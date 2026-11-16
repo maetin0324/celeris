@@ -1,0 +1,4778 @@
+{
+ "schema": "celeris.health-v2-v0.invariants/1",
+ "generated_by": "agent-docs/progress/2026-11-15-health-v2-v0/invariants.md の「作り方」",
+ "inputs": {
+  "capability_map": "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json",
+  "repo_profile": "scripts/dev/repo-health/profiles/celeris.toml [review.invariants]"
+ },
+ "run": "python3 agent-docs/progress/2026-11-15-health-v2-v0/invariants.py --run agent-docs/progress/2026-11-15-health-v2-v0/invariants.json",
+ "moved_tests": {
+  "crates/task-worker/tests/browser_prod_admission.rs": "task-worker --test browser_eval_surface_suite の browser_prod_admission::（phase 1: bundle task-worker integration test targets）",
+  "crates/celerisctl/tests/browser_doctor.rs": "celerisctl --test browser_eval_surface_suite の browser_doctor::（phase 1: bundle celerisctl integration test targets）",
+  "crates/task-api/tests/chat_attachments.rs": "task-api --test cos_delivery_suite_a の chat_attachments::",
+  "crates/celeris/tests/cos_chat_triage_scenarios.rs": "celeris --test cos_delivery_suite の cos_chat_triage_scenarios::（task-api --test cos_delivery_suite_a にも同名 module）",
+  "crates/task-api/tests/cos_auth.rs": "task-api --test cos_delivery_suite_a の cos_auth::",
+  "crates/task-api/tests/cos_ops_registry.rs": "task-api --test cos_delivery_suite_b の cos_ops_registry::",
+  "crates/task-api/tests/cron_jobs.rs": "task-api --test routing_budget_suite_a の cron_jobs::",
+  "crates/task-api/tests/integration_api.rs": "task-api --test cos_delivery_suite_c の integration_api::",
+  "crates/task-api/tests/project_auto_integrate.rs": "task-api --test cos_delivery_suite の repo_auto_integrate::（auto_integrate を repo の属性にした変更で改名）",
+  "crates/task-ops/src/plan/tests.rs": "削除（health-v2 R6 legacy: celerisctl plan と task_ops::plan::create_plan を撤去。execution-plan-adoption の不変条件は execution・execution_plan の試験が守る）",
+  "crates/task-api/tests/api_principals.rs": "task-api --test browser_eval_surface_suite の api_principals::",
+  "crates/celeris/tests/stranded_integration.rs": "celeris --test cos_delivery_suite の stranded_integration::",
+  "crates/celeris/tests/deployment_audit.rs": "celeris --test cos_delivery_suite の deployment_audit::",
+  "crates/celeris/tests/releases_api.rs": "celeris --test cos_delivery_suite の releases_api::",
+  "crates/task-api/tests/legacy_routing_events.rs": "task-api --test routing_budget_suite_a の legacy_routing_events::",
+  "crates/task-api/tests/routing_stage.rs": "task-api --test routing_budget_suite_a の routing_stage::",
+  "crates/task-api/tests/routing.rs": "task-api --test routing_budget_suite_a の routing::",
+  "crates/task-dispatch/src/dispatcher/tests/cos_chat_triage_fallback.rs": "task-dispatch --lib の dispatcher::tests::cos_chat_triage::fallback::",
+  "crates/task-dispatch/src/dispatcher/tests/project_controller_replay.rs": "task-dispatch --lib の dispatcher::tests::project_wake::replay::",
+  "crates/task-dispatch/src/dispatcher/tests/project_achievement.rs": "task-dispatch --lib の dispatcher::tests::project_wake::project_cos::project_achievement::"
+ },
+ "rows": [
+  {
+   "id": "cap:browser-policy-broker-approval#0",
+   "source": "capability-map",
+   "capability": "browser-policy-broker-approval",
+   "kind": "human_authority",
+   "invariant": "承認待ちは DB の待ち状態（browser_waits）として持ち、人の承認なしに越境しない",
+   "evidence_path": "agent-docs/adr/0080-browser-phase2-policy-broker-approval.md",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-api --test browser_waits -E 'test(/(?i)wait|approv|decid/)'",
+     "tests_at_head": 2,
+     "tests": [
+      "approval_needs_attestation_and_approve_or_deny_moves_the_task",
+      "expired_wait_is_gone_and_unconfigured_api_refuses_human_actions"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 2
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:browser-policy-broker-approval#1",
+   "source": "capability-map",
+   "capability": "browser-policy-broker-approval",
+   "kind": "credential_sandbox",
+   "invariant": "credential の値は worker に渡さず broker（celeris-credentiald）が注入する",
+   "evidence_path": "agent-docs/adr/0080-browser-phase2-policy-broker-approval.md",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p celeris-credentiald --test broker -E 'test(/(?i)secret|value|inject|never|leak/)'",
+     "tests_at_head": 3,
+     "tests": [
+      "daemon_rejects_worker_secret_retrieval_even_with_valid_lease",
+      "failed_consume_audit_never_returns_secret_or_consumes_lease",
+      "retired_plugin_bridge_never_connects_or_echoes_input"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 3
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:browser-policy-broker-approval#2",
+   "source": "capability-map",
+   "capability": "browser-policy-broker-approval",
+   "kind": "fail_closed",
+   "invariant": "実効の許可 origin は task ∩ grant。egress の許可 list も同じ積（browser_policy::egress_allow）",
+   "evidence_path": "crates/task-worker/src/browser_policy.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-worker --lib -E 'test(/^browser_egress::tests::.*(task_and_grant|allowed|denial)/)'",
+     "tests_at_head": 9,
+     "tests": [
+      "browser_egress::tests::browser_allowed_domains_egress_denies_outside_task_and_grant",
+      "browser_egress::tests::egress_denial_record_allowed_connection_has_no_entry",
+      "browser_egress::tests::egress_denial_record_malformed_and_bounded",
+      "browser_egress::tests::egress_denial_record_reasons_and_no_request_secrets",
+      "browser_egress::tests::egress_denial_record_rejects_preexisting_file",
+      "browser_egress::tests::egress_get_allowed_name_is_checked_after_dns",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 9
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:browser-launcher#0",
+   "source": "capability-map",
+   "capability": "browser-launcher",
+   "kind": "credential_sandbox",
+   "invariant": "userns の持ち主は daemon でなく launcher（daemon に ptrace させない）",
+   "evidence_path": "agent-docs/adr/0115-browser-ptrace-owner-ns-launcher.md",
+   "coverage": "none_in_wu",
+   "checks": [
+    {
+     "mode": "release_gate",
+     "command": "cargo nextest run -p task-worker --test browser_launcher_ptrace",
+     "reason": "userns・本物の namespace が要る。WU の --run から外し release gate（test-parallel の userns 段）で確かめる"
+    }
+   ],
+   "gap": "userns と ptrace が要る。WU では走らせない",
+   "result": {
+    "status": "release_gate",
+    "release_gate_checks": 1,
+    "checked": "提出時の HEAD で invariants.py --run",
+    "coverage": "none_in_wu"
+   }
+  },
+  {
+   "id": "cap:browser-launcher#1",
+   "source": "capability-map",
+   "capability": "browser-launcher",
+   "kind": "fail_closed",
+   "invariant": "CredentialUse・IdentityRestore は launcher の session 証明があるときだけ解放（無ければ拒否）",
+   "evidence_path": "agent-docs/adr/0138-browser-prod-admission-confidential-release.md",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-worker --test browser_eval_surface_suite -E 'test(/^browser_prod_admission::.*(credential|identity|session|release|refus|deny|reject)/)'",
+     "tests_at_head": 16,
+     "tests": [
+      "browser_prod_admission::attested_without_launcher_proof_is_rejected_even_if_isolated",
+      "browser_prod_admission::launcher_identity_mismatch_is_rejected",
+      "browser_prod_admission::launcher_isolation_not_ok_is_rejected",
+      "browser_prod_admission::launcher_proven_separate_uid_session_is_admitted",
+      "browser_prod_admission::missing_namespace_is_rejected",
+      "browser_prod_admission::non_isolated_with_valid_proof_is_rejected",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 16
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:browser-egress-runtime#0",
+   "source": "capability-map",
+   "capability": "browser-egress-runtime",
+   "kind": "credential_sandbox",
+   "invariant": "browser は隔離 runtime で動かし、外への通信は egress relay（CONNECT と GET/HEAD の forward）だけを通す",
+   "evidence_path": "agent-docs/adr/0104-browser-egress-transport.md",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-worker --test browser_egress_relay -E 'test(/./)'",
+     "tests_at_head": 2,
+     "tests": [
+      "fixture_reachable_only_through_per_connection_egress_proxy",
+      "inner_relay_in_test_netns"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 2
+     }
+    },
+    {
+     "mode": "release_gate",
+     "command": "cargo nextest run -p task-worker --test browser_runtime_isolated",
+     "reason": "userns・本物の namespace が要る。WU の --run から外し release gate（test-parallel の userns 段）で確かめる"
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 1,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:browser-egress-runtime#1",
+   "source": "capability-map",
+   "capability": "browser-egress-runtime",
+   "kind": "fail_closed",
+   "invariant": "egress は許可 list の host:port に合わない接続を拒否し記録する",
+   "evidence_path": "agent-docs/adr/2026-10-06-egress-http-forward-get.md",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-worker --test browser_egress_process -E 'test(/(?i)deny|reject|refus|block|allow/)'",
+     "tests_at_head": 3,
+     "tests": [
+      "independent_proxy_refuses_worker_selected_private_or_proxy_destinations",
+      "missing_inherited_socket_is_refused",
+      "policy_eof_deadline_terminates_process_without_a_blocking_stdin_thread"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 3
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:browser-live-view-control#0",
+   "source": "capability-map",
+   "capability": "browser-live-view-control",
+   "kind": "lease_exclusion",
+   "invariant": "制御は lease の持ち主だけが行う",
+   "evidence_path": "agent-docs/adr/0099-browser-phase3-control-lease.md",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-core --lib -E 'test(/^browser_control::tests::/)'",
+     "tests_at_head": 11,
+     "tests": [
+      "browser_control::tests::auth_section_revokes_human_control_and_blocks_takeover",
+      "browser_control::tests::disconnect_revokes_the_lease_and_does_not_resume",
+      "browser_control::tests::expired_lease_falls_back_to_paused_without_resuming_the_agent",
+      "browser_control::tests::idempotent_retry_does_not_act_twice",
+      "browser_control::tests::lease_is_exclusive_between_humans_and_against_the_agent",
+      "browser_control::tests::lease_ttl_is_bounded",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 11
+     }
+    },
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-api --test browser_live -E 'test(/./)'",
+     "tests_at_head": 1,
+     "tests": [
+      "browser_live_frame_authorization_is_bound_and_scrubbed"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 1
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:browser-live-view-control#1",
+   "source": "capability-map",
+   "capability": "browser-live-view-control",
+   "kind": "human_authority",
+   "invariant": "Live View は ACL を通った者だけ、credential session の frame は owner 本人だけに届け、保存しない",
+   "evidence_path": "agent-docs/adr/2026-10-10-browser-launcher-live-view-frames.md",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-api --test browser_live_cross -E 'test(/(?i)owner|acl|credential|frame/)'",
+     "tests_at_head": 2,
+     "tests": [
+      "browser_live_frame_auth_section_owner_only_api_stream",
+      "browser_live_frame_no_persist_db_events_logs_artifacts_tempdir"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 2
+     }
+    },
+    {
+     "mode": "release_gate",
+     "command": "release gate の web 段（web の unit 試験）: web/server/browser-live.test.mjs",
+     "reason": "web の unit 試験。release gate の web 段で確かめる"
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 1,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:browser-site-policy-trusted-devices#0",
+   "source": "capability-map",
+   "capability": "browser-site-policy-trusted-devices",
+   "kind": "credential_sandbox",
+   "invariant": "DeviceClaims は Ed25519 で検証し、通らない端末は登録しない",
+   "evidence_path": "agent-docs/adr/2026-10-07-browser-trusted-devices.md",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-api --test trusted_devices -E 'test(/(?i)claim|sign|ed25519|invalid|reject|forg/)'",
+     "tests_at_head": 4,
+     "tests": [
+      "trusted_device_expired_with_fake_clock_is_rejected",
+      "trusted_device_invalid_assertion_is_rejected",
+      "trusted_device_revoked_device_is_rejected",
+      "trusted_device_wrong_secret_is_rejected"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 4
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:browser-site-policy-trusted-devices#1",
+   "source": "capability-map",
+   "capability": "browser-site-policy-trusted-devices",
+   "kind": "atomic_state_event",
+   "invariant": "site policy の変更は browser_site_policies と browser_site_policy_events を同じ store 関数で書く",
+   "evidence_path": "crates/task-core/src/store/site_policies.rs",
+   "coverage": "partial",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-core --lib -E 'test(/^store::site_policies::tests::/)'",
+     "tests_at_head": 2,
+     "tests": [
+      "store::site_policies::tests::browser_site_policy_db_delete_refuses_open_wait_reference",
+      "store::site_policies::tests::browser_site_policy_db_round_trips_username_selector_and_post_login"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 2
+     }
+    },
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-api --test browser_site_policy_db -E 'test(/./)'",
+     "tests_at_head": 5,
+     "tests": [
+      "browser_site_policy_db_api_changes_reach_broker_without_restart",
+      "browser_site_policy_db_config_seed_only_fills_missing",
+      "browser_site_policy_db_delete_in_use_by_grant_is_conflict",
+      "browser_site_policy_db_grant_credential_settings",
+      "browser_site_policy_db_put_validates_and_lists"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 5
+     }
+    }
+   ],
+   "gap": "store と API の試験は通るが、表と event を同じ store 関数で書くことを名指しで確かめる試験名は見つからない",
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run",
+    "coverage": "partial"
+   }
+  },
+  {
+   "id": "cap:browser-site-policy-trusted-devices#2",
+   "source": "capability-map",
+   "capability": "browser-site-policy-trusted-devices",
+   "kind": "fail_closed",
+   "invariant": "適合台帳と前提 gate を満たさない backend には browser task を配らない",
+   "evidence_path": "agent-docs/adr/2026-10-08-browser-prod-enablement.md",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/(?i)browser.*(conform|ledger|enablement|admission|prereq|backend)/)'",
+     "tests_at_head": 6,
+     "tests": [
+      "dispatcher::tests::browser_ledger_gate::browser_ledger_gate_ignores_tasks_without_browser_skill",
+      "dispatcher::tests::browser_ledger_gate::browser_ledger_gate_missing_ledger_blocks_before_dispatch_without_infra_requeue",
+      "dispatcher::tests::browser_ledger_gate::browser_ledger_gate_placed_ledger_dispatches_and_worker_ledger_error_is_not_infra",
+      "dispatcher::tests::browser_ledger_gate::browser_ledger_gate_stale_release_blocks_and_resumes_after_regeneration",
+      "dispatcher::tests::browser_ledger_gate::verify_mode_does_not_resume_browser_prerequisite_blocked_tasks",
+      "run_settlement::tests::settle_blocks_on_browser_prerequisites_only_for_atomic_runs"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 6
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:campaign-eval#0",
+   "source": "capability-map",
+   "capability": "campaign-eval",
+   "kind": "budget",
+   "invariant": "試行は予算上限（cap・予約）の内でだけ起動する",
+   "evidence_path": "agent-docs/adr/2026-10-16-campaign-budget-cap.md",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p celeris-campaign --test global_ledger_atomic -E 'test(/./)'",
+     "result": {
+      "exit": 0,
+      "tests_run": 24
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:campaign-eval#1",
+   "source": "capability-map",
+   "capability": "campaign-eval",
+   "kind": "reviewed_candidate_identity",
+   "invariant": "campaign lock で固定した binary・case・grader の hash が変われば同じ測定の再開を拒否する",
+   "evidence_path": "agent-docs/adr/2026-10-17-campaign-lock.md",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p celeris-campaign --test campaign_lock -E 'test(/./)'",
+     "result": {
+      "exit": 0,
+      "tests_run": 7
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:campaign-eval#2",
+   "source": "capability-map",
+   "capability": "campaign-eval",
+   "kind": "other",
+   "invariant": "欠測は 0 で埋めず件数として数える（final-accounting の observed_partial）",
+   "evidence_path": "crates/campaign/src/export.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p celeris-campaign --test final_accounting -E 'test(/(?i)partial|missing|observed/)'",
+     "result": {
+      "exit": 0,
+      "tests_run": 3
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:jev-classifier#0",
+   "source": "capability-map",
+   "capability": "jev-classifier",
+   "kind": "fail_closed",
+   "invariant": "dispatcher・store からは呼ばない。失敗は FallbackToFixed で fixed 方策へ戻り、401/403 は JevError::Auth で credential 待ちへ",
+   "evidence_path": "crates/jev-classifier/src/lib.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p jev-classifier --test jev_fake_server -E 'test(/(?i)fallback|auth|401|403/)'",
+     "tests_at_head": 2,
+     "tests": [
+      "auth_errors_are_typed_without_retry_or_breaker_count",
+      "fallback_after_invalid_response_carries_no_model_provenance_and_cache_roundtrips"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 2
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:jev-classifier#1",
+   "source": "capability-map",
+   "capability": "jev-classifier",
+   "kind": "credential_sandbox",
+   "invariant": "config は鍵の値を持たず secret_id（secrets dir の名前）だけを持つ",
+   "evidence_path": "crates/celeris/src/config/jev.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p celeris --lib -E 'test(/(?i)jev.*(secret|key)/)'",
+     "tests_at_head": 5,
+     "tests": [
+      "daemon::jev_key::tests::auth_failures_401_403_request_credential_and_the_key_is_sent_as_bearer",
+      "daemon::jev_key::tests::rate_limit_429_and_server_errors_do_not_request_credential",
+      "daemon::jev_key::tests::unregistered_key_enters_credential_wait_without_a_request",
+      "daemon::jev_key::tests::unregistered_registered_and_reregistered_are_read_each_call",
+      "daemon::jev_key::tests::value_never_appears_in_debug_output"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 5
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:http-api-auth-principals#0",
+   "source": "capability-map",
+   "capability": "http-api-auth-principals",
+   "kind": "human_authority",
+   "invariant": "config の token が名乗れるのは human: と operator: だけ。mcp・cos の主体は daemon が作る",
+   "evidence_path": "crates/task-api/src/principal.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-api --test browser_eval_surface_suite -E 'test(/^api_principals::/)'",
+     "tests_at_head": 10,
+     "tests": [
+      "api_principals::a_comment_answer_carries_the_principal_and_its_author_kind",
+      "api_principals::an_integration_answer_and_a_task_answer_carry_the_principal",
+      "api_principals::api_principals_cos_runs_are_recorded_with_their_thread",
+      "api_principals::api_principals_mcp_token_reads_with_a_client_id_and_never_writes",
+      "api_principals::api_principals_two_tokens_are_recorded_as_different_actors",
+      "api_principals::api_principals_unknown_bearer_and_spoofed_headers_are_not_trusted",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 10
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:http-api-auth-principals#1",
+   "source": "capability-map",
+   "capability": "http-api-auth-principals",
+   "kind": "fail_closed",
+   "invariant": "token の無い構成（Unauthenticated）では管理系を受けない（require_admin が 401）",
+   "evidence_path": "crates/task-api/src/middleware.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-api --test auth_and_guards -E 'test(/(?i)unauth|401|admin|token/)'",
+     "tests_at_head": 3,
+     "tests": [
+      "bearer_token_is_required_when_configured",
+      "health_is_unauthenticated_but_still_host_checked",
+      "no_token_means_no_authentication"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 3
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:http-api-auth-principals#2",
+   "source": "capability-map",
+   "capability": "http-api-auth-principals",
+   "kind": "atomic_state_event",
+   "invariant": "task 作成は冪等キー・unblocks・添付 pin・link event を同じ transaction で書く",
+   "evidence_path": "crates/task-api/src/handlers/tasks.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-api --test task_idempotency -E 'test(/./)'",
+     "tests_at_head": 6,
+     "tests": [
+      "campaign_resend_binds_new_key_to_request_content",
+      "cos_operations_reject_a_body_idempotency_key",
+      "create_resend_with_the_same_key_makes_one_task_and_other_content_is_409",
+      "failed_creation_does_not_reserve_key_and_old_field_is_rejected",
+      "retry_resend_with_the_same_key_makes_one_copy_and_other_content_is_409",
+      "simultaneous_create_and_retry_return_the_same_task"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 6
+     }
+    },
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-api --test unmapped_suite_b -E 'test(/^unblocks::/)'",
+     "tests_at_head": 3,
+     "tests": [
+      "unblocks::unblocks_api_links_and_promotion_reopens_the_failed_task_once",
+      "unblocks::unblocks_api_rejects_unknown_and_duplicate_ids_and_creates_nothing",
+      "unblocks::unblocks_cos_task_create_writes_the_link_in_the_audited_transaction"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 3
+     }
+    },
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-api --test cos_chat_attach_pin -E 'test(/./)'",
+     "tests_at_head": 1,
+     "tests": [
+      "cos_chat_attach_handoff_cos_pins_attachment_to_created_task_and_kb_candidate"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 1
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:celerisctl-cli#0",
+   "source": "capability-map",
+   "capability": "celerisctl-cli",
+   "kind": "other",
+   "invariant": "celerisctl は migration をしない",
+   "evidence_path": "agent-docs/adr/0095-worker-runs-see-the-db-read-only.md",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p celerisctl --test no_migrate -E 'test(/./)'",
+     "tests_at_head": 4,
+     "tests": [
+      "celerisctl_does_not_create_a_missing_db",
+      "celerisctl_reads_a_newer_db_but_refuses_to_write_it",
+      "celerisctl_reads_and_writes_a_db_at_its_own_version",
+      "celerisctl_refuses_an_older_db_and_leaves_its_schema_alone"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 4
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:celerisctl-cli#1",
+   "source": "capability-map",
+   "capability": "celerisctl-cli",
+   "kind": "atomic_state_event",
+   "invariant": "workspace prune は削除の後に workspace_pruned event を追記する（dispatcher の housekeeping と同じ event kind）",
+   "evidence_path": "crates/celerisctl/src/commands/workspace.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p celerisctl --bin celerisctl -E 'test(/(?i)prune/)'",
+     "tests_at_head": 2,
+     "tests": [
+      "commands::build_cache::tests::dry_run_preserves_cache_and_prune_removes_only_old_entry",
+      "commands::workspace::tests::prune_deletes_and_records_the_event"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 2
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:celeris-mcp#0",
+   "source": "capability-map",
+   "capability": "celeris-mcp",
+   "kind": "human_authority",
+   "invariant": "外部が作る案件・タスクは CoS に渡して直接作らない",
+   "evidence_path": "agent-docs/adr/0056-mcp-server.md",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-api --test relayed_instructions -E 'test(/./)'",
+     "tests_at_head": 5,
+     "tests": [
+      "a_person_message_records_its_author_without_a_relay",
+      "operator_relay_grounds_the_project_cos_answer_and_separates_decider_from_executor",
+      "relay_after_escalation_is_answered_by_the_rejudging_run_once",
+      "relay_scope_maps_a_closed_authorization_item_to_its_task",
+      "triage_run_cites_a_relay_in_scope_and_refuses_out_of_scope_or_expired_ones"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 5
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:celeris-mcp#1",
+   "source": "capability-map",
+   "capability": "celeris-mcp",
+   "kind": "fail_closed",
+   "invariant": "DB は open_read_only で開き、読み取り以外の文を拒否する",
+   "evidence_path": "agent-docs/adr/2026-10-23-mcp-read-only-db-and-api.md",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p celeris-mcp --lib -E 'test(/^tools::db::tests::.*(reject|only_one|does_not_block)/)'",
+     "tests_at_head": 4,
+     "tests": [
+      "tools::db::tests::an_open_read_does_not_block_daemon_writes",
+      "tools::db::tests::attach_and_pragma_writes_and_extensions_are_rejected",
+      "tools::db::tests::only_one_statement_is_allowed",
+      "tools::db::tests::writes_are_rejected"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 4
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:web-gateway#0",
+   "source": "capability-map",
+   "capability": "web-gateway",
+   "kind": "credential_sandbox",
+   "invariant": "daemon の token は gateway → daemon の Authorization にだけ付け、ブラウザの Authorization・Cookie は転送せず、応答に紛れた token は [redacted] にする",
+   "evidence_path": "web/server/relay.js",
+   "coverage": "none_in_wu",
+   "checks": [
+    {
+     "mode": "release_gate",
+     "command": "release gate の web 段（web の unit 試験）: web/server/relay.test.mjs",
+     "reason": "web の unit 試験。release gate の web 段で確かめる"
+    }
+   ],
+   "gap": "web の unit 試験は release gate の web 段で走る",
+   "result": {
+    "status": "release_gate",
+    "release_gate_checks": 1,
+    "checked": "提出時の HEAD で invariants.py --run",
+    "coverage": "none_in_wu"
+   }
+  },
+  {
+   "id": "cap:web-gateway#1",
+   "source": "capability-map",
+   "capability": "web-gateway",
+   "kind": "fail_closed",
+   "invariant": "前段経由の https は CELERIS_WEB_PUBLIC_ORIGINS・loopback 接続元・Host 一致のときだけ受ける",
+   "evidence_path": "agent-docs/adr/2026-10-28-web-https-front-pwa.md",
+   "coverage": "none_in_wu",
+   "checks": [
+    {
+     "mode": "release_gate",
+     "command": "release gate の web 段（web の unit 試験）: web/server/origin.test.mjs web/server/auth.test.mjs",
+     "reason": "web の unit 試験。release gate の web 段で確かめる"
+    }
+   ],
+   "gap": "web の unit 試験は release gate の web 段で走る",
+   "result": {
+    "status": "release_gate",
+    "release_gate_checks": 1,
+    "checked": "提出時の HEAD で invariants.py --run",
+    "coverage": "none_in_wu"
+   }
+  },
+  {
+   "id": "cap:web-spa#0",
+   "source": "capability-map",
+   "capability": "web-spa",
+   "kind": "other",
+   "invariant": "画面は daemon の API を通して読み、状態を自分で持たない。route は生成した routeTree.gen.ts を使う",
+   "evidence_path": "agent-docs/adr/0081-web-spa-frontend.md",
+   "coverage": "none_in_wu",
+   "checks": [
+    {
+     "mode": "release_gate",
+     "command": "release gate の web 段（web の unit 試験）: web/api/client.test.ts web/test/routes.test.ts web/features/browser/browser-query.test.ts",
+     "reason": "web の unit 試験。release gate の web 段で確かめる"
+    }
+   ],
+   "gap": "web の unit 試験は release gate の web 段で走る",
+   "result": {
+    "status": "release_gate",
+    "release_gate_checks": 1,
+    "checked": "提出時の HEAD で invariants.py --run",
+    "coverage": "none_in_wu"
+   }
+  },
+  {
+   "id": "cap:cos-chat-threads-runs#0",
+   "source": "capability-map",
+   "capability": "cos-chat-threads-runs",
+   "kind": "lease_exclusion",
+   "invariant": "chat run は durable queue（chat_runs）から 1 回だけ claim して worker を起動する（chat_run_claim_next）",
+   "evidence_path": "crates/task-core/src/chat/run_store.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-core --lib -E 'test(/^chat::.*claim/)'",
+     "tests_at_head": 5,
+     "tests": [
+      "chat::launch_boundary_regression_tests::claim_marks_new_rows_as_launch_tracked_with_no_launch_time",
+      "chat::store_tests::chat_store_claim_is_fifo_with_one_live_run",
+      "chat::store_tests::chat_store_concurrent_claim_has_one_winner",
+      "chat::triage_tests::cos_chat_triage_store_reconcile_claim_and_resolve",
+      "chat::triage_tests::cos_triage_outbox_claim_refuses_an_older_revision"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 5
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:cos-chat-threads-runs#1",
+   "source": "capability-map",
+   "capability": "cos-chat-threads-runs",
+   "kind": "restart_replay",
+   "invariant": "停止・割り込み・daemon 再起動で queued message を失わず、終端 run は takeover しない",
+   "evidence_path": "crates/task-dispatch/src/dispatcher/cos_chat/control.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^dispatcher::tests::cos_chat.*(restart|interrupt|queued|takeover|stop)/)'",
+     "tests_at_head": 20,
+     "tests": [
+      "dispatcher::tests::cos_chat_harness_tests::cos_chat_resume_delta_interrupt_and_queued_inputs_are_always_delivered",
+      "dispatcher::tests::cos_chat_harness_tests::cos_chat_resume_delta_restart_recovery_delivers_the_full_text",
+      "dispatcher::tests::cos_chat_launch::cos_chat_run_control_interrupt_precedes_queue_without_changing_pause",
+      "dispatcher::tests::cos_chat_launch::cos_chat_run_control_live_interrupt_waits_for_old_worker_exit",
+      "dispatcher::tests::cos_chat_launch::cos_chat_run_control_restart_waits_for_orphan_then_continues_input",
+      "dispatcher::tests::cos_chat_launch::cos_chat_run_control_stop_kills_group_pauses_queue_and_late_stop_isolated",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 20
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:cos-chat-threads-runs#2",
+   "source": "capability-map",
+   "capability": "cos-chat-threads-runs",
+   "kind": "credential_sandbox",
+   "invariant": "CoS run の credential は環境変数名の参照だけを prompt に渡し、値は入れない",
+   "evidence_path": "crates/task-worker/src/cos_chat.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-worker --lib -E 'test(/^cos_chat::.*(credential|env|secret)/)'",
+     "tests_at_head": 1,
+     "tests": [
+      "cos_chat::tests::cos_chat_run_proto_credential_value_stays_out_of_request_json_and_prompt"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 1
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:cos-chat-threads-runs#3",
+   "source": "capability-map",
+   "capability": "cos-chat-threads-runs",
+   "kind": "atomic_state_event",
+   "invariant": "thread・message・run・chat_events は SQLite が正で、sink が chat_events を追記する",
+   "evidence_path": "crates/task-dispatch/src/dispatcher/cos_chat/sink.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^dispatcher::cos_chat::sink/)'",
+     "tests_at_head": 10,
+     "tests": [
+      "dispatcher::cos_chat::sink::tests::cos_chat_run_sink_actions_become_error_card_not_executed",
+      "dispatcher::cos_chat::sink::tests::cos_chat_run_sink_maps_text_tool_thinking_status_in_order",
+      "dispatcher::cos_chat::sink::tests::cos_chat_run_sink_pairs_tool_calls_and_fails_open_calls_at_end",
+      "dispatcher::cos_chat::sink::tests::cos_chat_run_sink_records_session_signals_without_events",
+      "dispatcher::cos_chat::sink::tests::cos_chat_run_sink_redacts_tool_detail_and_caps_it",
+      "dispatcher::cos_chat::sink::tests::cos_chat_run_sink_sends_nothing_after_terminal",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 10
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:cos-inbox-triage-operations-audit#0",
+   "source": "capability-map",
+   "capability": "cos-inbox-triage-operations-audit",
+   "kind": "human_authority",
+   "invariant": "/cos/inbox/{i}/resolve と /cos/operations は CoS run credential だけを受け、人は /api/v1/inbox で答える（actor=human の詐称を拒否）",
+   "evidence_path": "crates/task-api/src/cos/inbox.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-api --test cos_delivery_suite_a -E 'test(/^cos_auth::/)'",
+     "tests_at_head": 7,
+     "tests": [
+      "cos_auth::cos_chat_ops_auth_admin_bearer_unchanged",
+      "cos_auth::cos_chat_ops_auth_cos_shape_never_falls_back_to_admin",
+      "cos_auth::cos_chat_ops_auth_expired_revoked_and_unknown_are_401",
+      "cos_auth::cos_chat_ops_auth_get_allowed_and_direct_mutation_is_422_with_audit",
+      "cos_auth::cos_chat_ops_auth_identity_claims_are_ignored_or_422",
+      "cos_auth::cos_chat_ops_checkpoint_api_200_and_conflicts",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 7
+     }
+    },
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-api --test cos_triage -E 'test(/(?i)human|actor|spoof|forbid/)'",
+     "tests_at_head": 3,
+     "tests": [
+      "cos_chat_inbox_thread_instructed_by_relays_the_human_answer",
+      "cos_chat_triage_human_required_refused_on_resolve_and_operations",
+      "cos_chat_triage_resolve_rejects_human_credential"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 3
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:cos-inbox-triage-operations-audit#1",
+   "source": "capability-map",
+   "capability": "cos-inbox-triage-operations-audit",
+   "kind": "atomic_state_event",
+   "invariant": "domain の書き込みと cos_operations の監査行・Event::CosOperation は同じ transaction で書く",
+   "evidence_path": "crates/task-core/src/chat/operations.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-core --lib -E 'test(/^chat::operations_tests::/)'",
+     "tests_at_head": 6,
+     "tests": [
+      "chat::operations_tests::cos_chat_ops_store_event_has_complete_audit_envelope",
+      "chat::operations_tests::cos_chat_ops_store_failed_apply_rolls_back_and_records_rejection",
+      "chat::operations_tests::cos_chat_ops_store_idempotent_same_hash_and_conflict_on_different_hash",
+      "chat::operations_tests::cos_chat_ops_store_invalid_reason_is_rejected_with_audit_reason",
+      "chat::operations_tests::cos_external_pending_replay_returns_receipt_and_finish_applies_once",
+      "chat::operations_tests::cos_external_stale_pending_moves_to_needs_remediation_without_guessing"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 6
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:cos-inbox-triage-operations-audit#2",
+   "source": "capability-map",
+   "capability": "cos-inbox-triage-operations-audit",
+   "kind": "credential_sandbox",
+   "invariant": "CoS run credential は SHA-256 だけを cos_run_credentials に保存する",
+   "evidence_path": "crates/task-core/src/chat/credential.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-core --lib -E 'test(/^chat::credential_tests::/)'",
+     "tests_at_head": 7,
+     "tests": [
+      "chat::credential_tests::cos_chat_ops_checkpoint_enforces_cursor_and_size",
+      "chat::credential_tests::cos_chat_ops_checkpoint_rejects_queued_gap_before_interrupt_input",
+      "chat::credential_tests::cos_chat_ops_checkpoint_requires_current_run",
+      "chat::credential_tests::cos_chat_ops_cred_issue_verify_hash_only_and_classify",
+      "chat::credential_tests::cos_chat_ops_cred_requires_live_run_and_positive_ttl",
+      "chat::credential_tests::cos_chat_ops_cred_terminal_run_revokes_in_same_transition",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 7
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:cos-inbox-triage-operations-audit#3",
+   "source": "capability-map",
+   "capability": "cos-inbox-triage-operations-audit",
+   "kind": "fail_closed",
+   "invariant": "triage item の解決は state が pending/running の 1 行だけを更新し、既に解決済みなら Conflict にする",
+   "evidence_path": "crates/task-api/src/cos/triage_view.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-api --test cos_triage -E 'test(/(?i)conflict|resolved|already/)'",
+     "tests_at_head": 1,
+     "tests": [
+      "cos_chat_triage_resolve_conflicts_on_stale_revision"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 1
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:notifications#0",
+   "source": "capability-map",
+   "capability": "notifications",
+   "kind": "human_authority",
+   "invariant": "人の判断は受信箱、知らせは通知に分け、Discord 送出は escalation・不在退避・明示 test の経路だけ",
+   "evidence_path": "crates/celeris/src/notify.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p celeris --lib -E 'test(/^notify::tests::.*(discord|escalat|inbox|absent|away)/)'",
+     "tests_at_head": 3,
+     "tests": [
+      "notify::tests::base_url_drops_the_trailing_slash_and_treats_empty_as_absent",
+      "notify::tests::content_is_clamped_to_one_discord_message",
+      "notify::tests::notify_digest_phase_checkpoint_is_batched_as_inbox_new"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 3
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:notifications#1",
+   "source": "capability-map",
+   "capability": "notifications",
+   "kind": "restart_replay",
+   "invariant": "未解決の待ちは再起動後も対象で、終端 event の走査位置は notification_scan_state に永続化する",
+   "evidence_path": "crates/task-core/src/notify.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p celerisctl --test eval_requests -E 'test(/renotify_and_restart_do_not_add_rows/)'",
+     "tests_at_head": 1,
+     "tests": [
+      "renotify_and_restart_do_not_add_rows"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 1
+     }
+    },
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p celeris --test notify -E 'test(/never_scanned_or_recorded/)'",
+     "tests_at_head": 1,
+     "tests": [
+      "events_created_before_celeris_started_are_never_scanned_or_recorded"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 1
+     }
+    },
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-ops --lib -E 'test(/^notify_feed::tests::.*(twice|idempotent)/)'",
+     "tests_at_head": 2,
+     "tests": [
+      "notify_feed::tests::notify_feed_observed_release_cron_recovery_and_warning_are_idempotent",
+      "notify_feed::tests::notify_feed_same_event_twice_syncs_once_and_bundles_roots"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 2
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:notifications#2",
+   "source": "capability-map",
+   "capability": "notifications",
+   "kind": "fail_closed",
+   "invariant": "送信直前に解決済みかを再確認し、解決済みなら送らない（withdraw_if_resolved）",
+   "evidence_path": "crates/celeris/src/notify/triage.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p celeris --test cos_delivery_suite -E 'test(/withdrawn/)'",
+     "tests_at_head": 4,
+     "tests": [
+      "cos_chat_stagnation_notify::human_wait_aging_is_live_held_and_withdrawn_when_answered",
+      "cos_chat_stagnation_notify::resolved_stagnation_is_withdrawn_before_post",
+      "cos_chat_stagnation_notify::stagnation_findings_are_live_held_and_withdrawn_on_revision",
+      "cos_chat_triage_notify::cos_chat_triage_resolved_source_is_withdrawn_before_post"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 4
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:review-runs-final-review#0",
+   "source": "capability-map",
+   "capability": "review-runs-final-review",
+   "kind": "human_authority",
+   "invariant": "完了は reviewer か決定的 check が決め、Command は worker の自己申告を信じず workspace で再実行する",
+   "evidence_path": "crates/task-dispatch/src/review.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^review::tests::.*(self|rerun|command|workspace|claim)/)'",
+     "tests_at_head": 8,
+     "tests": [
+      "review::tests::acceptance_and_required_command_execute_once_and_share_bound_reuse",
+      "review::tests::acceptance_command_does_not_replace_the_repo_checks",
+      "review::tests::acceptance_command_shared_with_a_repo_check_keeps_the_record",
+      "review::tests::command_check_timeout_is_recorded_without_exit",
+      "review::tests::command_checks_are_re_executed_in_workspace",
+      "review::tests::command_checks_are_recorded_with_exit_codes",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 8
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:review-runs-final-review#1",
+   "source": "capability-map",
+   "capability": "review-runs-final-review",
+   "kind": "reviewed_candidate_identity",
+   "invariant": "review は target と同期した候補 SHA に対して行い、target が進めば ReviewTargetAdvanced で再 sync・再 review する",
+   "evidence_path": "crates/task-dispatch/src/dispatcher/review_spawn.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^dispatcher::tests::target_sync::/)'",
+     "tests_at_head": 33,
+     "tests": [
+      "dispatcher::tests::target_sync::behind_target_is_zero_after_pre_review_sync",
+      "dispatcher::tests::target_sync::behind_target_pre_review_sync_records_before_and_after",
+      "dispatcher::tests::target_sync::delivery_rereview_below_the_cap_still_reviews",
+      "dispatcher::tests::target_sync::delivery_rereview_loop_halts_visibly_at_the_cap",
+      "dispatcher::tests::target_sync::integration_repair_exhausted_dirty_failed_stops_for_manual_inspection",
+      "dispatcher::tests::target_sync::integration_repair_exhausted_plan_issue_reviews_unsynced_head_without_replan",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 33
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:review-runs-final-review#2",
+   "source": "capability-map",
+   "capability": "review-runs-final-review",
+   "kind": "fail_closed",
+   "invariant": "reviewer run は決定的条件が全て pass のときだけ起動し、review.json の判定を採る",
+   "evidence_path": "crates/task-dispatch/src/review.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^dispatcher::tests::review_check_wins::/)'",
+     "tests_at_head": 3,
+     "tests": [
+      "dispatcher::tests::review_check_wins::command_check_record_is_written_with_the_verdicts",
+      "dispatcher::tests::review_check_wins::failed_command_check_wins_over_reviewer_pass",
+      "dispatcher::tests::review_check_wins::reviewer_only_task_is_unchanged"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 3
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:delivery-merge-candidate#0",
+   "source": "capability-map",
+   "capability": "delivery-merge-candidate",
+   "kind": "reviewed_candidate_identity",
+   "invariant": "merge するのは merge_candidate_sha が head と一致し reviewed/target SHA が揃った delivery だけで、target が進めば候補を消して再 review に戻す",
+   "evidence_path": "crates/celeris/src/delivery.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p celeris --lib -E 'test(/^delivery::tests::.*(candidate|advanc|reviewed)/)'",
+     "tests_at_head": 10,
+     "tests": [
+      "delivery::tests::advance_pushes_to_origin_right_after_merge_before_release_prep",
+      "delivery::tests::merge_rejects_evidence_missing_a_required_check_of_the_candidate",
+      "delivery::tests::merge_requires_passing_evidence_bound_to_the_candidate_and_base",
+      "delivery::tests::pre_review_sync_conflict_unsynced_candidate_goes_to_merge_base_repair",
+      "delivery::tests::reviewed_merge_preserves_unrelated_user_deletion_and_branch",
+      "delivery::tests::target_advanced_absent_merges_only_the_matching_reviewed_sha_candidate",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 10
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:delivery-merge-candidate#1",
+   "source": "capability-map",
+   "capability": "delivery-merge-candidate",
+   "kind": "restart_replay",
+   "invariant": "Merging 中の daemon 再起動では外部操作を自動で再実行せず Blocked にして git と承認 SHA の照合を求める",
+   "evidence_path": "crates/celeris/src/delivery.rs",
+   "coverage": "none",
+   "checks": [],
+   "gap": "Merging 中の daemon 再起動で Blocked にする挙動を名指しする試験は試験名と grep で見つからない",
+   "result": {
+    "status": "unverified",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run",
+    "coverage": "none"
+   }
+  },
+  {
+   "id": "cap:delivery-merge-candidate#2",
+   "source": "capability-map",
+   "capability": "delivery-merge-candidate",
+   "kind": "lease_exclusion",
+   "invariant": "delivery_save は読み出した行（claimed）との比較で保存し、競合した更新を捨てる",
+   "evidence_path": "crates/task-core/src/delivery.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-core --lib -E 'test(/^delivery::tests::.*(claim|conflict|stale|save)/)'",
+     "tests_at_head": 1,
+     "tests": [
+      "delivery::tests::migration_0042_reads_existing_0036_delivery_and_saves_candidate_atomically"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 1
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:delivery-merge-candidate#3",
+   "source": "capability-map",
+   "capability": "delivery-merge-candidate",
+   "kind": "atomic_state_event",
+   "invariant": "root を delivery にしない場合は DeliverySkipped を理由付きで 1 回だけ追記する",
+   "evidence_path": "crates/task-ops/src/delivery.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-ops --lib -E 'test(/^delivery::tests::.*skip/)'",
+     "tests_at_head": 8,
+     "tests": [
+      "delivery::tests::delivery_skip_branch_mismatch",
+      "delivery::tests::delivery_skip_department_unresolved",
+      "delivery::tests::delivery_skip_multiple_repos",
+      "delivery::tests::delivery_skip_no_commits_when_head_equals_base",
+      "delivery::tests::delivery_skip_no_commits_when_head_is_ancestor_of_base",
+      "delivery::tests::delivery_skip_no_marker",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 8
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:pre-review-sync-auto-resolve-integration-repair#0",
+   "source": "capability-map",
+   "capability": "pre-review-sync-auto-resolve-integration-repair",
+   "kind": "reviewed_candidate_identity",
+   "invariant": "auto_resolve で task branch を進めたら新しい base/head を固定して MergeQueued に戻し、旧 release の gate 結果を使わない",
+   "evidence_path": "crates/celeris/src/delivery/auto_resolve.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p celeris --lib -E 'test(/^delivery::tests::auto_resolve_/)'",
+     "tests_at_head": 7,
+     "tests": [
+      "delivery::tests::auto_resolve_cargo_lock_conflict_is_regenerated_and_regated",
+      "delivery::tests::auto_resolve_cargo_lock_with_cargo_toml_conflict_requests_integration",
+      "delivery::tests::auto_resolve_clean_main_follow_is_counted_and_left_to_the_legacy_path",
+      "delivery::tests::auto_resolve_code_conflict_requests_integration_and_aborts_merge",
+      "delivery::tests::auto_resolve_local_repair_limit_requests_integration",
+      "delivery::tests::auto_resolve_progress_append_conflict_is_resolved_and_regated",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 7
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:pre-review-sync-auto-resolve-integration-repair#1",
+   "source": "capability-map",
+   "capability": "pre-review-sync-auto-resolve-integration-repair",
+   "kind": "budget",
+   "invariant": "target 再進行の自動再 sync は初回に加え最大 2 回、IntegrationRepair は 1 task につき最大 2 回",
+   "evidence_path": "crates/task-ops/src/delivery.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p celeris --lib -E 'test(/auto_resolve_local_repair_limit_requests_integration/)'",
+     "tests_at_head": 1,
+     "tests": [
+      "delivery::tests::auto_resolve_local_repair_limit_requests_integration"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 1
+     }
+    },
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/cex_review_resync_cap_halts_and_starts_no_more_reviewer_runs/)'",
+     "tests_at_head": 1,
+     "tests": [
+      "dispatcher::tests::cex_review_authority::cex_review_resync_cap_halts_and_starts_no_more_reviewer_runs"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 1
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:pre-review-sync-auto-resolve-integration-repair#2",
+   "source": "capability-map",
+   "capability": "pre-review-sync-auto-resolve-integration-repair",
+   "kind": "human_authority",
+   "invariant": "自動で解くのは機械的な衝突（記録・番号・生成物）だけで、残りは統合の依頼として受信箱か integrate task に回す",
+   "evidence_path": "crates/task-dispatch/src/auto_resolve.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^auto_resolve::tests::/)'",
+     "tests_at_head": 10,
+     "tests": [
+      "auto_resolve::tests::active_merge_classifies_each_supported_conflict",
+      "auto_resolve::tests::allowed_adr_duplicate_brought_in_by_source_requests_nothing",
+      "auto_resolve::tests::code_conflict_requests_human_with_both_subjects_and_diffstats",
+      "auto_resolve::tests::dated_adrs_added_on_both_sides_without_conflict_request_nothing",
+      "auto_resolve::tests::duplicate_already_on_both_sides_requests_nothing",
+      "auto_resolve::tests::fast_forward_source_with_dated_adrs_requests_nothing",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 10
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:pre-review-sync-auto-resolve-integration-repair#3",
+   "source": "capability-map",
+   "capability": "pre-review-sync-auto-resolve-integration-repair",
+   "kind": "credential_sandbox",
+   "invariant": "auto_resolve は scratch の worktree で merge し、本番の checkout には触らず task branch の ref だけを動かす",
+   "evidence_path": "crates/celeris/src/delivery/auto_resolve.rs",
+   "coverage": "partial",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p celeris --lib -E 'test(/^delivery::tests::auto_resolve_/)'",
+     "tests_at_head": 7,
+     "tests": [
+      "delivery::tests::auto_resolve_cargo_lock_conflict_is_regenerated_and_regated",
+      "delivery::tests::auto_resolve_cargo_lock_with_cargo_toml_conflict_requests_integration",
+      "delivery::tests::auto_resolve_clean_main_follow_is_counted_and_left_to_the_legacy_path",
+      "delivery::tests::auto_resolve_code_conflict_requests_integration_and_aborts_merge",
+      "delivery::tests::auto_resolve_local_repair_limit_requests_integration",
+      "delivery::tests::auto_resolve_progress_append_conflict_is_resolved_and_regated",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 7
+     }
+    }
+   ],
+   "gap": "auto_resolve の試験は scratch で merge するが、本番の checkout に触らないことを直接は確かめていない",
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run",
+    "coverage": "partial"
+   }
+  },
+  {
+   "id": "cap:release-selfdeploy-wiring#0",
+   "source": "capability-map",
+   "capability": "release-selfdeploy-wiring",
+   "kind": "lease_exclusion",
+   "invariant": "昇格は新プロセスが同じ DB に active を引き継ぎ、旧プロセスは handoff_requested_at で draining になる。live な active は 1 つだけ",
+   "evidence_path": "crates/celeris/src/instance.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p celeris --lib -E 'test(/^instance::tests::/)'",
+     "tests_at_head": 29,
+     "tests": [
+      "instance::tests::a_dead_pid_or_pid_zero_in_promote_lock_is_rejected",
+      "instance::tests::a_fresh_matching_marker_authorizes_and_stale_or_foreign_ones_do_not",
+      "instance::tests::a_handoff_request_from_a_gone_requester_is_dropped_and_the_active_stays",
+      "instance::tests::a_killed_active_is_taken_over_at_start_and_its_row_is_removed",
+      "instance::tests::a_live_active_of_another_release_makes_standby_listing_every_live_active",
+      "instance::tests::a_live_pid_and_a_fresh_promote_lock_authorize_the_old_promote_script",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 29
+     }
+    },
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p celeris --test instance_handoff -E 'test(/./)'",
+     "tests_at_head": 8,
+     "tests": [
+      "a_newer_release_takes_over_while_the_old_one_finishes_its_run",
+      "a_stale_heartbeat_does_not_replace_a_live_active_until_its_process_is_gone",
+      "normal_mode_does_not_inject_the_smoke_builtins",
+      "starting_the_same_release_twice_exits_three",
+      "the_builtin_smoke_role_and_genre_override_a_config_entry_of_the_same_id",
+      "the_cli_overrides_replace_the_config_values",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 8
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:release-selfdeploy-wiring#1",
+   "source": "capability-map",
+   "capability": "release-selfdeploy-wiring",
+   "kind": "human_authority",
+   "invariant": "どの release を昇格するかは人が GUI か shell で決め、releases は読むだけの純粋な関数",
+   "evidence_path": "crates/celeris/src/releases.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p celeris --lib -E 'test(/^releases::tests::/)'",
+     "tests_at_head": 21,
+     "tests": [
+      "releases::tests::broken_json_and_build_directories_do_not_break_the_scan",
+      "releases::tests::changes_json_becomes_changes_with_stale_computed_against_current",
+      "releases::tests::gate_failed_step_empty_string_is_normalized_to_none",
+      "releases::tests::missing_checks_and_gate_default_to_empty_without_breaking_the_scan",
+      "releases::tests::on_main_is_true_false_or_null",
+      "releases::tests::promote_exec_command_inline_is_setsid",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 21
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:release-selfdeploy-wiring#2",
+   "source": "capability-map",
+   "capability": "release-selfdeploy-wiring",
+   "kind": "fail_closed",
+   "invariant": "昇格していない release の daemon は本番を引き継がない（promotion evidence を読んで判定）",
+   "evidence_path": "crates/celeris/src/instance.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p celeris --test unpromoted_release -E 'test(/./)'",
+     "tests_at_head": 10,
+     "tests": [
+      "a_fresh_promoting_marker_authorizes_the_live_takeover",
+      "a_release_that_current_points_to_starts_as_before",
+      "an_unpromoted_release_does_not_migrate_an_old_schema_db",
+      "an_unpromoted_release_does_not_request_a_handoff",
+      "an_unpromoted_release_without_current_never_creates_the_db",
+      "old_promote_dead_lock_is_rejected_without_opening_the_db",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 10
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:release-selfdeploy-wiring#3",
+   "source": "capability-map",
+   "capability": "release-selfdeploy-wiring",
+   "kind": "reviewed_candidate_identity",
+   "invariant": "delivery の prepare は承認した head を引数に current/scripts/prepare.sh を起動し、gate/verify/manifest の一致を見て Ready にする",
+   "evidence_path": "crates/celeris/src/delivery.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p celeris --lib -E 'test(/^delivery::tests::.*(prepare|gate|manifest|verify)/)'",
+     "tests_at_head": 5,
+     "tests": [
+      "delivery::tests::auto_resolve_cargo_lock_conflict_is_regenerated_and_regated",
+      "delivery::tests::auto_resolve_progress_append_conflict_is_resolved_and_regated",
+      "delivery::tests::other_gate_failure_keeps_legacy_reopen_once",
+      "delivery::tests::preparation_requires_all_gates_and_notifies_cos_only_when_ready",
+      "delivery::tests::prepare_child_counts_as_in_flight_until_it_exits"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 5
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:routing-lane-route#0",
+   "source": "capability-map",
+   "capability": "routing-lane-route",
+   "kind": "other",
+   "invariant": "担当と lane は celeris が決定的に選び、worker の申告では選ばない（ADR-0069）。dispatcher は LLM を呼ばない",
+   "evidence_path": "agent-docs/adr/0069-routing-four-layers.md",
+   "coverage": "partial",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^dispatcher::tests::route_select::/)'",
+     "tests_at_head": 37,
+     "tests": [
+      "dispatcher::tests::route_select::class_candidates_survive_the_harness_loop",
+      "dispatcher::tests::route_select::cos_route_candidates_keep_priority_and_fail_closed_when_none_is_eligible",
+      "dispatcher::tests::route_select::direct_route_pick_keeps_the_bare_model",
+      "dispatcher::tests::route_select::evidence_mode::none_never_reads_the_table_and_ignores_later_updates",
+      "dispatcher::tests::route_select::harness_balance::a_class_that_is_not_enabled_keeps_the_declared_order",
+      "dispatcher::tests::route_select::harness_balance::a_difference_inside_the_tolerance_keeps_the_declared_order",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 37
+     }
+    }
+   ],
+   "gap": "dispatcher が LLM を呼ばないことを検出する試験は無い。選択が決定的なことは Rust の試験で確かめた。TS 側の試験（control-ts/src/domains/lane_rules.test.ts・route_priority.test.ts）は WU の --run に入れていない。release gate の script-bundle 段は bundle と Rust 側の script 試験を回すが、vitest の単体試験を回すかは未確認",
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run",
+    "coverage": "partial"
+   }
+  },
+  {
+   "id": "cap:routing-lane-route#1",
+   "source": "capability-map",
+   "capability": "routing-lane-route",
+   "kind": "restart_replay",
+   "invariant": "lane の決定は routing_decided event（policy_version 付き）として run ごとに追記し、後から再生・監査できる",
+   "evidence_path": "crates/task-dispatch/src/dispatcher/dispatch_run.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/(?i)routing_decided|policy_version/)'",
+     "tests_at_head": 2,
+     "tests": [
+      "dispatcher::tests::cos_chat_triage::cos_digest_script::cos_digest_script_policy_version_change_and_fresh_session",
+      "dispatcher::tests::cos_chat_triage::cos_digest_script::ts::cos_digest_script_ts_policy_version_bump_session_fresh"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 2
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:routing-lane-route#2",
+   "source": "capability-map",
+   "capability": "routing-lane-route",
+   "kind": "fail_closed",
+   "invariant": "宣言された route 候補がどれも使えないときは run を起こさない（no declared route candidate ... is eligible）",
+   "evidence_path": "crates/task-dispatch/src/dispatcher/route_failure.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^dispatcher::tests::route_failure_escalation::/)'",
+     "tests_at_head": 5,
+     "tests": [
+      "dispatcher::tests::route_failure_escalation::classification_defaults_toward_waiting_not_spending",
+      "dispatcher::tests::route_failure_escalation::content_failure_escalates_one_step_then_requests_replan",
+      "dispatcher::tests::route_failure_escalation::explicit_model_and_allowed_tiers_are_never_overridden",
+      "dispatcher::tests::route_failure_escalation::infra_failures_wait_in_same_lane_with_backoff_and_never_escalate",
+      "dispatcher::tests::route_failure_escalation::unknown_quota_or_cost_is_not_treated_as_zero_or_launched"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 5
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:accounts-quota#0",
+   "source": "capability-map",
+   "capability": "accounts-quota",
+   "kind": "budget",
+   "invariant": "quota 見積りを超える account に割り当てない。見積りは measured → apportioned → estimated → unknown の順で決定的に選ぶ（ADR-0074 D4）",
+   "evidence_path": "crates/task-core/src/quota.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-core --lib -E 'test(/^quota::tests::.*(measured|apportion|estimat|unknown|exceed)/)'",
+     "tests_at_head": 13,
+     "tests": [
+      "quota::tests::apportioned_by_weighted_tokens_when_runs_overlap",
+      "quota::tests::apportioned_is_none_while_the_group_has_not_closed",
+      "quota::tests::apportioned_requires_a_valid_group_before_and_positive_weights",
+      "quota::tests::estimated_requires_at_least_three_measured_samples",
+      "quota::tests::estimated_uses_ratio_of_sums_calibration",
+      "quota::tests::free_window_is_zero_not_unknown",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 13
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:accounts-quota#1",
+   "source": "capability-map",
+   "capability": "accounts-quota",
+   "kind": "credential_sandbox",
+   "invariant": "credential は消さない（ADR-0017）。認証切れ account は再ログイン/check 成功まで routing から外す",
+   "evidence_path": "crates/celeris/src/accounts_admin.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^(accounts::routing_tests|dispatcher::tests::account_auth_failure)::.*(auth|expired|login|check)/)'",
+     "tests_at_head": 3,
+     "tests": [
+      "accounts::routing_tests::missing_stale_and_expired_quota_are_unknown",
+      "dispatcher::tests::account_auth_failure::auth_failure_excludes_the_account_reroutes_notifies_and_recovers",
+      "dispatcher::tests::account_auth_failure::auth_failure_with_no_other_account_waits_for_relogin_instead_of_failing"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 3
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:budget-pricing#0",
+   "source": "capability-map",
+   "capability": "budget-pricing",
+   "kind": "budget",
+   "invariant": "単価が引けない model と usage の無い終わった run は費用不明として BudgetKind::UsdUnknown で止める（ADR 2026-11-06-budget-usd-caps D2）",
+   "evidence_path": "crates/task-ops/src/project_budget.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-ops --lib -E 'test(/^project_budget.*unknown/)'",
+     "tests_at_head": 3,
+     "tests": [
+      "project_budget::tests::attempt_with_missing_usage_is_unknown_but_keeps_known_tokens_and_usd",
+      "project_budget::tests::prelaunch_only_has_no_unknown_guard_but_any_missing_after_launch_keeps_it",
+      "project_budget::tests::unpriced_model_and_missing_usage_stop_as_unknown_cost"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 3
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:budget-pricing#1",
+   "source": "capability-map",
+   "capability": "budget-pricing",
+   "kind": "fail_closed",
+   "invariant": "単価表に一致しない model は None（費用不明）で、0 円と偽らない",
+   "evidence_path": "crates/task-core/src/pricing.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-core --lib -E 'test(/^pricing.*(unknown|none|unpriced|zero)/)'",
+     "tests_at_head": 6,
+     "tests": [
+      "pricing::tests::missing_fields_are_treated_as_zero_not_as_unknown",
+      "pricing::tests::no_tokens_at_all_is_none_even_for_a_known_model",
+      "pricing::tests::nonzero_tokens_with_missing_price_are_unknown",
+      "pricing::tests::output_input_ratio_of_an_unpriced_model_is_none",
+      "pricing::tests::unknown_model_is_none",
+      "pricing::tests::unpriced_model_and_null_usage_are_unknown_not_zero"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 6
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:budget-pricing#2",
+   "source": "capability-map",
+   "capability": "budget-pricing",
+   "kind": "budget",
+   "invariant": "task 木の token 予算（Budget.max_tokens）を run 途中の累積 usage で watch し、continuation・retry・reviewer の前に消費 ≥ 上限を判定する",
+   "evidence_path": "crates/task-dispatch/src/dispatcher/token_budget.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^dispatcher::tests::token_budget::/)'",
+     "tests_at_head": 4,
+     "tests": [
+      "dispatcher::tests::token_budget::failed_reviewer_run_records_usage",
+      "dispatcher::tests::token_budget::question_run_records_usage",
+      "dispatcher::tests::token_budget::token_budget_exhausted_no_continuation_or_review",
+      "dispatcher::tests::token_budget::token_budget_stops_run_midway"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 4
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:llm-proxy#0",
+   "source": "capability-map",
+   "capability": "llm-proxy",
+   "kind": "other",
+   "invariant": "proxy は 127.0.0.1 で待ち受け、source・model は dispatcher の RoutePolicy の決定を使い proxy で選び直さない（ADR-0053 D1・ADR 2026-10-04）",
+   "evidence_path": "agent-docs/adr/0053-llm-source-proxy.md",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p llm-proxy --test proxy_routing_context -E 'test(/./)'",
+     "tests_at_head": 2,
+     "tests": [
+      "routing_context_header_without_a_registry_is_rejected",
+      "routing_context_ref_propagates_and_rejects_spoofing"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 2
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:llm-proxy#1",
+   "source": "capability-map",
+   "capability": "llm-proxy",
+   "kind": "lease_exclusion",
+   "invariant": "枠（account・共有 GPU）の予約は全枠をまとめて取るか 1 つも取らない。競合時の選び直しは 1 回だけ",
+   "evidence_path": "crates/llm-proxy/src/reservation.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p llm-proxy --lib -E 'test(/^reservation/)'",
+     "tests_at_head": 2,
+     "tests": [
+      "reservation::tests::reselect_happens_at_most_once",
+      "reservation::tests::reserve_is_all_or_nothing_and_released_on_drop"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 2
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:llm-proxy#2",
+   "source": "capability-map",
+   "capability": "llm-proxy",
+   "kind": "credential_sandbox",
+   "invariant": "CLI が書いた OAuth 認証情報 file をそのまま読み、更新は同じ file に tmp+rename で書き戻す。DB や別の場所に写さず、値を Debug/log に出さない",
+   "evidence_path": "crates/llm-proxy/src/credentials.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p llm-proxy --lib -E 'test(/^credentials::/)'",
+     "tests_at_head": 5,
+     "tests": [
+      "credentials::tests::codex_write_back_updates_last_refresh",
+      "credentials::tests::missing_field_is_a_shape_error",
+      "credentials::tests::parses_claude_fixture",
+      "credentials::tests::parses_codex_fixture",
+      "credentials::tests::write_back_preserves_unknown_fields_and_updates_only_tokens"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 5
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:routing-eval#0",
+   "source": "capability-map",
+   "capability": "routing-eval",
+   "kind": "atomic_state_event",
+   "invariant": "試行の投入は冪等で、claim は二重にしない（ADR 2026-10-11）",
+   "evidence_path": "crates/task-core/src/store/eval_trials.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-core --lib -E 'test(/^store::eval_trials.*(idempot|claim|twice|once)/)'",
+     "tests_at_head": 4,
+     "tests": [
+      "store::eval_trials::tests::claim_skips_the_given_sources_and_keeps_their_order",
+      "store::eval_trials::tests::claim_takes_oldest_once_and_unclaim_requeues",
+      "store::eval_trials::tests::concurrent_claims_never_return_the_same_trial",
+      "store::eval_trials::tests::insert_is_idempotent_per_trial_key"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 4
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:routing-eval#1",
+   "source": "capability-map",
+   "capability": "routing-eval",
+   "kind": "atomic_state_event",
+   "invariant": "routing stage の変更は routing_stage 表と routing_stage_changed event を同じ store 呼び出しで書く",
+   "evidence_path": "crates/task-core/src/store/routing_evidence.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-core --lib -E 'test(/^store::routing_evidence.*stage/)'",
+     "tests_at_head": 1,
+     "tests": [
+      "store::routing_evidence::tests::evidence_versions_replace_and_stage_is_shadow_by_default_then_event_is_appended"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 1
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:routing-eval#2",
+   "source": "capability-map",
+   "capability": "routing-eval",
+   "kind": "other",
+   "invariant": "評価集合は manifest の hash で固定し recheck で確かめる。API 応答に check_cmd を返さない",
+   "evidence_path": "crates/routing-eval/src/manifest.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p routing-eval --lib -E 'test(/^(manifest::tests::.*(reject|freez)|recheck::tests::)/)'",
+     "tests_at_head": 11,
+     "tests": [
+      "manifest::tests::manifest_freezes_stratified_30_and_12_with_features_and_rejects_changed_sha",
+      "manifest::tests::old_manifest_without_prompt_is_rejected",
+      "manifest::tests::refill_fills_30_from_adopted_records_rejections_and_marks_parent_bases",
+      "recheck::tests::recheck_adopts_a_base_failure_and_head_success_and_excludes_the_rest_with_reasons",
+      "recheck::tests::recheck_does_not_let_the_base_run_pollute_the_head_run",
+      "recheck::tests::recheck_excludes_a_check_that_does_not_finish_in_time",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 11
+     }
+    },
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-api --test routing_eval -E 'test(/check_command_server_side/)'",
+     "tests_at_head": 1,
+     "tests": [
+      "post_creates_a_batch_and_keeps_the_check_command_server_side"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 1
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:routing-audit-outcome#0",
+   "source": "capability-map",
+   "capability": "routing-audit-outcome",
+   "kind": "restart_replay",
+   "invariant": "proxy の要求判断 event は request_id・decision_id が既にあれば追記しない（再送で二重にしない）",
+   "evidence_path": "crates/celeris/src/daemon/services.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p celeris --lib -E 'test(/^daemon::services.*(request_id|decision|dup|once)/)'",
+     "tests_at_head": 1,
+     "tests": [
+      "daemon::services::routing_tests::proxy_sink_appends_only_correlated_requests_once"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 1
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:routing-audit-outcome#1",
+   "source": "capability-map",
+   "capability": "routing-audit-outcome",
+   "kind": "other",
+   "invariant": "監査・export は DB を書き換えない（ADR 2026-10-11 D8）",
+   "evidence_path": "crates/task-ops/src/routing_audit.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-ops --lib -E 'test(/^routing_audit/)'",
+     "tests_at_head": 1,
+     "tests": [
+      "routing_audit::tests::legacy_shadow_history_fixture_deserializes_and_appears_in_audit"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 1
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:project-controller#0",
+   "source": "capability-map",
+   "capability": "project-controller",
+   "kind": "other",
+   "invariant": "判定は TS、状態遷移・予算・安全は Rust。controller は task の遷移を直接行わない（ADR 2026-11-04-project-controller D3・I14）",
+   "evidence_path": "agent-docs/adr/2026-11-04-project-controller.md",
+   "coverage": "partial",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^dispatcher::tests::project_wake::replay::/)'",
+     "tests_at_head": 13,
+     "tests": [
+      "dispatcher::tests::project_wake::replay::project_controller_replay_achieved_stays_quiet",
+      "dispatcher::tests::project_wake::replay::project_controller_replay_budget_day_cap",
+      "dispatcher::tests::project_wake::replay::project_controller_replay_cancelled_project",
+      "dispatcher::tests::project_wake::replay::project_controller_replay_crash_each_stage",
+      "dispatcher::tests::project_wake::replay::project_controller_replay_event_primary_cron_fallback",
+      "dispatcher::tests::project_wake::replay::project_controller_replay_external_never_replies",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 13
+     }
+    }
+   ],
+   "gap": "Rust 側の replay 試験は通った。判定（TS）側の試験（control-ts/src/domains/project_controller.test.ts）は WU の --run に入れていない。release gate が vitest の単体試験を回すかは未確認",
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run",
+    "coverage": "partial"
+   }
+  },
+  {
+   "id": "cap:project-controller#1",
+   "source": "capability-map",
+   "capability": "project-controller",
+   "kind": "human_authority",
+   "invariant": "blocked の自動の再開は原因の解消の根拠がある時だけで、pause・cancel・未回答の問い・危険な予算超過は解かない（付記 P1-G）",
+   "evidence_path": "agent-docs/adr/2026-11-05-phase3-p1g.md",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^dispatcher::tests::project_wake::.*(pause|cancel|question|unanswered|budget)/)'",
+     "tests_at_head": 17,
+     "tests": [
+      "dispatcher::tests::project_wake::effects::project_wake_pending_cancelled",
+      "dispatcher::tests::project_wake::effects::project_wake_pending_paused",
+      "dispatcher::tests::project_wake::long_horizon_pilot::long_horizon_pilot_cancel_and_rewind",
+      "dispatcher::tests::project_wake::project_cos::authority_ledger::authority_ledger_answered_question_is_not_asked_again",
+      "dispatcher::tests::project_wake::project_cos::authority_ledger::authority_ledger_budget_and_expiry_stop_launch",
+      "dispatcher::tests::project_wake::project_cos::project_cos_no_needless_question",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 17
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:project-controller#2",
+   "source": "capability-map",
+   "capability": "project-controller",
+   "kind": "budget",
+   "invariant": "案件の日次上限（USD・root 数・CoS 入力数）を超えたら guard が止める",
+   "evidence_path": "crates/task-ops/src/project_budget.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-ops --lib -E 'test(/^project_budget.*(daily|cap|root|cos|limit)/)'",
+     "tests_at_head": 4,
+     "tests": [
+      "project_budget::tests::chat_runs_are_project_scoped_daily_and_priced",
+      "project_budget::tests::project_budget_exceeded_at_the_limit",
+      "project_budget::tests::route_prefixed_model_is_priced_and_severity_uses_double_limit",
+      "project_budget::tests::unpriced_model_and_missing_usage_stop_as_unknown_cost"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 4
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:script-runtime#0",
+   "source": "capability-map",
+   "capability": "script-runtime",
+   "kind": "fail_closed",
+   "invariant": "hash・schema・host API の検証に通らない bundle を load しない。op は store を持たず host sink へ送るだけ",
+   "evidence_path": "crates/script-runtime/src/manifest.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p celeris-script --test manifest -E 'test(/./)'",
+     "tests_at_head": 11,
+     "tests": [
+      "bench_bin_writes_latency_and_rss",
+      "deploy_again_keeps_provenance_and_rejects_contract_change",
+      "deploy_copies_and_reload_verifies",
+      "deploy_rejects_invalid_dist_without_writing",
+      "load_check_bin_reports_json_and_fails_nonzero",
+      "load_deployed_rejects_path_like_hash_and_moved_dir",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 11
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:script-runtime#1",
+   "source": "capability-map",
+   "capability": "script-runtime",
+   "kind": "human_authority",
+   "invariant": "→canary・canary_bps 変更・→ts は人の API token の主体だけ。自動で昇格する経路は無い",
+   "evidence_path": "crates/task-api/src/script_domains.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-api --test script_domains -E 'test(/(?i)human|token|forbid|operator|canary|403|401/)'",
+     "tests_at_head": 7,
+     "tests": [
+      "canary_promote_with_exhaustive_100",
+      "canary_promote_without_exhaustive_422",
+      "script_behavior_change_approve_is_human_only_and_revoke_fails_closed",
+      "script_domain_guard_clear_human_only",
+      "script_domain_mode_canary_requires_guard_ready",
+      "script_domain_mode_canary_requires_human",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 7
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:script-runtime#2",
+   "source": "capability-map",
+   "capability": "script-runtime",
+   "kind": "atomic_state_event",
+   "invariant": "script-guard の戻しは mode の CAS と同じ transaction で書き、script_guard_state の計数は再起動後も残す",
+   "evidence_path": "crates/task-core/src/store/script_guard.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p celeris --lib -E 'test(/^daemon::script_guard/)'",
+     "tests_at_head": 15,
+     "tests": [
+      "daemon::script_guard::ops_measure_tests::script_ops_restart_drain_retire_cycles",
+      "daemon::script_guard::stop_tests::script_guard_counts_canary_records_on_both_sides",
+      "daemon::script_guard::stop_tests::script_guard_counts_survive_restart",
+      "daemon::script_guard::stop_tests::script_guard_no_automatic_promotion",
+      "daemon::script_guard::stop_tests::script_guard_rolls_back_on_failure_rate_and_streak",
+      "daemon::script_guard::stop_tests::script_guard_rolls_back_on_one_mismatch",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 15
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:script-runtime#3",
+   "source": "capability-map",
+   "capability": "script-runtime",
+   "kind": "restart_replay",
+   "invariant": "起動時は mode の行が指す generation を load し直し、使えない領域は system:script-startup で rust に戻す",
+   "evidence_path": "crates/celeris/src/daemon/script_layer.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p celeris --lib -E 'test(/^daemon::script_layer::tests::/)'",
+     "tests_at_head": 3,
+     "tests": [
+      "daemon::script_layer::tests::script_restore_reason_checks_stored_checkpoint_versions",
+      "daemon::script_layer::tests::script_restore_reason_codes_for_each_failure",
+      "daemon::script_layer::tests::script_restore_reason_keeps_usable_generation_modes"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 3
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:cron-jobs#0",
+   "source": "capability-map",
+   "capability": "cron-jobs",
+   "kind": "other",
+   "invariant": "cron job は tick の段で決定的に起動し、dispatcher から LLM を呼ばない（ADR-0131）",
+   "evidence_path": "agent-docs/adr/0131-cron-jobs.md",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^dispatcher::tests::cron_jobs::/)'",
+     "tests_at_head": 8,
+     "tests": [
+      "dispatcher::tests::cron_jobs::target_sweep_cron_fires_deterministic_executor_and_records_event",
+      "dispatcher::tests::cron_jobs::target_sweep_cron_rejects_unknown_action",
+      "dispatcher::tests::cron_jobs::target_sweep_executor_cleans_finished_workspaces_and_scratch_at_critical",
+      "dispatcher::tests::cron_jobs::target_sweep_tick_defers_while_pool_is_locked",
+      "dispatcher::tests::cron_jobs::tick_after_daemon_gap_applies_each_job_misfire_rule",
+      "dispatcher::tests::cron_jobs::tick_fires_once_skips_nonterminal_overlap_and_ignores_disabled_job",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 8
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:cron-jobs#1",
+   "source": "capability-map",
+   "capability": "cron-jobs",
+   "kind": "restart_replay",
+   "invariant": "cos_review は周期ごとに冪等キー付きの入力を 1 件だけ積み、再起動後も重複しない（ADR 2026-10-27-cron-cos-review D3）",
+   "evidence_path": "crates/task-ops/src/cron_jobs.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^dispatcher::tests::cron_cos_review::/)'",
+     "tests_at_head": 7,
+     "tests": [
+      "dispatcher::tests::cron_cos_review::cos_review_is_not_held_back_by_the_persons_queued_message_in_the_general_thread",
+      "dispatcher::tests::cron_cos_review::cos_review_queues_one_input_per_period_and_a_restart_does_not_duplicate_it",
+      "dispatcher::tests::cron_cos_review::cos_review_queues_the_next_period_after_a_person_stopped_a_review_run",
+      "dispatcher::tests::cron_cos_review::cos_review_run_has_the_general_cos_context_and_its_own_session",
+      "dispatcher::tests::cron_cos_review::cos_review_thread_runs_get_the_general_cos_context_scope",
+      "dispatcher::tests::cron_cos_review::cos_review_without_cos_chat_records_an_error_and_posts_nothing",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 7
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:run-claim-lease#0",
+   "source": "capability-map",
+   "capability": "run-claim-lease",
+   "kind": "lease_exclusion",
+   "invariant": "task の lease は条件付き UPDATE で 1 run だけが取得でき、renew は status と lease_worker_run_id が一致する行だけ延長する",
+   "evidence_path": "crates/task-core/src/store/tasks.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-core --lib -E 'test(/^store::tests::.*lease/)'",
+     "tests_at_head": 8,
+     "tests": [
+      "store::tests::acquire_lease_appends_transitioned_event_atomically",
+      "store::tests::acquire_lease_is_exclusive_under_concurrency",
+      "store::tests::acquire_lease_rejects_approval_kind_even_when_ready",
+      "store::tests::acquire_work_unit_lease_marks_running_and_extends_the_task_lease",
+      "store::tests::acquire_work_unit_lease_requires_a_running_task",
+      "store::tests::apply_transition_releases_lease_when_leaving_running",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 8
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:run-claim-lease#1",
+   "source": "capability-map",
+   "capability": "run-claim-lease",
+   "kind": "atomic_state_event",
+   "invariant": "acquire_lease は running への遷移と Transitioned event を同じ transaction で書く（試験 acquire_lease_appends_transitioned_event_atomically）",
+   "evidence_path": "crates/task-core/src/store/tests.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-core --lib -E 'test(/acquire_lease_appends_transitioned_event/)'",
+     "tests_at_head": 1,
+     "tests": [
+      "store::tests::acquire_lease_appends_transitioned_event_atomically"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 1
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:run-claim-lease#2",
+   "source": "capability-map",
+   "capability": "run-claim-lease",
+   "kind": "restart_replay",
+   "invariant": "drain の打ち切りは DB の状態を変えず、lease の失効で新しい active が拾う。lease を持たない reviewer/eval run は runs 行を cancelled で閉じる",
+   "evidence_path": "crates/task-dispatch/src/dispatcher/leases.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^dispatcher::tests::drain_hand_off::/)'",
+     "tests_at_head": 2,
+     "tests": [
+      "dispatcher::tests::drain_hand_off::a_draining_instance_does_not_start_the_phase_integration",
+      "dispatcher::tests::drain_hand_off::a_draining_instance_leaves_the_work_unit_checks_to_the_new_active"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 2
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:orphan-takeover#0",
+   "source": "capability-map",
+   "capability": "orphan-takeover",
+   "kind": "lease_exclusion",
+   "invariant": "再起動直後の takeover は holder_gone（旧インスタンスの freshness と pid の生存）で持ち主が居ないと確かめた run だけ。旧が生きていれば lease 失効まで横取りしない",
+   "evidence_path": "crates/task-dispatch/src/orphan.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^orphan::tests::.*(holder|alive|fresh|gone|live)/)'",
+     "tests_at_head": 3,
+     "tests": [
+      "orphan::tests::an_ownerless_run_is_closed_at_once_without_live_holders_and_otherwise_after_its_deadline",
+      "orphan::tests::proc_pid_alive_sees_this_process_and_not_an_unused_pid",
+      "orphan::tests::the_holder_is_gone_only_when_no_other_live_active_or_draining_instance_exists"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 3
+     }
+    },
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^dispatcher::tests::orphan_takeover::/)'",
+     "tests_at_head": 6,
+     "tests": [
+      "dispatcher::tests::orphan_takeover::a_run_held_by_a_live_draining_instance_is_left_alone",
+      "dispatcher::tests::orphan_takeover::a_shutdown_records_the_interrupted_runs_before_exiting",
+      "dispatcher::tests::orphan_takeover::an_orphaned_parallel_work_unit_run_is_reconciled_without_waiting_for_its_lease",
+      "dispatcher::tests::orphan_takeover::an_orphaned_run_with_a_done_result_is_finalised",
+      "dispatcher::tests::orphan_takeover::an_orphaned_run_with_an_error_result_is_retried_without_waiting_for_the_lease",
+      "dispatcher::tests::orphan_takeover::an_orphaned_run_without_a_result_is_requeued_as_interrupted"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 6
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:orphan-takeover#1",
+   "source": "capability-map",
+   "capability": "orphan-takeover",
+   "kind": "restart_replay",
+   "invariant": "lease を持たない running の runs 行は ownerless_run_decision で期限超過を確かめてから WorkerFinished{end:cancelled} で閉じる",
+   "evidence_path": "agent-docs/adr/2026-10-03-ownerless-running-runs.md",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^dispatcher::tests::ownerless_runs::/)'",
+     "tests_at_head": 11,
+     "tests": [
+      "dispatcher::tests::ownerless_runs::a_crashed_old_daemons_reviewer_run_is_closed_and_the_task_rereviewed",
+      "dispatcher::tests::ownerless_runs::a_dispatcher_not_accepting_new_work_does_not_reconcile_until_it_becomes_active",
+      "dispatcher::tests::ownerless_runs::a_leased_worker_run_of_a_gone_daemon_is_requeued_by_the_lease_path",
+      "dispatcher::tests::ownerless_runs::a_review_that_ended_without_a_verdict_is_closed_and_redone_in_the_same_instance",
+      "dispatcher::tests::ownerless_runs::a_review_that_outlives_its_deadline_is_stopped_and_redone_in_the_same_instance",
+      "dispatcher::tests::ownerless_runs::a_reviewer_run_not_launched_because_a_check_failed_is_closed",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 11
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:orphan-takeover#2",
+   "source": "capability-map",
+   "capability": "orphan-takeover",
+   "kind": "other",
+   "invariant": "orphan.rs は純粋関数と設定だけで DB にも LLM にも触れない",
+   "evidence_path": "crates/task-dispatch/src/orphan.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^orphan::tests::/)'",
+     "tests_at_head": 3,
+     "tests": [
+      "orphan::tests::an_ownerless_run_is_closed_at_once_without_live_holders_and_otherwise_after_its_deadline",
+      "orphan::tests::proc_pid_alive_sees_this_process_and_not_an_unused_pid",
+      "orphan::tests::the_holder_is_gone_only_when_no_other_live_active_or_draining_instance_exists"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 3
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:continuation-session-resume#0",
+   "source": "capability-map",
+   "capability": "continuation-session-resume",
+   "kind": "restart_replay",
+   "invariant": "resume できない（拒否・adapter 非対応）ときは checkpoint から新しい session で続け、失敗した session は retire する",
+   "evidence_path": "agent-docs/adr/0140-claude-session-resume.md",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^dispatcher::tests::session_resume::.*(retire|reject|fallback|checkpoint|unsupported)/)'",
+     "tests_at_head": 8,
+     "tests": [
+      "dispatcher::tests::session_resume::session_resume_after_restart_corrupt_session_file_falls_back_to_checkpoint",
+      "dispatcher::tests::session_resume::session_resume_after_restart_missing_session_file_falls_back_to_checkpoint",
+      "dispatcher::tests::session_resume::session_resume_comment_interrupt_missing_session_falls_back_to_checkpoint",
+      "dispatcher::tests::session_resume::session_resume_remote_other_account_falls_back_to_checkpoint",
+      "dispatcher::tests::session_resume::session_resume_remote_rejected_resume_falls_back_to_checkpoint",
+      "dispatcher::tests::session_resume::session_resume_session_reuse_adapter_change_falls_back_to_checkpoint",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 8
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:continuation-session-resume#1",
+   "source": "capability-map",
+   "capability": "continuation-session-resume",
+   "kind": "other",
+   "invariant": "継続 session は node / WU 単位で DB（node_sessions）に記録し、worker のメモリに持たない",
+   "evidence_path": "crates/task-core/src/node_session.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-core --lib -E 'test(/^node_session::tests::/)'",
+     "tests_at_head": 11,
+     "tests": [
+      "node_session::tests::conversation_and_lead_kinds_and_different_nodes_are_independent",
+      "node_session::tests::create_then_active_round_trips",
+      "node_session::tests::kind_as_str_and_parse_round_trip",
+      "node_session::tests::retire_then_create_replaces_the_active_session",
+      "node_session::tests::set_id_and_touch_are_no_ops_when_there_is_no_active_session",
+      "node_session::tests::touch_bumps_turns_and_tokens_and_set_id_updates_the_session_id_only",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 11
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:continuation-session-resume#2",
+   "source": "capability-map",
+   "capability": "continuation-session-resume",
+   "kind": "atomic_state_event",
+   "invariant": "checkpoint は worker_finish が CheckpointSaved event として run の終わりの記録に添える",
+   "evidence_path": "crates/task-dispatch/src/dispatcher/worker_finish.rs",
+   "coverage": "partial",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^(checkpoint::tests::|dispatcher::tests::orphan_work_units::restart_with_checkpoint)/)'",
+     "tests_at_head": 6,
+     "tests": [
+      "checkpoint::tests::missing_cwd_yields_empty_repo_facts",
+      "checkpoint::tests::read_worker_checkpoint_reads_a_valid_file",
+      "checkpoint::tests::read_worker_checkpoint_returns_none_when_the_file_is_absent",
+      "checkpoint::tests::recent_activity_keeps_only_the_most_recent_items",
+      "checkpoint::tests::tests_and_activity_pairs_test_commands_with_the_following_result",
+      "dispatcher::tests::orphan_work_units::restart_with_checkpoint_preserves_continuation_and_counters"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 6
+     }
+    }
+   ],
+   "gap": "CheckpointSaved event を名指しする試験は無い。checkpoint の読み取りと再起動後の継続は試験がある",
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run",
+    "coverage": "partial"
+   }
+  },
+  {
+   "id": "cap:worker-protocol-adapters#0",
+   "source": "capability-map",
+   "capability": "worker-protocol-adapters",
+   "kind": "other",
+   "invariant": "adapter は結果を RunOutcome に正規化して返すだけで、状態遷移の判断はしない（task-dispatch の責務）",
+   "evidence_path": "crates/task-worker/src/adapter.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-worker --lib -E 'test(/^route::tests::/)'",
+     "tests_at_head": 10,
+     "tests": [
+      "route::tests::adapter_settings_route_account_env_fails_closed_before_endpoint",
+      "route::tests::non_opencode_model_id_remains_route_model",
+      "route::tests::opencode_model_id_uses_declared_namespace",
+      "route::tests::opencode_without_namespace_keeps_route_model",
+      "route::tests::worker_route_account_directory_is_put_in_the_named_env",
+      "route::tests::worker_route_openai_compatible_endpoint_and_credential",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 10
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:worker-protocol-adapters#1",
+   "source": "capability-map",
+   "capability": "worker-protocol-adapters",
+   "kind": "other",
+   "invariant": "worker は stateless。入力は RunRequest、出力は result.json と events。完了は check か reviewer が決める",
+   "evidence_path": "agent-docs/adr/0003-worker-protocol.md",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-worker --lib -E 'test(/^protocol::tests::/)'",
+     "tests_at_head": 10,
+     "tests": [
+      "protocol::tests::available_genres_round_trips_and_is_omitted_when_empty",
+      "protocol::tests::committed_schema_matches_generated",
+      "protocol::tests::delegate_message_parses_and_is_not_terminal",
+      "protocol::tests::evidence_fields_other_than_criterion_are_optional",
+      "protocol::tests::harness_and_subject_genre_are_optional_additions",
+      "protocol::tests::progress_accepts_both_the_plain_and_the_structured_form",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 10
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:worker-protocol-adapters#2",
+   "source": "capability-map",
+   "capability": "worker-protocol-adapters",
+   "kind": "atomic_state_event",
+   "invariant": "run 途中の event は sink から store へ追記するだけ（worker_progress・worker_policy_violation・artifact_produced）",
+   "evidence_path": "crates/task-dispatch/src/dispatcher/sinks.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/(drained_into_worker_progress|review_policy_violations_collects)/)'",
+     "tests_at_head": 2,
+     "tests": [
+      "dispatcher::tests::remote_push_after_run::remote_prepare_notes_are_drained_into_worker_progress",
+      "dispatcher::tests::review::review_policy_violations_collects_only_the_subject_runs_detections"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 2
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:sandbox-db-guard#0",
+   "source": "capability-map",
+   "capability": "sandbox-db-guard",
+   "kind": "credential_sandbox",
+   "invariant": "adapter・check の子 process は pre_exec で user+mount namespace に入り、DB 本体と -wal/-shm/-journal を読み取り専用にする（container 実行を除く）",
+   "evidence_path": "crates/task-worker/src/db_guard.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-worker --lib -E 'test(/^db_guard.*(refuse|every_worker_spawn_site|protected_set|allows_test_db|requires_userns|writable_children)/)'",
+     "tests_at_head": 16,
+     "tests": [
+      "db_guard::tests::every_worker_spawn_site_goes_through_launch",
+      "db_guard::tests::host_config_read_only_failure_refuses_the_spawn",
+      "db_guard::tests::worker_db_guard_allows_test_db_inside_worker_run",
+      "db_guard::tests::worker_db_guard_allows_test_db_with_test_token",
+      "db_guard::tests::worker_db_guard_protected_set_includes_configured_hot_paths_and_legacy_home",
+      "db_guard::tests::worker_db_guard_refuses_missing_configured_releases",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 16
+     }
+    },
+    {
+     "mode": "release_gate",
+     "command": "cargo nextest run -p task-worker --lib -E 'test(/^db_guard.*(nested_user_namespace|inside_namespace|not_writable_inside|read_only_but_siblings|no_capabilities|systemd_bus_is_hidden)/)'",
+     "reason": "userns・本物の namespace が要る。WU の --run から外し release gate（test-parallel の userns 段）で確かめる"
+    },
+    {
+     "mode": "release_gate",
+     "command": "cargo nextest run -p e2e --test worker_db_read_only",
+     "reason": "userns・本物の namespace が要る。WU の --run から外し release gate（test-parallel の userns 段）で確かめる"
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 2,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:sandbox-db-guard#1",
+   "source": "capability-map",
+   "capability": "sandbox-db-guard",
+   "kind": "fail_closed",
+   "invariant": "本番 DB を守れない起動は拒否する（celeris の worker_db_guard_refuse 試験）",
+   "evidence_path": "crates/celeris/tests/worker_db_guard_refuse.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p celeris --test worker_db_guard_refuse -E 'test(/./)'",
+     "tests_at_head": 2,
+     "tests": [
+      "worker_db_guard_refuse_real_binary_inside_worker_run",
+      "worker_db_guard_refuse_with_opt_out"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 2
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:sandbox-db-guard#2",
+   "source": "capability-map",
+   "capability": "sandbox-db-guard",
+   "kind": "credential_sandbox",
+   "invariant": "host config（~/.config/celeris 等）を run から ro bind で見せる（host_config_read_only_paths）",
+   "evidence_path": "crates/task-worker/src/db_guard.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-worker --lib -E 'test(/^db_guard.*host_config_read_only_(failure|skips)/)'",
+     "tests_at_head": 2,
+     "tests": [
+      "db_guard::tests::host_config_read_only_failure_refuses_the_spawn",
+      "db_guard::tests::host_config_read_only_skips_missing_paths"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 2
+     }
+    },
+    {
+     "mode": "release_gate",
+     "command": "cargo nextest run -p task-worker --lib -E 'test(/^db_guard.*host_config_read_only_inside_namespace/)'",
+     "reason": "userns・本物の namespace が要る。WU の --run から外し release gate（test-parallel の userns 段）で確かめる"
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 1,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:sandbox-db-guard#3",
+   "source": "capability-map",
+   "capability": "sandbox-db-guard",
+   "kind": "other",
+   "invariant": "worker の subagent・別 LLM CLI・LLM API の起動は決定的に検出して WorkerPolicyViolation に残す。検出は警告で run は止めない",
+   "evidence_path": "crates/task-worker/src/tool_policy.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-worker --lib -E 'test(/^tool_policy::/)'",
+     "tests_at_head": 10,
+     "tests": [
+      "tool_policy::tests::command_is_truncated_and_single_line",
+      "tool_policy::tests::command_text_accepts_arrays_and_alternate_keys",
+      "tool_policy::tests::direct_llm_api_calls_are_detected_unless_only_read_tools_mention_the_host",
+      "tool_policy::tests::disallowed_tools_value_lists_the_claude_code_subagent_tools",
+      "tool_policy::tests::general_cos_consult_inline_budget_counts_shell_commands_and_refuses_llm_launches",
+      "tool_policy::tests::llm_cli_launches_are_detected_as_the_head_word_of_a_segment",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 10
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:required-rules-delivery#0",
+   "source": "capability-map",
+   "capability": "required-rules-delivery",
+   "kind": "fail_closed",
+   "invariant": "git が追跡する CLAUDE.md が欠落・読めない・空なら harness を起動せず run を落とす",
+   "evidence_path": "agent-docs/adr/2026-10-23-required-rules-prompt-delivery.md",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-worker --lib -E 'test(/^required_rules::tests::.*(missing|empty|unread|absent|fail)/)'",
+     "tests_at_head": 3,
+     "tests": [
+      "required_rules::tests::preamble_fails_when_the_rules_cannot_be_read",
+      "required_rules::tests::preamble_fails_when_the_tracked_rules_source_is_missing",
+      "required_rules::tests::preamble_is_empty_where_no_rules_source_is_tracked"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 3
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:required-rules-delivery#1",
+   "source": "capability-map",
+   "capability": "required-rules-delivery",
+   "kind": "other",
+   "invariant": "Codex・Pi・ACP は preamble_for_run の全文を prompt 先頭に 1 度だけ置き、作業ツリーには書かない。Claude Code は CLAUDE.md を直接読む",
+   "evidence_path": "crates/task-worker/src/required_rules.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-worker --lib -E 'test(/^(pi|acp)::tests::.*(rules|preamble)/)'",
+     "tests_at_head": 9,
+     "tests": [
+      "acp::tests::acp_run_fails_when_required_rules_are_unreadable",
+      "acp::tests::acp_run_fails_when_tracked_required_rules_are_missing",
+      "acp::tests::change_rules_generic_reaches_acp_once_beside_required_rules",
+      "acp::tests::mounted_skills_are_listed_in_the_preamble",
+      "acp::tests::required_rules_reach_acp_from_a_fresh_worktree",
+      "pi::tests::change_rules_generic_reaches_pi_once_beside_required_rules",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 9
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:credential-broker-resume#0",
+   "source": "capability-map",
+   "capability": "credential-broker-resume",
+   "kind": "credential_sandbox",
+   "invariant": "credential の値は broker の外に出さず、相手 process の uid を確かめて渡す",
+   "evidence_path": "agent-docs/adr/0080-browser-phase2-policy-broker-approval.md",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p celeris-credentiald --test injection_peer_uid -E 'test(/./)'",
+     "tests_at_head": 4,
+     "tests": [
+      "inner_peer_uid_probe",
+      "probe_line_round_trips",
+      "real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch",
+      "same_uid_control_is_worker_not_allowed"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 4
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:credential-broker-resume#1",
+   "source": "capability-map",
+   "capability": "credential-broker-resume",
+   "kind": "credential_sandbox",
+   "invariant": "credential_waits のどの列にも秘密の値を置かない（secret_id と fingerprint だけ）",
+   "evidence_path": "crates/task-core/src/store/credential_wait.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-core --lib -E 'test(/^store::credential_wait.*(secret|value|fingerprint|never)/)'",
+     "tests_at_head": 4,
+     "tests": [
+      "store::credential_wait::tests::cancelled_task_is_never_resumed",
+      "store::credential_wait::tests::enter_wait_is_idempotent_and_aggregates_by_secret",
+      "store::credential_wait::tests::schema_has_no_column_for_a_secret_value",
+      "store::credential_wait::tests::secret_saved_event_is_append_only_and_deduplicated"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 4
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:credential-broker-resume#2",
+   "source": "capability-map",
+   "capability": "credential-broker-resume",
+   "kind": "lease_exclusion",
+   "invariant": "credential 待ちは waiting|rejected → verified → resumed の一方向の条件付き UPDATE で、claim_resume は一度だけ true を返す",
+   "evidence_path": "crates/task-core/src/store/credential_wait.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-core --lib -E 'test(/^store::credential_wait.*(claim_resume|once|resum)/)'",
+     "tests_at_head": 4,
+     "tests": [
+      "store::credential_wait::tests::cancelled_task_is_never_resumed",
+      "store::credential_wait::tests::claim_resume_requires_verified",
+      "store::credential_wait::tests::claim_resume_succeeds_exactly_once_under_concurrency",
+      "store::credential_wait::tests::claim_resume_succeeds_once_sequentially"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 4
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:credential-broker-resume#3",
+   "source": "capability-map",
+   "capability": "credential-broker-resume",
+   "kind": "fail_closed",
+   "invariant": "未登録の credential を宣言した source は worker 起動前にその WU だけを blocked(waiting_for_auth) にする",
+   "evidence_path": "crates/task-dispatch/src/dispatcher/credential_gate.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^dispatcher::tests::credential_gate::/)'",
+     "tests_at_head": 7,
+     "tests": [
+      "dispatcher::tests::credential_gate::a_task_without_a_plan_waits_as_one_unit_and_never_rewrites_the_wait",
+      "dispatcher::tests::credential_gate::missing_credential_blocks_only_that_unit_and_leaves_the_task_and_siblings",
+      "dispatcher::tests::credential_gate::registered_credential_passes_the_gate_and_an_undeclared_source_is_never_gated",
+      "dispatcher::tests::credential_gate::restore_closes_the_wait_of_a_cancelled_task",
+      "dispatcher::tests::credential_gate::tasks_waiting_for_the_same_secret_share_one_inbox_item",
+      "dispatcher::tests::credential_gate::the_secret_value_appears_in_no_wait_row_inbox_item_event_or_worker_route",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 7
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:scratch-build-cache-disk-guard#0",
+   "source": "capability-map",
+   "capability": "scratch-build-cache-disk-guard",
+   "kind": "lease_exclusion",
+   "invariant": "scratch の owner は lease.json（mtime が生存の合図）と .lock の flock で持ち、走っている run の scratch は消さない",
+   "evidence_path": "crates/task-worker/src/scratch.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-worker --lib -E 'test(/^scratch::tests::.*(lease|lock|running|alive|live)/)'",
+     "tests_at_head": 9,
+     "tests": [
+      "scratch::tests::a_running_parent_is_written_only_while_a_run_shares_its_target",
+      "scratch::tests::adopt_skips_a_candidate_that_was_leased_again_after_the_scan",
+      "scratch::tests::check_allocation_does_not_wait_for_the_pool_lock_nor_copy_the_seed",
+      "scratch::tests::external_lease_expires_after_ttl",
+      "scratch::tests::lease_touch_release_round_trip_on_disk",
+      "scratch::tests::measure_tree_counts_blocks_and_latest_mtime",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 9
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:scratch-build-cache-disk-guard#1",
+   "source": "capability-map",
+   "capability": "scratch-build-cache-disk-guard",
+   "kind": "fail_closed",
+   "invariant": "空きが min_free_disk_mb を割るか検査できないときは新しい run を開始しない（check_disk_space）。空き不足の間は scratch GC を緊急モードで回す",
+   "evidence_path": "crates/task-dispatch/src/dispatcher/housekeeping.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^dispatcher::tests::cleanup_and_disk::.*(disk|free|space)/)'",
+     "tests_at_head": 4,
+     "tests": [
+      "dispatcher::tests::cleanup_and_disk::disk_gate_notifies_once_and_recovers_without_a_run",
+      "dispatcher::tests::cleanup_and_disk::disk_watch_tick_phase_holds_coding_until_pressure_recovers",
+      "dispatcher::tests::cleanup_and_disk::tick_prunes_the_oldest_terminal_workspace_and_records_an_event",
+      "dispatcher::tests::cleanup_and_disk::workspace_prune_after_secs_zero_disables_pruning"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 4
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:scratch-build-cache-disk-guard#2",
+   "source": "capability-map",
+   "capability": "scratch-build-cache-disk-guard",
+   "kind": "other",
+   "invariant": "分類・plan_gc・adopt の選択は task-worker の純粋関数、走査と削除・測定 thread は task-dispatch の scratch_gc（LLM は呼ばない）",
+   "evidence_path": "crates/task-dispatch/src/scratch_gc.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^scratch_gc::tests::/)'",
+     "tests_at_head": 9,
+     "tests": [
+      "scratch_gc::tests::a_parent_waiting_for_its_work_unit_reserves_only_the_work_unit_growth",
+      "scratch_gc::tests::effective_max_shrinks_with_usage_outside_the_pool",
+      "scratch_gc::tests::gc_dry_run_lists_without_removing_and_execute_renames",
+      "scratch_gc::tests::legacy_paths_list_build_cache_entries_and_the_release_target",
+      "scratch_gc::tests::measurement_is_cached_and_written_to_the_lease_without_touching_it",
+      "scratch_gc::tests::seed_is_not_reclaimed_by_owner_gc_even_in_emergency",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 9
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:task-lifecycle#0",
+   "source": "capability-map",
+   "capability": "task-lifecycle",
+   "kind": "atomic_state_event",
+   "invariant": "task の insert と Event::Created は TaskStore::create_task の単一 transaction で書く（ADR-0010 D2）",
+   "evidence_path": "crates/task-ops/src/add.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-ops --lib -E 'test(/^add::tests::.*(event|created|transaction|atomic)/)'",
+     "tests_at_head": 2,
+     "tests": [
+      "add::tests::create_task_inserts_task_and_created_event",
+      "add::tests::inherited_remote_without_a_cluster_taker_is_created_local"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 2
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:task-lifecycle#1",
+   "source": "capability-map",
+   "capability": "task-lifecycle",
+   "kind": "other",
+   "invariant": "状態は transition が許す遷移でだけ変わり、不正な遷移は Err で DB を変えない（ADR-0002）",
+   "evidence_path": "crates/task-core/src/transition.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-core --lib -E 'test(/^transition::tests::/)'",
+     "tests_at_head": 14,
+     "tests": [
+      "transition::tests::browser_wait_triggers_only_from_expected_states",
+      "transition::tests::cancel_dependency_failed_and_requeue_keep_attempts",
+      "transition::tests::continue_reason_matches_the_why_variant",
+      "transition::tests::dependency_reopen_trigger_distinguishes_kept_reasons",
+      "transition::tests::dispatch_rejects_approval_kind_even_when_ready",
+      "transition::tests::interrupt_keeps_attempts_and_reopen_resets_them",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 14
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:task-lifecycle#2",
+   "source": "capability-map",
+   "capability": "task-lifecycle",
+   "kind": "fail_closed",
+   "invariant": "depends_on に存在しない・failed/cancelled の task があれば何も挿入しない",
+   "evidence_path": "crates/task-ops/src/add.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-ops --lib -E 'test(/^add::tests::.*(depend|missing|fail|cancel)/)'",
+     "tests_at_head": 3,
+     "tests": [
+      "add::tests::create_task_rejects_blank_title_or_objective_and_missing_parent",
+      "add::tests::create_task_with_failed_dependency_errors_and_inserts_nothing",
+      "add::tests::create_task_with_missing_dependency_errors_and_inserts_nothing"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 3
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:task-lifecycle#3",
+   "source": "capability-map",
+   "capability": "task-lifecycle",
+   "kind": "fail_closed",
+   "invariant": "cancel/approve 等は expected が現在の status と違えば遷移を試みず Conflict を返す",
+   "evidence_path": "crates/task-ops/src/gate.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-ops --lib -E 'test(/^gate::tests::.*(expected|conflict|stale)/)'",
+     "tests_at_head": 4,
+     "tests": [
+      "gate::tests::approve_with_matching_expected_succeeds",
+      "gate::tests::approve_with_mismatched_expected_returns_conflict_without_transitioning",
+      "gate::tests::cancel_with_mismatched_expected_returns_conflict_without_transitioning",
+      "gate::tests::reject_with_mismatched_expected_returns_conflict"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 4
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:task-lifecycle#4",
+   "source": "capability-map",
+   "capability": "task-lifecycle",
+   "kind": "other",
+   "invariant": "reopen は done/failed だけを ready に戻し、cancelled は 409（worktree とブランチを消してあるため）。reopen_with は遷移と also を同じ transaction で書く",
+   "evidence_path": "crates/task-ops/src/comment.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-ops --lib -E 'test(/reopen/)'",
+     "tests_at_head": 11,
+     "tests": [
+      "comment::tests::reopen_resets_attempts_for_done_and_failed_but_refuses_cancelled",
+      "execution::tests::replan_adding_units_to_integrated_stages_reopens_their_integrations",
+      "inbox::dependents_reopened::tests::dependency_reopen_inbox_item_resolves_when_dependents_move",
+      "inbox::dependents_reopened::tests::dependency_reopen_inbox_lists_restored_and_kept",
+      "inbox::dependents_reopened::tests::dependency_reopen_kept_only_event_has_no_inbox_item",
+      "plan_gate::stall::tests::a_human_comment_or_reopen_resets_the_count",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 11
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:task-lifecycle#5",
+   "source": "capability-map",
+   "capability": "task-lifecycle",
+   "kind": "other",
+   "invariant": "retry は failed/cancelled を非終端へ戻す遷移を足さず、複製の新 task を作る",
+   "evidence_path": "crates/task-ops/src/retry.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-ops --lib -E 'test(/^retry::tests::/)'",
+     "tests_at_head": 10,
+     "tests": [
+      "retry::tests::retry_can_override_the_workspace_of_the_new_task",
+      "retry::tests::retry_drops_the_copied_gate_decision_and_keeps_an_explicit_hint",
+      "retry::tests::retry_duplicates_fields_and_records_retried_event",
+      "retry::tests::retry_missing_task_is_not_found",
+      "retry::tests::retry_rejects_non_terminal_or_done_tasks_with_409",
+      "retry::tests::retry_rewires_non_terminal_and_cascaded_cancelled_dependents_but_not_manual_cancels",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 10
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:task-lifecycle#6",
+   "source": "capability-map",
+   "capability": "task-lifecycle",
+   "kind": "restart_replay",
+   "invariant": "作成・retry の冪等キーは task と同じ transaction で保存し、再送で複製を増やさない",
+   "evidence_path": "crates/task-core/src/store/idempotency.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-core --lib -E 'test(/^store::idempotency/)'",
+     "tests_at_head": 3,
+     "tests": [
+      "store::idempotency::tests::claimed_retry_creates_once_and_records_the_result",
+      "store::idempotency::tests::key_survives_reopening_database",
+      "store::idempotency::tests::same_hash_is_same_and_other_hash_conflicts"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 3
+     }
+    },
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-api --test task_idempotency -E 'test(/./)'",
+     "tests_at_head": 6,
+     "tests": [
+      "campaign_resend_binds_new_key_to_request_content",
+      "cos_operations_reject_a_body_idempotency_key",
+      "create_resend_with_the_same_key_makes_one_task_and_other_content_is_409",
+      "failed_creation_does_not_reserve_key_and_old_field_is_rejected",
+      "retry_resend_with_the_same_key_makes_one_copy_and_other_content_is_409",
+      "simultaneous_create_and_retry_return_the_same_task"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 6
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:execution-plan-adoption#0",
+   "source": "capability-map",
+   "capability": "execution-plan-adoption",
+   "kind": "fail_closed",
+   "invariant": "計画は validate_with（D14）を通らなければ採用しない。検証・scheduler は純粋関数で I/O を持たない",
+   "evidence_path": "crates/task-ops/src/execution.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-ops --lib -E 'test(/^execution::tests::.*(valid|reject|invalid)/)'",
+     "tests_at_head": 7,
+     "tests": [
+      "execution::tests::adopt_plan_rejects_a_missing_task",
+      "execution::tests::adopt_plan_rejects_a_second_plan_for_the_same_task",
+      "execution::tests::adopt_plan_rejects_an_invalid_plan_without_writing_anything",
+      "execution::tests::replan_rejects_a_changed_done_work_unit",
+      "execution::tests::replan_rejects_a_removed_stage_key_as_a_validation_error",
+      "execution::tests::replan_rejects_reusing_a_superseded_key",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 7
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:execution-plan-adoption#1",
+   "source": "capability-map",
+   "capability": "execution-plan-adoption",
+   "kind": "atomic_state_event",
+   "invariant": "execution_plans・work_units の行と ExecutionPlanned は execution_plan_adopt で同じ transaction に書く",
+   "evidence_path": "crates/task-core/src/store/task_store.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-core --lib -E 'test(/execution_plan_adopt/)'",
+     "tests_at_head": 1,
+     "tests": [
+      "store::tests::execution_plan_adopt_rejects_a_second_active_plan"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 1
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:execution-plan-adoption#2",
+   "source": "capability-map",
+   "capability": "execution-plan-adoption",
+   "kind": "other",
+   "invariant": "WorkUnit・task の完了は check か reviewer が決め、worker の自己申告だけでは完了にしない（ADR-0072）",
+   "evidence_path": "crates/task-core/src/execution_plan.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-core --lib -E 'test(/^execution_plan::tests::.*(self|report|check|review)/)'",
+     "tests_at_head": 7,
+     "tests": [
+      "execution_plan::tests::carry_done_units_v3_keeps_the_planners_non_empty_checks",
+      "execution_plan::tests::planner_replan_may_change_only_the_checks_of_a_done_unit",
+      "execution_plan::tests::rejects_leaf_check_running_operator_scripts",
+      "execution_plan::tests::rejects_leaf_without_checks",
+      "execution_plan::tests::rejects_task_unit_with_checks",
+      "execution_plan::tests::rejects_work_unit_check_running_operator_scripts",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 7
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:workunit-scheduling-stage-integration#0",
+   "source": "capability-map",
+   "capability": "workunit-scheduling-stage-integration",
+   "kind": "atomic_state_event",
+   "invariant": "WU の新しい行と WorkUnitTransitioned は work_unit_transition で書く。execution_scheduler::decide は純粋で、store への書き込みは dispatcher の責務",
+   "evidence_path": "crates/task-dispatch/src/execution_scheduler.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^execution_scheduler::tests::/)'",
+     "tests_at_head": 23,
+     "tests": [
+      "execution_scheduler::tests::a_failure_at_the_retry_limit_fails_the_work_unit_and_blocks_dependents",
+      "execution_scheduler::tests::a_non_retryable_failure_fails_immediately_regardless_of_retries_so_far",
+      "execution_scheduler::tests::a_plan_issue_in_the_checkpoint_blocks_the_work_unit_even_within_budget",
+      "execution_scheduler::tests::a_question_blocks_the_work_unit_and_the_task",
+      "execution_scheduler::tests::a_retryable_failure_within_the_limit_retries_the_same_work_unit",
+      "execution_scheduler::tests::a_waiting_run_blocks_the_unit_on_cluster_jobs",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 23
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:workunit-scheduling-stage-integration#1",
+   "source": "capability-map",
+   "capability": "workunit-scheduling-stage-integration",
+   "kind": "restart_replay",
+   "invariant": "工程の統合は seq 順の merge --no-ff で、既に入った WU は飛ばし、MERGE_HEAD が残れば abort してやり直す（再起動後も冪等）。衝突は abort して repair WU に回す",
+   "evidence_path": "crates/task-dispatch/src/integration.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^integration::tests::.*(seq|skip|merge_head|abort|idempot|already|conflict)/)'",
+     "tests_at_head": 8,
+     "tests": [
+      "integration::tests::a_conflict_is_aborted_and_reported_and_resumes_after_the_repair",
+      "integration::tests::auto_resolve_code_conflict_returns_request_and_cleans_merge",
+      "integration::tests::child_cargo_lock_conflict_is_regenerated_and_toml_conflict_needs_human",
+      "integration::tests::child_task_branches_are_optional_and_idempotent",
+      "integration::tests::integrate_merges_leaves_deterministically_and_skips_ones_already_in",
+      "integration::tests::merge_is_idempotent_after_restart",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 8
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:workunit-scheduling-stage-integration#2",
+   "source": "capability-map",
+   "capability": "workunit-scheduling-stage-integration",
+   "kind": "lease_exclusion",
+   "invariant": "expected write-set の重なる WorkUnit は同時に走らせない（ADR-0130）",
+   "evidence_path": "crates/task-dispatch/src/dispatcher/write_set_gate.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^dispatcher::tests::write_set_gate::/)'",
+     "tests_at_head": 7,
+     "tests": [
+      "dispatcher::tests::write_set_gate::write_set_gate_ignores_overlap_in_another_repo",
+      "dispatcher::tests::write_set_gate::write_set_gate_no_starvation",
+      "dispatcher::tests::write_set_gate::write_set_gate_runs_disjoint_hints_in_parallel",
+      "dispatcher::tests::write_set_gate::write_set_gate_same_task_siblings_with_only_the_inherited_hint_do_not_block",
+      "dispatcher::tests::write_set_gate::write_set_gate_serializes_strong_overlap_until_the_first_run_finishes",
+      "dispatcher::tests::write_set_gate::write_set_gate_wakes_the_longest_waiter_before_a_newer_higher_priority_task",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 7
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:workunit-scheduling-stage-integration#3",
+   "source": "capability-map",
+   "capability": "workunit-scheduling-stage-integration",
+   "kind": "other",
+   "invariant": "ExecutionGated と routing は同じ transaction のまま書く",
+   "evidence_path": "crates/task-dispatch/src/dispatcher/work_units.rs",
+   "coverage": "partial",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^dispatcher::tests::planning_and_gate::gate_on_compound_task/)'",
+     "tests_at_head": 1,
+     "tests": [
+      "dispatcher::tests::planning_and_gate::gate_on_compound_task_runs_a_planner_then_the_planned_work_units_in_order"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 1
+     }
+    }
+   ],
+   "gap": "ExecutionGated の追記は試験があるが、routing と同じ transaction であることは確かめていない",
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run",
+    "coverage": "partial"
+   }
+  },
+  {
+   "id": "cap:decisions-plan-gate#0",
+   "source": "capability-map",
+   "capability": "decisions-plan-gate",
+   "kind": "human_authority",
+   "invariant": "人の決定が要る gate は決定が記録されるまで先へ進めない。plan gate の approve/replan/withdraw は人の操作で、状態の変更は apply_transition だけ",
+   "evidence_path": "crates/task-ops/src/plan_gate.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^dispatcher::tests::human_gates::/)'",
+     "tests_at_head": 10,
+     "tests": [
+      "dispatcher::tests::human_gates::a_tree_node_leaf_failure_after_replans_are_exhausted_raises_the_limit_decision",
+      "dispatcher::tests::human_gates::an_unapproved_version_stays_parked_while_the_replan_is_pending",
+      "dispatcher::tests::human_gates::approval_facts_count_only_units_that_will_create_children",
+      "dispatcher::tests::human_gates::comment_on_awaiting_human_keeps_the_gate_and_continue_still_works",
+      "dispatcher::tests::human_gates::comment_on_plan_approval_keeps_the_gate_and_a_stranded_ready_task_returns_to_it",
+      "dispatcher::tests::human_gates::plan_gate_replan_does_not_dispatch_the_unapproved_version",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 10
+     }
+    },
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-ops --lib -E 'test(/^plan_gate/)'",
+     "tests_at_head": 11,
+     "tests": [
+      "plan_gate::stall::tests::a_human_comment_or_reopen_resets_the_count",
+      "plan_gate::stall::tests::a_human_replan_request_resets_the_count",
+      "plan_gate::stall::tests::a_work_unit_commit_in_between_resets_the_count",
+      "plan_gate::stall::tests::normalization_strips_shell_wrappers_set_and_env_prefixes",
+      "plan_gate::stall::tests::signature_uses_compile_error_lines_not_timings",
+      "plan_gate::stall::tests::the_pending_integration_replan_ends_at_the_next_plan_or_a_human_request",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 11
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:decisions-plan-gate#1",
+   "source": "capability-map",
+   "capability": "decisions-plan-gate",
+   "kind": "atomic_state_event",
+   "invariant": "回答は decision_resolve_apply の 1 transaction: open の確認、DecisionAnswered と表の行、待っていた unit の再評価、効き目の event を同時に積む",
+   "evidence_path": "crates/task-ops/src/decision.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-api --test decisions -E 'test(/./)'",
+     "tests_at_head": 13,
+     "tests": [
+      "a_choice_decision_can_be_answered_with_only_a_note",
+      "a_limit_decision_without_an_option_is_422",
+      "answer_requires_a_token_when_one_is_configured_and_even_without_one",
+      "answer_with_invalid_json_body_is_400",
+      "answering_an_open_decision_resumes_and_records_the_event",
+      "answering_with_an_unknown_option_is_422_and_an_unknown_id_is_404",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 13
+     }
+    },
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-api --test cos_operations -E 'test(/decision_answer/)'",
+     "tests_at_head": 1,
+     "tests": [
+      "cos_chat_ops_api_comment_and_decision_answer_use_the_shared_operations"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 1
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:decisions-plan-gate#2",
+   "source": "capability-map",
+   "capability": "decisions-plan-gate",
+   "kind": "fail_closed",
+   "invariant": "回答は決定が今も open のときだけ適用する。効き目は決定の種類と選択肢だけから決まる（answer_effect）",
+   "evidence_path": "crates/task-core/src/decision.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-core --lib -E 'test(/^decision::tests::.*(open|effect|answer)/)'",
+     "tests_at_head": 4,
+     "tests": [
+      "decision::tests::answer_effect_table",
+      "decision::tests::answer_line_is_the_fixed_format",
+      "decision::tests::row_folds_answer_and_withdrawal",
+      "decision::tests::validate_answer_checks_options_free_text_and_note"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 4
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:decisions-plan-gate#3",
+   "source": "capability-map",
+   "capability": "decisions-plan-gate",
+   "kind": "other",
+   "invariant": "root 計画の承認の要否は store の読み取りと PlanApprovalFacts の純粋判定で決め、LLM を使わない",
+   "evidence_path": "crates/task-core/src/tree/approval.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-core --lib -E 'test(/^tree::.*approval/)'",
+     "tests_at_head": 2,
+     "tests": [
+      "tree::r3b_tests::each_trigger_requires_approval",
+      "tree::r3b_tests::small_plan_needs_no_approval"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 2
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:recursive-task-tree#0",
+   "source": "capability-map",
+   "capability": "recursive-task-tree",
+   "kind": "budget",
+   "invariant": "計画の上限（段階数・段階あたりの unit・計画あたりの子 task・max_depth）を超える unit は保留し、上限の余裕は決定（raise-once）でだけ広げる",
+   "evidence_path": "crates/task-core/src/tree/limits.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-core --lib -E 'test(/^tree::.*(limit|depth|raise)/)'",
+     "tests_at_head": 9,
+     "tests": [
+      "tree::tests::depth_counts_task_levels_not_leaves",
+      "tree::tests::gate_threshold_rises_with_depth_formula",
+      "tree::tests::limit_keys_allowances_and_plan_invalid_options",
+      "tree::tests::plan_limit_holds_count_only_live_units_per_stage",
+      "tree::tests::plan_limit_holds_do_not_count_done_task_units",
+      "tree::tests::plan_limit_holds_select_only_the_excess",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 9
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:recursive-task-tree#1",
+   "source": "capability-map",
+   "capability": "recursive-task-tree",
+   "kind": "atomic_state_event",
+   "invariant": "子 task の挿入・unit の行・親の event は tree_child_create の 1 transaction",
+   "evidence_path": "crates/task-ops/src/tree.rs",
+   "coverage": "partial",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-core --lib -E 'test(/tree_events_write_root_id_child_links_and_decisions/)'",
+     "tests_at_head": 1,
+     "tests": [
+      "store::tests::tree_events_write_root_id_child_links_and_decisions"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 1
+     }
+    }
+   ],
+   "gap": "子の insert と unit と親の event が 1 transaction であることは直接は確かめていない。event の書き込みは試験がある",
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run",
+    "coverage": "partial"
+   }
+  },
+  {
+   "id": "cap:recursive-task-tree#2",
+   "source": "capability-map",
+   "capability": "recursive-task-tree",
+   "kind": "other",
+   "invariant": "委譲した子 task が終わるまで親 task は完了しない（ADR-0005）",
+   "evidence_path": "crates/task-dispatch/src/dispatcher/child_tasks.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^dispatcher::tests::tree::.*(parent|child|wait)/)'",
+     "tests_at_head": 9,
+     "tests": [
+      "dispatcher::tests::tree::child_failure_fails_the_unit_and_the_stage_does_not_complete",
+      "dispatcher::tests::tree::child_waits_for_dependencies_and_decisions",
+      "dispatcher::tests::tree::parent_waits_without_lease",
+      "dispatcher::tests::tree::replay_rebuilds_child_links_and_unit_statuses",
+      "dispatcher::tests::tree::stage_report_lists_child_summaries",
+      "dispatcher::tests::tree::task_unit_repos_must_be_a_subset_of_the_parents",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 9
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "cap:recursive-task-tree#3",
+   "source": "capability-map",
+   "capability": "recursive-task-tree",
+   "kind": "fail_closed",
+   "invariant": "kind task の unit の repos は親の repos の部分集合でなければ子を作らない（check_task_unit_repos）",
+   "evidence_path": "crates/task-ops/src/tree.rs",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-ops --lib -E 'test(/^tree::tests::.*repos/)'",
+     "tests_at_head": 2,
+     "tests": [
+      "tree::tests::repository_required_child_task_inherits_the_parent_project_and_repos",
+      "tree::tests::task_unit_repos_must_be_a_subset_of_the_parent_repos"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 2
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "profile:budget-unknown-cost-stops",
+   "source": "repo-profile",
+   "capability": null,
+   "kind": "budget",
+   "invariant": "budget-unknown-cost-stops",
+   "evidence_path": "agent-docs/adr/2026-11-06-budget-usd-caps.md",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-ops --lib -E 'test(/^project_budget.*unknown/)'",
+     "tests_at_head": 3,
+     "tests": [
+      "project_budget::tests::attempt_with_missing_usage_is_unknown_but_keeps_known_tokens_and_usd",
+      "project_budget::tests::prelaunch_only_has_no_unknown_guard_but_any_missing_after_launch_keeps_it",
+      "project_budget::tests::unpriced_model_and_missing_usage_stop_as_unknown_cost"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 3
+     }
+    },
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-core --lib -E 'test(/^pricing.*(unknown|none|unpriced)/)'",
+     "tests_at_head": 6,
+     "tests": [
+      "pricing::tests::missing_fields_are_treated_as_zero_not_as_unknown",
+      "pricing::tests::no_tokens_at_all_is_none_even_for_a_known_model",
+      "pricing::tests::nonzero_tokens_with_missing_price_are_unknown",
+      "pricing::tests::output_input_ratio_of_an_unpriced_model_is_none",
+      "pricing::tests::unknown_model_is_none",
+      "pricing::tests::unpriced_model_and_null_usage_are_unknown_not_zero"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 6
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "profile:completion-not-self-reported",
+   "source": "repo-profile",
+   "capability": null,
+   "kind": "human_authority",
+   "invariant": "completion-not-self-reported",
+   "evidence_path": "CLAUDE.md",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^review::tests::.*(self|rerun|command|claim)/)'",
+     "tests_at_head": 8,
+     "tests": [
+      "review::tests::acceptance_and_required_command_execute_once_and_share_bound_reuse",
+      "review::tests::acceptance_command_does_not_replace_the_repo_checks",
+      "review::tests::acceptance_command_shared_with_a_repo_check_keeps_the_record",
+      "review::tests::command_check_timeout_is_recorded_without_exit",
+      "review::tests::command_checks_are_re_executed_in_workspace",
+      "review::tests::command_checks_are_recorded_with_exit_codes",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 8
+     }
+    },
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^dispatcher::tests::review_check_wins::/)'",
+     "tests_at_head": 3,
+     "tests": [
+      "dispatcher::tests::review_check_wins::command_check_record_is_written_with_the_verdicts",
+      "dispatcher::tests::review_check_wins::failed_command_check_wins_over_reviewer_pass",
+      "dispatcher::tests::review_check_wins::reviewer_only_task_is_unchanged"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 3
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "profile:credential-stays-in-broker",
+   "source": "repo-profile",
+   "capability": null,
+   "kind": "credential_sandbox",
+   "invariant": "credential-stays-in-broker",
+   "evidence_path": "agent-docs/adr/0080-browser-phase2-policy-broker-approval.md",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p celeris-credentiald --test broker -E 'test(/(?i)secret|value|inject|never|leak/)'",
+     "tests_at_head": 3,
+     "tests": [
+      "daemon_rejects_worker_secret_retrieval_even_with_valid_lease",
+      "failed_consume_audit_never_returns_secret_or_consumes_lease",
+      "retired_plugin_bridge_never_connects_or_echoes_input"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 3
+     }
+    },
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/secret_values_never_appear/)'",
+     "tests_at_head": 2,
+     "tests": [
+      "dispatcher::tests::credential_e2e::secret_values_never_appear_in_db_inbox_events_reports_or_errors",
+      "dispatcher::tests::credential_logcap::secret_values_never_appear_in_captured_logs_for_every_verify_outcome"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 2
+     }
+    },
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-core --lib -E 'test(/secret_like_values_never_reach_rows_or_events/)'",
+     "tests_at_head": 1,
+     "tests": [
+      "browser_wait::tests::secret_like_values_never_reach_rows_or_events"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 1
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "profile:events-append-only",
+   "source": "repo-profile",
+   "capability": null,
+   "kind": "atomic_state_event",
+   "invariant": "events-append-only",
+   "evidence_path": "CLAUDE.md",
+   "coverage": "partial",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-core --lib -E 'test(/(append_only|appends_transitioned_then_extras_in_order)/)'",
+     "tests_at_head": 9,
+     "tests": [
+      "store::credential_wait::tests::secret_saved_event_is_append_only_and_deduplicated",
+      "store::project_wake::tests::project_wake_store_decisions_are_append_only",
+      "store::roadmap::tests::project_roadmap_store_rows_are_append_only",
+      "store::script_behavior_changes::tests::behavior_change_events_append_only",
+      "store::script_domains::tests::script_compare_log_appends_once_per_outcome_and_is_append_only",
+      "store::script_domains::tests::script_domain_events_table_is_append_only",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 9
+     }
+    }
+   ],
+   "gap": "events 表の UPDATE・DELETE を拒む trigger も、それを確かめる試験も無い。store に events の更新・削除の関数が無いことと、review の高 risk class events で守る。試験があるのは script・project 系の追記専用表と、遷移と event の追記順",
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run",
+    "coverage": "partial"
+   }
+  },
+  {
+   "id": "profile:lease-single-holder",
+   "source": "repo-profile",
+   "capability": null,
+   "kind": "lease_exclusion",
+   "invariant": "lease-single-holder",
+   "evidence_path": "agent-docs/adr/2026-10-03-ownerless-running-runs.md",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-core --lib -E 'test(/^store::tests::.*lease/)'",
+     "tests_at_head": 8,
+     "tests": [
+      "store::tests::acquire_lease_appends_transitioned_event_atomically",
+      "store::tests::acquire_lease_is_exclusive_under_concurrency",
+      "store::tests::acquire_lease_rejects_approval_kind_even_when_ready",
+      "store::tests::acquire_work_unit_lease_marks_running_and_extends_the_task_lease",
+      "store::tests::acquire_work_unit_lease_requires_a_running_task",
+      "store::tests::apply_transition_releases_lease_when_leaving_running",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 8
+     }
+    },
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^orphan::tests::.*(holder|alive|fresh|gone|live)/)'",
+     "tests_at_head": 3,
+     "tests": [
+      "orphan::tests::an_ownerless_run_is_closed_at_once_without_live_holders_and_otherwise_after_its_deadline",
+      "orphan::tests::proc_pid_alive_sees_this_process_and_not_an_unused_pid",
+      "orphan::tests::the_holder_is_gone_only_when_no_other_live_active_or_draining_instance_exists"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 3
+     }
+    },
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^dispatcher::tests::ownerless_runs::/)'",
+     "tests_at_head": 11,
+     "tests": [
+      "dispatcher::tests::ownerless_runs::a_crashed_old_daemons_reviewer_run_is_closed_and_the_task_rereviewed",
+      "dispatcher::tests::ownerless_runs::a_dispatcher_not_accepting_new_work_does_not_reconcile_until_it_becomes_active",
+      "dispatcher::tests::ownerless_runs::a_leased_worker_run_of_a_gone_daemon_is_requeued_by_the_lease_path",
+      "dispatcher::tests::ownerless_runs::a_review_that_ended_without_a_verdict_is_closed_and_redone_in_the_same_instance",
+      "dispatcher::tests::ownerless_runs::a_review_that_outlives_its_deadline_is_stopped_and_redone_in_the_same_instance",
+      "dispatcher::tests::ownerless_runs::a_reviewer_run_not_launched_because_a_check_failed_is_closed",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 11
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "profile:no-data-loss",
+   "source": "repo-profile",
+   "capability": null,
+   "kind": "restart_replay",
+   "invariant": "no-data-loss",
+   "evidence_path": "CLAUDE.md",
+   "coverage": "partial",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-core --lib -E 'test(/(?i)migration.*(preserv|keep|without_losing|data)/)'",
+     "tests_at_head": 11,
+     "tests": [
+      "chat::launch_boundary_regression_tests::migration_0120_keeps_rows_usage_credentials_and_events_without_guessing_a_boundary",
+      "chat::tests::chat_migration_0092_maps_threads_without_losing_data",
+      "chat::tests::chat_migration_0102_adds_review_without_losing_rows",
+      "chat::tests::chat_migration_new_database_has_all_tables_and_constraints",
+      "chat::tests::chat_migration_upgrade_from_47_preserves_existing_rows",
+      "chat::tests::cos_chat_usage_migration_preserves_legacy_run_and_omits_unknown_usage",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 11
+     }
+    }
+   ],
+   "gap": "migration が行を保つ試験はある。credential を消さないこと一般を確かめる試験は無い",
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run",
+    "coverage": "partial"
+   }
+  },
+  {
+   "id": "profile:no-llm-in-dispatcher",
+   "source": "repo-profile",
+   "capability": null,
+   "kind": "other",
+   "invariant": "no-llm-in-dispatcher",
+   "evidence_path": "CLAUDE.md",
+   "coverage": "partial",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^orphan::tests::/)'",
+     "tests_at_head": 3,
+     "tests": [
+      "orphan::tests::an_ownerless_run_is_closed_at_once_without_live_holders_and_otherwise_after_its_deadline",
+      "orphan::tests::proc_pid_alive_sees_this_process_and_not_an_unused_pid",
+      "orphan::tests::the_holder_is_gone_only_when_no_other_live_active_or_draining_instance_exists"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 3
+     }
+    },
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-dispatch --lib -E 'test(/^execution_scheduler::tests::/)'",
+     "tests_at_head": 23,
+     "tests": [
+      "execution_scheduler::tests::a_failure_at_the_retry_limit_fails_the_work_unit_and_blocks_dependents",
+      "execution_scheduler::tests::a_non_retryable_failure_fails_immediately_regardless_of_retries_so_far",
+      "execution_scheduler::tests::a_plan_issue_in_the_checkpoint_blocks_the_work_unit_even_within_budget",
+      "execution_scheduler::tests::a_question_blocks_the_work_unit_and_the_task",
+      "execution_scheduler::tests::a_retryable_failure_within_the_limit_retries_the_same_work_unit",
+      "execution_scheduler::tests::a_waiting_run_blocks_the_unit_on_cluster_jobs",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 23
+     }
+    }
+   ],
+   "gap": "dispatcher に LLM 呼び出しが入ったことを検出する試験・検査は無い。純粋関数の試験（orphan・execution_scheduler）と review で守る",
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run",
+    "coverage": "partial"
+   }
+  },
+  {
+   "id": "profile:no-unwrap-outside-tests",
+   "source": "repo-profile",
+   "capability": null,
+   "kind": "fail_closed",
+   "invariant": "no-unwrap-outside-tests",
+   "evidence_path": "CLAUDE.md",
+   "coverage": "none",
+   "checks": [],
+   "gap": "clippy の unwrap_used は workspace で有効でなく、repo-health の rule にも unwrap の検査は無い。review だけで守る",
+   "result": {
+    "status": "unverified",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run",
+    "coverage": "none"
+   }
+  },
+  {
+   "id": "profile:remove-superseded-mechanism",
+   "source": "repo-profile",
+   "capability": null,
+   "kind": "other",
+   "invariant": "remove-superseded-mechanism",
+   "evidence_path": "agent-docs/adr/2026-10-11-breaking-changes-by-default.md",
+   "coverage": "partial",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "python3 -I -m unittest discover -s scripts/tests -p test_repo_health_dup.py -k test_remnant",
+     "tests": [
+      "scripts/tests/test_repo_health_dup.py::test_remnant*"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 2
+     }
+    }
+   ],
+   "gap": "repo-health の migration_remnant rule の試験は通る。旧い仕組みが残ったかの最終判断は review",
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run",
+    "coverage": "partial"
+   }
+  },
+  {
+   "id": "profile:task-state-in-sqlite",
+   "source": "repo-profile",
+   "capability": null,
+   "kind": "restart_replay",
+   "invariant": "task-state-in-sqlite",
+   "evidence_path": "CLAUDE.md",
+   "coverage": "partial",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-core --lib -E 'test(/^node_session::tests::/)'",
+     "tests_at_head": 11,
+     "tests": [
+      "node_session::tests::conversation_and_lead_kinds_and_different_nodes_are_independent",
+      "node_session::tests::create_then_active_round_trips",
+      "node_session::tests::kind_as_str_and_parse_round_trip",
+      "node_session::tests::retire_then_create_replaces_the_active_session",
+      "node_session::tests::set_id_and_touch_are_no_ops_when_there_is_no_active_session",
+      "node_session::tests::touch_bumps_turns_and_tokens_and_set_id_updates_the_session_id_only",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 11
+     }
+    }
+   ],
+   "gap": "継続 session を DB に置く試験はある。worker が memory に状態を持たないこと一般を確かめる試験は無い",
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run",
+    "coverage": "partial"
+   }
+  },
+  {
+   "id": "profile:unpromoted-release-no-takeover",
+   "source": "repo-profile",
+   "capability": null,
+   "kind": "fail_closed",
+   "invariant": "unpromoted-release-no-takeover",
+   "evidence_path": "docs/ops/selfdeploy.md",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p celeris --test unpromoted_release -E 'test(/./)'",
+     "tests_at_head": 10,
+     "tests": [
+      "a_fresh_promoting_marker_authorizes_the_live_takeover",
+      "a_release_that_current_points_to_starts_as_before",
+      "an_unpromoted_release_does_not_migrate_an_old_schema_db",
+      "an_unpromoted_release_does_not_request_a_handoff",
+      "an_unpromoted_release_without_current_never_creates_the_db",
+      "old_promote_dead_lock_is_rejected_without_opening_the_db",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 10
+     }
+    },
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p celeris --test instance_handoff -E 'test(/./)'",
+     "tests_at_head": 8,
+     "tests": [
+      "a_newer_release_takes_over_while_the_old_one_finishes_its_run",
+      "a_stale_heartbeat_does_not_replace_a_live_active_until_its_process_is_gone",
+      "normal_mode_does_not_inject_the_smoke_builtins",
+      "starting_the_same_release_twice_exits_three",
+      "the_builtin_smoke_role_and_genre_override_a_config_entry_of_the_same_id",
+      "the_cli_overrides_replace_the_config_values",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 8
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "profile:worker-db-read-only",
+   "source": "repo-profile",
+   "capability": null,
+   "kind": "credential_sandbox",
+   "invariant": "worker-db-read-only",
+   "evidence_path": "agent-docs/adr/0095-worker-runs-see-the-db-read-only.md",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p celeris --test worker_db_guard_refuse -E 'test(/./)'",
+     "tests_at_head": 2,
+     "tests": [
+      "worker_db_guard_refuse_real_binary_inside_worker_run",
+      "worker_db_guard_refuse_with_opt_out"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 2
+     }
+    },
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-worker --lib -E 'test(/^db_guard.*(refuse|every_worker_spawn_site|protected_set|allows_test_db|requires_userns)/)'",
+     "tests_at_head": 15,
+     "tests": [
+      "db_guard::tests::every_worker_spawn_site_goes_through_launch",
+      "db_guard::tests::host_config_read_only_failure_refuses_the_spawn",
+      "db_guard::tests::worker_db_guard_allows_test_db_inside_worker_run",
+      "db_guard::tests::worker_db_guard_allows_test_db_with_test_token",
+      "db_guard::tests::worker_db_guard_protected_set_includes_configured_hot_paths_and_legacy_home",
+      "db_guard::tests::worker_db_guard_refuses_missing_configured_releases",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 15
+     }
+    },
+    {
+     "mode": "release_gate",
+     "command": "cargo nextest run -p task-worker --lib -E 'test(/^db_guard.*(nested_user_namespace|inside_namespace|not_writable_inside|read_only_but_siblings|no_capabilities|systemd_bus_is_hidden)/)'",
+     "reason": "userns・本物の namespace が要る。WU の --run から外し release gate（test-parallel の userns 段）で確かめる"
+    },
+    {
+     "mode": "release_gate",
+     "command": "cargo nextest run -p e2e --test worker_db_read_only",
+     "reason": "userns・本物の namespace が要る。WU の --run から外し release gate（test-parallel の userns 段）で確かめる"
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 2,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "profile:worker-no-subagents",
+   "source": "repo-profile",
+   "capability": null,
+   "kind": "credential_sandbox",
+   "invariant": "worker-no-subagents",
+   "evidence_path": "agent-docs/adr/2026-10-07-worker-no-subagents-no-llm-cli.md",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-worker --lib -E 'test(/(?i)subagent|llm_cli|other_llm/)'",
+     "tests_at_head": 12,
+     "tests": [
+      "acp::tests::acp_tool_calls_that_spawn_subagents_or_launch_llm_clis_are_reported",
+      "claude_code::tests::cos_chat_tests::general_cos_consult_llm_cli_launch_stops_the_cos_run",
+      "claude_code::tests::only_an_explicit_subagents_setting_lifts_the_deny",
+      "claude_code::tests::subagent_tools_are_disallowed_by_default_after_any_extra_args",
+      "claude_code::tests::tool_uses_that_launch_subagents_or_other_llms_are_reported_to_the_sink",
+      "codex::tests::command_executions_that_launch_other_llm_clis_are_reported",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 12
+     }
+    },
+    {
+     "mode": "run",
+     "command": "cargo nextest run -p task-worker --lib -E 'test(/^tool_policy::/)'",
+     "tests_at_head": 10,
+     "tests": [
+      "tool_policy::tests::command_is_truncated_and_single_line",
+      "tool_policy::tests::command_text_accepts_arrays_and_alternate_keys",
+      "tool_policy::tests::direct_llm_api_calls_are_detected_unless_only_read_tools_mention_the_host",
+      "tool_policy::tests::disallowed_tools_value_lists_the_claude_code_subagent_tools",
+      "tool_policy::tests::general_cos_consult_inline_budget_counts_shell_commands_and_refuses_llm_launches",
+      "tool_policy::tests::llm_cli_launches_are_detected_as_the_head_word_of_a_segment",
+      "…"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 10
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  },
+  {
+   "id": "parent:health-policy-on-base",
+   "source": "parent-task",
+   "capability": null,
+   "kind": "reviewed_candidate_identity",
+   "invariant": "候補 branch が検査器・policy・baseline を弱めて自分を合格させない（policy の変更は base 側の profile で評価して落とす）",
+   "evidence_path": "agent-docs/adr/2026-11-07-repo-health-contract.md",
+   "coverage": "full",
+   "checks": [
+    {
+     "mode": "run",
+     "command": "python3 -I -m unittest discover -s scripts/tests -p test_repo_health_core.py -k test_policy_weakening_is_evaluated_on_base_and_fails",
+     "tests": [
+      "scripts/tests/test_repo_health_core.py::test_policy_weakening_is_evaluated_on_base_and_fails*"
+     ],
+     "result": {
+      "exit": 0,
+      "tests_run": 1
+     }
+    }
+   ],
+   "result": {
+    "status": "pass",
+    "release_gate_checks": 0,
+    "checked": "提出時の HEAD で invariants.py --run"
+   }
+  }
+ ]
+}

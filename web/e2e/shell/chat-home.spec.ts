@@ -49,20 +49,25 @@ test("320px でも composer は下部タブバーの上にあり横へ溢れな�
   }
 });
 
-test("人の会話が無ければ新しい thread を作る", async ({ page }) => {
+// CoS の thread は固定（ADR 2026-10-22-cos-fixed-threads）: 統括 CoS と案件の CoS は archive できず、ホームは thread を
+// 作らずに統括 CoS を開く（ADR 2026-10-28-single-human-window-general-cos D5）。archive できるのは legacy の履歴だけ。
+test("CoS の thread は archive できず、ホームは thread を作らずに統括 CoS を開く", async ({ page }) => {
   const gateway = await startFixtureGateway();
+  const archive = (id: string) =>
+    fetch(`${gateway.base}/api/chat/threads/${id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ status: "archived", expected_revision: 1 }),
+    });
   try {
-    for (const id of ["chat-main", "chat-history", "chat-legacy"]) {
-      const response = await fetch(`${gateway.base}/api/chat/threads/${id}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ status: "archived", expected_revision: 1 }),
-      });
-      expect(response.status).toBe(200);
-    }
+    for (const id of ["chat-main", "chat-history"]) expect((await archive(id)).status).toBe(409);
+    expect((await archive("chat-legacy")).status).toBe(200);
     await page.goto(`${gateway.base}/`);
-    await expect(page).toHaveURL(/\?thread=chat-new-1$/);
+    await expect(page).toHaveURL(/\?thread=chat-main$/);
+    await expect(page.getByText("進捗を教えて")).toBeVisible();
     await expect(page.getByRole("textbox", { name: "CoS へのメッセージ" })).toBeVisible();
+    const created = gateway.daemon.requests.filter((r) => r.method === "POST" && r.path === "/api/v1/chat/threads");
+    expect(created).toEqual([]);
   } finally {
     await gateway.close();
   }

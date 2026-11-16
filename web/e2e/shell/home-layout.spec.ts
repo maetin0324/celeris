@@ -60,39 +60,47 @@ for (const [width, height] of [
   });
 }
 
-// 1440 の通知の右・会話枠の上端の右（x≈1300〜1415, y≈340〜360）に中身の無い枠が浮かない。
-// 退行の形: 枠（[data-home-console]）が末尾へ送られて宛先と会話一覧の行が枠の上端で切れ、button の下辺の線だけが
-// 空の枠に見えた（fix-r5/fix-home-states.md）。その領域の点ごとに、点を含む border 付きの要素が枠の上端で切れておらず、
-// 文字を持つことを DOM（elementFromPoint・bounding box）で確かめる。
+// 1440 の会話枠の上端の右に中身の無い枠が浮かない。
+// 退行の形: 枠（[data-home-console]）の上端の行が末尾へ送られて宛先と会話一覧の行が枠の上端で切れ、button の下辺の線だけが
+// 空の枠に見えた（fix-r5/fix-home-states.md）。いまの枠の上端の行は宛先の行（[data-console-toolbar]）だけで、
+// 「新しい会話」「会話を検索」は CoS の thread の固定（ADR 2026-10-22-cos-fixed-threads）で消えた。
+// 枠と宛先の行の位置を DOM から読み、枠の上端の行の右の点ごとに、点が宛先の行に当たること、点を含む border 付きの
+// 要素が枠の上端で切れておらず文字を持つことを確かめる（固定の座標で探ると、画面が変わったとき何にも当たらずに通る）。
 test("Console 1440: 会話枠の上端の右に中身の無い枠（border だけの切れた要素）が無い", async ({ page }) => {
   const gateway = await startFixtureGateway();
   try {
     await page.setViewportSize({ width: 1440, height: 800 });
     await page.goto(`${gateway.base}/console`);
     await expect(page.getByRole("list", { name: "Console の会話" }).getByRole("listitem").first()).toBeVisible();
+    const toolbar = page.locator("[data-home-console] [data-console-toolbar]");
+    await expect(toolbar).toContainText("宛先: CoS");
     await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     const found = await page.evaluate(() => {
       const region = document.querySelector("[data-home-console]");
-      if (!region) throw new Error("no [data-home-console]");
-      const top = region.getBoundingClientRect().top;
+      const bar = region?.querySelector("[data-console-toolbar]");
+      if (!region || !bar) throw new Error("no [data-home-console] [data-console-toolbar]");
+      const frame = region.getBoundingClientRect();
+      const row = bar.getBoundingClientRect();
       const bad: string[] = [];
-      let hits = 0;
-      for (let x = 1300; x <= 1415; x += 5) {
-        for (let y = 340; y <= 360; y += 2) {
+      let onToolbar = 0;
+      let points = 0;
+      for (let x = Math.ceil(frame.right - 140); x <= frame.right - 2; x += 5) {
+        for (let y = Math.ceil(frame.top + 1); y <= row.bottom - 1; y += 2) {
+          points += 1;
           let el = document.elementFromPoint(x, y);
-          while (el && el.id !== "main") {
+          if (el && bar.contains(el)) onToolbar += 1;
+          else bad.push(`(${x},${y}) は宛先の行でなく ${el?.tagName ?? "なし"}「${(el?.textContent ?? "").trim().slice(0, 20)}」`);
+          while (el && el !== region) {
             const cs = getComputedStyle(el);
             const bordered = ["Top", "Right", "Bottom", "Left"].some(
               (side) => Number.parseFloat(cs.getPropertyValue(`border-${side.toLowerCase()}-width`)) > 0,
             );
             if (bordered) {
-              hits += 1;
               const box = el.getBoundingClientRect();
               const text = (el.textContent ?? "").trim();
-              const clipped = region.contains(el) && box.top < top - 0.5;
-              if (clipped || text === "")
+              if (box.top < frame.top - 0.5 || text === "")
                 bad.push(
-                  `${el.tagName}「${text.slice(0, 20)}」 top=${Math.round(box.top)} 枠の上端=${Math.round(top)}`,
+                  `${el.tagName}「${text.slice(0, 20)}」 top=${Math.round(box.top)} 枠の上端=${Math.round(frame.top)}`,
                 );
               break;
             }
@@ -100,16 +108,13 @@ test("Console 1440: 会話枠の上端の右に中身の無い枠（border だ�
           }
         }
       }
-      return { bad: [...new Set(bad)], hits };
+      return { bad: [...new Set(bad)], onToolbar, points, rowTop: row.top, frameTop: frame.top };
     });
-    expect(found.bad, "中身の無い枠・枠の上端で切れた border 付きの要素").toEqual([]);
-    // 領域には会話の検索欄がある（点が何にも当たらずに通るのを防ぐ）。
-    expect(found.hits).toBeGreaterThan(0);
-    const fresh = page.getByRole("searchbox", { name: "会話を検索" });
-    const region = await page.locator("[data-home-console]").boundingBox();
-    const button = await fresh.boundingBox();
-    if (!region || !button) throw new Error("no box");
-    expect(button.y, "会話の検索欄は枠の上端より下から始まる").toBeGreaterThanOrEqual(region.y - 0.5);
+    expect(found.bad, "枠の上端の行の右に宛先の行以外のもの・中身の無い枠・切れた border 付きの要素").toEqual([]);
+    // 探った点が実際に宛先の行に当たっている（点が何にも当たらずに通るのを防ぐ）。
+    expect(found.points).toBeGreaterThan(0);
+    expect(found.onToolbar).toBe(found.points);
+    expect(found.rowTop, "宛先の行は枠の上端から始まる").toBeGreaterThanOrEqual(found.frameTop - 0.5);
   } finally {
     await gateway.close();
   }

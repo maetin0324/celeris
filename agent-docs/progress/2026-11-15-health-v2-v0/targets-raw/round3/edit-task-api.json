@@ -1,0 +1,26 @@
+{
+ "mode": "edit",
+ "crate": "task-api",
+ "edited_file": "crates/task-api/src/lib.rs",
+ "list_exit": 0,
+ "list_secs": 0.13,
+ "affected_crates": 7,
+ "affected": [
+  "celeris",
+  "celeris-campaign",
+  "celerisctl",
+  "llm-proxy",
+  "task-api",
+  "task-dispatch",
+  "task-worker"
+ ],
+ "extra_checks": [
+  "web: typecheck+unit (\u7406\u7531: web \u306e\u578b\u306e\u5143\u306b\u306a\u308b crate \u306e\u5909\u66f4: task-api)"
+ ],
+ "rebuild_exit": 0,
+ "rebuild_secs": 107.63,
+ "edit_to_verify_secs": 107.77,
+ "compiled_units": 7,
+ "loadavg_before": "27.08 25.68 23.21",
+ "loadavg_after": "23.36 25.94 23.63"
+}

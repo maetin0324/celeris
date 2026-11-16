@@ -1,0 +1,10 @@
+{
+ "mode": "build",
+ "crate": "task-worker",
+ "exit": 0,
+ "secs": 40.67,
+ "test_binaries": 21,
+ "compiled_units": 1,
+ "loadavg_before": "10.36 13.37 12.81",
+ "loadavg_after": "10.81 13.13 12.76"
+}

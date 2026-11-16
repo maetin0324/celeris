@@ -345,7 +345,7 @@ async fn a_master_that_exited_on_its_own_is_reported_once_with_its_stderr_tail()
     d.set_cluster_liveness_probe(Arc::new(|_ssh_command: &[String], _host: &str| false));
     let watcher_calls = Arc::new(AtomicUsize::new(0));
     let calls = watcher_calls.clone();
-    d.set_cluster_master_watcher(Arc::new(move || {
+    d.cluster.set_cluster_master_watcher(Arc::new(move || {
         if calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
             vec![ClusterMasterExit {
                 cluster: "sirius".into(),
@@ -409,7 +409,7 @@ fn probe_failures_keep_the_master_until_three_in_a_row() {
     let probe_ok = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let probe_calls = Arc::new(AtomicUsize::new(0));
     let (ok_hook, calls_hook) = (probe_ok.clone(), probe_calls.clone());
-    d.set_cluster_command_probe(Arc::new(
+    d.cluster.set_cluster_command_probe(Arc::new(
         move |_ssh_command: &[String], _host: &str, _timeout: Duration| {
             calls_hook.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             ok_hook.load(std::sync::atomic::Ordering::SeqCst)
@@ -473,7 +473,7 @@ fn a_slow_probe_does_not_block_the_liveness_refresh() {
     d.set_cluster_liveness_probe(Arc::new(|_ssh_command: &[String], _host: &str| true));
     let release = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let release_hook = release.clone();
-    d.set_cluster_command_probe(Arc::new(
+    d.cluster.set_cluster_command_probe(Arc::new(
         move |_ssh_command: &[String], _host: &str, _timeout: Duration| {
             // 放されるまで（最大 10 秒）眠る = timeout 寸前まで返らない遅い probe。
             let deadline = Instant::now() + Duration::from_secs(10);
@@ -526,10 +526,11 @@ fn totp_key_auth_reconnect_is_tried_once_per_outage() {
     }));
     let connector_calls = Arc::new(AtomicUsize::new(0));
     let calls_hook = connector_calls.clone();
-    d.set_cluster_connector(Arc::new(move |_id: &str, _host: &str| {
-        calls_hook.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Err("Permission denied (keyboard-interactive)".to_string())
-    }));
+    d.cluster
+        .set_cluster_connector(Arc::new(move |_id: &str, _host: &str| {
+            calls_hook.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err("Permission denied (keyboard-interactive)".to_string())
+        }));
     let run_ticks = |d: &mut Dispatcher, n: usize| {
         for _ in 0..n {
             *d.cluster.last_liveness_mut() = None;
@@ -539,7 +540,8 @@ fn totp_key_auth_reconnect_is_tried_once_per_outage() {
         }
     };
     let login_needed_events = |d: &mut Dispatcher| {
-        d.take_tunnel_events()
+        d.cluster
+            .take_tunnel_events()
             .iter()
             .filter(|e| e.kind == TunnelEventKind::LoginNeeded)
             .count()
@@ -548,14 +550,17 @@ fn totp_key_auth_reconnect_is_tried_once_per_outage() {
     run_ticks(&mut d, 100);
     assert_eq!(connector_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert_eq!(login_needed_events(&mut d), 1);
-    assert_eq!(d.clusters_needing_login(), vec!["pegasus".to_string()]);
+    assert_eq!(
+        d.cluster.clusters_needing_login(),
+        vec!["pegasus".to_string()]
+    );
 
     // 人が GUI で TOTP を入れて繋いだ。
-    d.set_cluster_connect_pending("pegasus", true);
-    d.set_cluster_connect_pending("pegasus", false);
+    d.cluster.set_cluster_connect_pending("pegasus", true);
+    d.cluster.set_cluster_connect_pending("pegasus", false);
     master_up.store(true, std::sync::atomic::Ordering::SeqCst);
     run_ticks(&mut d, 3);
-    assert!(d.clusters_needing_login().is_empty());
+    assert!(d.cluster.clusters_needing_login().is_empty());
     // 再び切れた: 鍵認証はもう 1 回だけ、通知ももう 1 件だけ。
     master_up.store(false, std::sync::atomic::Ordering::SeqCst);
     run_ticks(&mut d, 100);
@@ -609,10 +614,11 @@ fn publickey_key_auth_reconnect_backs_off_up_to_five_minutes() {
     d.set_cluster_liveness_probe(Arc::new(|_ssh_command: &[String], _host: &str| false));
     let connector_calls = Arc::new(AtomicUsize::new(0));
     let calls_hook = connector_calls.clone();
-    d.set_cluster_connector(Arc::new(move |_id: &str, _host: &str| {
-        calls_hook.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Err("Connection timed out".to_string())
-    }));
+    d.cluster
+        .set_cluster_connector(Arc::new(move |_id: &str, _host: &str| {
+            calls_hook.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err("Connection timed out".to_string())
+        }));
     for _ in 0..50 {
         assert!(!d.ensure_cluster_master_for_tunnel(&spec));
     }
@@ -639,7 +645,7 @@ fn publickey_key_auth_reconnect_backs_off_up_to_five_minutes() {
     assert_eq!(state.key_auth_failures, 3);
     assert!(state.unavailable_reported);
     assert!(
-        d.clusters_needing_login().is_empty(),
+        d.cluster.clusters_needing_login().is_empty(),
         "publickey は TOTP を求めない"
     );
 }
@@ -677,6 +683,7 @@ fn a_lost_master_is_recorded_and_notified_once_per_transition() {
     assert_eq!(log[1].cause.as_deref(), Some("check_failed"));
     assert!(log[1].uptime_secs.is_some());
     let login_needed: Vec<_> = d
+        .cluster
         .take_tunnel_events()
         .into_iter()
         .filter(|e| e.kind == TunnelEventKind::LoginNeeded)
@@ -693,7 +700,7 @@ fn a_lost_master_is_recorded_and_notified_once_per_transition() {
     // master の終了（celeris が抱えた子）でも同じ経路で数える。
     master_up.store(true, std::sync::atomic::Ordering::SeqCst);
     tick_liveness(&mut d);
-    d.set_cluster_master_watcher(Arc::new(|| {
+    d.cluster.set_cluster_master_watcher(Arc::new(|| {
         vec![ClusterMasterExit {
             cluster: "pegasus".into(),
             exit_code: Some(255),
@@ -728,17 +735,19 @@ fn a_restarted_dispatcher_borrows_the_surviving_master_and_keeps_the_counts() {
         );
         // master は生き続けている（ControlPersist=yes。celeris の停止と無関係）。
         d.set_cluster_liveness_probe(Arc::new(|_ssh_command: &[String], _host: &str| true));
-        d.set_cluster_connector(Arc::new(move |_id: &str, _host: &str| {
-            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Err("must not be called".to_string())
-        }));
-        d.set_tunnel_listener_probe(Arc::new(|_listen: &str| true));
-        d.set_tunnel_probe(Arc::new(|_listen: &str| Ok(())));
+        d.cluster
+            .set_cluster_connector(Arc::new(move |_id: &str, _host: &str| {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err("must not be called".to_string())
+            }));
+        d.cluster
+            .set_tunnel_listener_probe(Arc::new(|_listen: &str| true));
+        d.cluster.set_tunnel_probe(Arc::new(|_listen: &str| Ok(())));
         d
     };
     let mut before = make(store.clone(), connector_calls.clone());
-    before.set_cluster_connect_pending("pegasus", true);
-    before.set_cluster_connect_pending("pegasus", false);
+    before.cluster.set_cluster_connect_pending("pegasus", true);
+    before.cluster.set_cluster_connect_pending("pegasus", false);
     before.refresh_cluster_liveness();
     before.refresh_cluster_tunnels();
     let counts_before =
@@ -754,7 +763,7 @@ fn a_restarted_dispatcher_borrows_the_surviving_master_and_keeps_the_counts() {
         after.refresh_cluster_tunnels();
     }
     assert_eq!(after.cluster.connected_mut().get("pegasus"), Some(&true));
-    assert!(after.clusters_needing_login().is_empty());
+    assert!(after.cluster.clusters_needing_login().is_empty());
     assert_eq!(connector_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     let counts_after =
         task_core::ClusterConnectionStats::from_records(&connection_log(&store), "pegasus");
@@ -934,12 +943,13 @@ async fn tunnel_down_then_key_auth_ok_brings_the_forward_up() {
         ),
     );
     // master は死んでいる（cluster_connected に何も入っていない）。
-    d.set_cluster_connector(Arc::new(|_id: &str, _host: &str| Ok(())));
+    d.cluster
+        .set_cluster_connector(Arc::new(|_id: &str, _host: &str| Ok(())));
     let ensure_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let forward_present = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let ensure_calls_hook = ensure_calls.clone();
     let forward_present_hook = forward_present.clone();
-    d.set_tunnel_forward_ensurer(Arc::new(
+    d.cluster.set_tunnel_forward_ensurer(Arc::new(
         move |_host: &str, _listen: &str, _target: &str| {
             ensure_calls_hook.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             forward_present_hook.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -949,11 +959,12 @@ async fn tunnel_down_then_key_auth_ok_brings_the_forward_up() {
     // Phase 85: listener と target の健康は別のフック。この試験では両方を同じフラグに束ねる
     // （ensure が listener を立て、立った listener はそのまま target も健全とみなす）。
     let forward_present_listener = forward_present.clone();
-    d.set_tunnel_listener_probe(Arc::new(move |_listen: &str| {
-        forward_present_listener.load(std::sync::atomic::Ordering::SeqCst)
-    }));
+    d.cluster
+        .set_tunnel_listener_probe(Arc::new(move |_listen: &str| {
+            forward_present_listener.load(std::sync::atomic::Ordering::SeqCst)
+        }));
     let forward_present_probe = forward_present.clone();
-    d.set_tunnel_probe(Arc::new(move |_listen: &str| {
+    d.cluster.set_tunnel_probe(Arc::new(move |_listen: &str| {
         if forward_present_probe.load(std::sync::atomic::Ordering::SeqCst) {
             Ok(())
         } else {
@@ -964,10 +975,10 @@ async fn tunnel_down_then_key_auth_ok_brings_the_forward_up() {
     d.refresh_cluster_tunnels();
 
     assert_eq!(d.cluster.connected_mut().get("pegasus"), Some(&true));
-    assert!(d.clusters_needing_login().is_empty());
+    assert!(d.cluster.clusters_needing_login().is_empty());
     assert_eq!(ensure_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
-    assert!(d.tunnel_reachable("pegasus", "127.0.0.1:19001"));
-    let events = d.take_tunnel_events();
+    assert!(d.cluster.tunnel_reachable("pegasus", "127.0.0.1:19001"));
+    let events = d.cluster.take_tunnel_events();
     assert!(
         events.iter().any(|e| e.cluster == "pegasus"
             && e.listen == "127.0.0.1:19001"
@@ -1000,13 +1011,17 @@ async fn tunnel_down_and_key_auth_fails_marks_login_needed_once() {
             "bnode150:19002",
         ),
     );
-    d.set_cluster_connector(Arc::new(|_id: &str, _host: &str| {
-        Err("permission denied (keyboard-interactive)".to_string())
-    }));
+    d.cluster
+        .set_cluster_connector(Arc::new(|_id: &str, _host: &str| {
+            Err("permission denied (keyboard-interactive)".to_string())
+        }));
 
     d.refresh_cluster_tunnels();
-    assert_eq!(d.clusters_needing_login(), vec!["pegasus".to_string()]);
-    let first_events = d.take_tunnel_events();
+    assert_eq!(
+        d.cluster.clusters_needing_login(),
+        vec!["pegasus".to_string()]
+    );
+    let first_events = d.cluster.take_tunnel_events();
     assert_eq!(
         first_events
             .iter()
@@ -1021,8 +1036,11 @@ async fn tunnel_down_and_key_auth_fails_marks_login_needed_once() {
     *d.cluster.last_tunnel_refresh_mut() =
         Some(Instant::now() - CLUSTER_LIVENESS_INTERVAL - Duration::from_millis(1));
     d.refresh_cluster_tunnels();
-    assert_eq!(d.clusters_needing_login(), vec!["pegasus".to_string()]);
-    let second_events = d.take_tunnel_events();
+    assert_eq!(
+        d.cluster.clusters_needing_login(),
+        vec!["pegasus".to_string()]
+    );
+    let second_events = d.cluster.take_tunnel_events();
     assert!(
         second_events
             .iter()
@@ -1061,7 +1079,7 @@ async fn tunnel_listener_absent_is_re_added() {
     let listener_present = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let ensure_calls_hook = ensure_calls.clone();
     let listener_present_hook = listener_present.clone();
-    d.set_tunnel_forward_ensurer(Arc::new(
+    d.cluster.set_tunnel_forward_ensurer(Arc::new(
         move |_host: &str, _listen: &str, _target: &str| {
             ensure_calls_hook.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             listener_present_hook.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -1069,16 +1087,17 @@ async fn tunnel_listener_absent_is_re_added() {
         },
     ));
     let listener_present_probe = listener_present.clone();
-    d.set_tunnel_listener_probe(Arc::new(move |_listen: &str| {
-        listener_present_probe.load(std::sync::atomic::Ordering::SeqCst)
-    }));
+    d.cluster
+        .set_tunnel_listener_probe(Arc::new(move |_listen: &str| {
+            listener_present_probe.load(std::sync::atomic::Ordering::SeqCst)
+        }));
     // listener が有る間は target も健全（この試験は listener の有無だけを見たいので単純化する）。
-    d.set_tunnel_probe(Arc::new(|_listen: &str| Ok(())));
+    d.cluster.set_tunnel_probe(Arc::new(|_listen: &str| Ok(())));
 
     // 1 回目: 最初から listener が有る。ensure は呼ばれない。
     d.refresh_cluster_tunnels();
     assert_eq!(ensure_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
-    assert!(d.tunnel_reachable("pegasus", "127.0.0.1:19003"));
+    assert!(d.cluster.tunnel_reachable("pegasus", "127.0.0.1:19003"));
 
     // listener が消える（誰かが master 側を再起動した、等）。
     listener_present.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -1090,7 +1109,7 @@ async fn tunnel_listener_absent_is_re_added() {
         1,
         "a missing listener must be re-added"
     );
-    assert!(d.tunnel_reachable("pegasus", "127.0.0.1:19003"));
+    assert!(d.cluster.tunnel_reachable("pegasus", "127.0.0.1:19003"));
 }
 
 /// ADR-0053 Phase 85 の本旨: listener は有る（`-O forward` は張れている）が target
@@ -1124,16 +1143,17 @@ async fn tunnel_listener_present_target_unhealthy_does_not_re_add() {
         ),
     );
     d.cluster.connected_mut().insert("pegasus".into(), true);
-    d.set_tunnel_listener_probe(Arc::new(|_listen: &str| true));
+    d.cluster
+        .set_tunnel_listener_probe(Arc::new(|_listen: &str| true));
     let ensure_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let ensure_calls_hook = ensure_calls.clone();
-    d.set_tunnel_forward_ensurer(Arc::new(
+    d.cluster.set_tunnel_forward_ensurer(Arc::new(
         move |_host: &str, _listen: &str, _target: &str| {
             ensure_calls_hook.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(())
         },
     ));
-    d.set_tunnel_probe(Arc::new(|_listen: &str| {
+    d.cluster.set_tunnel_probe(Arc::new(|_listen: &str| {
         Err("GET /models timed out after 2s".to_string())
     }));
 
@@ -1144,18 +1164,24 @@ async fn tunnel_listener_present_target_unhealthy_does_not_re_add() {
         0,
         "a present listener must not be re-added just because the target is unhealthy"
     );
-    assert!(!d.tunnel_reachable("pegasus", "127.0.0.1:19004"));
-    assert!(d.tunnel_listener_present("pegasus", "127.0.0.1:19004"));
-    assert!(!d.tunnel_target_healthy("pegasus", "127.0.0.1:19004"));
+    assert!(!d.cluster.tunnel_reachable("pegasus", "127.0.0.1:19004"));
+    assert!(
+        d.cluster
+            .tunnel_listener_present("pegasus", "127.0.0.1:19004")
+    );
+    assert!(
+        !d.cluster
+            .tunnel_target_healthy("pegasus", "127.0.0.1:19004")
+    );
     assert_eq!(
-        d.tunnel_last_error("pegasus", "127.0.0.1:19004"),
+        d.cluster.tunnel_last_error("pegasus", "127.0.0.1:19004"),
         Some(
             "target bnode150:19004 (as seen from pegasus) did not answer /v1/models through \
              the forward: GET /models timed out after 2s"
                 .to_string()
         )
     );
-    let events = d.take_tunnel_events();
+    let events = d.cluster.take_tunnel_events();
     assert!(
         events.iter().any(|e| e.cluster == "pegasus"
             && e.listen == "127.0.0.1:19004"
@@ -1192,11 +1218,13 @@ async fn target_probe_seeds_synchronously_once_then_the_tick_stops_waiting_on_it
         ),
     );
     d.cluster.connected_mut().insert("pegasus".into(), true);
-    d.set_tunnel_listener_probe(Arc::new(|_listen: &str| true));
-    d.set_tunnel_forward_ensurer(Arc::new(|_host: &str, _listen: &str, _target: &str| Ok(())));
+    d.cluster
+        .set_tunnel_listener_probe(Arc::new(|_listen: &str| true));
+    d.cluster
+        .set_tunnel_forward_ensurer(Arc::new(|_host: &str, _listen: &str, _target: &str| Ok(())));
     let probe_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let probe_calls_hook = probe_calls.clone();
-    d.set_tunnel_probe(Arc::new(move |_listen: &str| {
+    d.cluster.set_tunnel_probe(Arc::new(move |_listen: &str| {
         probe_calls_hook.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         // 本番観測（無応答の Qwen 先方への `/v1/models`）の遅さを模す。
         std::thread::sleep(Duration::from_millis(150));
@@ -1210,7 +1238,7 @@ async fn target_probe_seeds_synchronously_once_then_the_tick_stops_waiting_on_it
         "the first observation seeds synchronously"
     );
     assert_eq!(probe_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
-    assert!(d.tunnel_reachable("pegasus", "127.0.0.1:19006"));
+    assert!(d.cluster.tunnel_reachable("pegasus", "127.0.0.1:19006"));
 
     // 次の tick（`CLUSTER_LIVENESS_INTERVAL` を過ぎさせる）。probe はもう同期では呼ばれないので、
     // probe が遅くても tick は速い。
@@ -1277,9 +1305,11 @@ async fn tunnel_target_unreachable_emits_the_event_once_across_many_ticks() {
         ),
     );
     d.cluster.connected_mut().insert("pegasus".into(), true);
-    d.set_tunnel_listener_probe(Arc::new(|_listen: &str| true));
-    d.set_tunnel_forward_ensurer(Arc::new(|_host: &str, _listen: &str, _target: &str| Ok(())));
-    d.set_tunnel_probe(Arc::new(|_listen: &str| {
+    d.cluster
+        .set_tunnel_listener_probe(Arc::new(|_listen: &str| true));
+    d.cluster
+        .set_tunnel_forward_ensurer(Arc::new(|_host: &str, _listen: &str, _target: &str| Ok(())));
+    d.cluster.set_tunnel_probe(Arc::new(|_listen: &str| {
         Err("GET /models timed out after 2s".to_string())
     }));
 
@@ -1292,7 +1322,7 @@ async fn tunnel_target_unreachable_emits_the_event_once_across_many_ticks() {
             Some(Instant::now() - CLUSTER_LIVENESS_INTERVAL - Duration::from_millis(1));
         d.refresh_cluster_tunnels();
     }
-    let events = d.take_tunnel_events();
+    let events = d.cluster.take_tunnel_events();
     let target_unreachable: Vec<_> = events
         .iter()
         .filter(|e| e.kind == TunnelEventKind::TargetUnreachable)
@@ -1338,13 +1368,14 @@ async fn verify_mode_does_not_refresh_cluster_tunnels_or_write_a_report() {
     // `cluster_connector` → 失敗 → `cluster_login_needed` の報告書き込みに至るはずの状態。
     let connector_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let connector_calls_hook = connector_calls.clone();
-    d.set_cluster_connector(Arc::new(move |_id: &str, _host: &str| {
-        connector_calls_hook.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Err("permission denied (keyboard-interactive)".to_string())
-    }));
+    d.cluster
+        .set_cluster_connector(Arc::new(move |_id: &str, _host: &str| {
+            connector_calls_hook.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err("permission denied (keyboard-interactive)".to_string())
+        }));
     let ensure_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let ensure_calls_hook = ensure_calls.clone();
-    d.set_tunnel_forward_ensurer(Arc::new(
+    d.cluster.set_tunnel_forward_ensurer(Arc::new(
         move |_host: &str, _listen: &str, _target: &str| {
             ensure_calls_hook.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(())
@@ -1352,16 +1383,17 @@ async fn verify_mode_does_not_refresh_cluster_tunnels_or_write_a_report() {
     ));
     let probe_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let probe_calls_hook = probe_calls.clone();
-    d.set_tunnel_probe(Arc::new(move |_listen: &str| {
+    d.cluster.set_tunnel_probe(Arc::new(move |_listen: &str| {
         probe_calls_hook.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }));
     let listener_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let listener_calls_hook = listener_calls.clone();
-    d.set_tunnel_listener_probe(Arc::new(move |_listen: &str| {
-        listener_calls_hook.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        true
-    }));
+    d.cluster
+        .set_tunnel_listener_probe(Arc::new(move |_listen: &str| {
+            listener_calls_hook.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            true
+        }));
 
     let reports_before = store
         .report_list(&task_core::ReportFilter::default())
@@ -1396,8 +1428,8 @@ async fn verify_mode_does_not_refresh_cluster_tunnels_or_write_a_report() {
         0,
         "verify mode must not probe forward listeners"
     );
-    assert!(d.clusters_needing_login().is_empty());
-    assert!(d.take_tunnel_events().is_empty());
+    assert!(d.cluster.clusters_needing_login().is_empty());
+    assert!(d.cluster.take_tunnel_events().is_empty());
     assert_eq!(d.cluster.connected_mut().get("pegasus"), None);
 
     let reports_after = store
@@ -1450,13 +1482,14 @@ async fn publickey_cluster_auto_connects_and_dispatch_continues_on_success() {
     );
     let calls: Arc<StdMutex<Vec<(String, String)>>> = Arc::new(StdMutex::new(Vec::new()));
     let calls_for_hook = calls.clone();
-    d.set_cluster_connector(Arc::new(move |id: &str, host: &str| {
-        calls_for_hook
-            .lock()
-            .unwrap()
-            .push((id.to_string(), host.to_string()));
-        Ok(())
-    }));
+    d.cluster
+        .set_cluster_connector(Arc::new(move |id: &str, host: &str| {
+            calls_for_hook
+                .lock()
+                .unwrap()
+                .push((id.to_string(), host.to_string()));
+            Ok(())
+        }));
 
     let report = d.tick().unwrap();
     assert_eq!(report.dispatched, 1, "{report:?}");
@@ -1521,10 +1554,11 @@ async fn publickey_cluster_auto_connect_failure_gets_a_distinguishable_reason() 
     );
     let call_count = Arc::new(StdMutex::new(0u32));
     let call_count_for_hook = call_count.clone();
-    d.set_cluster_connector(Arc::new(move |_id: &str, _host: &str| {
-        *call_count_for_hook.lock().unwrap() += 1;
-        Err("permission denied (publickey)".to_string())
-    }));
+    d.cluster
+        .set_cluster_connector(Arc::new(move |_id: &str, _host: &str| {
+            *call_count_for_hook.lock().unwrap() += 1;
+            Err("permission denied (publickey)".to_string())
+        }));
 
     let report = d.tick().unwrap();
     assert_eq!(report.dispatched, 0, "{report:?}");
@@ -1581,10 +1615,11 @@ async fn manual_and_totp_clusters_are_not_auto_connected_even_with_a_hook() {
         );
         let call_count = Arc::new(StdMutex::new(0u32));
         let call_count_for_hook = call_count.clone();
-        d.set_cluster_connector(Arc::new(move |_id: &str, _host: &str| {
-            *call_count_for_hook.lock().unwrap() += 1;
-            Ok(())
-        }));
+        d.cluster
+            .set_cluster_connector(Arc::new(move |_id: &str, _host: &str| {
+                *call_count_for_hook.lock().unwrap() += 1;
+                Ok(())
+            }));
 
         let report = d.tick().unwrap();
         assert_eq!(report.dispatched, 0, "{auth}: {report:?}");
@@ -1644,7 +1679,7 @@ async fn cluster_live_carries_auth_and_connect_pending() {
         ("publickey", false)
     );
 
-    d.set_cluster_connect_pending("fern03", true);
+    d.cluster.set_cluster_connect_pending("fern03", true);
     d.tick().unwrap();
     let snap = rx.borrow().clone().expect("snapshot published");
     let live = snap
@@ -1654,7 +1689,7 @@ async fn cluster_live_carries_auth_and_connect_pending() {
         .expect("fern03 in snapshot");
     assert!(live.connect_pending, "connect_pending set");
 
-    d.set_cluster_connect_pending("fern03", false);
+    d.cluster.set_cluster_connect_pending("fern03", false);
     d.tick().unwrap();
     let snap = rx.borrow().clone().expect("snapshot published");
     let live = snap

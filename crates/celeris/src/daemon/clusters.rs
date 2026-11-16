@@ -182,12 +182,14 @@ pub(crate) fn spawn_control_path_inspection(config: &Config) {
 /// `cluster_liveness_probe` を偽物にすり替えるだけで済ませているため、実 ssh を打つこの 3 つを
 /// そこに混ぜると CLAUDE.md の「テストで外部ネットワークに出ない」を破る）。
 pub fn wire_cluster_liveness_hooks(dispatcher: &mut Dispatcher, masters: ClusterMasters) {
-    dispatcher.set_cluster_command_probe(Arc::new(
+    dispatcher.cluster_mut().set_cluster_command_probe(Arc::new(
         |ssh_command: &[String], host: &str, timeout: std::time::Duration| {
             task_worker::ssh::control_master_command_probe_blocking(ssh_command, host, timeout)
         },
     ));
-    dispatcher.set_cluster_master_watcher(cluster_master_watcher(masters));
+    dispatcher
+        .cluster_mut()
+        .set_cluster_master_watcher(cluster_master_watcher(masters));
     dispatcher.set_cluster_job_poller(task_dispatch::dispatcher::ssh_cluster_job_poller());
 }
 

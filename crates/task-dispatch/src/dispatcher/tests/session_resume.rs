@@ -998,7 +998,8 @@ fn remote_three_step(
         cluster_spec_with_auth("sirius", "sirius", "manual"),
     );
     d.set_cluster_liveness_probe(Arc::new(|_ssh_command: &[String], _host: &str| true));
-    d.set_cluster_ssh_command_override(vec!["true".to_string()]);
+    d.cluster
+        .set_cluster_ssh_command_override(vec!["true".to_string()]);
     (task_id, d)
 }
 

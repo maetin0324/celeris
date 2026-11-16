@@ -712,7 +712,7 @@ impl Dispatcher {
         tracing::info!(task_id = %task.id, %run_id, adapter = %adapter_id, source = %source_id, model = %model, account = account.as_deref(), "dispatching");
         let remote = cluster
             .as_ref()
-            .map(|(spec, path, mode)| self.remote_ssh_settings(spec, path, task.id, *mode));
+            .map(|(spec, path, mode)| self.cluster.remote_ssh_settings(spec, path, task.id, *mode));
         // ADR-0043 D3（Phase 56）: ホストか、コンテナか、runtime が無くて `blocked` か。
         let container =
             self.container_decision(&task, worktree.as_ref(), &adapter_id, remote.is_some());

@@ -96,10 +96,10 @@ impl Dispatcher {
                     .map(|f| TunnelForwardLive {
                         listen: f.listen.clone(),
                         target: f.target.clone(),
-                        up: self.tunnel_reachable(&spec.id, &f.listen),
-                        listener: self.tunnel_listener_present(&spec.id, &f.listen),
-                        target_healthy: self.tunnel_target_healthy(&spec.id, &f.listen),
-                        last_error: self.tunnel_last_error(&spec.id, &f.listen),
+                        up: self.cluster.tunnel_reachable(&spec.id, &f.listen),
+                        listener: self.cluster.tunnel_listener_present(&spec.id, &f.listen),
+                        target_healthy: self.cluster.tunnel_target_healthy(&spec.id, &f.listen),
+                        last_error: self.cluster.tunnel_last_error(&spec.id, &f.listen),
                     })
                     .collect(),
             })

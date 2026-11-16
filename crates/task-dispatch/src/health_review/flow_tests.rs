@@ -380,7 +380,8 @@ async fn run_remote_flow(change: &'static str) -> (Outcome, Arc<FlowAdapter>) {
         cluster_spec_with_auth("sirius", "sirius", "manual"),
     );
     d.set_cluster_liveness_probe(Arc::new(|_ssh_command: &[String], _host: &str| true));
-    d.set_cluster_ssh_command_override(vec!["true".to_string()]);
+    d.cluster_mut()
+        .set_cluster_ssh_command_override(vec!["true".to_string()]);
     d.config.execution.gate = task_core::GateMode::On;
     d.config.execution.limits = super::tree::tree_limits();
     run_until_idle(&mut d, 400).await;

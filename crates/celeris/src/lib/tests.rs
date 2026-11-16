@@ -604,28 +604,33 @@ target = "bnode150:18000"
 
     let connector_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let connector_calls_hook = connector_calls.clone();
-    dispatcher.set_cluster_connector(Arc::new(move |_cluster_id: &str, _host: &str| {
-        connector_calls_hook.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        // Phase 66b の契約: ここに来た時点で、呼び出し元はすでに tokio の文脈を持たない OS
-        // スレッドへ逃がしているはず（さもなければこのテストの意味が無い）。
-        assert!(
-            tokio::runtime::Handle::try_current().is_err(),
-            "the cluster connector hook must run off any tokio runtime context (Phase 66b)"
-        );
-        // 実物の `cluster_connector`（本ファイルの上のほう）と同じ形: ネストした current_thread
-        // ランタイムを作って `block_on` する。修正前はこの形が「Cannot start a runtime from within
-        // a runtime」で panic した。実 ssh は起こさない。
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap_or_else(|e| panic!("nested runtime: {e}"));
-        rt.block_on(async { Err::<(), String>("test: no real ssh".to_string()) })
-    }));
+    dispatcher.cluster_mut().set_cluster_connector(Arc::new(
+        move |_cluster_id: &str, _host: &str| {
+            connector_calls_hook.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            // Phase 66b の契約: ここに来た時点で、呼び出し元はすでに tokio の文脈を持たない OS
+            // スレッドへ逃がしているはず（さもなければこのテストの意味が無い）。
+            assert!(
+                tokio::runtime::Handle::try_current().is_err(),
+                "the cluster connector hook must run off any tokio runtime context (Phase 66b)"
+            );
+            // 実物の `cluster_connector`（本ファイルの上のほう）と同じ形: ネストした current_thread
+            // ランタイムを作って `block_on` する。修正前はこの形が「Cannot start a runtime from within
+            // a runtime」で panic した。実 ssh は起こさない。
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap_or_else(|e| panic!("nested runtime: {e}"));
+            rt.block_on(async { Err::<(), String>("test: no real ssh".to_string()) })
+        },
+    ));
     dispatcher
+        .cluster_mut()
         .set_tunnel_forward_ensurer(Arc::new(|_host: &str, _listen: &str, _target: &str| Ok(())));
-    dispatcher.set_tunnel_probe(Arc::new(|_listen: &str| {
-        Err("unreachable in test".to_string())
-    }));
+    dispatcher
+        .cluster_mut()
+        .set_tunnel_probe(Arc::new(|_listen: &str| {
+            Err("unreachable in test".to_string())
+        }));
     dispatcher.set_accepting_new_work(true);
 
     // celeris の tick ループ（`tick_loop`）がしているのと同じこと: マルチスレッド tokio ランタイムの
@@ -746,24 +751,26 @@ auth = "publickey"
 
     let connector_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let connector_calls_hook = connector_calls.clone();
-    dispatcher.set_cluster_connector(Arc::new(move |_cluster_id: &str, _host: &str| {
-        connector_calls_hook.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        // Phase 81 の契約: `try_auto_connect_cluster` も `run_cluster_hooks_off_async` 経由で
-        // 呼ばれ、ここに来た時点で呼び出し元はすでに tokio の文脈を持たない OS スレッドへ
-        // 逃がしているはず（さもなければこのテストの意味が無い）。
-        assert!(
-            tokio::runtime::Handle::try_current().is_err(),
-            "the cluster connector hook must run off any tokio runtime context (Phase 81)"
-        );
-        // 実物の `cluster_connector`（本ファイルの上のほう）と同じ形: ネストした current_thread
-        // ランタイムを作って `block_on` する。修正前ならこの形は「Cannot start a runtime from
-        // within a runtime」で panic した経路。実 ssh は起こさない。
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap_or_else(|e| panic!("nested runtime: {e}"));
-        rt.block_on(async { Err::<(), String>("test: no real ssh".to_string()) })
-    }));
+    dispatcher.cluster_mut().set_cluster_connector(Arc::new(
+        move |_cluster_id: &str, _host: &str| {
+            connector_calls_hook.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            // Phase 81 の契約: `try_auto_connect_cluster` も `run_cluster_hooks_off_async` 経由で
+            // 呼ばれ、ここに来た時点で呼び出し元はすでに tokio の文脈を持たない OS スレッドへ
+            // 逃がしているはず（さもなければこのテストの意味が無い）。
+            assert!(
+                tokio::runtime::Handle::try_current().is_err(),
+                "the cluster connector hook must run off any tokio runtime context (Phase 81)"
+            );
+            // 実物の `cluster_connector`（本ファイルの上のほう）と同じ形: ネストした current_thread
+            // ランタイムを作って `block_on` する。修正前ならこの形は「Cannot start a runtime from
+            // within a runtime」で panic した経路。実 ssh は起こさない。
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap_or_else(|e| panic!("nested runtime: {e}"));
+            rt.block_on(async { Err::<(), String>("test: no real ssh".to_string()) })
+        },
+    ));
     dispatcher.set_accepting_new_work(true);
 
     // celeris の tick ループがしているのと同じこと: マルチスレッド tokio ランタイムの中から、
@@ -820,21 +827,29 @@ target = "bnode150:18000"
 
     let connector_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let connector_calls_hook = connector_calls.clone();
-    dispatcher.set_cluster_connector(Arc::new(move |_cluster_id: &str, _host: &str| {
-        connector_calls_hook.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Err::<(), String>("must not be called while the master is alive (Phase 84b)".to_string())
-    }));
-    let ensure_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let ensure_calls_hook = ensure_calls.clone();
-    dispatcher.set_tunnel_forward_ensurer(Arc::new(
-        move |_host: &str, _listen: &str, _target: &str| {
-            ensure_calls_hook.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(())
+    dispatcher.cluster_mut().set_cluster_connector(Arc::new(
+        move |_cluster_id: &str, _host: &str| {
+            connector_calls_hook.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err::<(), String>(
+                "must not be called while the master is alive (Phase 84b)".to_string(),
+            )
         },
     ));
-    dispatcher.set_tunnel_probe(Arc::new(|_listen: &str| {
-        Err("unreachable in test".to_string())
-    }));
+    let ensure_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let ensure_calls_hook = ensure_calls.clone();
+    dispatcher
+        .cluster_mut()
+        .set_tunnel_forward_ensurer(Arc::new(
+            move |_host: &str, _listen: &str, _target: &str| {
+                ensure_calls_hook.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            },
+        ));
+    dispatcher
+        .cluster_mut()
+        .set_tunnel_probe(Arc::new(|_listen: &str| {
+            Err("unreachable in test".to_string())
+        }));
     dispatcher.set_accepting_new_work(true);
 
     let report = dispatcher.tick();

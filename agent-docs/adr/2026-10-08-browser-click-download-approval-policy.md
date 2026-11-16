@@ -144,3 +144,10 @@ ADR-0080 D4/D5 の該当文は本 ADR が上書きする（ADR-0080 本文は書
 - `crates/task-api/src/handlers/org.rs`: `BrowserSettingsPatch.approval_actions`。schema（`docs/api/v1`、web の生成型）再生成。
 - `web/features/browser/browser-settings-screen.tsx`: 「毎回の承認が要る操作」checkbox（文言は D2 の実挙動:
   承認待ち → 承認後に同じ session で一度だけ）。`web/e2e/support/fake-daemon.mjs` も `approval_actions` を受ける。
+
+## 付記（2026-11-16、`check_narrowing` の削除）
+
+1.2 節と D1 が書く `EffectiveBrowserPolicy::check_narrowing` は、本体の呼び手が無いまま、人の決定（2026-11-16、LoC 削減 v3 D）で
+消した（[ADR-0080 の付記](0080-browser-phase2-policy-broker-approval.md)）。モデル・ページが policy を編集する入口は無く、
+`approval_actions` を変えるのは管理者の経路（task policy の PUT と組織の browser grant の PATCH）だけである。D1 の
+「承認を外すのは管理者経路」は変わらない。モデル由来の編集の入口を足すときは、その変更で縮小の検査と拒否の試験を置く。

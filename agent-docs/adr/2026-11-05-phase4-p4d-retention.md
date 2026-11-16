@@ -50,3 +50,10 @@
 
 D9 の trigger を追加しない判断を [証跡整合 ADR](2026-11-06-n5-evidence-integrity.md) で置き換えた。
 migration 0118 は 3 表の最大 id の DELETE を permit の有無によらず拒む。
+
+## 付記（2026-11-16、`retention_stats` の削除）
+
+D7 の表全体の数を返す `SqliteStore::retention_stats` と型 `RetentionStats` を、LoC 削減 v3 D で消した。本体の呼び手は無く、
+試験と計測だけが使っていた。D7 の可視化（`summary.retention` の案件の行数と画面の `controller-retention`）は変わらない。
+D9 の「消せる行の数も同じ条件で数える」は、試験 `project_retention_tests`（task-core `store/project_retention_tests.rs`）が GC の条件と同じ定数
+`WAKE_GUARD`・`COMPARE_GUARD` で数える形に置き換えた。表全体の数が要るときは、その変更で同じ定数を使う関数を足す。

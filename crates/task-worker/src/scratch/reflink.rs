@@ -19,6 +19,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use super::build_outputs::{RemovedBuildOutput, profile_dirs, remove_stale_build_outputs};
 use super::{CargoTuning, Pool, TARGET_SUBDIR, rfc3339};
 
 pub const SEEDS_DIR: &str = "seeds";
@@ -115,12 +116,17 @@ impl SeedCopyOps<'static> {
 pub enum TargetOrigin {
     /// 既にあった（割り当て直し）。
     Existing,
-    /// 回収可能な owner の target を rename で引き継いだ（ADR-0075 D3）。
-    Adopted { from: String },
-    /// seed から reflink で写した。
+    /// 回収可能な owner の target を rename で引き継いだ（ADR-0075 D3）。`removed` は引き継いだ後に消した、
+    /// 元の場所を指す build 出力（ADR 2026-11-16-scratch-stale-build-outputs）。
+    Adopted {
+        from: String,
+        removed: Vec<RemovedBuildOutput>,
+    },
+    /// seed から reflink で写した。`removed` は写した後に消した、seed の世代を指す build 出力。
     Seed {
         seed: PathBuf,
         commit: Option<String>,
+        removed: Vec<RemovedBuildOutput>,
     },
     /// 空から作った。`reason` は seed を使わなかった理由（seed が無い・無効のときは `None`）。
     Empty { reason: Option<String> },
@@ -133,6 +139,16 @@ impl TargetOrigin {
             TargetOrigin::Adopted { .. } => "adopted",
             TargetOrigin::Seed { .. } => "seed",
             TargetOrigin::Empty { .. } => "empty",
+        }
+    }
+
+    /// 引き継ぎ・写しの後に消した build 出力（それ以外の作り方では `None`）。
+    pub fn removed_build_outputs(&self) -> Option<&[RemovedBuildOutput]> {
+        match self {
+            TargetOrigin::Adopted { removed, .. } | TargetOrigin::Seed { removed, .. } => {
+                Some(removed)
+            }
+            TargetOrigin::Existing | TargetOrigin::Empty { .. } => None,
         }
     }
 }
@@ -151,6 +167,10 @@ pub struct TargetOriginRecord {
     pub adopted_from: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// 引き継ぎ・写しの後に消した、元の場所を指す build 出力（ADR 2026-11-16-scratch-stale-build-outputs D5）。
+    /// `adopted`・`seed` では必ず書く（無ければ `[]`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub removed_build_outputs: Option<Vec<RemovedBuildOutput>>,
     pub created_at: String,
 }
 
@@ -163,12 +183,13 @@ impl TargetOriginRecord {
             seed_commit: None,
             adopted_from: None,
             reason: None,
+            removed_build_outputs: origin.removed_build_outputs().map(<[_]>::to_vec),
             created_at: rfc3339(at),
         };
         match origin {
             TargetOrigin::Existing => {}
-            TargetOrigin::Adopted { from } => r.adopted_from = Some(from.clone()),
-            TargetOrigin::Seed { seed, commit } => {
+            TargetOrigin::Adopted { from, .. } => r.adopted_from = Some(from.clone()),
+            TargetOrigin::Seed { seed, commit, .. } => {
                 r.seed = Some(seed.display().to_string());
                 r.seed_commit = commit.clone();
             }
@@ -285,7 +306,7 @@ pub fn remove_partial_copies(owner_dir: &Path) {
     }
 }
 
-fn remove_any(path: &Path) -> io::Result<()> {
+pub(super) fn remove_any(path: &Path) -> io::Result<()> {
     let r = match std::fs::symlink_metadata(path) {
         Ok(m) if m.is_dir() => std::fs::remove_dir_all(path),
         Ok(_) => std::fs::remove_file(path),
@@ -445,12 +466,17 @@ pub fn seed_target(
             return Err(io::Error::other("copied target did not share extents"));
         }
         prune_workspace_artifacts(&tmp, &checkout_marks)?;
-        std::fs::rename(&tmp, owner_dir.join(TARGET_SUBDIR))
+        // ADR 2026-11-16-scratch-stale-build-outputs D1: seed の世代を指す build 出力を、rename の前に消す。
+        let target = owner_dir.join(TARGET_SUBDIR);
+        let removed = remove_stale_build_outputs(pool, &tmp, &target)?;
+        std::fs::rename(&tmp, &target)?;
+        Ok(removed)
     });
     match result {
-        Ok(()) => TargetOrigin::Seed {
+        Ok(removed) => TargetOrigin::Seed {
             seed,
             commit: manifest.commit,
+            removed,
         },
         Err(e) => {
             if let Err(rm) = remove_any(&tmp) {
@@ -636,7 +662,7 @@ fn dep_info_is_workspace_member(text: &str, checkout_marks: &[String]) -> bool {
 }
 
 /// `name-<hash>` の `<hash>`（最後の `-` の後ろ。拡張子は含まない）。
-fn unit_hash(stem: &str) -> Option<&str> {
+pub(super) fn unit_hash(stem: &str) -> Option<&str> {
     stem.rsplit_once('-').map(|(_, h)| h)
 }
 
@@ -645,23 +671,7 @@ fn unit_hash(stem: &str) -> Option<&str> {
 /// 指す unit の `deps/<unit>.*`・`.fingerprint/*-<hash>`・`build/<pkg>-*` と、`incremental/`・`examples/`・profile
 /// 直下の bin を消す。
 pub fn prune_workspace_artifacts(target: &Path, checkout_marks: &[String]) -> io::Result<()> {
-    let mut profiles = Vec::new();
-    let mut stack = vec![(target.to_path_buf(), 0u8)];
-    while let Some((dir, depth)) = stack.pop() {
-        if dir.join(".fingerprint").is_dir() {
-            profiles.push(dir);
-            continue;
-        }
-        if depth >= 3 {
-            continue;
-        }
-        for e in std::fs::read_dir(&dir)?.flatten() {
-            if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                stack.push((e.path(), depth + 1));
-            }
-        }
-    }
-    for profile in profiles {
+    for profile in profile_dirs(target)? {
         prune_profile(&profile, checkout_marks)?;
     }
     Ok(())

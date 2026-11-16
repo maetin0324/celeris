@@ -1,7 +1,8 @@
 //! ADR-0075 D1〜D3（Phase G1）: ローカルの scratch pool。
 //!
 //! `<scratch>/targets/<owner>/{lease.json,target/}` の owner とパス、`lease.json` の読み書き、`.lock` の flock、
-//! 割り当て（`allocate`。adopt〈rename による引き継ぎ〉を含む）、分類（`classify`）、削除順を決める純粋関数
+//! 割り当て（`allocate`。adopt〈rename による引き継ぎ〉を含む。引き継いだ直後に元の場所を指す build 出力を消す〈ADR
+//! 2026-11-16-scratch-stale-build-outputs〉）、分類（`classify`）、削除順を決める純粋関数
 //! `plan_gc`、adopt の候補選び `choose_adopt` をここに置く。**LLM は呼ばない**（ADR-0001 D2 原則 1）。
 //! pool の走査・DB の状態の読み出し・削除スレッド・測定スレッドは `task-dispatch` の `scratch_gc` が持つ
 //! （dispatcher の tick と `celerisctl scratch` の両方が使う）。
@@ -804,6 +805,7 @@ fn allocate_locked(
         lease.work_unit_key = req.work_unit_key.clone();
     }
     let mut adopted_from = None;
+    let mut adopted_removed = Vec::new();
     if !target.exists()
         && req.adopt
         && let Some(checkout) = req.checkout
@@ -827,12 +829,25 @@ fn allocate_locked(
         if let Some(c) = choose_adopt(&live, &repo_key, checkout, req.distance, req.max_distance) {
             let from = pool.target_dir(&c.owner);
             match std::fs::rename(&from, &target) {
-                Ok(()) => {
-                    adopted_from = Some(c.owner.to_string());
-                    lease.adopted_from = adopted_from.clone();
-                    lease.size_bytes = None;
-                    lease.measured_at = None;
-                }
+                // ADR 2026-11-16-scratch-stale-build-outputs D1: rename の直後、run が使う前に、元の場所
+                // （引き継ぎ元・それより前の seed の世代）を指す build 出力を消す。
+                Ok(()) => match remove_stale_build_outputs(pool, &target, &target) {
+                    Ok(removed) => {
+                        adopted_from = Some(c.owner.to_string());
+                        adopted_removed = removed;
+                        lease.adopted_from = adopted_from.clone();
+                        lease.size_bytes = None;
+                        lease.measured_at = None;
+                    }
+                    Err(e) => {
+                        // D4: 消しかけの target は使わない。GC の削除待ちへ動かし、引き継がなかったものとして進む。
+                        let trash = pool
+                            .targets_dir()
+                            .join(deleting_name(&req.owner.flat(), SystemTime::now()));
+                        tracing::warn!(from = %from.display(), to = %target.display(), trash = %trash.display(), error = %e, "scratch: could not remove stale build outputs from the adopted target; discarding it");
+                        std::fs::rename(&target, &trash)?;
+                    }
+                },
                 Err(e) => {
                     tracing::warn!(from = %from.display(), to = %target.display(), error = %e, "scratch: adopt failed; starting from an empty target");
                 }
@@ -841,7 +856,10 @@ fn allocate_locked(
     }
     let origin = if target.exists() {
         match &adopted_from {
-            Some(from) => TargetOrigin::Adopted { from: from.clone() },
+            Some(from) => TargetOrigin::Adopted {
+                from: from.clone(),
+                removed: adopted_removed,
+            },
             None => TargetOrigin::Existing,
         }
     } else if !seed.enabled {
@@ -864,8 +882,15 @@ fn allocate_locked(
     let _lock = lock;
     std::fs::create_dir_all(&target)?;
     if origin != TargetOrigin::Existing {
+        if let Some(removed) = origin.removed_build_outputs().filter(|r| !r.is_empty()) {
+            let packages: Vec<String> = removed
+                .iter()
+                .map(|r| format!("{}/{}", r.profile, r.package))
+                .collect();
+            tracing::info!(owner = %req.owner, origin = origin.as_str(), packages = ?packages, count = removed.len(), "scratch: removed build outputs that point at another place in the pool");
+        }
         match &origin {
-            TargetOrigin::Seed { seed, commit } => {
+            TargetOrigin::Seed { seed, commit, .. } => {
                 tracing::info!(owner = %req.owner, seed = %seed.display(), commit = ?commit, target = %target.display(), "scratch: target created from the seed by reflink (ADR-0129)");
             }
             TargetOrigin::Empty {
@@ -1003,6 +1028,10 @@ pub fn cargo_child_env(settings: &ScratchSettings, owner: &Owner) -> CargoEnv {
 // Lease と cargo 環境の管理から GC の分類・回収計画を分離する。
 mod gc;
 pub use gc::*;
+
+// ADR 2026-11-16-scratch-stale-build-outputs: 引き継ぎ・写しの後に元の場所を指す build 出力を消す。
+mod build_outputs;
+pub use build_outputs::*;
 
 // ADR-0129 (4): seed からの reflink。
 pub(crate) mod reflink;

@@ -111,7 +111,7 @@ stat -f -c 'path=%n blocks=%b free=%f available=%a block_size=%S' /local
    - `scratch: seed refresh disabled; pool cannot share extents` が出たら probe は失敗している（`reason=` に理由）。seed は作られず、従来の空 target のまま動く。手順 6 で戻す。
    - `scratch: refreshing the seed (ADR-0129 (4))` のあと `scratch: seed switched` が出れば成功。`/local/celeris/data/scratch/seeds/<repo-key>/current/manifest.json` ができる。seed の build は main が進むたびに 1 本走る。
    - `seed refresh held` は空き不足か pressure 中。旧 seed を残して保留しているだけで、異常ではない。
-5. 新しい owner が seed を使ったかは `/local/celeris/data/scratch/targets/<owner>/target-origin.json` で確かめる（`"origin": "seed"`。`empty` なら `reason` を読む）。この host には `filefrag` と `btrfs` が無いので、extent の共有は `target-origin.json` で判断する。
+5. 新しい owner が seed を使ったかは `/local/celeris/data/scratch/targets/<owner>/target-origin.json` で確かめる（`"origin": "seed"`。`empty` なら `reason` を読む）。この host には `filefrag` と `btrfs` が無いので、extent の共有は `target-origin.json` で判断する。`seed` と `adopted` の記録の `removed_build_outputs` は、写し・引き継ぎの後に消した package（seed の世代や引き継ぎ元を指す `rustc-link-search` を持つもの。例 `v8`）の一覧（[ADR 2026-11-16](../../agent-docs/adr/2026-11-16-scratch-stale-build-outputs.md)）。
 6. 戻し方: `seed_reflink = false` にして daemon を再起動する。既存の owner の target はそのまま使える。無効の間は seed の GC が走らないので、`/local/celeris/data/scratch/seeds/` は人が消す（進行中の seed build が無いことを log で確かめてから `rm -rf -- /local/celeris/data/scratch/seeds`）。
 
 ## 8. `[scratch] targets_max_gb` の既定と暫定値

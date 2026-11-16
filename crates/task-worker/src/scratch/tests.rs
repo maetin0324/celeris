@@ -2088,3 +2088,6 @@ fn check_allocation_does_not_wait_for_the_pool_lock_nor_copy_the_seed() {
     assert!(try_allocate_for_check(&pool, &owner, Path::new(SEED_REPO)).is_none());
     drop(owner_alloc);
 }
+
+// ADR 2026-11-16-scratch-stale-build-outputs: 引き継ぎ・seed の写しの後に元の場所を指す build 出力を消す。
+mod stale_build_outputs;

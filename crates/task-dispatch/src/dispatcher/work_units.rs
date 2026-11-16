@@ -26,7 +26,7 @@ impl Dispatcher {
         let Some(dir) = self.task_dir(&task) else {
             // リモートの workspace は E4 の範囲外（review.rs の Command 実行も同様、remote_review
             // 経由の別経路を持つ。ここでは checks を飛ばして通常どおり `Done` として扱う）。
-            return self.finish_worker_result(
+            return self.finish_worker_result_with(
                 task,
                 Some(wu),
                 run_id,
@@ -395,7 +395,7 @@ impl Dispatcher {
                 exit_code: None,
             }),
         };
-        self.finish_worker_result(
+        self.finish_worker_result_with(
             task,
             current_wu,
             run_id,

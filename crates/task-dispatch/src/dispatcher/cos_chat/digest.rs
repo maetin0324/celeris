@@ -375,10 +375,10 @@ impl Dispatcher {
         }) = script.as_ref().filter(|s| s.draft.canary_selected)
         {
             // S5-8: the pass waits at most the rest of this tick's budget.
-            let remaining = self.script_tick_wait_remaining();
+            let remaining = self.maint.script_compare().tick_wait.remaining();
             let deadline = remaining.min(COS_DIGEST_PASS_DEADLINE);
             if deadline.is_zero() {
-                self.script_tick_budget_hit();
+                self.maint.script_compare_mut().tick_wait.budget_hit();
                 budget_fallback = Some(CosDigestFallback::new(
                     "tick_budget",
                     "tick wait budget used up before the pass",
@@ -395,11 +395,14 @@ impl Dispatcher {
                 });
                 reads = back;
                 if let Some((r, elapsed)) = &result {
-                    self.script_tick_charge((*elapsed).min(deadline));
+                    self.maint
+                        .script_compare_mut()
+                        .tick_wait
+                        .charge((*elapsed).min(deadline));
                     if matches!(r, TsResult::DeadlineExceeded(_))
                         && deadline < COS_DIGEST_PASS_DEADLINE
                     {
-                        self.script_tick_budget_hit();
+                        self.maint.script_compare_mut().tick_wait.budget_hit();
                         budget_fallback = Some(CosDigestFallback::new(
                             "tick_budget",
                             "tick wait budget used up during the pass",
@@ -727,7 +730,7 @@ impl Dispatcher {
     fn cos_digest_behavior_changes(
         &self,
     ) -> Vec<task_core::script_behavior_change::ApprovedBehaviorChange> {
-        match self.script_compare_log_store().map(|s| {
+        match self.maint.script_compare().store.clone().map(|s| {
             s.script_behavior_changes_approved(task_core::script_compare::ScriptDomain::CosDigest)
         }) {
             Some(Ok(approved)) => approved,
@@ -745,7 +748,10 @@ impl Dispatcher {
         row: &(ScriptMode, Option<String>, u64),
     ) -> Option<CosDigestFallback> {
         let now = self
-            .script_compare_log_store()
+            .maint
+            .script_compare()
+            .store
+            .clone()
             .map(|s| s.script_domain_modes())
             .transpose()
             .map(|rows| {

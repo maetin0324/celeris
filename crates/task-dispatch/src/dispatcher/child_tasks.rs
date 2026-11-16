@@ -288,41 +288,8 @@ impl Dispatcher {
                 continue;
             }
             let result = match (task.kind, waiting.plan) {
-                (TaskKind::Plan, Some(mut plan)) => {
-                    let org = self.store.org_list()?;
-                    self.fix_plan_for_harness(&task, &mut plan, &org);
-                    // ADR-0039 D2: 子の作業場所は 明示 > 案件 > 親。
-                    let project_workspace =
-                        task_ops::delegate::project_workspace(self.store.as_ref(), &task)
-                            .map_err(ops_to_store)?;
-                    // ADR-0043 D2: 子のリポジトリは 明示（計画の `repos`）> 親 > 案件の primary。
-                    let project_repos =
-                        task_ops::delegate::project_repos(self.store.as_ref(), &task)
-                            .map_err(ops_to_store)?;
-                    let home = task_core::home_dir();
-                    let workspace = task_core::WorkspaceContext {
-                        project: project_workspace.as_ref(),
-                        home: home.as_deref(),
-                        repos: &project_repos,
-                    };
-                    let children = materialize_logging(
-                        &task,
-                        &plan,
-                        &org,
-                        &self.config.roles,
-                        &self.config.genres,
-                        workspace,
-                        OffsetDateTime::now_utc(),
-                        &mut |child_id, reason| {
-                            tracing::info!(task_id = %task_id, child_id = %child_id, %reason, "workspace downgraded to local (ADR-0062 B2)");
-                        },
-                    );
-                    self.store.complete_plan(
-                        task_id,
-                        Vec::new(),
-                        children,
-                        self.config.plan_auto_accept,
-                    )
+                (TaskKind::Plan, Some(plan)) => {
+                    self.complete_plan_with_children(&task, plan, Vec::new())?
                 }
                 _ => self.store.apply_transition_with_events(
                     task_id,

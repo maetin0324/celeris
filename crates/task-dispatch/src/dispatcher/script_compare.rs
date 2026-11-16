@@ -62,7 +62,7 @@ pub(in crate::dispatcher) fn script_canary_target_for_test(
 /// dispatcher が持つ compare の状態。既定は何も注入しない（mode を読まず、TS を呼ばない）。
 #[derive(Default)]
 pub(in crate::dispatcher) struct ScriptCompareState {
-    store: Option<Arc<dyn ScriptDomainStore>>,
+    pub(in crate::dispatcher) store: Option<Arc<dyn ScriptDomainStore>>,
     script: Option<Arc<dyn PolicyScriptSource>>,
     /// この tick の mode の行（読めない・store が無いときは空 = 両領域とも `rust`）。
     modes: Vec<ScriptDomainModeRow>,
@@ -70,9 +70,9 @@ pub(in crate::dispatcher) struct ScriptCompareState {
     read_at_tick: Option<u64>,
     in_flight: Vec<JoinHandle<()>>,
     /// 付記 S5-8: この tick の TS の待ちと直近の集計。
-    tick_wait: ScriptTickWait,
+    pub(in crate::dispatcher) tick_wait: ScriptTickWait,
     /// 付記 S5-6: 戻しの書き込みに失敗した領域（process の中で `rust`）。
-    pending_rollbacks: Vec<script_canary::PendingRollback>,
+    pub(in crate::dispatcher) pending_rollbacks: Vec<script_canary::PendingRollback>,
     /// この tick の `lane_rules` の TS の lane（task ごと）。
     lane_canary: script_canary::LaneCanary,
     /// ADR 2026-11-03-cos-digest-persist: `cos_digest` の影の outbox を閉じる task と再処理の要否。
@@ -188,13 +188,6 @@ impl Dispatcher {
         Vec<task_core::llm_route::CandidateKey>,
     )> {
         self.canary_route_priority(task_id, run_id, input, trace)
-    }
-
-    /// 付記 S4-15: `script_compare_log` の store（無ければ記録しない）。
-    pub(in crate::dispatcher) fn script_compare_log_store(
-        &self,
-    ) -> Option<Arc<dyn ScriptDomainStore>> {
-        self.maint.script_compare().store.clone()
     }
 
     /// mode が `modes` のどれかで generation の id があれば宛先を返す（付記 S4-14: `cos_digest` は `ts` も）。

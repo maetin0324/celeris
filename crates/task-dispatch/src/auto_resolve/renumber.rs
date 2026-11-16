@@ -186,7 +186,47 @@ pub fn resolve_with_refs(
     let unmerged_now = unmerged_paths(repo)?;
     let new_title_number = format!("{next:04}");
     let old_number = format!("{number:04}");
-    for file in worktree_paths(repo)? {
+    rewrite_refs(
+        repo,
+        worktree_paths(repo)?,
+        &unmerged_now,
+        unmerged,
+        (old_stem, &new_stem),
+        (&new_path, &old_number, &new_title_number, is_digit),
+        item.kind,
+        &mut actions,
+    )?;
+
+    let leftovers = bare_number_refs(&added, path, old_stem, number, true);
+    if !leftovers.is_empty() {
+        let done = actions
+            .iter()
+            .map(|a| a.detail.as_str())
+            .collect::<Vec<_>>()
+            .join("; ");
+        return not_handled(format!(
+            "{done}。番号だけの参照 {old_number} は参照先を機械的に決められない: {}",
+            leftovers.join(" | ")
+        ));
+    }
+    Ok(ResolveAttempt::Handled { actions })
+}
+
+/// 参照の書き換え: `files` の各 file（未解決の衝突・binary・UTF-8 でないものは飛ばす）で `stems.0` を `stems.1`
+/// に替える（`unmerged` のときは替えない）。動かした file（`title.0`）の題名（1 行目）の `title.1` は自分を指すので
+/// `title.2` に替える（`title.3` は語の境界）。書き換えた file を stage し、`actions` に残す。
+#[allow(clippy::too_many_arguments)]
+fn rewrite_refs(
+    repo: &Path,
+    files: BTreeSet<String>,
+    unmerged_now: &BTreeSet<String>,
+    unmerged: bool,
+    (old_stem, new_stem): (&str, &str),
+    (new_path, old_title, new_title, title_word): (&str, &str, &str, fn(char) -> bool),
+    kind: ConflictKind,
+    actions: &mut Vec<ResolutionAction>,
+) -> Result<(), String> {
+    for file in files {
         if unmerged_now.contains(&file) {
             continue;
         }
@@ -202,12 +242,11 @@ pub fn resolve_with_refs(
         let (mut updated, mut count) = if unmerged {
             (text.clone(), 0)
         } else {
-            replace_token(&text, old_stem, &new_stem, is_name_char)
+            replace_token(&text, old_stem, new_stem, is_name_char)
         };
         if file == new_path {
-            // 動かした file 自身の題名（1 行目）の番号は自分を指す。
             let (first, tail) = updated.split_once('\n').unwrap_or((&updated, ""));
-            let (title, n) = replace_token(first, &old_number, &new_title_number, is_digit);
+            let (title, n) = replace_token(first, old_title, new_title, title_word);
             if n > 0 {
                 count += n;
                 updated = if updated.contains('\n') {
@@ -224,24 +263,11 @@ pub fn resolve_with_refs(
         git(repo, &["add", "--", &file])?;
         actions.push(action(
             &file,
-            item.kind,
+            kind,
             format!("参照更新 {old_stem} → {new_stem}（{count} 箇所）"),
         ));
     }
-
-    let leftovers = bare_number_refs(&added, path, old_stem, number, true);
-    if !leftovers.is_empty() {
-        let done = actions
-            .iter()
-            .map(|a| a.detail.as_str())
-            .collect::<Vec<_>>()
-            .join("; ");
-        return not_handled(format!(
-            "{done}。番号だけの参照 {old_number} は参照先を機械的に決められない: {}",
-            leftovers.join(" | ")
-        ));
-    }
-    Ok(ResolveAttempt::Handled { actions })
+    Ok(())
 }
 
 fn action(path: &str, kind: ConflictKind, detail: String) -> ResolutionAction {
@@ -396,48 +422,16 @@ fn resolve_adr(
     followers.insert(new_path.clone());
     let old_title = format!("ADR-{number}");
     let new_title = format!("ADR {new_stem}");
-    for file in followers {
-        if unmerged_now.contains(&file) {
-            continue;
-        }
-        let Ok(bytes) = std::fs::read(repo.join(&file)) else {
-            continue;
-        };
-        if bytes.contains(&0) {
-            continue;
-        }
-        let Ok(text) = String::from_utf8(bytes) else {
-            continue;
-        };
-        let (mut updated, mut count) = if unmerged {
-            (text.clone(), 0)
-        } else {
-            replace_token(&text, old_stem, &new_stem, is_name_char)
-        };
-        if file == new_path {
-            // 動かした file 自身の題名（1 行目）の `ADR-NNNN` は自分を指す。
-            let (first, tail) = updated.split_once('\n').unwrap_or((&updated, ""));
-            let (title, n) = replace_token(first, &old_title, &new_title, is_name_char);
-            if n > 0 {
-                count += n;
-                updated = if updated.contains('\n') {
-                    format!("{title}\n{tail}")
-                } else {
-                    title
-                };
-            }
-        }
-        if count == 0 {
-            continue;
-        }
-        std::fs::write(repo.join(&file), &updated).map_err(|e| format!("{file}: {e}"))?;
-        git(repo, &["add", "--", &file])?;
-        actions.push(action(
-            &file,
-            item.kind,
-            format!("参照更新 {old_stem} → {new_stem}（{count} 箇所）"),
-        ));
-    }
+    rewrite_refs(
+        repo,
+        followers,
+        &unmerged_now,
+        unmerged,
+        (old_stem, &new_stem),
+        (&new_path, &old_title, &new_title, is_name_char),
+        item.kind,
+        &mut actions,
+    )?;
 
     let parsed = number.parse::<u32>().map_err(|e| format!("{path}: {e}"))?;
     let leftovers = bare_number_refs(&added, path, old_stem, parsed, false);

@@ -477,45 +477,8 @@ impl Dispatcher {
         }
         // ADR-0007 D3/D4: Plan が全 pass なら子タスクの挿入と ReviewPass を同一トランザクションで行う。
         let result = match (all_pass, task.kind, outcome.plan) {
-            (true, TaskKind::Plan, Some(mut plan)) => {
-                let org = self.store.org_list()?;
-                self.fix_plan_for_harness(&task, &mut plan, &org);
-                // ADR-0039 D2: 子の作業場所は 明示 > 案件 > 親。
-                let project_workspace =
-                    task_ops::delegate::project_workspace(self.store.as_ref(), &task)
-                        .map_err(ops_to_store)?;
-                // ADR-0043 D2: 子のリポジトリは 明示（計画の `repos`）> 親 > 案件の primary。
-                let project_repos = task_ops::delegate::project_repos(self.store.as_ref(), &task)
-                    .map_err(ops_to_store)?;
-                let home = task_core::home_dir();
-                let workspace = task_core::WorkspaceContext {
-                    project: project_workspace.as_ref(),
-                    home: home.as_deref(),
-                    repos: &project_repos,
-                };
-                let children = materialize_logging(
-                    &task,
-                    &plan,
-                    &org,
-                    &self.config.roles,
-                    &self.config.genres,
-                    workspace,
-                    OffsetDateTime::now_utc(),
-                    &mut |child_id, reason| {
-                        tracing::info!(task_id = %task_id, child_id = %child_id, %reason, "workspace downgraded to local (ADR-0062 B2)");
-                    },
-                );
-                let n = children.len();
-                let r = self.store.complete_plan(
-                    task_id,
-                    events,
-                    children,
-                    self.config.plan_auto_accept,
-                );
-                if r.is_ok() {
-                    tracing::info!(%task_id, %run_id, children = n, auto_accept = self.config.plan_auto_accept, "plan completed; children inserted");
-                }
-                r
+            (true, TaskKind::Plan, Some(plan)) => {
+                self.complete_plan_with_children(&task, plan, events)?
             }
             // ADR-0079 D13（Phase R5a）: 案件計画（マイルストーン DAG）の run の提案の取り込み
             // （`finish_project_plan_run`）は廃止。新しく作る入口が無く（`POST /projects/{id}/plan` は 410）、

@@ -1049,12 +1049,17 @@ impl Dispatcher {
     /// `objective` に本当の成果物の名前を注記する（`task_core::plan::fix_harness_artifacts`）。
     /// 壊さず直す（Plan run は失敗させず、`Question` にもしない）。判定は決定的で LLM は呼ばない
     /// （DESIGN 原則 1）。直した事実は `warn` に残す。
-    pub(super) fn fix_plan_for_harness(
+    ///
+    /// ADR-0007 D3/D4: 直した計画から子を作り、子の挿入と親の完了（`verdict_events` を含む）を 1 transaction で行う。
+    /// 子の作業場所は 明示 > 案件 > 親（ADR-0039 D2）、リポジトリは 明示（計画の `repos`）> 親 > 案件の primary（ADR-0043 D2）。
+    pub(super) fn complete_plan_with_children(
         &self,
         task: &Task,
-        plan: &mut PlanOutput,
-        org: &[task_core::OrgNode],
-    ) {
+        mut plan: PlanOutput,
+        verdict_events: Vec<Event>,
+    ) -> Result<Result<task_core::Outcome, StoreError>, DispatchError> {
+        let org = self.store.org_list()?;
+        let (plan, org) = (&mut plan, org.as_slice());
         for note in task_core::fix_harness_artifacts(
             plan,
             task,
@@ -1082,6 +1087,40 @@ impl Dispatcher {
                 tracing::info!(task_id = %task.id, index, dropped_assignee = %a, "plan-supplied assignee ignored; matching decides (ADR-0069 D1)");
             }
         }
+        let project_workspace = task_ops::delegate::project_workspace(self.store.as_ref(), task)
+            .map_err(ops_to_store)?;
+        let project_repos =
+            task_ops::delegate::project_repos(self.store.as_ref(), task).map_err(ops_to_store)?;
+        let home = task_core::home_dir();
+        let workspace = task_core::WorkspaceContext {
+            project: project_workspace.as_ref(),
+            home: home.as_deref(),
+            repos: &project_repos,
+        };
+        let task_id = task.id;
+        let children = materialize_logging(
+            task,
+            plan,
+            org,
+            &self.config.roles,
+            &self.config.genres,
+            workspace,
+            OffsetDateTime::now_utc(),
+            &mut |child_id, reason| {
+                tracing::info!(task_id = %task_id, child_id = %child_id, %reason, "workspace downgraded to local (ADR-0062 B2)");
+            },
+        );
+        let n = children.len();
+        let r = self.store.complete_plan(
+            task_id,
+            verdict_events,
+            children,
+            self.config.plan_auto_accept,
+        );
+        if r.is_ok() {
+            tracing::info!(%task_id, children = n, auto_accept = self.config.plan_auto_accept, "plan completed; children inserted");
+        }
+        Ok(r)
     }
 
     /// ADR-0107 D2: browser fallback candidates for one run. Only declared harnesses whose

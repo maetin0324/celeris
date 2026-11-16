@@ -178,11 +178,6 @@ impl Dispatcher {
     /// tick の始め: tick を数え、前の tick の TS の待ちを集計して予算を戻す（S5-8）。失敗した戻しを書き直す（S5-6）。
     pub(in crate::dispatcher) fn begin_tick(&mut self) {
         self.coord.count_tick();
-        self.script_tick_rollover();
-    }
-
-    /// 付記 S5-8: tick の終わりに TS の待ちを集計し、予算を戻す。失敗した戻しを書き直す（S5-6）。
-    pub(in crate::dispatcher) fn script_tick_rollover(&mut self) {
         self.maint.script_compare_mut().tick_wait.end_tick();
         self.retry_pending_rollbacks();
     }
@@ -198,29 +193,6 @@ impl Dispatcher {
             tick_budget: s.tick_budget,
             budget_us: u64::try_from(SCRIPT_TICK_WAIT_BUDGET.as_micros()).unwrap_or(u64::MAX),
         })
-    }
-
-    /// この tick の TS の待ちの残り（S5-8。cos_digest の pass が使う）。
-    pub(in crate::dispatcher) fn script_tick_wait_remaining(&self) -> Duration {
-        self.maint.script_compare().tick_wait.remaining()
-    }
-
-    pub(in crate::dispatcher) fn script_tick_charge(&mut self, waited: Duration) {
-        self.maint.script_compare_mut().tick_wait.charge(waited);
-    }
-
-    pub(in crate::dispatcher) fn script_tick_budget_hit(&mut self) {
-        self.maint.script_compare_mut().tick_wait.budget_hit();
-    }
-
-    /// 戻しの書き込みに失敗して process の中で `rust` と扱っている領域。
-    pub fn script_domains_forced_rust(&self) -> Vec<ScriptDomain> {
-        self.maint
-            .script_compare()
-            .pending_rollbacks
-            .iter()
-            .map(|p| p.domain)
-            .collect()
     }
 
     /// 付記 S5-6: 領域を actor `system:script-guard` で `rust` に戻す。書けなければ process の中で `rust` と扱い、

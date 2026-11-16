@@ -440,7 +440,7 @@ async fn rollback_write_failure_treated_as_rust() {
         version,
         "script_effect_unverified: injected",
     );
-    assert_eq!(d.script_domains_forced_rust(), [ScriptDomain::LaneRules]);
+    assert_eq!(forced_rust(&d), [ScriptDomain::LaneRules]);
     assert_eq!(
         sqlite.script_domain_mode("lane_rules").unwrap().mode,
         ScriptMode::Canary
@@ -453,11 +453,11 @@ async fn rollback_write_failure_treated_as_rust() {
     let lane = routing_decided(&store, &task).decision.lane;
     assert_ne!(lane, Tier::Frontier);
     assert_eq!(script.calls(), 0);
-    assert_eq!(d.script_domains_forced_rust(), [ScriptDomain::LaneRules]);
+    assert_eq!(forced_rust(&d), [ScriptDomain::LaneRules]);
     // 書けるようになった次の tick で表を `rust` に戻し、process の中の扱いを外す。
     flaky.fail.store(false, Ordering::SeqCst);
     d.tick().unwrap();
-    assert!(d.script_domains_forced_rust().is_empty());
+    assert!(forced_rust(&d).is_empty());
     let row = sqlite.script_domain_mode("lane_rules").unwrap();
     assert_eq!(row.mode, ScriptMode::Rust);
     assert!(
@@ -467,4 +467,10 @@ async fn rollback_write_failure_treated_as_rust() {
         "{:?}",
         guard_reasons(&sqlite)
     );
+}
+
+/// 戻しの書き込みに失敗して process の中で `rust` と扱っている領域。
+fn forced_rust(d: &Dispatcher) -> Vec<ScriptDomain> {
+    let compare = d.maint.script_compare();
+    compare.pending_rollbacks.iter().map(|p| p.domain).collect()
 }

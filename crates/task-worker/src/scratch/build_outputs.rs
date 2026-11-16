@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use super::reflink::{remove_any, unit_hash};
 use super::{Pool, seeds_dir};
+use crate::workspace_targets::profile_dirs;
 
 /// `rustc-link-search` の値の前置き（cargo の `-L KIND=PATH`）。
 const LINK_SEARCH_KINDS: [&str; 5] = ["native=", "dependency=", "crate=", "framework=", "all="];
@@ -26,28 +27,6 @@ pub struct RemovedBuildOutput {
     pub link_search: Vec<String>,
     /// 消した `build/`・`.fingerprint/` の dir と `deps/` の file の数。
     pub removed_entries: usize,
-}
-
-/// `target` の下の cargo の profile の dir（`.fingerprint` を持つ dir。`debug`、`<triple>/<profile>` も）。
-pub fn profile_dirs(target: &Path) -> io::Result<Vec<PathBuf>> {
-    let mut profiles = Vec::new();
-    let mut stack = vec![(target.to_path_buf(), 0u8)];
-    while let Some((dir, depth)) = stack.pop() {
-        if dir.join(".fingerprint").is_dir() {
-            profiles.push(dir);
-            continue;
-        }
-        if depth >= 3 {
-            continue;
-        }
-        for e in std::fs::read_dir(&dir)?.flatten() {
-            if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                stack.push((e.path(), depth + 1));
-            }
-        }
-    }
-    profiles.sort();
-    Ok(profiles)
 }
 
 /// 元の場所の根（pool の `targets/` と `seeds/`。設定の path と実体の path の両方）。
@@ -73,7 +52,7 @@ pub fn remove_stale_build_outputs(
 ) -> io::Result<Vec<RemovedBuildOutput>> {
     let foreign = foreign_roots(pool);
     let mut removed = Vec::new();
-    for profile in profile_dirs(scan)? {
+    for profile in profile_dirs(scan) {
         let stale = stale_packages(&profile, own, &foreign)?;
         let rel = profile
             .strip_prefix(scan)

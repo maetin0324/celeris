@@ -19,8 +19,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use super::build_outputs::{RemovedBuildOutput, profile_dirs, remove_stale_build_outputs};
+use super::build_outputs::{RemovedBuildOutput, remove_stale_build_outputs};
 use super::{CargoTuning, Pool, TARGET_SUBDIR, rfc3339};
+use crate::workspace_targets::profile_dirs;
 
 pub const SEEDS_DIR: &str = "seeds";
 /// `seeds/<repo-key>/current`（世代ディレクトリへの symlink）。
@@ -667,11 +668,12 @@ pub(super) fn unit_hash(stem: &str) -> Option<&str> {
 }
 
 /// 写した target から workspace member の成果物を消す（seed の checkout の path を焼いているため）。
-/// `target/` の下の profile dir（`.fingerprint` を持つ dir。`<triple>/<profile>` も）ごとに、dep-info が member を
+/// `target/` の下の profile dir（`.cargo-lock` を持つ dir。`<triple>/<profile>` も。`workspace_targets::profile_dirs`）
+/// ごとに、dep-info が member を
 /// 指す unit の `deps/<unit>.*`・`.fingerprint/*-<hash>`・`build/<pkg>-*` と、`incremental/`・`examples/`・profile
 /// 直下の bin を消す。
 pub fn prune_workspace_artifacts(target: &Path, checkout_marks: &[String]) -> io::Result<()> {
-    for profile in profile_dirs(target)? {
+    for profile in profile_dirs(target) {
         prune_profile(&profile, checkout_marks)?;
     }
     Ok(())
@@ -741,10 +743,12 @@ fn prune_profile(profile: &Path, checkout_marks: &[String]) -> io::Result<()> {
         }
     }
     let fingerprints = profile.join(".fingerprint");
-    for e in std::fs::read_dir(&fingerprints)?.flatten() {
-        let name = e.file_name().to_string_lossy().into_owned();
-        if unit_hash(&name).is_some_and(|h| hashes.contains(h)) {
-            remove_any(&e.path())?;
+    if fingerprints.is_dir() {
+        for e in std::fs::read_dir(&fingerprints)?.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if unit_hash(&name).is_some_and(|h| hashes.contains(h)) {
+                remove_any(&e.path())?;
+            }
         }
     }
     remove_any(&profile.join("incremental"))?;

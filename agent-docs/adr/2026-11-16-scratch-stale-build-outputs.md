@@ -1,7 +1,7 @@
 # scratch の target の引き継ぎと seed の写しの後に、元の場所を指す build 出力を消す
 
 - 日付: 2026-11-16
-- 状態: Accepted
+- 状態: Accepted（実装済み）
 - 関連: [ADR-0075](0075-tiered-build-cache.md) D3（adopt）、[ADR-0129](0129-host-sccache-reflink-targets.md) (4)（seed の reflink）、[ADR 2026-11-11 scratch-lock-tick-stall](2026-11-11-scratch-lock-tick-stall.md)
 - task: 01M7H4K519QZGY2875BHNFTMKX（健全性v2 V0〈01M6TYVJT97XH88TEEAVRD7JK6〉の提案 1）
 
@@ -22,14 +22,14 @@ target の位置が変わる経路は 2 つある。
 
 1. 根本原因: target の位置を変える 2 つの経路（引き継ぎの rename、seed の写し）が、cargo の付け替えの対象外の build script の出力（OUT_DIR の外を指す `rustc-link-search`）を残す。症状は、後で元の場所が消えてから、その package を再コンパイルしたときの link の失敗として出る。
 2. 責務 owner: target の位置を変える `task-worker::scratch` の `allocate_locked`（引き継ぎ）と `scratch::reflink::seed_target`（seed の写し）。消す処理は新しい `scratch::build_outputs`（両方が呼ぶ 1 つの関数）に置く。
-3. 既存の再利用先: profile の dir の見つけ方（`.fingerprint` を持つ dir。`prune_workspace_artifacts` の走査を `build_outputs::profile_dirs` に移して両方で使う）、`<name>-<hash>` の分け方（`unit_hash`）、`remove_any`、記録の `target-origin.json`（`write_target_origin`）、GC の削除待ち（`targets/.deleting-*` と削除スレッド）。試験は `scratch/tests.rs` の seed の偽の写し（`SeedCopyOps` の差し替え）と adopt の候補の作り方。
+3. 既存の再利用先: profile の dir の見つけ方（`workspace_targets::profile_dirs`。`.cargo-lock` を持つ `<target>/<profile>`・`<target>/<triple>/<profile>`。`prune_workspace_artifacts` の独自の走査〈`.fingerprint` を持つ dir〉もこれに替える）、`<name>-<hash>` の分け方（`unit_hash`）、`remove_any`、記録の `target-origin.json`（`write_target_origin`）、GC の削除待ち（`targets/.deleting-*` と削除スレッド）。試験は `scratch/tests.rs` の seed の偽の写し（`SeedCopyOps` の差し替え）と adopt の候補の作り方。
 4. 選択肢:
    - (a) 引き継ぎ・写しの直後に、元の場所を指す package の build の出力を消す。採用。target の側だけで閉じ、元の場所が消える前でも後でも効く。
    - (b) seed の古い世代や引き継ぎ元を、それを指す target が残る間は消さない。引き継ぎの rename では元の path が必ず無くなるので直せない。採らない。
    - (c) 残った path を新しい path へ書き換える。`gn_out` の中身が新しい target に在るかは package ごとに違い、在ると決めつけられない。cargo の記録を書き換えることにもなる。採らない。
    - 判定の範囲: 直前の引き継ぎ元・seed の世代の path だけを見る案は、上の背景の連鎖（引き継いだ target が seed の世代を指す）を見落とす。pool の root 全体を見る案は、v8 の archive の置き場（`rusty-v8/`）のような消えない共有の dir まで消す。`targets/`・`seeds/` の下（GC が消す場所）を見る案を採る。
 5. 新しい状態・分岐・fallback・port: `target-origin.json` の欄 `removed_build_outputs`（引き継ぎ・写しのときだけ書く）と、`TargetOrigin::Adopted`・`TargetOrigin::Seed` の `removed`。引き継ぎの後に消す処理が I/O で落ちたら、その target を `targets/.deleting-*` へ動かして引き継ぎをやめる（下の D4）。新しい設定の欄・flag・port は無し。
-6. 撤去対象: `prune_workspace_artifacts` の中の profile の走査（`build_outputs::profile_dirs` へ移す）。消す仕組みは無い。手で `cargo clean -p v8` する回避は、この変更の後の新しい引き継ぎ・写しでは要らなくなる（既存の target の扱いは進捗ファイルの「本番への移行」）。
+6. 撤去対象: `prune_workspace_artifacts` の中の profile の走査（`workspace_targets::profile_dirs` に替える。cargo は build する profile の dir に必ず `.cargo-lock` を置く）。消す仕組みは無い。手で `cargo clean -p v8` する回避は、この変更の後の新しい引き継ぎ・写しでは要らなくなる（既存の target の扱いは進捗ファイルの「本番への移行」）。
 7. 不変条件: 引き継ぎ・写しの後の target に、`targets/`・`seeds/` の下の自分以外の場所を指す `rustc-link-search` が残らない。`root-output` の下を指す package と、pool の外・`targets/`・`seeds/` の外を指す package の出力は残る。判定は dir が在るかに依らない。試験は `scratch/tests/stale_build_outputs.rs`（既存の試験は build script の出力を作らないので、この欠陥を検出できない）。
 
 ## 決定
@@ -40,7 +40,7 @@ target の位置が変わる経路は 2 つある。
 - 既にあった target（`TargetOrigin::Existing`）には当てない。WorkUnit が task の target を共有して build している最中に消しうるため。
 
 ### D2 どれを「元の場所を指す」とみなすか
-`<target>` の下の profile の dir（`.fingerprint` を持つ dir。`debug`、`<triple>/<profile>` など）ごとに、`build/<pkg>-<hash>/output` の各行のうち `cargo:rustc-link-search=` と `cargo::rustc-link-search=` の値を読む。値の前置き（`native=`・`dependency=`・`crate=`・`framework=`・`all=`）は外す。次の 3 つをすべて満たす値を「元の場所を指す」とみなす。
+`<target>` の下の profile の dir（`workspace_targets::profile_dirs`。`.cargo-lock` を持つ `debug`、`<triple>/<profile>` など）ごとに、`build/<pkg>-<hash>/output` の各行のうち `cargo:rustc-link-search=` と `cargo::rustc-link-search=` の値を読む。値の前置き（`native=`・`dependency=`・`crate=`・`framework=`・`all=`）は外す。次の 3 つをすべて満たす値を「元の場所を指す」とみなす。
 1. 同じ dir の `root-output` の path（`root-output` が無ければ `build/<pkg>-<hash>/out`）とその下に無い。cargo が付け替えるので残す。
 2. 引き継ぎ・写しの後の自分の `target/` とその下に無い。
 3. pool の `targets/` か `seeds/` の下にある（設定の path と、その実体の path〈canonicalize〉の両方で比べる）。引き継ぎ元・seed の世代はどちらかの下にあり、GC がいずれ消す。

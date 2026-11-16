@@ -8,6 +8,13 @@
 //! （root-output の下・外で元の場所でない・外で元の場所）。本物の cargo は走らせず、偽の build 出力を置く。
 
 use super::*;
+use crate::workspace_targets::CARGO_LOCK;
+
+/// cargo の profile の dir（`.cargo-lock` と `.fingerprint/`。`workspace_targets::profile_dirs` が見る印）を作る。
+fn make_profile(profile: &Path) {
+    std::fs::create_dir_all(profile.join(".fingerprint")).unwrap();
+    std::fs::write(profile.join(CARGO_LOCK), b"").unwrap();
+}
 
 /// package の unit の hash（cargo と同じ 16 桁の 16 進）。`[実行, build script の build, lib]`。
 fn unit_hashes(n: u8) -> [String; 3] {
@@ -161,7 +168,7 @@ fn adopt_removes_packages_that_point_at_the_adopted_from_target() {
     allocate(&pool, &seed_req(&old, &none)).unwrap();
     let before = pool.target_dir(&old);
     let profile_before = before.join("debug");
-    std::fs::create_dir_all(profile_before.join(".fingerprint")).unwrap();
+    make_profile(&profile_before);
     let gn_out = three_cases(&pool, &profile_before, &before, &outside.path().join("lib"));
     std::fs::create_dir_all(&gn_out).unwrap();
     // 連鎖: 引き継ぎ元が前に seed から写した target で、seed の世代を指したまま残った出力。
@@ -238,7 +245,7 @@ fn seed_copy_removes_packages_that_point_at_the_seed_generation() {
     let seed = write_seed(&pool, MANIFEST);
     let seed_profile = seed.join("debug");
     std::fs::remove_file(seed_profile.join(".fingerprint")).unwrap();
-    std::fs::create_dir_all(seed_profile.join(".fingerprint")).unwrap();
+    make_profile(&seed_profile);
     let gn_out = three_cases(&pool, &seed_profile, &seed, &outside.path().join("lib"));
     // 元の場所が在っても消す（判定は dir の有無に依らない）。
     std::fs::create_dir_all(&gn_out).unwrap();
@@ -294,7 +301,7 @@ fn stale_build_output_rule_details() {
     let debug = scan.join("debug");
     let cross = scan.join("x86_64-unknown-linux-gnu/debug");
     for p in [&debug, &cross] {
-        std::fs::create_dir_all(p.join(".fingerprint")).unwrap();
+        make_profile(p);
     }
     assert_eq!(
         remove_stale_build_outputs(&pool, &scan, &own).unwrap(),
@@ -380,7 +387,7 @@ fn adopt_discards_the_target_when_stale_outputs_cannot_be_removed() {
     allocate(&pool, &seed_req(&old, &none)).unwrap();
     let before = pool.target_dir(&old);
     let profile = before.join("debug");
-    std::fs::create_dir_all(profile.join(".fingerprint")).unwrap();
+    make_profile(&profile);
     fake_package(
         &profile,
         &profile,

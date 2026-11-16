@@ -43,6 +43,9 @@ completed: 2026-11-16
 - 本物の repo での模擬（branch は変えず、HEAD を親にした一時 commit を `git commit-tree` で作った）: `--base HEAD --rules policy.changed` で、`scripts/dev/human-text-lint.allow` の 1 行を消した commit → `changed=false`・exit 0。1 行足した commit → `changed=true`・exit 1・evidence `scripts/dev/human-text-lint.allow`。両方の report は `validate_report.py` を通った。
 - 検査器のコードに repo 固有の path が無い: `grep -rn 'adr-allowed-duplicates\|human-text-lint' scripts/dev/repo-health/health scripts/dev/repo-health/rules scripts/dev/repo-health/repo_health.py` → 一致なし（exit 1）
 - `crates/`・`web/` を変えていない: `git diff --name-only $CELERIS_WU_BASE HEAD -- crates web` → 空
+- `sh scripts/dev/progress-index.sh --check` → exit 0、`sh scripts/dev/check-doc-links.sh` → exit 0、`sh scripts/dev/check-adr-numbers.sh` → exit 0（453 files）
+- `cargo fmt --all -- --check` → exit 0。`cargo clippy --workspace -- -D warnings` → exit 0
+- `bash scripts/dev/test-affected.sh --list` → 対象なし（crate の変更が無い）。`bash scripts/dev/test-affected.sh` → exit 1。先頭の `check-health.sh` が `policy.changed`（必須）の fail で止まった。ほかの必須 rule は全部 pass。この branch は policy の file に ADR・進捗・試験を加えて変えるので、D6.2 の「変更 path が全部 `policy.files`」に当たらず exit 0 にならない（ADR health-review-integration の実装の記録「進捗 file と検査器の試験は policy の file に入らない」と同じ。先例の policy の branch も人の承認と operator の merge で通した）。
 
 ## 未解決
 - 判定は main に入った後の branch から効く（契約 D2: policy は base 側で評価する）。この branch 自身は `policy.changed=true` で、D6.4 の人の承認で通す。LoC 削減 v3 E（01M7J3NKVAH9NG53C5FEFNQJYK）の `human-text-lint.allow` の 3 行の削除は、この branch が main に入った後の base で `policy.changed` に数えられなくなる。

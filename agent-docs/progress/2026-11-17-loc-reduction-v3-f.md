@@ -1,5 +1,5 @@
 ---
-title: LoC 削減 v3 F — task-worker・task-api の整理と Console 互換・旧い報告 API・aider の撤去（試行 2: production 純減 unit 4,151 行、size check exit 0）
+title: LoC 削減 v3 F — task-worker・task-api の整理と Console 互換・旧い報告 API・aider の撤去（試行 3: production 純減 unit 4,223 行、size check exit 0）
 tasks: [01M7J3NKVC2KQ4NGJ4GESHJV0B]
 status: done
 updated: 2026-11-17
@@ -9,12 +9,33 @@ completed: 2026-11-17
 
 親 01M7J3N68JRNTP5Q4G934QWF36（依頼キー loc-reduction-v3-20261116）の子 F。依存は E（01M7J3NKVAH9NG53C5FEFNQJYK）。
 
-## 結論（試行 2）
+## 結論（試行 3）
+- 試行 2 の review は条件 2・3 を不合格にした。自動引き渡しの人向け通知（「デプロイ準備完了」など）が、legacy スレッドのある案件では archived の `legacy:project:<id>` に写り、web で読めなかった。試行 3 で、CoS の `messages` 行の写しを legacy スレッドに入れず、その scope の固定 CoS スレッドだけに入れるように直した（下の「試行 3 で直したもの」）。
 - 人が 2026-11-17 に 3 つの廃止（C4 Console 互換・C5 deprecated API・aider adapter）と、承認なしで消せる残りの候補の削除を認めた（operator が中継）。設計は [ADR 2026-11-17-console-deprecated-api-aider-removal](../adr/2026-11-17-console-deprecated-api-aider-removal.md)。
-- 提出時の HEAD で、production 全言語の純減は unit（`git merge-base HEAD main` → HEAD）で **4,151 行**、固定（開始時 main 415a19a7004cb6a73b872e861fa8d1cf634dddbb → HEAD）で **11,163 行**。production Rust は unit 2,727・固定 9,739 行、own_total_with_tests は unit 7,687・固定 17,588 行（下の「測定」）。
+- 提出時の HEAD で、production 全言語の純減は unit（`git merge-base HEAD main` → HEAD）で **4,223 行**、固定（開始時 main 415a19a7004cb6a73b872e861fa8d1cf634dddbb → HEAD）で **11,235 行**。production Rust は unit 2,799・固定 9,811 行、own_total_with_tests は unit 7,743・固定 17,644 行（下の「測定」）。
 - 受け入れの size check（閾値 `2500 1 - - -`）は exit 0。
-- C・D・E の unit の合計 7,012 行に F の 4,151 行を足すと 11,163 行で、固定の計測と一致する（差 0 行。無関係の main の production の変更は無い）。
-- 親の最終目標（累積 10,000 行以上・production Rust も純減・own_total も純減）は、固定の計測で production 11,163・Rust 9,739・own 17,588 行の純減。
+- C・D・E の unit の合計 7,012 行に F の 4,223 行を足すと 11,235 行で、固定の計測と一致する（差 0 行。無関係の main の production の変更は無い）。
+- 親の最終目標（累積 10,000 行以上・production Rust も純減・own_total も純減）は、固定の計測で production 11,235・Rust 9,811・own 17,644 行の純減。
+
+## 試行 3 で直したもの（試行 2 の review の差し戻し）
+- 不合格の理由（条件 2・3）: `delivery.rs` は通知を書いた直後に `SqliteStore::cos_messages_project` を呼ぶが、写し先を決める `store/legacy.rs` の `backfill_thread` は migration 0092 が残した `legacy:project:<id>`・`legacy:global` があればそちらを返した。本番の主な案件には open の固定スレッドと archived の legacy スレッドの両方があり、11/15〜11/17 の通知は legacy の方に入っていた。web は open のスレッドだけを一覧するので、Console を消した後は人がこの通知を読めない。ADR D2「CoS の固定スレッドへ写す」に反していた。
+- 直し: `backfill_legacy_cos` の写し先を常に `cos_thread_ensure_tx`（その scope の固定 CoS スレッド）にし、`backfill_thread` を消した。legacy スレッドには何も書かない。写しは書き込み可能な open のたびに migration の直後に走るので、0092 の時点にあった旧 Console の行は 0092 を当てた open で legacy に写し終えている。規則を変えて動くのは 0092 より後に書かれた行（自動引き渡しの通知）だけである。ADR 2026-11-17 D2 に写し先の規則を書き、ADR 2026-10-22-cos-fixed-threads に付記を足した。
+- 試験: task-core `chat_console_projection_reuses_legacy_threads_kept_by_migration_0092`（旧い規則の契約）を `chat_cos_projection_lands_on_fixed_threads_even_beside_legacy_threads` に置き換えた。守る不変条件: legacy スレッドと固定スレッドの両方がある scope でも、まだ写していない行（open 時）と delivery の通知（`message_append` → `cos_messages_project`）は固定 CoS スレッドに入り、legacy スレッドの行と `next_seq` は変わらない。既存の delivery の試験（`non_self_repo_is_merged_without_release_or_push`）は legacy スレッドの無い新しい案件しか見ないので検出できなかった。新しい試験は旧い `legacy.rs` で落ちる（固定スレッドが作られず panic）ことを確かめた。
+- review の注意（advisory）への対応:
+  - `DaemonSnapshot.reports` の doc comment（消した `last_notified_at`・`POST /reports/notified`）と、それが写る生成 schema、`docs/api/v1/api.md` の `reports` の形と `notify_now` の説明を直した。
+  - aider を現行の harness として書いた注釈（`child_stream.rs`・`change_rules.rs`・`claude_code/prompt.rs` 2 か所・`adapter_tests.rs`・`result_report_tests.rs` 2 か所、langmem・local-deep-research の「aider と同じ」）を直した。
+  - `api.md` の Console を現行の利用者として書いた 4 か所、`web/e2e/parity/reports.spec.ts` の消した `/api/v1/reports/read` の偽応答と `notify_now` を直した。
+  - Console を現行の読み手として書いた task-core の doc comment（`message.rs` 3・`model.rs` 2・`knowledge_run.rs` 3）と、`config/celeris.example.toml`・`crates/celeris/src/config/execution.rs` の「Console の一言」を直した。生成 schema（api・event・worker protocol）を作り直した。
+- 追加の写しの集約: 研究系 adapter 3 個（paperqa・langmem・local-deep-research）の `terminal_from_summary`（要約から `result.json` を書いて結果契約で読み直す。違いは誤りの文の adapter 名だけ）を `research_runner::terminal_from_summary` の 1 つにした。paperqa に残っていた宙に浮いた doc comment（移した helper のもの）も消した。
+
+### 試行 3 の設計 brief（store の高 risk path を変えた）
+1. 根本原因: 写し先を決める `backfill_thread` が、移行用の legacy スレッドを新しい行の写し先にも使っていた。症状は delivery の通知が web で読めないこと。
+2. 責務 owner: `crates/task-core/src/store/legacy.rs` の写し（`backfill_legacy_cos`）。delivery 側ではなく写し先の規則を直す。
+3. 既存の再利用先: `chat::store::cos_thread_ensure_tx`（`POST /org/cos/messages` の `chat_console_enqueue` と同じ固定スレッドの決め方）。
+4. 選択肢: (a) delivery が固定スレッドへ直に書く案は、写しの経路が 2 つになり、通知の追記と写しの間で落ちたときに起動時の写しが legacy に入れる。(b) 時刻で legacy と固定を分ける案は境目の時刻を持たない。(c) 写し先を常に固定スレッドにする案を採った。0092 の前の行は 0092 を当てた open で写し終えているので、履歴の置き場は変わらない。
+5. 新しい状態・分岐・fallback・port: 無し（分岐を 1 つ消した）。
+6. 撤去対象: `backfill_thread` と legacy スレッドへの写しの規則、その試験。
+7. 不変条件: legacy スレッドは読むだけ（`chat_store_legacy_thread_is_read_only` と新しい試験）。同じ行を 2 回写さない（`chat_legacy_reopen_is_idempotent_and_catches_up_late_rows`）。events・`messages` は変えない。
 
 ## 試行 2 で消した対象（production）
 ### 承認された 3 つの廃止
@@ -47,20 +68,20 @@ completed: 2026-11-17
 ## 消さなかったもの（理由）
 - `GET /api/v1/inbox`（C5 の 1 つ）: 廃止は認められたが残した。release の検証 `scripts/selfdeploy/verify.sh` の `probe_api` がこの path の 200 と JSON を求める。`scripts/selfdeploy/` は高 risk の path class で、人が認めた write set の外にある。撤去の条件（`verify.sh` を `GET /inbox/items` に替える変更と試験 14 か所・`daemon_soak.py` の書き換え）と責任者（親 01M7J3N68JRNTP5Q4G934QWF36 の closeout が後続 task を人に提案）は ADR D3 に書いた。
 - celeris-mcp の `console_instruct`・`console_reply`: 名前は Console だが CoS チャットの入口（`chat_mcp_instruct`）で、運用 session の中継に使う現行の経路。
-- `POST /org/cos/messages`（`chat_console_enqueue`）と起動時の写し `backfill_legacy_cos`: 承認の範囲の外。写しは delivery の通知の写し先として使う。
+- `POST /org/cos/messages`（`chat_console_enqueue`）と起動時の写し `backfill_legacy_cos`: 承認の範囲の外。写しは delivery の通知を固定 CoS スレッドへ写すのに使う（試行 3 で legacy スレッドへの写しを消した）。
 - 未配線の仕組み（ADR が使うと書いているのに本体から呼ばれない。消すか配線するかは人の判断）: `run_tmpdir::sweep_stale`（ADR 2026-10-07-build-tmp-hygiene D2.2。task-dispatch `worker_task.rs` の注釈が「拾い直す」と書く）、`browser_supervisor::reap_on_start`（ADR-0116。launcher の起動時の回収）、task-api `llm_sources::source_state_view`（ADR 2026-10-04-multi-objective-model-routing Phase 2）。
 - browser の試験の入口（`run_with_executable`・`verify_launcher_observation`・`launcher_runtime_facts` ほか）と `browser_identity::restore_for_session`: 隔離・credential の試験が使う。
 - 振る舞いの違う写し: `task_actions` の `approve`・`reject`（共通の関数にすると型の引数で行数が増えた。+55/−23 で取り消した）、`execution.rs` の phase-gate と plan-gate の拒否（文言が違う）、`decisions.rs` の `answer_op`・`withdraw_op`・`revise_op`（既に `resolve_op` の薄い包みで、本文の型が違う）、harness の監視 loop の残り（行の意味が harness ごとに違う）。
 - C10・C11: 試行 1 の「残りの候補」に書いた理由のまま。
 
-## 測定（試行 2、提出時の HEAD で実行）
+## 測定（試行 3、提出時の HEAD で実行）
 - 受け入れの size check（開始時 main の `scripts/dev/source-size-report.py`・`source-size-report.toml` を `git show` で取り出し、`--exclusive-classes` で 3 点を測る。閾値 `2500 1 - - -`）→ exit 0、`OK []`。
-  - production 全言語: unit 純減 4,151（379,326 → 375,175）、固定純減 11,163
-  - production Rust: unit 2,727、固定 9,739（全言語との差 1,424 行は web の TS・JS の削除）
-  - own_total_with_tests: unit 7,687、固定 17,588
-  - unit の class ごとの純減: production 4,151、external_test 3,450、inline_test 86、generated 1,070、schema 847、docs −61（進捗と ADR の付記で増えた）。試験・生成物への付け替えは無い（external_test・generated・schema も減った）。
-- C・D・E・F の unit の合計: 2,701 + 2,558 + 1,753 + 4,151 = 11,163 行 = 固定の 11,163 行（差 0 行）。
-- 試行 2 の 3 回目の run（承認なしの残りの候補）の分は unit 3,952 → 4,151 の 199 行。
+  - production 全言語: unit 純減 4,223（379,326 → 375,103）、固定純減 11,235
+  - production Rust: unit 2,799、固定 9,811（全言語との差 1,424 行は web の TS・JS の削除）
+  - own_total_with_tests: unit 7,743、固定 17,644
+  - unit の class ごとの純減: production 4,223、external_test 3,434、inline_test 86、generated 1,070、schema 847、docs は進捗と ADR の付記で増えた。試験・生成物への付け替えは無い（external_test・generated・schema も減った）。
+- C・D・E・F の unit の合計: 2,701 + 2,558 + 1,753 + 4,223 = 11,235 行 = 固定の 11,235 行（差 0 行）。
+- 試行 2 の 3 回目の run（承認なしの残りの候補）の分は unit 3,952 → 4,151 の 199 行。試行 3 の分は 4,151 → 4,223 の 72 行（`backfill_thread` の削除、`terminal_from_summary` の写し 2 つ、宙に浮いた doc comment）。
 
 ## 検査（試行 2、提出時の HEAD で実行。基準は `git merge-base HEAD main`）
 - `bash scripts/dev/test-affected.sh` → exit 0。repo-health `verdict=pass`（new=0・worsened=0）、nextest `8446 tests run: 8446 passed, 22 skipped`（celeris・celeris-campaign・celeris-credentiald・celeris-mcp・celeris-script・celerisctl・e2e・llm-proxy・routing-eval・task-api・task-core・task-dispatch・task-ops・task-worker）、web の型検査と unit（vitest `705 passed`、gateway の node --test `110 pass`）、`test-ts-verify: 20 passed`。
@@ -98,6 +119,12 @@ completed: 2026-11-17
   - `loc-reduction-v3 F: 研究系 adapter のランナーの約束（summary・progress 行の上限と目印・CELERIS_RESULT の読み取り）を research_runner の 1 か所にする`
   - `loc-reduction-v3 F: cos_problem を chat_problem に 1 つにし、SSE の応答の組み立てを sse::response に共有する`
   - この進捗ファイルと ADR D3 の commit。
+- 試行 3:
+  - `loc-reduction-v3 F: CoS の messages 行の写しを legacy スレッドに入れず、案件・統括の固定 CoS スレッドだけに入れる（自動引き渡しの通知が archived の legacy に入っていた）`
+  - `loc-reduction-v3 F: 研究系 adapter の terminal_from_summary の写し 3 つを research_runner の 1 つにし、paperqa に残った宙に浮いた doc comment を消す`
+  - `loc-reduction-v3 F: 撤去した Console・reports/notified・aider を現行として書いた注釈と文書（DaemonSnapshot.reports・api.md・e2e の偽応答・生成 schema）を直す`
+  - `loc-reduction-v3 F: 直した doc comment に合わせて event と worker protocol の生成 schema を作り直す`
+  - この進捗ファイルの commit。
 
 ## 試行 1 の内容
 ### 試行 1 で消した対象（production）
@@ -138,12 +165,14 @@ completed: 2026-11-17
 ### 試行 1 の時点の残りの候補（試行 2 で扱った。結果は上の「承認なしで消せた残りの候補」と「消さなかったもの」）
 - 試験だけが呼ぶ production の関数（`dead2.py` の走査、約 300 行）: `run_tmpdir::sweep_stale`（33）、`scratch/gc.rs` の `account_shared_extents`（31）、`browser_supervisor::reap_on_start`（28）、`local_worktree::remove_if_clean`（19）、`target_sweep::group_deps_by_key`（13）ほか。どれも本体の経路が別にあるかを 1 件ずつ確かめ、試験を本体の入口に替える必要がある。browser の試験の入口（`run_with_executable` ほか）は隔離の試験が使うので候補にしない。
 - task-api の handler の写し（約 150 行）: `stats.rs` の `catch_up` 2 組、`handlers/accounts.rs` の login の開始・取り消し、`decisions.rs` の 4 組、`cos/ops/*` の dispatch の 4 組、`handlers/clusters.rs`・`execution.rs`・`task_io.rs` の組。1 組 10〜15 行。
-- 研究系 adapter の残りの写し（約 50 行）: config の型の欄（`local_deep_research.rs`・`paperqa.rs` の先頭）、結果の読み戻し（`terminal_from_summary`）。
+- 研究系 adapter の残りの写し（約 50 行）: config の型の欄（`local_deep_research.rs`・`paperqa.rs` の先頭）、結果の読み戻し（`terminal_from_summary`。試行 3 で 1 つにした）。
 - 候補にしないもの: C10（`WorkUnitView` は `quota`・`running_run_id` を足し、`task_id`・`lease_*`・`needs_decisions` を出さない。task-core の行と JSON が違う）、C11（task-api と task-dispatch の循環依存を避けるための写しで、1 つにするには task-core の変更が要る）、`cos/ops/*` の `EXCLUDED`（試験が全 route の分類を確かめる材料）。
 
 ## 未解決
 - `GET /api/v1/inbox` の撤去（ADR D3 の撤去の条件と責任者）。
 - 未配線の `run_tmpdir::sweep_stale`・`browser_supervisor::reap_on_start`・`source_state_view` は、消すか配線するかを人が決める（「提案」）。
+- 0092 の後から本 release の起動までに legacy スレッドへ写った通知（11/15〜11/17 の「デプロイ準備完了」など）は移さない。legacy は読むだけの履歴で、`messages` の行と task・release の画面の配送の状態は残る。
+- `crates/task-worker/src/subprocess.rs` の注釈（349 行「claude-code / codex / acp / aider は自前で終端を合成する」）に aider が残る。sandbox の高 risk path で、F では変えていない。次に `subprocess.rs` を変える task が直す。
 - E が残した task-core・task-ops の項目（`notification_scan_at`・`is_cluster_login_needed_headline` と doc 参照 3 か所）は F の write set の外なので触っていない。
 
 ## 提案
@@ -153,4 +182,4 @@ completed: 2026-11-17
 ## 本番への移行
 - `[notify]` の 4 欄は読み込みエラーになる。本番の `~/.config/celeris/config.toml` の `[notify]` にはこの 4 欄が無い（2026-11-17 に読み取りで確認）ので、本番 config の書き換えは要らない。
 - `[adapters.aider]` は読み込みエラーになる（`deny_unknown_fields`）。本番の config に aider の記述は無く、本番の runs に adapter=aider は 0 件（operator が 2026-11-17 に確認）なので、本番 config の書き換えは要らない。
-- Console の画面は無くなる。delivery の通知は次の release から CoS チャットに直接写る（daemon の起動を待たない）。本番 DB の移行は無い（`messages` の行は残す）。
+- Console の画面は無くなる。delivery の通知は次の release から、書いた時点でその案件の固定 CoS スレッド（legacy スレッドがあっても固定の方）に写る。本番 DB の migration は無い（`messages` の行は残す）。新しい release の最初の起動で、前の起動の後に書かれてまだ写っていない通知も固定スレッドに写る。これまで legacy スレッドに写った通知は移さない（「未解決」）。

@@ -1,4 +1,5 @@
 //! Human-only correction of an applied CoS operation.
+use crate::chat::chat_problem;
 use axum::body::Body;
 use axum::extract::{RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -7,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use task_core::chat::OverrideAction;
 use time::OffsetDateTime;
 
-use super::{cos_bearer_secret, cos_problem};
+use super::cos_bearer_secret;
 use crate::handlers::{ApiResult, Params, json_response, no_query, read_json};
 use crate::middleware::require_admin;
 use crate::problem::ApiProblem;
@@ -81,7 +82,7 @@ async fn override_operation(
         .blocking(move |store| {
             store
                 .cos_operation_override_at(&id, action, &request.reason, OffsetDateTime::now_utc())
-                .map_err(cos_problem)
+                .map_err(chat_problem)
         })
         .await?;
     let response = OverrideResponse {

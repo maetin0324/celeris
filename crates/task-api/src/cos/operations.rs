@@ -8,6 +8,7 @@
 //! `cos_operations` row, the audit envelope event and the chat card are one transaction.
 //! Thread, run and operation ids come from the verified credential, never from the body.
 
+use crate::chat::chat_problem;
 use axum::Extension;
 use axum::body::Body;
 use axum::extract::{RawQuery, State};
@@ -25,7 +26,7 @@ mod instructions;
 pub use instructions::{InstructionRecord, inbox_answer_instruction_at};
 use instructions::{instructed_message, operation_target};
 
-use super::{CosCaller, cos_only, cos_problem, reject_identity_claims};
+use super::{CosCaller, cos_only, reject_identity_claims};
 use crate::handlers::{ApiResult, Params, json_response, no_query};
 use crate::problem::ApiProblem;
 use crate::state::ApiState;
@@ -194,7 +195,7 @@ impl OperationAudit {
                 &self.payload,
                 now,
             )
-            .map_err(cos_problem)
+            .map_err(chat_problem)
     }
 
     /// Record the known result after an external effect has completed.
@@ -206,7 +207,7 @@ impl OperationAudit {
     ) -> Result<CosOperation, ApiProblem> {
         store
             .cos_operation_finish_external(&self.ctx, result, now)
-            .map_err(cos_problem)
+            .map_err(chat_problem)
     }
 
     /// Settle the pending C-class operation as `rejected` with `problem` when the external
@@ -220,7 +221,7 @@ impl OperationAudit {
         let result = serde_json::json!({"error": problem.code(), "detail": problem.detail()});
         match store.cos_operation_fail_external(&self.ctx, &result, now) {
             Ok(_) => problem,
-            Err(error) => cos_problem(error),
+            Err(error) => chat_problem(error),
         }
     }
 
@@ -297,7 +298,7 @@ impl OperationAudit {
                     Ok(result)
                 },
             )
-            .map_err(cos_problem)
+            .map_err(chat_problem)
     }
 
     /// [`Self::apply`] for domain writes that fail with an [`ApiProblem`]: a failure of `write`
@@ -366,7 +367,7 @@ impl OperationAudit {
         );
         match outcome {
             Err(ChatError::Invalid(_)) => problem,
-            Err(error) => cos_problem(error),
+            Err(error) => chat_problem(error),
             Ok(_) => ApiProblem::internal("a CoS rejection was not recorded as rejected"),
         }
     }
@@ -481,7 +482,7 @@ pub(crate) fn bind_run_policy(
 ) -> Result<(), ApiProblem> {
     let handed = store
         .chat_run_policy_version(&audit.ctx.run_id)
-        .map_err(cos_problem)?;
+        .map_err(chat_problem)?;
     let claimed = audit.ctx.policy_version.clone();
     let detail = match handed.as_deref() {
         Some(handed) if handed == claimed => return Ok(()),
@@ -713,7 +714,7 @@ async fn create_operation(
         .blocking(move |store| {
             if let Some(existing) = store
                 .cos_operation_find(&audit.ctx.thread_id, &audit.idempotency_key)
-                .map_err(cos_problem)?
+                .map_err(chat_problem)?
             {
                 if existing.request_hash != audit.request_hash {
                     return Err(ApiProblem::new(
@@ -917,7 +918,7 @@ async fn get_operation(
     no_query(&raw)?;
     let lookup = o.clone();
     let operation = state
-        .blocking(move |store| store.cos_operation_get(&lookup).map_err(cos_problem))
+        .blocking(move |store| store.cos_operation_get(&lookup).map_err(chat_problem))
         .await?;
     // A CoS run sees only its own thread's operations; others look absent (no id probing).
     let visible = match (&operation, &caller) {
@@ -927,7 +928,7 @@ async fn get_operation(
     };
     match operation {
         Some(op) if visible => Ok(operation_response(op)),
-        _ => Err(cos_problem(ChatError::NotFound {
+        _ => Err(chat_problem(ChatError::NotFound {
             kind: "operation",
             id: o,
         })),

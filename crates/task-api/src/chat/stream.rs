@@ -7,11 +7,9 @@
 //! up by the `poll_interval` re-read, the same way as `crate::sse`. Heartbeats are SSE comments
 //! and never move the cursor. A disconnect only ends this loop; it does not stop any run.
 
-use std::convert::Infallible;
-
-use axum::body::{Body, Bytes};
+use axum::body::Bytes;
 use axum::extract::{RawQuery, State};
-use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, HeaderName, StatusCode};
 use axum::response::Response;
 use axum::routing::get;
 use task_core::chat::{
@@ -24,7 +22,7 @@ use super::{authorize, chat_problem};
 use crate::handlers::{ApiResult, Params, json_response};
 use crate::problem::ApiProblem;
 use crate::query::QueryParams;
-use crate::sse::{CHANNEL_CAPACITY, X_ACCEL_BUFFERING, closed, send};
+use crate::sse::{CHANNEL_CAPACITY, closed, send};
 use crate::state::{ApiState, StreamSlot};
 
 const LAST_EVENT_ID: HeaderName = HeaderName::from_static("last-event-id");
@@ -98,20 +96,7 @@ async fn stream(
     let (tx, rx) = mpsc::channel::<Bytes>(CHANNEL_CAPACITY);
     tokio::spawn(run(state, slot, tx, t, cursor));
 
-    let body = futures_util::stream::unfold(rx, |mut rx| async move {
-        rx.recv()
-            .await
-            .map(|bytes| (Ok::<Bytes, Infallible>(bytes), rx))
-    });
-    let mut response = Response::new(Body::from_stream(body));
-    let headers = response.headers_mut();
-    headers.insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("text/event-stream; charset=utf-8"),
-    );
-    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    headers.insert(X_ACCEL_BUFFERING, HeaderValue::from_static("no"));
-    Ok(response)
+    Ok(crate::sse::response(rx))
 }
 
 async fn run(
@@ -268,7 +253,8 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(
             LAST_EVENT_ID,
-            HeaderValue::from_str(value).unwrap_or(HeaderValue::from_static("x")),
+            axum::http::HeaderValue::from_str(value)
+                .unwrap_or(axum::http::HeaderValue::from_static("x")),
         );
         headers
     }

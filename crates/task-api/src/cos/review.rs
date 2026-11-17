@@ -12,6 +12,7 @@
 //! - `GET /api/v1/cos/review-thread`: the review thread, 404 when it does not exist yet (never
 //!   created here).
 
+use crate::chat::chat_problem;
 use axum::Extension;
 use axum::extract::{RawQuery, State};
 use axum::http::StatusCode;
@@ -22,7 +23,7 @@ use task_core::chat::{self, ChatError, ChatMessage, ChatThreadResponse, CosOpera
 use task_core::store::SqliteStore;
 
 use super::operations::{OperationAudit, unprocessable};
-use super::{CosCaller, cos_problem, record_direct_rejection};
+use super::{CosCaller, record_direct_rejection};
 use crate::handlers::{ApiResult, json_response, no_query};
 use crate::problem::ApiProblem;
 use crate::state::ApiState;
@@ -91,7 +92,7 @@ pub(crate) fn report_op(
         "general",
         "chat.review_report",
         |tx| {
-            let review = thread_of_kind(tx, "review").map_err(cos_problem)?;
+            let review = thread_of_kind(tx, "review").map_err(chat_problem)?;
             if review.as_deref() != Some(caller_thread.as_str()) {
                 return Err(invalid(format!(
                     "only the run of the review thread reports; this run belongs to thread \
@@ -156,14 +157,14 @@ async fn report_direct(
 async fn review_thread(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> ApiResult {
     no_query(&raw)?;
     let thread = state
-        .blocking(|store| store.cos_review_thread_get().map_err(cos_problem))
+        .blocking(|store| store.cos_review_thread_get().map_err(chat_problem))
         .await?;
     match thread {
         Some(thread) => Ok(json_response(
             StatusCode::OK,
             &ChatThreadResponse { thread },
         )),
-        None => Err(cos_problem(ChatError::NotFound {
+        None => Err(chat_problem(ChatError::NotFound {
             kind: "thread",
             id: "review".into(),
         })),

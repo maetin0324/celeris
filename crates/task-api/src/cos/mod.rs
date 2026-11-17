@@ -16,6 +16,7 @@ pub mod override_op;
 pub mod review;
 pub mod triage_view;
 
+use crate::chat::chat_problem;
 use axum::Extension;
 use axum::body::Body;
 use axum::extract::{Request, State};
@@ -222,23 +223,6 @@ pub struct CheckpointResponse {
     summary_through_seq: u64,
 }
 
-pub(crate) fn cos_problem(error: ChatError) -> ApiProblem {
-    let status =
-        StatusCode::from_u16(error.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    let code = match &error {
-        ChatError::Store(_) => "chat_store_error",
-        ChatError::BadRequest(_) => "bad_request",
-        ChatError::Invalid(_) => "validation",
-        ChatError::NotFound { .. } => "chat_not_found",
-        ChatError::Conflict(_) => "chat_conflict",
-        ChatError::TooLarge(_) => "payload_too_large",
-        ChatError::QueueFull { .. } => "chat_queue_full",
-        ChatError::CursorExpired(_) => "chat_cursor_expired",
-        ChatError::ReadOnly(_) => "chat_thread_read_only",
-    };
-    ApiProblem::new(status, code, error.to_string())
-}
-
 fn cos_only(detail: impl Into<String>) -> ApiProblem {
     ApiProblem::new(StatusCode::FORBIDDEN, "cos_credential_required", detail)
 }
@@ -297,7 +281,7 @@ async fn checkpoint(
                     req.through_seq,
                     req.expected_summary_through_seq,
                 )
-                .map_err(cos_problem)
+                .map_err(chat_problem)
         })
         .await?;
     state.chat.events.notify_waiters();

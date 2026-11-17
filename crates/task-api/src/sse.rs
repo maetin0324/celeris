@@ -89,6 +89,11 @@ pub(crate) async fn stream(
         notice_baseline,
     ));
 
+    Ok(response(rx))
+}
+
+/// `rx` に積まれた frame を流す SSE の応答（`GET /stream` と `GET /chat/threads/{t}/stream` が共有する）。
+pub(crate) fn response(rx: mpsc::Receiver<Bytes>) -> Response {
     let body = futures_util::stream::unfold(rx, |mut rx| async move {
         rx.recv()
             .await
@@ -102,7 +107,7 @@ pub(crate) async fn stream(
     );
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     headers.insert(X_ACCEL_BUFFERING, HeaderValue::from_static("no"));
-    Ok(response)
+    response
 }
 
 /// 送信開始位置と、必要なら `reset`。省略時は「今」（最新 id）から。要求 id が最新より大きい（DB が入れ替わった）か、

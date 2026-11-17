@@ -8,6 +8,7 @@
 //! `cos_operations` row, its audit envelope event and its chat card are one transaction.
 //! `escalate` validates the escalation packet and claims the durable outbox row; the notifier sends.
 
+use crate::chat::chat_problem;
 use axum::Extension;
 use axum::body::Body;
 use axum::extract::{RawQuery, State};
@@ -27,7 +28,7 @@ use super::operations::{
     DispatchEnv, ItemMark, Matched, OperationAudit, OperationView, dispatch, request_hash,
 };
 use super::triage_view::{self, CosInboxItem};
-use super::{CosCaller, cos_only, cos_problem, reject_identity_claims};
+use super::{CosCaller, cos_only, reject_identity_claims};
 use crate::handlers::{ApiResult, Params, json_response};
 use crate::inbox_notifications::{InboxAnswerBody, delegated_request, human_feed};
 use crate::problem::{ApiProblem, store_problem};
@@ -185,7 +186,7 @@ async fn list(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> ApiResu
     };
     let db = triage_db(&state)?;
     let items = state
-        .blocking(move |_| triage_view::items(&db, filter.as_deref(), limit).map_err(cos_problem))
+        .blocking(move |_| triage_view::items(&db, filter.as_deref(), limit).map_err(chat_problem))
         .await?;
     Ok(json_response(StatusCode::OK, &CosInboxList { items }))
 }
@@ -354,7 +355,7 @@ pub(crate) async fn wait_for_operation(
             if let Some((source_kind, id)) = override_source
                 && store
                     .cos_override_wait_requires_human(source_kind, &id)
-                    .map_err(cos_problem)?
+                    .map_err(chat_problem)?
             {
                 return Ok((Some("human override wait".into()), reserved));
             }
@@ -525,7 +526,7 @@ async fn resolve(
         .blocking(move |store| {
             if let Some(existing) = store
                 .cos_operation_find(&audit.ctx.thread_id, &audit.idempotency_key)
-                .map_err(cos_problem)?
+                .map_err(chat_problem)?
             {
                 if existing.request_hash != audit.request_hash {
                     return Err(ApiProblem::new(
@@ -540,13 +541,13 @@ async fn resolve(
             let rejecter = audit.clone();
             let reject =
                 |problem: ApiProblem| rejecter.reject(store, "cos_inbox_item", &item_key, problem);
-            let Some(item) = triage_view::item_get(&db, &i).map_err(cos_problem)? else {
-                return Err(reject(cos_problem(ChatError::NotFound {
+            let Some(item) = triage_view::item_get(&db, &i).map_err(chat_problem)? else {
+                return Err(reject(chat_problem(ChatError::NotFound {
                     kind: "triage item",
                     id: i.clone(),
                 })));
             };
-            if let Some(problem) = terminal_conflict(&db, &item).map_err(cos_problem)? {
+            if let Some(problem) = terminal_conflict(&db, &item).map_err(chat_problem)? {
                 return Err(reject(problem));
             }
             if item.source_revision != req.expected_revision {
@@ -555,7 +556,7 @@ async fn resolve(
                     item.source_revision, req.expected_revision
                 ))));
             }
-            if triage_view::superseded(&db, &item).map_err(cos_problem)? {
+            if triage_view::superseded(&db, &item).map_err(chat_problem)? {
                 return Err(reject(revision_conflict(format!(
                     "a newer revision of {}:{} was ingested; judge that one",
                     item.source_kind, item.source_key
@@ -666,7 +667,7 @@ async fn resolve(
                             &outbox.to_string(),
                             OffsetDateTime::now_utc(),
                         )
-                        .map_err(cos_problem)?;
+                        .map_err(chat_problem)?;
                     audit.item = Some(ItemMark::new(&item.id, "escalated"));
                     let result = serde_json::json!({
                         "item_id": item.id,
@@ -686,7 +687,7 @@ async fn resolve(
         .await?;
     state.chat.events.notify_waiters();
     let item = state
-        .blocking(move |_| triage_view::item_get(&lookup_db, &lookup).map_err(cos_problem))
+        .blocking(move |_| triage_view::item_get(&lookup_db, &lookup).map_err(chat_problem))
         .await?;
     Ok(json_response(
         StatusCode::OK,
@@ -773,7 +774,7 @@ fn kept_by_person(
 ) -> Result<Option<Kept>, ApiProblem> {
     let override_wait = store
         .cos_override_wait_requires_human(&item.source_kind, &item.source_key)
-        .map_err(cos_problem)?;
+        .map_err(chat_problem)?;
     if override_wait {
         return Ok(Some(Kept::HumanRequired("human override wait".into())));
     }

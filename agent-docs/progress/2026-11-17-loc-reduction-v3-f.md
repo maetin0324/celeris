@@ -1,5 +1,5 @@
 ---
-title: LoC 削減 v3 F — task-worker・task-api の整理と Console 互換・旧い報告 API・aider の撤去（試行 3: production 純減 unit 4,223 行、size check exit 0）
+title: LoC 削減 v3 F — task-worker・task-api の整理と Console 互換・旧い報告 API・aider の撤去（試行 4: production 純減 unit 4,224 行、size check exit 0）
 tasks: [01M7J3NKVC2KQ4NGJ4GESHJV0B]
 status: done
 updated: 2026-11-17
@@ -8,6 +8,17 @@ completed: 2026-11-17
 # LoC 削減 v3 F — task-worker・task-api の整理
 
 親 01M7J3N68JRNTP5Q4G934QWF36（依頼キー loc-reduction-v3-20261116）の子 F。依存は E（01M7J3NKVAH9NG53C5FEFNQJYK）。
+
+## 結論（試行 4）
+- 試行 3 の review は条件 0・3 を不合格にした。撤去が web の試験と機能台帳に届いていなかった: 消した `/org/:id`・`/org/secretary` を開く e2e 3 件が残って落ちる、機能台帳 `agent-docs/web/feature-parity.md` が消した Console（R01・R06・R08・R27・R38）を「完了」のまま書く、消した `console.spec.ts` にあった run ログ画面の 360px の試験の移し先が無い。試行 4 でこの 3 つと注意（advisory）の残りを直した（下の「試行 4 で直したもの」）。
+- 提出時の HEAD で、production 全言語の純減は unit **4,224 行**、固定 **11,236 行**。production Rust は unit 2,800・固定 9,812 行、own_total_with_tests は unit 7,721・固定 17,622 行。size check（`2500 1 - - -`）は exit 0。
+
+## 試行 4 で直したもの（試行 3 の review の差し戻し）
+- e2e: `web/e2e/admin/org.spec.ts` の「/org/secretary が横 scroll なく読める」「/org/cos が横 scroll なく読める」と、`web/e2e/parity/org.spec.ts` の「parity: /org/secretary → /org/cos」を消した。3 件とも ADR 2026-11-17 D1 で消した route（`routes/org.$id.tsx`＝その人の Console、`routes/org.secretary.tsx`＝その転送）の契約を見る試験で、契約を廃止したので消す（規約 10）。`/org` の 360px の試験（木・詳細・skill 欄）は残る。
+- 試験の移し: 消した `web/e2e/parity/console.spec.ts` にあった「parity: /tasks/:id/runs/:runId 360px で長い 1 行がページを広げない」を、`web/e2e/parity/runs-files.spec.ts` の P3-12（R26 の run ログ画面の試験の置き場）に移した。2400 文字の 1 行・tool_result・素の行を stdout に返し、360px で既定・折り返しを切った状態・原文の 3 つでページ幅が 360 を超えないことを見る。元の試験との違いは、偽 daemon を `startGateway` で包むことと、Console の run events の fixture（消した「すべて見る」用）を外したことだけ。
+- 機能台帳 `agent-docs/web/feature-parity.md`: R06 `/org/secretary`・R08 `/org/:id`・R38 `/console/stream` を「廃止（2026-11-17。ADR 2026-11-17 D1）」にした。R01 `/` は CoS chat が今の中身なので「置換」にし、確認方法を e2e `shell/chat-home.spec.ts` にした。R27 `/tasks/:id/runs/:runId/events` は残す API（今の呼び手は生ログの無い run の R26）なので「置換」にし、確認方法を e2e `runs/run-log-without-raw-log.spec.ts` にした。台帳の検査 `node web/scripts/check-parity.mjs` の誤りは base と同じ R30 の 1 件（台帳の R30 の行が書く commit が HEAD の祖先でない）だけになった（R01・R08・R27・R38 の missing parity test title は消えた）。
+- 注意（advisory）への対応: `web/tsconfig.app.json`・`web/tsconfig.node.json` の include の消した `e2e/parity/console.spec.ts` を消した。Console を現行として書いた `docs/guides/knowledge.md` の 3 か所、`crates/task-ops/src/conversation.rs`（`start_console_cos` の doc）、`crates/task-dispatch/src/capacity.rs`（`is_cos_run` の doc）と試験 `dispatcher/tests/cos_capacity.rs` の注釈、`web/e2e/latency/in-app-routes.ts` の注釈（`/org/cos` の「話す」）、`web/e2e/support/fake-server-noise.test.ts` の迷い込み要求の path（消した `/api/v1/console/messages` を `/api/v1/tasks` に。試験の意味は「完結しない要求を数えない」のまま）を直した。`crates/task-worker/src/subprocess.rs` の注釈の aider も消した（注釈だけで、sandbox の挙動は変えていない）。
+- 直さなかった記述: `docs/frontend/UX_AUDIT.md`（task 01M3XTCNKMQBCHKSZ7Y1GF6ZM4 の時点の監査記録。Console の画面を当時の状態として書く）、`docs/api/v1/api.md` の改訂履歴の行、`crates/task-core/src/routing.rs` の `HARNESS_AIDER`（ADR-0061 の分類表の名前で、未導入の harness として既定へ戻る。aider adapter を消した後も意味は同じ）、`crates/task-worker/src/tool_policy.rs` の `aider`（起動を禁じる LLM CLI の一覧）。
 
 ## 結論（試行 3）
 - 試行 2 の review は条件 2・3 を不合格にした。自動引き渡しの人向け通知（「デプロイ準備完了」など）が、legacy スレッドのある案件では archived の `legacy:project:<id>` に写り、web で読めなかった。試行 3 で、CoS の `messages` 行の写しを legacy スレッドに入れず、その scope の固定 CoS スレッドだけに入れるように直した（下の「試行 3 で直したもの」）。
@@ -74,6 +85,23 @@ completed: 2026-11-17
 - 振る舞いの違う写し: `task_actions` の `approve`・`reject`（共通の関数にすると型の引数で行数が増えた。+55/−23 で取り消した）、`execution.rs` の phase-gate と plan-gate の拒否（文言が違う）、`decisions.rs` の `answer_op`・`withdraw_op`・`revise_op`（既に `resolve_op` の薄い包みで、本文の型が違う）、harness の監視 loop の残り（行の意味が harness ごとに違う）。
 - C10・C11: 試行 1 の「残りの候補」に書いた理由のまま。
 
+## 測定（試行 4、提出時の HEAD で実行）
+- 受け入れの size check（閾値 `2500 1 - - -`）→ exit 0、`OK []`。
+  - production 全言語: unit 純減 4,224（379,326 → 375,102）、固定純減 11,236
+  - production Rust: unit 2,800、固定 9,812
+  - own_total_with_tests: unit 7,721、固定 17,622（試行 3 より 22 行少ない。移した試験の 45 行を足し、消した e2e 3 件ほかを引いた）
+  - 試行 3 からの production の差 1 行は `capacity.rs` の doc comment（2 行を 1 行に）。
+- C・D・E・F の unit の合計: 2,701 + 2,558 + 1,753 + 4,224 = 11,236 行 = 固定の 11,236 行（差 0 行）。
+
+## 検査（試行 4。基準は `git merge-base HEAD main`、提出時の HEAD で実行）
+- `bash scripts/dev/test-affected.sh` → exit 0（約 13.5 分）。repo-health `verdict=pass`（new=0・worsened=0）、nextest `8446 tests run: 8446 passed, 22 skipped`、web の型検査（tsc -b）と unit（vitest `705 passed`、gateway の node --test `110 pass`）、`test-ts-verify: 20 passed`。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。`sh scripts/dev/progress-index.sh --check` → `ok`。
+- `node web/scripts/check-parity.mjs` → base と同じ `R30` の 1 件だけ（新しい誤りは 0 件）。
+- web の e2e（`vite build` の後、対象の spec だけを名指し。全件は release gate で走る）:
+  - `playwright test e2e/admin/org.spec.ts e2e/parity/org.spec.ts e2e/parity/runs-files.spec.ts e2e/runs/run-log-without-raw-log.spec.ts` → 13 passed・1 skipped（移した 360px の試験を含む）。
+  - この branch が変えた functional の spec 13 file（`chat/content`・`parity/gateway`・`parity/notifications`・`parity/reports`・`runs/run-log-recovery`・`shell/chat-home`・`shell/tabbar`・`states/rich-data`・`states/states`・`work/inbox-notifications`・`work/narrow-r6`・`parity/shell`・`states/long-id-execution`）→ 75 passed・1 skipped。
+  - 画面の台帳（`screens.ts`）を全部回す nfr の `a11y/axe`・`parity/mobile-gate`・`realtime/refetch-scope` → 117 passed。`latency/transition` → 446 passed・8 skipped。
+
 ## 測定（試行 3、提出時の HEAD で実行）
 - 受け入れの size check（開始時 main の `scripts/dev/source-size-report.py`・`source-size-report.toml` を `git show` で取り出し、`--exclusive-classes` で 3 点を測る。閾値 `2500 1 - - -`）→ exit 0、`OK []`。
   - production 全言語: unit 純減 4,223（379,326 → 375,103）、固定純減 11,235
@@ -125,6 +153,9 @@ completed: 2026-11-17
   - `loc-reduction-v3 F: 研究系 adapter のランナーの約束（summary・progress 行の上限と目印・CELERIS_RESULT の読み取り）を research_runner の 1 か所にする`
   - `loc-reduction-v3 F: cos_problem を chat_problem に 1 つにし、SSE の応答の組み立てを sse::response に共有する`
   - この進捗ファイルと ADR D3 の commit。
+- 試行 4:
+  - `loc-reduction-v3 F: 消した /org/:id・/org/secretary を開く e2e 3 件を消し、run ログの 360px の試験を runs-files に移し、機能台帳の R01・R06・R08・R27・R38 を撤去に合わせる`
+  - この進捗ファイルの commit。
 - 試行 3:
   - `loc-reduction-v3 F: CoS の messages 行の写しを legacy スレッドに入れず、案件・統括の固定 CoS スレッドだけに入れる（自動引き渡しの通知が archived の legacy に入っていた）`
   - `loc-reduction-v3 F: 研究系 adapter の terminal_from_summary の写し 3 つを research_runner の 1 つにし、paperqa に残った宙に浮いた doc comment を消す`
@@ -178,7 +209,6 @@ completed: 2026-11-17
 - `GET /api/v1/inbox` の撤去（ADR D3 の撤去の条件と責任者）。
 - 未配線の `run_tmpdir::sweep_stale`・`browser_supervisor::reap_on_start`・`source_state_view` は、消すか配線するかを人が決める（「提案」）。
 - 0092 の後から本 release の起動までに legacy スレッドへ写った通知（11/15〜11/17 の「デプロイ準備完了」など）は移さない。legacy は読むだけの履歴で、`messages` の行と task・release の画面の配送の状態は残る。
-- `crates/task-worker/src/subprocess.rs` の注釈（349 行「claude-code / codex / acp / aider は自前で終端を合成する」）に aider が残る。sandbox の高 risk path で、F では変えていない。次に `subprocess.rs` を変える task が直す。
 - E が残した task-core・task-ops の項目（`notification_scan_at`・`is_cluster_login_needed_headline` と doc 参照 3 か所）は F の write set の外なので触っていない。
 
 ## 提案

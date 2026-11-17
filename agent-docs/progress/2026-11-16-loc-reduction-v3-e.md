@@ -1,5 +1,5 @@
 ---
-title: LoC 削減 v3 E — task-dispatch・celeris の整理（production 純減 unit 1,745 行・固定 7,004 行）
+title: LoC 削減 v3 E — task-dispatch・celeris の整理（production 純減 unit 1,753 行・固定 7,012 行）
 tasks: [01M7J3NKVAH9NG53C5FEFNQJYK]
 status: done
 updated: 2026-11-17
@@ -10,10 +10,10 @@ completed: 2026-11-17
 親 01M7J3N68JRNTP5Q4G934QWF36（依頼キー loc-reduction-v3-20261116）の子 E。依存は D（01M7J3NKV8E6P9WAWGMJR3KB1F）。候補は子 A の [進捗](2026-11-16-loc-reduction-v3-a.md) の E の割当（C2・C6・C7・C8・C12・C13・C14・C21）。
 
 ## 結論
-- 提出時の HEAD で、production 全言語の純減は unit（`git merge-base HEAD main` → HEAD）で **1,745 行**、固定（開始時 main 415a19a7004c → HEAD）で **7,004 行**。production Rust も同じ 1,745 / 7,004 行、own_total_with_tests は 4,220 / 9,892 行。受け入れの size check（閾値 `1499 1 - - -`、人の決定で試行 1 の実測値に下げた）は exit 0。
-- 第 2 マイルストーン（累積 5,000 行）を満たす。C・D・E の unit の合計は 2,701 + 2,558 + 1,745 = 7,004 行で、固定計測の 7,004 行と一致する（差 0 行。無関係の main の production の変更は無い）。
+- 提出時の HEAD で、production 全言語の純減は unit（`git merge-base HEAD main` → HEAD）で **1,753 行**、固定（開始時 main 415a19a7004c → HEAD）で **7,012 行**。production Rust も同じ 1,753 / 7,012 行、own_total_with_tests は 4,229 / 9,901 行。受け入れの size check（閾値 `1499 1 - - -`、人の決定で試行 1 の実測値に下げた）は exit 0。
+- 第 2 マイルストーン（累積 5,000 行）を満たす。C・D・E の unit の合計は 2,701 + 2,558 + 1,753 = 7,012 行で、固定計測の 7,012 行と一致する（差 0 行。無関係の main の production の変更は無い）。
 - 人の決定（2026-11-16）で承認された削除のうち、D6・D7 の未配線の判断、`regenerate_if_drifted`・`needs_human`、C12（ablation の分岐）を消した（run 4 で production 246 行）。C7・C8・C13 は消していない。理由は「承認された削除の扱い」に書く。
-- 試行 1 の run 1〜3 の 13 行（試験だけが呼ぶ leaf の setter 3 個を `#[cfg(test)]` にした付け替え）は production の 1,745 行に含まれる。run 4 の C12 で inline_test も 21,568 → 21,551 に減ったので、試験への付け替えだけの増加は残っていない。
+- 試行 1 の run 1〜3 の 13 行（試験だけが呼ぶ leaf の setter 3 個を `#[cfg(test)]` にした付け替え）は production の 1,753 行に含まれる。run 4 の C12 で inline_test も 21,568 → 21,551 に減ったので、試験への付け替えだけの増加は残っていない。
 
 ## 承認された削除の扱い（人の決定 2026-11-16 の (b)）
 | 対象 | 扱い | 理由・場所 |
@@ -27,7 +27,7 @@ completed: 2026-11-17
 
 ## 消した対象（production）
 
-- celeris `notify.rs`: daemon が呼ばない旧い直の走査一式。`scan`・`scan_at`・`scan_approval_pending`・`scan_question_blocked`・`scan_bad_news`・`scan_cluster_login_needed`・`scan_secretary_reply`・`scan_task_failed`・`scan_decisions`・`scan_plan_approvals`・`scan_phase_checkpoint`・`transition_key`・`decision_breadcrumb`・`cost_label`・`decision_line`・`schedule`・`schedule_routes`・`InboxOutboundState`・`DigestOutboundState`・`select_batch`・`Candidate`・`link`・`node_name`・定数 `TASK_SCAN`・`REPORT_SCAN`・`MESSAGE_SCAN`・`PROJECT_SCAN`・`BAD_NEWS_PREFIX`。module doc に「互換試験用に残すが daemon は呼ばない」とあった旧経路で、送信は CoS の outbox（`select_routes_batch`）だけが使う。
+- celeris `notify.rs`: daemon が呼ばない旧い直の走査一式。`scan`・`scan_at`・`scan_approval_pending`・`scan_question_blocked`・`scan_bad_news`・`scan_cluster_login_needed`・`scan_secretary_reply`・`scan_task_failed`・`scan_decisions`・`scan_plan_approvals`・`scan_phase_checkpoint`・`transition_key`・`decision_breadcrumb`・`cost_label`・`decision_line`・`schedule`・`schedule_routes`・`InboxOutboundState`・`DigestOutboundState`・`select_batch`・`Candidate`・`link`・`node_name`・定数 `TASK_SCAN`・`REPORT_SCAN`・`MESSAGE_SCAN`・`PROJECT_SCAN`・`BAD_NEWS_PREFIX`。module doc に「互換試験用に残すが daemon は呼ばない」とあった旧経路で、送信は CoS の outbox（`select_routes_batch`）だけが使う。試行 2 で、旧い走査だけが使っていた定数 `EXCERPT_CHARS`・`REVIEW_EXCERPT_CHARS`・`DECISION_REMINDER_AFTER` と見出し「判定（ADR-0037 D1 の 5 種）」も消した（review の指摘。repo health の new の link.unlinked 3 件）。
 - task-dispatch `dispatcher/cluster.rs`: `Dispatcher` の 1 行委譲 15 個（`set_cluster_connector`・`set_cluster_connect_pending`・`set_tunnel_forward_ensurer`・`set_tunnel_probe`・`set_tunnel_listener_probe`・`set_cluster_ssh_command_override`・`remote_ssh_settings`・`set_cluster_command_probe`・`set_cluster_master_watcher`・`take_tunnel_events`・`clusters_needing_login`・`tunnel_reachable`・`tunnel_listener_present`・`tunnel_target_healthy`・`tunnel_last_error`）。C2 の一部。呼び手は owner の `ClusterRuntime` を直接呼ぶ（dispatcher の中は `self.cluster`、daemon の結線は accessor `Dispatcher::cluster()` 1 個）。`set_cluster_liveness_probe` は write set の外の campaign（`dagbench/celeris_side.rs`）が呼ぶので残した。
 - task-dispatch の試験だけが呼ぶ口: `Dispatcher` の `set_now_unix_fn`・`set_container_probe`・`container_probe`・`set_browser_ledger_watch`・`set_disk_watch_with_probe`・`disk_watch_critical`・`held_by_disk_critical`・`set_eval_version_probe`・`set_config_max_concurrency`（本体の reload は `apply_dispatch_config` が欄を入れる）、`review.rs` の `tree_child_review_view`・`exec_check_with_repair_retries`・`run_work_unit_checks`（本体の WU の検査は `exec_check_outcome` を呼ぶ）、`disk_watch.rs` の `run_disk_watch`。試験は本体と同じ owner・関数を呼ぶ。包みの doc comment にあった規則の説明（ADR-0074 D6.1/D6.2 の再実行、ADR-0079 D6 の木の子の基点）は残す関数へ移した。
 - task-dispatch の dispatcher の中だけで呼ばれる 1 行委譲: `script_tick_wait_summary`・`stagnation_generation`・`harness_adapter`（呼び手なし）。`script_tick_wait_remaining`・`script_compare_log_store` は呼び手の cos_chat から owner の field が見えないので残した。`holds_eval_run` は呼び手が lease の高 risk path（`ownerless_runs.rs`）なので触っていない。
@@ -48,11 +48,11 @@ completed: 2026-11-17
 |---|---|---|---|
 | 固定の基点（415a19a7004c） | 386,338 | 340,223 | 1,043,479 |
 | unit 基点（`git merge-base HEAD main`） | 381,079 | 334,964 | 1,037,807 |
-| HEAD | 379,334 | 333,219 | 1,033,587 |
-| 純減（unit / 固定） | 1,745 / 7,004 | 1,745 / 7,004 | 4,220 / 9,892 |
+| HEAD | 379,326 | 333,211 | 1,033,578 |
+| 純減（unit / 固定） | 1,753 / 7,012 | 1,753 / 7,012 | 4,229 / 9,901 |
 
-- 他の class（unit 基点 → HEAD）: external_test 461,348 → 458,893、inline_test 21,568 → 21,551、tooling 25,258 → 25,255（human-text の許可 3 行）。generated・vendor・fixture・evaluation_infra・schema・migration・lockfile は同じ。docs はこの進捗と ADR の付記の分だけ増える。
-- 累積の内訳（unit の合計）: C 2,701（[C の進捗](2026-11-16-loc-reduction-v3-c.md)）、D 2,558（[D の進捗](2026-11-16-loc-reduction-v3-d.md)）、E 1,745。合計 7,004 は固定計測の 7,004 と一致する。
+- 他の class（unit 基点 → HEAD）: external_test 461,348 → 458,892、inline_test 21,568 → 21,551、tooling 25,258 → 25,255（human-text の許可 3 行）。generated・vendor・fixture・evaluation_infra・schema・migration・lockfile は同じ。docs はこの進捗と ADR の付記の分だけ増える。
+- 累積の内訳（unit の合計）: C 2,701（[C の進捗](2026-11-16-loc-reduction-v3-c.md)）、D 2,558（[D の進捗](2026-11-16-loc-reduction-v3-d.md)）、E 1,753。合計 7,012 は固定計測の 7,012 と一致する。
 - 無関係の main の変更（固定と unit の差の一覧）: production は 0 行。run 4 の前に取り込んだ main（task 01M7KATBGCRQRZ5NWXHXVWYPZ8 の「許可の一覧から行を消すだけの変更を policy.changed に数えない」）は scripts/dev/repo-health と scripts/tests の変更で、own_total（tooling・試験）だけを増やした（unit 基点の own_total が試行 1 の 1,037,546 から 1,037,807 に）。
 
 ## 変更（commit の件名）
@@ -77,13 +77,15 @@ completed: 2026-11-17
 - loc-reduction-v3 E: 未配線の D6・D7 の判断（decide_route_failure・classify_failure・admit_by_availability ほか）と試験だけが呼ぶ regenerate_if_drifted・needs_human を消し、ADR に付記する
 - loc-reduction-v3 E: 試験用の ablation の分岐（EffectAblation と本体の読み口 3 個・引数 gate_disabled・priority_disabled）を消し、phase_effect_ab は on だけを確かめる
 - loc-reduction-v3 E: 進捗を run 4 の数値に更新し、承認された削除の扱いを書く
+- loc-reduction-v3 E: notify の旧い走査だけが使っていた定数 3 個（EXCERPT_CHARS・REVIEW_EXCERPT_CHARS・DECISION_REMINDER_AFTER）と古い見出しを消し、policy_close の自明な assert を消す
+- loc-reduction-v3 E: 進捗を試行 2 の数値に更新し、write set の外に残った呼び手の無い関数と古い説明を未解決に書く
 
 ## 試験の変更（規約 10）
 - `crates/celeris/tests/notify.rs`: 旧い走査の判定の試験 31 個（approval_pending・question_blocked・bad_news・secretary_reply・task_failed・decisions・plan approval・milestone の判定ほか）を消した。契約（daemon が notify の走査で通知を作る）は CoS の outbox への置き換えで廃止済みで、本体はもう走査を持たない。送信の仕組みの試験 7 個（1 回送って記録、3 回失敗で諦める、URL を出さない、429 を数えない、秘密の読み込み、送信の試し、偽の webhook）は残し、`select_batch` を本体と同じ `select_routes_batch` に、種を `CosEscalation` に替えた。
 - `crates/celeris/src/notify/tests.rs`: `schedule_routes` の試験 2 個と、消した `link` の試験 1 個を消した。`root_done_summary` の選択の試験ほかは残した。
 - task-dispatch `dispatcher/tests/cluster_tunnel.rs`・`session_resume.rs`・`git_workspace.rs`・`cex_review_authority.rs`・`route_failure_escalation.rs`・`tick_and_dispatch.rs`・`browser_ledger_gate.rs`・`browser_policy_missing.rs`・`cleanup_and_disk.rs`・`cron_jobs.rs`・`eval_trial_dispatch.rs`・`cos_capacity.rs`・`cos_chat_launch.rs`、`review/tests.rs`、`disk_watch/tests.rs`、`health_review/flow_tests.rs`、celeris `lib/tests.rs`: 消した口・委譲・包みの呼び出しを、本体と同じ owner・関数の呼び出しに替えただけで、検査の内容（入力と assert）は変えていない。
 - run 2・3: `dispatcher/tests/script_canary.rs` は消した `script_domains_forced_rust` の代わりに、同じ field（`pending_rollbacks` の領域）を読む試験内の関数を使う。`target_sweep/tests.rs` は `root` が文字列になったので期待値を `root.display().to_string()` にした。`accounts_admin/tests.rs` は import 1 行。assert の内容は変えていない。
-- run 4: `dispatcher/tests/route_failure_escalation.rs`（7 試験）を消した。契約（dispatcher の D6・D7 の判断の入口）を ADR の付記で廃止し、規則の本体の試験は task-core の `route_select` の試験と `tests/policy_close.rs` に残る。`policy_close.rs` の 2 試験は `classify_failure`・`admit_by_availability` の呼び出しを外し、task-core の `escalation_decision`・`availability` の assert を残した。
+- run 4: `dispatcher/tests/route_failure_escalation.rs`（7 試験）を消した。契約（dispatcher の D6・D7 の判断の入口）を ADR の付記で廃止し、規則の本体の試験は task-core の `route_select` の試験と `tests/policy_close.rs` に残る。`policy_close.rs` の 2 試験は `classify_failure`・`admit_by_availability` の呼び出しを外し、task-core の `escalation_decision`・`availability` の assert を残した。試行 2 で、`classify_failure` を外した後に残った自明な assert（`let class = FailureClass::TransientInfra; assert_eq!(class, FailureClass::TransientInfra)`）を消した（何も検出しない行で、続く `escalation_decision` の assert は変えていない）。
 - run 4: `auto_resolve/generated/tests.rs` の `drift_is_committed_once_and_rerun_is_noop` と、`command_failure_needs_human_in_merge_and_drift` の drift の半分を消した（契約の廃止）。`out_of_scope_write_and_timeout_need_human` は `regenerate` を直接呼び、対象外の変更と timeout が誤りになることを同じ assert で確かめる（衝突の解決の経路も同じ `regenerate` を使う）。
 - run 4（C12）: `phase_effect_ab` の review_sync・stale_priority・write_set は off（旧経路）の variant を消し、on の値の assert（review_sync: run 3 本・attempts 0、stale_priority: stale の待ち 0・run 2 本、write_set: 衝突 0・repair 0・run 2 本・最初の tick で 1 本が待つ）を残した。off の値と off の harness の回帰試験（`phase_effect_ab_write_set_waits_for_late_run_start`）は、研究の A/B 比較の契約の廃止と一緒に消した。`execution_coordination.rs` の単体試験は ablation の 1 assert を消した。
 - lease・restart・replan・stale-result の反例試験は変えていない（下の「証拠」で名指しで通した）。名指しの件数が 288 → 287 になったのは、消した D7 の試験 `content_failure_escalates_one_step_then_requests_replan` が `test(replan)` に当たっていたため。
@@ -107,13 +109,14 @@ completed: 2026-11-17
 
 ## 受け入れ条件との対応
 - 条件 0（統合・新しい大きな仕組みを足さない・反例試験）: 旧い notify の走査（同じ通知の判断の第 2 の経路）、Dispatcher の cluster・script の薄い委譲と試験用の口、未配線の D6・D7 の判断、試験用の ablation の分岐を消し、review・settlement・dispatch の写し（repair の行、計画の子の完了、WU の取り消し、lane の天井ほか）を 1 つにした。足したのは accessor 1 個と集約の関数だけ。反例試験は変えず、名指しで 287 件が通る。
-- 条件 1（第 2 マイルストーン）: 固定 7,004 行、C・D・E の unit の合計 7,004 行で、5,000 行以上。差は 0 行で、無関係の main の production の変更は無い（own_total だけの main の変更は「測定」に書いた）。
-- 条件 2（size check）: 閾値 `1499 1 - - -` で exit 0。unit の production 純減 1,745 行、own_total 4,220 行。
+- 条件 1（第 2 マイルストーン）: 固定 7,012 行、C・D・E の unit の合計 7,012 行で、5,000 行以上。差は 0 行で、無関係の main の production の変更は無い（own_total だけの main の変更は「測定」に書いた）。
+- 条件 2（size check）: 閾値 `1499 1 - - -` で exit 0。unit の production 純減 1,753 行、own_total 4,229 行。
 - 条件 3（人の決定）: (1) 閾値は実測値で受けた。(2) 承認された削除は「承認された削除の扱い」の表のとおり（3 件を消し、C7・C8・C13 は理由を書いた）。C7 は消していないので本番 config の書き換えは無い。(3) `scripts/dev/human-text-lint.allow` の 3 行の削除は branch に残し、01M7KATBGC が main に入った後の test-affected の health の gate は pass。
 
 ## 未解決
 - C7・C8・C13 は E の write set では消せない（上の表）。消すなら task-core・task-worker・celerisctl・celeris-campaign を含む write set の task が要る。
-- 最終目標（累積 10,000 行）には固定 7,004 行で 2,996 行足りない。残りは親 01M7J3N68JRNTP5Q4G934QWF36 の子 F 以降の範囲。
+- notify の旧い走査を消したので、task-core `report.rs` の `is_cluster_login_needed_headline`（呼び手は消した `scan_cluster_login_needed` だけだった）に呼び手が無くなった（repo health の new の link.unlinked 1 件）。task-core の doc comment も消した仕組みを説明したまま残る: `crates/task-core/src/notify.rs` の module doc（「判定は celeris（`celeris::notify`）」「判定（`celeris::notify::scan`）が候補を作った」）と `crates/task-core/src/report.rs` の `cluster_login_needed_headline`・`is_cluster_login_needed_headline` の doc comment（「`celeris::notify` が `bad_news` の中から抜き出す」）。どれも task-core（E の write set の外）なので消していない。後続の task（task-core を write set に持つもの）で `is_cluster_login_needed_headline` を消し、doc comment を CoS の outbox の説明に直す。`crates/task-core/migrations/0009_notifications_project_id.sql` の注記（`taskd::notify::scan`）は適用済みの migration なので直さない。
+- 最終目標（累積 10,000 行）には固定 7,012 行で 2,988 行足りない。残りは親 01M7J3N68JRNTP5Q4G934QWF36 の子 F 以降の範囲。
 
 ## 提案
 - C7 を消すなら、task-core `harness.rs` の `from_legacy`・`role_specs` の互換、celerisctl の `config to-harnesses`、celeris の fallback を 1 つの task で消し、`[[harnesses]]` の無い設定を読み込みエラーにする。`[[genres]]`・`[[roles]]` だけの試験の fixture（celeris-campaign・celerisctl・task-api）を `[[harnesses]]` に書き換える。

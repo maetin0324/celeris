@@ -66,8 +66,19 @@ ADR: [2026-11-17-boundary-change-risk-review.md](../../adr/2026-11-17-boundary-c
 - `cases`（D5）: ケース 1・2 は上の 2 試験と同じ入力を実際の判定経路で通す。失敗注入の「積の規則に戻す」は `assess_risk` の
   `if !matches.is_empty()` の下で `declared` が空なら理由を足さない形に戻せばよい。
 
+## 範囲の check の不合格（run 01M7NW71ACNKFG51NQGJNHNFFX、plan_issue を申告）
+- 前回の run の後の範囲の check が exit 1 で落ちた。範囲外と出たのは次の 5 file で、どれも ADR の決定から機械的に生じる変更。
+  - `crates/task-worker/src/protocol/design_review/tests.rs`・`crates/task-worker/src/protocol/health/tests.rs`: `PathClass` の struct literal。
+    ADR D6 が決めた `PathClass.invariants` を足すと、この 2 file は欄を書かなければ compile できない。
+  - `docs/api/v1/api-v1.schema.json`・`docs/api/v1/event.schema.json`・`web/api/generated/schema.json`（api-v1 の写しで同一）: `DesignBrief` と
+    `RiskAssessment` の doc comment から生成される。ADR の撤去対象（brief 6）が旧い規則の記述の書き換えを求め、一致は
+    `task-api/src/schema.rs` の `committed_schema_matches_generated` と `task-core/src/store/tests.rs` の event schema の試験が確かめる。
+- 範囲の中だけで通す方法（欄を足さない・旧い doc comment を残す）は ADR と受け入れ条件 2 に反するので取らなかった。
+  check の許可の正規表現に `crates/task-worker/src/protocol/(design_review|health)/tests\.rs$`・`docs/api/v1/(api-v1|event)\.schema\.json$`・
+  `web/api/generated/schema\.json$` を足す修正を plan_issue で申告した。足した式は提出時の HEAD で exit 0 を確かめた。
+
 ## 未解決
-- 無し（呼び出し元の確認は上）。
+- 範囲の check の修正（上の節。replan 待ち）。
 
 ## 提案
 - `execution_plan::assess_plan_risk` は試験だけが使う。D3 の後も production の呼び出しが無ければ、closeout か H で消すかを決める。

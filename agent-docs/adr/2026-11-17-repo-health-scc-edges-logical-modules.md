@@ -161,3 +161,31 @@ base の crates（試験の file と campaign・routing-eval・jev-classifier �
 - `checker`: D1〜D5 を実装し、D6 の試験を足す。policy の branch で出す。背景の表の 16 file の単位を実装で確かめ、違えば進捗に書く。
 - `metrics`: 共通受入条件 (1)〜(6) のうち B に関わる項目を A の §7 の command で before/after 計測する。(1) の循環の組は旧と新の検査器の両方で出す（単位の数え方が変わるため。A と違う数え方なので両方の値と理由を書く）。
 - `replay`: D7。
+
+## 付記 2026-11-17: 実装での違い（checker）
+WorkUnit `checker` は D1〜D4 を既存の検査器 3 file（`health/lang_deps.py`・`rules/deps.py`・`rules/size_growth.py`）の修正で実装し、D6 の試験 8 件を足した。
+決定の本文（D1〜D7）は書き換えず、実装で変えた 3 点をここに書く。詳細は WorkUnit の進捗 `agent-docs/progress/2026-11-17-arch-v4-b/checker.md` の「ADR との違い」。
+
+- 人の承認: 人は 2026-11-17 に、この 3 点を含む policy の差分を承認した（運用 session の問いへの人の答えを operator が task のコメントで中継した）。
+  operator は件名「integrate 01M7MZTKAZ checker: deps.cycle の循環の内部の新しい組を finding にし、Rust の単位を論理 module（#[path]・super::）にする（policy の branch、人の承認と operator の hand merge）」の no-ff の merge で main に入れた。WorkUnit は自分で承認していない。
+
+1. D1 の組の finding（鍵 `cycle-edge:<src>-><dst>`）は、base の循環と突き合い節点の数が base を超えない head の循環（循環の finding が existing）にだけ出す。
+   D1 の「新しい循環・併合した循環でも、base で循環の外にあった組を新しい組として出す」は実装していない。
+   理由: その場合は循環の finding が new か worsened で既に fail 級になり、組の finding は同じ悪化の二重の報告になる。また既存の試験 `test_repo_health_structure.py` の 3 件
+   （`test_new_python_cycle_fails_with_paths_and_lines`・`test_existing_cycle_that_grows_is_worsened`・`test_rust_module_cycle_ignores_crate_root_reexports`）は
+   deps.cycle の finding がちょうど 1 件であることを確かめており、D1 のとおりだと落ちる。見逃しは増えない（節点が増えた循環は循環の finding が fail にする）。
+2. D3 の `super::` の解決は、inline の `mod x { … }` block の深さも数える。D3 の限界の節は「block の深さを数えない」と書いた。
+   理由: 数えないと、1 段の module の file の中の inline block にある `super::y`（本当は自分の単位の中）を `crate::y` と解決し、誤った辺を作る。
+   D3 の「誤検出にはならない」はこの場合に成り立たない。block の範囲は rustfmt の字下げと `source_size.block_end` で決める。
+3. 論理 module の表（`lang_deps` の `Graph.modules`）は、本体の file だけでなく、検査の対象の Rust の file 全部（試験・道具の file も）に作る。
+   理由: `crate::x` が module かの判定は今まで本体の外の file も path の存在で見ていたので、表の lookup でも同じに扱うため。辺の元は今までどおり本体の file だけ。
+
+既知の限界（WorkUnit `replay` が見つけた。直していない）:
+- `#[path]` の宣言の行が `module_lines` に 1 行数えられる。`rules/size_growth.py` の `DECL_RE`（`^\s*(?:pub(...)\s+)?(?:use|mod)\s`）は、`#[path = "…"] mod x;` の 1 行の宣言も、
+  2 行の形の `#[path = "…"]` の行も宣言として除かない。旧い検査器も同じ式だが、D4 で別 dir の `#[path]` の file を宣言した module に数えるので、別 dir への移動でもこの 1 行が効くようになった。
+- 影響: 閾値を超えた module で `mod x;` を `#[path]` 付きに変えると、本体の行を変えない移動でも worsened（fail）になる。数え過ぎの側で、見逃しは無い。
+- replay で当たった件数: main の実 commit 10 件では 0 件。模擬では m3（`crates/task-dispatch/src/dispatcher/write_set_gate.rs` を `health_review/` に移しただけ）の 1 件が、
+  この 1 行だけで module `crates/task-dispatch/src/dispatcher` の `module_lines` 32,347→32,348 の worsened になった。m2・m2x の同じ module の増分（+24）にもこの 1 行が入っているが、
+  m2・m2x は足した本体の 23 行でも fail になる。
+- 扱い（2026-11-17 の決定。CoS の回答で、人の選択ではない）: この付記に既知の限界として書き、修正は別の policy の task（policy だけの branch、人の差分の承認、operator の merge）として提案する。起票は人が決める。
+  アーキ v4 の後続 C〜H がこの限界で size の fail に当たったら、検査を外したり迂回したりせず、この決定を引いて人に聞く。

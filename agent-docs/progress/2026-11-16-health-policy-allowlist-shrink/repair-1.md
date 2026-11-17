@@ -8,7 +8,7 @@ completed: 2026-11-17
 
 # repair-1（WorkUnit）
 
-完了日: 2026-11-17。policy の差分の人の承認と operator の merge は未（task の進捗の「repair-1」）。
+完了日: 2026-11-17。policy の差分は人が 2026-11-17 に承認し（決定 repair-1-policy-merge）、operator が task の branch を main に no-ff で merge した（件名「integrate 01M7KATBGC repair-1: '\n' 以外の改行の文字を含む許可の一覧は比べずに policy.changed に数える（policy の branch、人の承認と operator の hand merge）」）。merge の後の HEAD で reviewer の再現を再実行し、`policy.changed=True`・exit 1 を確かめた（task の進捗の「証拠」）。
 
 ## 指摘
 reviewer 01M7KJH9BREHTYP8GWC2M2ZWJW（受け入れ 5 が不合格）: `engine.py` の `_content_lines` は内容を `'\n'` だけで分け、列 0 が `#` の行を除く。`scripts/dev/check-human-text.py` の `allow_list` は text mode（universal newlines）で開くので、単独の CR も行の区切りにする。`#note<CR>slop_vocabulary<TAB>NEW-SNIPPET-NOT-IN-BASE<TAB>smuggled` を 1 行足すと `policy.changed=false`（exit 0）のまま新しい許可が入った。

@@ -12,7 +12,7 @@ use tracing::warn;
 
 use crate::adapter::{
     AdapterError, AdapterSetting, AdapterSettings, Configured, EventSink, RunLimits, RunOutcome,
-    Terminal, WorkerAdapter, deadline_terminal, spawn_capture_stderr,
+    Terminal, WorkerAdapter, next_line, spawn_capture_stderr,
 };
 use crate::claude_code::build_prompt_with_skill_list;
 use crate::delegate_file::forward_delegate_file;
@@ -20,8 +20,7 @@ use crate::protocol::RunRequest;
 use crate::provider::classify_provider_failure;
 use crate::result_report::{ResultFileRead, interpret_result_text, read_result_file};
 use crate::subprocess::{
-    LineOutcome, MAX_LINE_BYTES, finish_run, kill_now, prepare_run, read_line_limited, read_tail,
-    reap_after_terminal,
+    LineOutcome, finish_run, kill_now, prepare_run, read_tail, reap_after_terminal,
 };
 
 #[derive(Debug, Clone)]
@@ -328,25 +327,13 @@ async fn run_pi(
     let mut stream = PiStream::default();
 
     loop {
-        let wait =
-            match deadline_terminal(start, last_activity, limits.wall_clock, limits.idle_timeout) {
-                Ok(wait) => wait,
-                Err(terminal) => {
-                    timeout_terminal = Some(*terminal);
-                    force_kill = true;
-                    break;
-                }
-            };
-
-        let outcome = match tokio::time::timeout(
-            wait,
-            read_line_limited(&mut reader, MAX_LINE_BYTES),
-        )
-        .await
-        {
-            Err(_elapsed) => continue,
-            Ok(Err(e)) => return Err(AdapterError::Io(e)),
-            Ok(Ok(outcome)) => outcome,
+        let outcome = match next_line(&mut reader, start, last_activity, limits).await? {
+            Ok(outcome) => outcome,
+            Err(terminal) => {
+                timeout_terminal = Some(terminal);
+                force_kill = true;
+                break;
+            }
         };
 
         match outcome {

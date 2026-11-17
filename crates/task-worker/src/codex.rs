@@ -21,17 +21,17 @@ use tracing::warn;
 
 use crate::adapter::{
     AdapterError, AdapterSetting, AdapterSettings, Configured, EventSink, RunLimits, RunOutcome,
-    Terminal, WorkerAdapter, deadline_terminal, spawn_capture_stderr, with_estimated_cost,
+    Terminal, WorkerAdapter, next_line, spawn_capture_stderr, with_estimated_cost,
 };
 use crate::claude_code::{build_prompt, work_dir_note};
 use crate::delegate_file::{clear_delegate_file, forward_delegate_file};
 use crate::progress;
+use crate::progress::truncate_bytes as truncate;
 use crate::protocol::{ProviderFailure, RunRequest};
 use crate::provider::classify_provider_failure;
 use crate::result_report::{ResultFileRead, interpret_result_text};
 use crate::subprocess::{
-    LineOutcome, MAX_LINE_BYTES, RunPaths, finish_run, kill_now, prepare_run, read_line_limited,
-    read_tail, reap_after_terminal,
+    LineOutcome, RunPaths, finish_run, kill_now, prepare_run, read_tail, reap_after_terminal,
 };
 
 /// `[adapters.codex] resume_mode`（ADR-0054 D1。Phase 67）: このインストールの `codex` が
@@ -625,25 +625,13 @@ async fn run_codex_once(
 
     loop {
         // codex には turn の上限が無いので、wall-clock の打ち切りが予算切れの唯一の経路。
-        let wait =
-            match deadline_terminal(start, last_activity, limits.wall_clock, limits.idle_timeout) {
-                Ok(wait) => wait,
-                Err(terminal) => {
-                    timeout_terminal = Some(*terminal);
-                    force_kill = true;
-                    break;
-                }
-            };
-
-        let outcome = match tokio::time::timeout(
-            wait,
-            read_line_limited(&mut reader, MAX_LINE_BYTES),
-        )
-        .await
-        {
-            Err(_elapsed) => continue,
-            Ok(Err(e)) => return Err(AdapterError::Io(e)),
-            Ok(Ok(outcome)) => outcome,
+        let outcome = match next_line(&mut reader, start, last_activity, limits).await? {
+            Ok(outcome) => outcome,
+            Err(terminal) => {
+                timeout_terminal = Some(terminal);
+                force_kill = true;
+                break;
+            }
         };
 
         match outcome {
@@ -1295,17 +1283,6 @@ fn describe_error(value: &serde_json::Value) -> String {
         return msg.to_string();
     }
     value.to_string()
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        return s.to_string();
-    }
-    let mut end = max;
-    while !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}…", &s[..end])
 }
 
 /// `turn.completed` と結果ファイルの読み取り結果から終端を合成する。呼び出し元は `turn.completed` を一度でも

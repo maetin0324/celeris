@@ -19,16 +19,16 @@ use tracing::warn;
 
 use crate::adapter::{
     AdapterError, AdapterSetting, AdapterSettings, Configured, EventSink, RunLimits, RunOutcome,
-    Terminal, WorkerAdapter, deadline_terminal, spawn_capture_stderr, with_estimated_cost,
+    Terminal, WorkerAdapter, next_line, spawn_capture_stderr, with_estimated_cost,
 };
 use crate::delegate_file::forward_delegate_file;
 use crate::progress;
+use crate::progress::truncate_bytes as truncate;
 use crate::protocol::{Answer, ProviderFailure, RunContext, RunRequest};
 use crate::provider::classify_provider_failure;
 use crate::result_report::{ResultFileRead, interpret_result_text};
 use crate::subprocess::{
-    LineOutcome, MAX_LINE_BYTES, finish_run, kill_now, prepare_run, read_line_limited, read_tail,
-    reap_after_terminal,
+    LineOutcome, finish_run, kill_now, prepare_run, read_tail, reap_after_terminal,
 };
 
 /// `[adapters.claude_code]`（config.toml, ADR-0006 D6）。
@@ -669,25 +669,13 @@ async fn run_claude_code(
 
     loop {
         // 打ち切りの usage は後で `exploration` の累積から載せる（`result` を観測する前に打ち切っている）。
-        let wait =
-            match deadline_terminal(start, last_activity, limits.wall_clock, limits.idle_timeout) {
-                Ok(wait) => wait,
-                Err(terminal) => {
-                    timeout_terminal = Some(*terminal);
-                    force_kill = true;
-                    break;
-                }
-            };
-
-        let outcome = match tokio::time::timeout(
-            wait,
-            read_line_limited(&mut reader, MAX_LINE_BYTES),
-        )
-        .await
-        {
-            Err(_elapsed) => continue, // タイムアウト。ループ先頭で上限超過を検知する。
-            Ok(Err(e)) => return Err(AdapterError::Io(e)),
-            Ok(Ok(outcome)) => outcome,
+        let outcome = match next_line(&mut reader, start, last_activity, limits).await? {
+            Ok(outcome) => outcome,
+            Err(terminal) => {
+                timeout_terminal = Some(terminal);
+                force_kill = true;
+                break;
+            }
         };
 
         match outcome {
@@ -1227,17 +1215,6 @@ fn handle_line_for_run(
         }
         _ => {}
     }
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        return s.to_string();
-    }
-    let mut end = max;
-    while !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}…", &s[..end])
 }
 
 /// ADR-0048 D2: `tool_result` の本文。Claude Code は文字列の `content` と、`[{"type":"text","text":…}]`

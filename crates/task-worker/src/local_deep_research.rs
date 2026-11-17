@@ -12,29 +12,26 @@
 //! （ADR-0006 D3 の規約は保つ）。委譲（`delegate.json`）は扱わない（ADR-0029 D1: 「委譲はしない」）。
 
 use std::path::Path;
-use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use task_core::Task;
-use tokio::io::{AsyncWriteExt, BufReader};
-use tokio::process::Command;
 use tracing::warn;
 
 use crate::adapter::{
     AdapterError, AdapterSetting, AdapterSettings, Configured, EventSink, RunLimits, RunOutcome,
-    Terminal, WorkerAdapter, deadline_terminal, spawn_capture_stderr,
+    Terminal, WorkerAdapter,
 };
 use crate::progress;
 use crate::protocol::{Answer, RunContext, RunRequest};
 use crate::provider::classify_provider_failure;
-use crate::result_report::{ResultFileRead, interpret_result_text, read_result_file};
-use crate::subprocess::{
-    LineOutcome, MAX_LINE_BYTES, finish_run, kill_now, read_line_limited, read_tail,
-    reap_after_terminal,
+use crate::research_runner::{
+    runner_command, single_line_summary, stream_child, truncate_chars, write_runner_files,
 };
+use crate::result_report::{ResultFileRead, interpret_result_text, read_result_file};
+use crate::subprocess::finish_run;
 
 /// run ごとに `runs/<run_id>/ldr_run.py` として書き出す本体（ADR-0029 D1）。
 const RUNNER_SCRIPT: &str = include_str!("local_deep_research_run.py");
@@ -506,120 +503,54 @@ async fn run_ldr(
         "aspects": aspects,
         "structured_synthesis": config.structured_synthesis,
     });
-    let script_path = run_dir.join("ldr_run.py");
-    let input_path = run_dir.join("ldr_input.json");
-    tokio::fs::write(&script_path, RUNNER_SCRIPT).await?;
-    let input_text = serde_json::to_string_pretty(&input)?;
-    tokio::fs::write(&input_path, format!("{input_text}\n")).await?;
+    let (script_path, input_path) = write_runner_files(
+        &run_dir,
+        "ldr_run.py",
+        RUNNER_SCRIPT,
+        "ldr_input.json",
+        &input,
+    )
+    .await?;
+    let env = config.env.iter().cloned().chain(secret_env);
+    let mut command = runner_command(&config.command, &script_path, &input_path, env, req.cwd());
 
-    let mut command = Command::new(&config.command);
-    command
-        .arg(&script_path)
-        .arg(&input_path)
-        .envs(config.env.iter().cloned())
-        .envs(secret_env)
-        .current_dir(req.cwd())
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    #[cfg(unix)]
-    command.process_group(0);
-    // ADR-0095 D2: 本番 DB を読み取り専用にした namespace で起動する（コンテナ非対応の adapter）。
-    let mut command = crate::db_guard::launch(command, None);
-
-    let mut child = crate::subprocess::spawn_after_notice(sink, &mut command)?;
+    let child = crate::subprocess::spawn_after_notice(sink, &mut command)?;
     // ADR-0044 §5 Phase 53 追記（Phase 55）: この run のプロセスグループを覚える（`kill_tree` の入口）。
     let _process_group = crate::process_group::ProcessGroup::register(run_id, child.id());
 
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| AdapterError::Other("worker stdout was not piped".into()))?;
-    let stderr_task = spawn_capture_stderr(&mut child, &stderr_log_path, run_id)?;
-
-    let mut stdout_file = tokio::fs::File::create(&stdout_log_path).await?;
-    let mut reader = BufReader::new(stdout);
-
     let start = Instant::now();
-    let mut last_activity = Instant::now();
-    let mut stdout_buf = String::new();
     let mut task_result: Option<serde_json::Value> = None;
-    let mut timeout_terminal: Option<Terminal> = None;
-
-    loop {
-        // ADR 2026-11-15-research-adapter-deadline D1: 締め切りの規則は `deadline_terminal` が持つ
-        // （wall clock の超過は `BudgetExhausted{WallClock}`、idle の超過は retryable な `Error`）。
-        let wait =
-            match deadline_terminal(start, last_activity, limits.wall_clock, limits.idle_timeout) {
-                Ok(wait) => wait,
-                Err(terminal) => {
-                    timeout_terminal = Some(*terminal);
-                    break;
-                }
-            };
-
-        let outcome = match tokio::time::timeout(
-            wait,
-            read_line_limited(&mut reader, MAX_LINE_BYTES),
-        )
-        .await
-        {
-            Err(_elapsed) => continue, // タイムアウト。ループ先頭の `deadline_terminal` が上限超過を検知する。
-            Ok(Err(e)) => return Err(AdapterError::Io(e)),
-            Ok(Ok(outcome)) => outcome,
-        };
-
-        match outcome {
-            LineOutcome::Eof => break,
-            LineOutcome::TooLong => {
-                // ランナーの出力形式は celeris が定義したものではないので寛容に無視する（paperqa と同じ考え方）。
-                sink.heartbeat();
-                last_activity = Instant::now();
-                warn!("run {run_id}: discarding overlong line from the local-deep-research runner");
-            }
-            LineOutcome::Line(bytes) => {
-                sink.heartbeat();
-                last_activity = Instant::now();
-                stdout_file.write_all(&bytes).await?;
-                stdout_file.write_all(b"\n").await?;
-                let text = String::from_utf8_lossy(&bytes);
-                let trimmed = text.trim();
-                stdout_buf.push_str(&text);
-                stdout_buf.push('\n');
-                if let Some(rest) = trimmed.strip_prefix(PROGRESS_PREFIX) {
-                    // ADR-0029 D1 手順 3: ランナーは検索・要約の進捗を `progress: <text>` の形で出す。
-                    progress::emit_status(
-                        sink,
-                        &truncate_chars(rest.trim(), PROGRESS_LINE_MAX_CHARS),
-                    );
-                } else if let Some(rest) = trimmed.strip_prefix(RESULT_PREFIX) {
-                    match serde_json::from_str::<serde_json::Value>(rest) {
-                        Ok(value) => task_result = Some(value),
-                        Err(e) => warn!("run {run_id}: could not parse CELERIS_RESULT line: {e}"),
-                    }
+    let streamed = stream_child(
+        child,
+        stdout_log_path,
+        stderr_log_path,
+        start,
+        limits,
+        run_id,
+        sink,
+        "local-deep-research runner",
+        |line| {
+            if let Some(rest) = line.strip_prefix(PROGRESS_PREFIX) {
+                // ADR-0029 D1 手順 3: ランナーは検索・要約の進捗を `progress: <text>` の形で出す。
+                progress::emit_status(sink, &truncate_chars(rest.trim(), PROGRESS_LINE_MAX_CHARS));
+            } else if let Some(rest) = line.strip_prefix(RESULT_PREFIX) {
+                match serde_json::from_str::<serde_json::Value>(rest) {
+                    Ok(value) => task_result = Some(value),
+                    Err(e) => warn!("run {run_id}: could not parse CELERIS_RESULT line: {e}"),
                 }
             }
-        }
-    }
+        },
+    )
+    .await?;
+    let exit_status = streamed.exit;
 
-    let exit_status = if timeout_terminal.is_some() {
-        kill_now(&mut child, limits.kill_grace).await?
-    } else {
-        reap_after_terminal(&mut child, limits.kill_grace).await?
-    };
-
-    if let Err(e) = stderr_task.await {
-        warn!("run {run_id}: stderr capture task failed: {e}");
-    }
-    stdout_file.flush().await?;
-
-    if let Some(terminal) = timeout_terminal {
+    if let Some(terminal) = streamed.timeout {
         // タイムアウトは供給側失敗として分類しない（他アダプタと同じ。ADR-0010 D5）。
         return finish_run(&run_dir, terminal, None, exit_status).await;
     }
 
-    let stderr_tail = read_tail(&stderr_log_path, 4096).await;
+    let stdout_buf = streamed.stdout;
+    let stderr_tail = streamed.stderr_tail;
     let classify_text = format!("{stdout_buf}\n{stderr_tail}");
 
     let report_len = tokio::fs::metadata(&report_path)
@@ -832,17 +763,6 @@ async fn terminal_from_summary(req: &RunRequest, start: Instant, summary: &str) 
 
 /// `artifacts/result.json` の `summary`: 改行・連続空白を単一の空白にたたみ（single-line-safe）、
 /// 文字数で上限まで切り詰める（ランナー側でも行うが、二重に安全側へ倒す）。
-fn single_line_summary(text: &str, max_chars: usize) -> String {
-    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    truncate_chars(&collapsed, max_chars)
-}
-
-fn truncate_chars(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        return s.to_string();
-    }
-    s.chars().take(max).collect()
-}
 
 /// `sources.json`（`report_path` の隣。ランナーが書く）から `primary: true` の件数と、そのうち
 /// `cited: true` の件数を数える（ADR-0063 Phase 109b B1/B4: 必読の一次情報が実際に report に

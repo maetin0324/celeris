@@ -26,29 +26,26 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use task_core::Task;
-use tokio::io::{AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command};
 use tracing::warn;
 
 use crate::adapter::{
     AdapterError, AdapterSetting, AdapterSettings, Configured, EventSink, RunLimits, RunOutcome,
-    Terminal, WorkerAdapter, deadline_terminal, spawn_capture_stderr,
+    Terminal, WorkerAdapter,
 };
 use crate::progress;
 use crate::protocol::{Answer, RunContext, RunRequest};
 use crate::provider::classify_provider_failure;
-use crate::result_report::{ResultFileRead, interpret_result_text, read_result_file};
-use crate::subprocess::{
-    LineOutcome, MAX_LINE_BYTES, finish_run, kill_now, read_line_limited, read_tail,
-    reap_after_terminal,
+use crate::research_runner::{
+    runner_command, single_line_summary, stream_child, truncate_chars, write_runner_files,
 };
+use crate::result_report::{ResultFileRead, interpret_result_text, read_result_file};
+use crate::subprocess::finish_run;
 
 mod render;
 pub use render::answer_cites;
@@ -980,107 +977,6 @@ struct AcquireCounts {
     abstracts: u32,
 }
 
-/// 子プロセスの標準出力を 1 行ずつ読み、生存監視（壁時計・無出力）を行う（両方の段で共用）。
-/// 締め切りの規則は `adapter::deadline_terminal`（ADR 2026-11-15-research-adapter-deadline D1）。
-struct StreamedRun {
-    stdout: String,
-    stderr_tail: String,
-    exit: std::process::ExitStatus,
-    /// 上限を超えて強制終了したときの終端（超えていなければ `None`）。
-    timeout: Option<Terminal>,
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn stream_child(
-    mut child: Child,
-    stdout_log_path: PathBuf,
-    stderr_log_path: PathBuf,
-    start: Instant,
-    limits: &RunLimits,
-    run_id: &str,
-    sink: &dyn EventSink,
-    mut on_line: impl FnMut(&str),
-) -> Result<StreamedRun, AdapterError> {
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| AdapterError::Other("worker stdout was not piped".into()))?;
-    let stderr_task = spawn_capture_stderr(&mut child, &stderr_log_path, run_id)?;
-
-    let mut stdout_file = tokio::fs::File::create(&stdout_log_path).await?;
-    let mut reader = BufReader::new(stdout);
-
-    let mut last_activity = Instant::now();
-    let mut stdout_buf = String::new();
-    let mut timeout_terminal: Option<Terminal> = None;
-
-    loop {
-        // 壁時計は run 全体（取得 + pqa）で数える（`start` は `run_paperqa` の始まり）。2 段目に入る時点で
-        // 残りが無ければすぐ打ち切る。
-        let wait =
-            match deadline_terminal(start, last_activity, limits.wall_clock, limits.idle_timeout) {
-                Ok(wait) => wait,
-                Err(terminal) => {
-                    timeout_terminal = Some(*terminal);
-                    break;
-                }
-            };
-
-        let outcome = match tokio::time::timeout(
-            wait,
-            read_line_limited(&mut reader, MAX_LINE_BYTES),
-        )
-        .await
-        {
-            Err(_elapsed) => continue, // タイムアウト。ループ先頭の `deadline_terminal` が上限超過を検知する。
-            Ok(Err(e)) => return Err(AdapterError::Io(e)),
-            Ok(Ok(outcome)) => outcome,
-        };
-
-        match outcome {
-            LineOutcome::Eof => break,
-            LineOutcome::TooLong => {
-                // pqa / ランナーのフォーマットは celeris が定義したものではないので寛容に無視する
-                // （claude_code と同じ考え方）。
-                sink.heartbeat();
-                last_activity = Instant::now();
-                warn!("run {run_id}: discarding overlong line from the paperqa stage");
-            }
-            LineOutcome::Line(bytes) => {
-                sink.heartbeat();
-                last_activity = Instant::now();
-                stdout_file.write_all(&bytes).await?;
-                stdout_file.write_all(b"\n").await?;
-                let text = String::from_utf8_lossy(&bytes);
-                let trimmed = text.trim().to_string();
-                stdout_buf.push_str(&text);
-                stdout_buf.push('\n');
-                if !trimmed.is_empty() {
-                    on_line(&trimmed);
-                }
-            }
-        }
-    }
-
-    let exit = if timeout_terminal.is_some() {
-        kill_now(&mut child, limits.kill_grace).await?
-    } else {
-        reap_after_terminal(&mut child, limits.kill_grace).await?
-    };
-    if let Err(e) = stderr_task.await {
-        warn!("run {run_id}: stderr capture task failed: {e}");
-    }
-    stdout_file.flush().await?;
-    let stderr_tail = read_tail(&stderr_log_path, 4096).await;
-
-    Ok(StreamedRun {
-        stdout: stdout_buf,
-        stderr_tail,
-        exit,
-        timeout: timeout_terminal,
-    })
-}
-
 /// 取得の段（ADR-0035 D1 / D2 手順 1）。**失敗しても run は止めない**（`progress` に残して `pqa` に進み、
 /// 判定は証拠ゲートに任せる）。壁時計・無出力の上限に当たったときだけ終端（と kill した取得ランナーの
 /// exit status）を返す。
@@ -1126,8 +1022,6 @@ async fn run_acquire(
         ),
     }
 
-    let script_path = run_dir.join("paperqa_acquire.py");
-    let input_path = run_dir.join("acquire_input.json");
     // ADR-0063 D4（Phase 109）: `acquire_input.json` はワーカー/レビュアーが読める run ディレクトリに
     // 平文で残る（権限 664）。API キーの実際の値はここには書かず、子プロセスの環境変数（`.envs(config.env)`
     // で既に渡っている）だけで受け渡す。JSON にはプレースホルダだけを書く（`paperqa_acquire.py` の
@@ -1169,25 +1063,23 @@ async fn run_acquire(
         "abstract_fallback": config.acquire.abstract_fallback,
         "seed_urls": seed_urls_json,
     });
-    tokio::fs::write(&script_path, ACQUIRE_SCRIPT).await?;
-    let input_text = serde_json::to_string_pretty(&input)?;
-    tokio::fs::write(&input_path, format!("{input_text}\n")).await?;
+    let (script_path, input_path) = write_runner_files(
+        run_dir,
+        "paperqa_acquire.py",
+        ACQUIRE_SCRIPT,
+        "acquire_input.json",
+        &input,
+    )
+    .await?;
 
     let python = acquire_python(config);
-    let mut command = Command::new(&python);
-    command
-        .arg(&script_path)
-        .arg(&input_path)
-        .envs(config.env.iter().cloned())
-        .current_dir(req.cwd())
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    #[cfg(unix)]
-    command.process_group(0);
-    // ADR-0095 D2: 本番 DB を読み取り専用にした namespace で起動する（コンテナ非対応の adapter）。
-    let mut command = crate::db_guard::launch(command, None);
+    let mut command = runner_command(
+        &python,
+        &script_path,
+        &input_path,
+        config.env.iter().cloned(),
+        req.cwd(),
+    );
 
     let child = match command.spawn() {
         // ADR-0044 §5 Phase 53 追記（Phase 55）: 取得ランナーも同じ run の一族（`pqa ask` の前に
@@ -1222,6 +1114,7 @@ async fn run_acquire(
         limits,
         run_id,
         sink,
+        "paperqa stage",
         |line| {
             if let Some(rest) = line.strip_prefix(PROGRESS_PREFIX) {
                 progress::emit_status(
@@ -1403,8 +1296,6 @@ async fn run_paperqa(
     let stdout_log_path = run_dir.join("stdout.log");
     let stderr_log_path = run_dir.join("stderr.log");
 
-    let ask_script_path = run_dir.join("paperqa_ask.py");
-    let ask_input_path = run_dir.join("ask_input.json");
     let ask_output_path = run_dir.join("ask_output.json");
     let (settings_path, settings_dir, settings_name) = config
         .settings
@@ -1459,25 +1350,23 @@ async fn run_paperqa(
         "fallback_question": question,
         "output_path": ask_output_path.to_string_lossy(),
     });
-    tokio::fs::write(&ask_script_path, ASK_SCRIPT).await?;
-    let ask_input_text = serde_json::to_string_pretty(&ask_input)?;
-    tokio::fs::write(&ask_input_path, format!("{ask_input_text}\n")).await?;
+    let (ask_script_path, ask_input_path) = write_runner_files(
+        &run_dir,
+        "paperqa_ask.py",
+        ASK_SCRIPT,
+        "ask_input.json",
+        &ask_input,
+    )
+    .await?;
 
     let ask_command = resolve_ask_command(config, run_id);
-    let mut command = Command::new(&ask_command);
-    command
-        .arg(&ask_script_path)
-        .arg(&ask_input_path)
-        .envs(config.env.iter().cloned())
-        .current_dir(req.cwd())
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    #[cfg(unix)]
-    command.process_group(0);
-    // ADR-0095 D2: 本番 DB を読み取り専用にした namespace で起動する（コンテナ非対応の adapter）。
-    let mut command = crate::db_guard::launch(command, None);
+    let mut command = runner_command(
+        &ask_command,
+        &ask_script_path,
+        &ask_input_path,
+        config.env.iter().cloned(),
+        req.cwd(),
+    );
 
     let child = crate::subprocess::spawn_after_notice(sink, &mut command)?;
     // ADR-0044 §5 Phase 53 追記（Phase 55）: この run のプロセスグループを覚える（`kill_tree` の入口）。
@@ -1491,6 +1380,7 @@ async fn run_paperqa(
         limits,
         run_id,
         sink,
+        "paperqa stage",
         |line| {
             // `paperqa_ask.py` は `progress: <text>` を出す（ADR-0035 D5 の acquire ランナーと同じ流儀）。
             progress::emit_status(sink, &truncate_chars(line, PROGRESS_LINE_MAX_CHARS));
@@ -1924,17 +1814,6 @@ async fn write_sources_json(path: &Path, marked: &[(Candidate, bool)], run_id: &
 
 /// `artifacts/result.json` の `summary`: 改行・連続空白を単一の空白にたたみ（single-line-safe）、
 /// 文字数で上限まで切り詰める。
-fn single_line_summary(text: &str, max_chars: usize) -> String {
-    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    truncate_chars(&collapsed, max_chars)
-}
-
-fn truncate_chars(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        return s.to_string();
-    }
-    s.chars().take(max).collect()
-}
 
 #[cfg(test)]
 mod tests;

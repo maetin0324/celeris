@@ -20,6 +20,18 @@ pub(crate) fn truncate_chars(s: &str, max: usize) -> String {
     format!("{head}…")
 }
 
+/// byte 数で切る（UTF-8 の境界まで戻す。切ったら末尾に `…`）。harness の stream の行の要約に使う。
+pub(crate) fn truncate_bytes(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        return s.to_string();
+    }
+    let mut end = max;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &s[..end])
+}
+
 /// アダプタの節目（`kind = status`）。
 pub(crate) fn status() -> ProgressFields {
     ProgressFields::of(ProgressKind::Status)

@@ -51,6 +51,7 @@ use crate::cos_chat::capabilities::{
 };
 use crate::delegate_file::forward_delegate_file;
 use crate::progress;
+use crate::progress::truncate_bytes as truncate;
 use crate::protocol::{ProviderFailure, RunRequest};
 use crate::provider::classify_provider_failure;
 use crate::result_report::{ResultFileRead, interpret_result_text, read_result_file};
@@ -161,17 +162,6 @@ impl WorkerAdapter for AcpAdapter {
             },
         )
     }
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        return s.to_string();
-    }
-    let mut end = max;
-    while !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}…", &s[..end])
 }
 
 // --- JSON-RPC 2.0 の組み立て（ADR-0026 の実装メモ参照） ---

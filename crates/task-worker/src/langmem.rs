@@ -19,28 +19,25 @@
 //! 読み書きしない）。出力は `artifacts/knowledge-candidates.json` = `{candidates: [...]}`
 //! （`task_core::knowledge::Candidate` の配列。検査・適用は `task_ops::knowledge::apply_candidates`）。
 
-use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncWriteExt, BufReader};
-use tokio::process::Command;
 use tracing::warn;
 
 use crate::adapter::{
     AdapterError, AdapterSetting, AdapterSettings, Configured, EventSink, RunLimits, RunOutcome,
-    Terminal, WorkerAdapter, deadline_terminal, spawn_capture_stderr,
+    Terminal, WorkerAdapter,
 };
 use crate::progress;
 use crate::protocol::RunRequest;
 use crate::provider::classify_provider_failure;
-use crate::result_report::{ResultFileRead, interpret_result_text, read_result_file};
-use crate::subprocess::{
-    LineOutcome, MAX_LINE_BYTES, finish_run, kill_now, read_line_limited, read_tail,
-    reap_after_terminal,
+use crate::research_runner::{
+    runner_command, single_line_summary, stream_child, truncate_chars, write_runner_files,
 };
+use crate::result_report::{ResultFileRead, interpret_result_text, read_result_file};
+use crate::subprocess::finish_run;
 
 /// run ごとに `runs/<run_id>/langmem_run.py` として書き出すランナー（ADR-0047 D4）。
 const RUNNER_SCRIPT: &str = include_str!("langmem_run.py");
@@ -252,44 +249,23 @@ async fn run_langmem(
         },
         "candidates_path": candidates_path.to_string_lossy(),
     });
-    let script_path = run_dir.join("langmem_run.py");
-    let input_path = run_dir.join("langmem_input.json");
-    tokio::fs::write(&script_path, RUNNER_SCRIPT).await?;
-    let input_text = serde_json::to_string_pretty(&input)?;
-    tokio::fs::write(&input_path, format!("{input_text}\n")).await?;
+    let (script_path, input_path) = write_runner_files(
+        &run_dir,
+        "langmem_run.py",
+        RUNNER_SCRIPT,
+        "langmem_input.json",
+        &input,
+    )
+    .await?;
+    // ADR-0139 D4: 鍵は env にも入れる。provider 行・`[adapters.langmem].env` の古い値より後に
+    // 置くので、それらが勝たない。
+    let env = config.env.iter().cloned().chain(api_key_env(config));
+    let mut command = runner_command(&config.command, &script_path, &input_path, env, req.cwd());
 
-    let mut command = Command::new(&config.command);
-    command
-        .arg(&script_path)
-        .arg(&input_path)
-        .envs(config.env.iter().cloned())
-        // ADR-0139 D4: 鍵は env にも入れる。provider 行・`[adapters.langmem].env` の古い値より後に
-        // 置くので、それらが勝たない。
-        .envs(api_key_env(config))
-        .current_dir(req.cwd())
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    #[cfg(unix)]
-    command.process_group(0);
-    // ADR-0095 D2: 本番 DB を読み取り専用にした namespace で起動する（コンテナ非対応の adapter）。
-    let mut command = crate::db_guard::launch(command, None);
-
-    let mut child = crate::subprocess::spawn_after_notice(sink, &mut command)?;
+    let child = crate::subprocess::spawn_after_notice(sink, &mut command)?;
     // ADR-0044 §5 Phase 53 追記（Phase 55）: この run のプロセスグループを覚える（`kill_tree` の入口）。
     let _process_group = crate::process_group::ProcessGroup::register(run_id, child.id());
 
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| AdapterError::Other("worker stdout was not piped".into()))?;
-    let stderr_task = spawn_capture_stderr(&mut child, &stderr_log_path, run_id)?;
-
-    let mut stdout_file = tokio::fs::File::create(&stdout_log_path).await?;
-    let mut reader = BufReader::new(stdout);
-
-    let start = Instant::now();
     // ADR-0047 D4: `[adapters.langmem].idle_timeout_secs` はハーネスの予算（`limits.idle_timeout`）を
     // 上回らない範囲でだけ効く（config が長い秒数を書いても予算を突破できない）。締め切りの規則は
     // `deadline_terminal` が持ち、この値を `idle_timeout` として受ける（ADR 2026-11-15-research-adapter-deadline D1）。
@@ -298,79 +274,42 @@ async fn run_langmem(
         .map(Duration::from_secs)
         .map(|d| d.min(limits.idle_timeout))
         .unwrap_or(limits.idle_timeout);
-    let mut last_activity = Instant::now();
-    let mut stdout_buf = String::new();
+    let stream_limits = RunLimits {
+        idle_timeout,
+        ..*limits
+    };
+    let start = Instant::now();
     let mut task_result: Option<serde_json::Value> = None;
-    let mut timeout_terminal: Option<Terminal> = None;
-
-    loop {
-        let wait = match deadline_terminal(start, last_activity, limits.wall_clock, idle_timeout) {
-            Ok(wait) => wait,
-            Err(terminal) => {
-                timeout_terminal = Some(*terminal);
-                break;
-            }
-        };
-
-        let outcome = match tokio::time::timeout(
-            wait,
-            read_line_limited(&mut reader, MAX_LINE_BYTES),
-        )
-        .await
-        {
-            Err(_elapsed) => continue, // タイムアウト。ループ先頭の `deadline_terminal` が上限超過を検知する。
-            Ok(Err(e)) => return Err(AdapterError::Io(e)),
-            Ok(Ok(outcome)) => outcome,
-        };
-
-        match outcome {
-            LineOutcome::Eof => break,
-            LineOutcome::TooLong => {
-                sink.heartbeat();
-                last_activity = Instant::now();
-                warn!("run {run_id}: discarding overlong line from the langmem runner");
-            }
-            LineOutcome::Line(bytes) => {
-                sink.heartbeat();
-                last_activity = Instant::now();
-                stdout_file.write_all(&bytes).await?;
-                stdout_file.write_all(b"\n").await?;
-                let text = String::from_utf8_lossy(&bytes);
-                let trimmed = text.trim();
-                stdout_buf.push_str(&text);
-                stdout_buf.push('\n');
-                if let Some(rest) = trimmed.strip_prefix(PROGRESS_PREFIX) {
-                    progress::emit_status(
-                        sink,
-                        &truncate_chars(rest.trim(), PROGRESS_LINE_MAX_CHARS),
-                    );
-                } else if let Some(rest) = trimmed.strip_prefix(RESULT_PREFIX) {
-                    match serde_json::from_str::<serde_json::Value>(rest) {
-                        Ok(value) => task_result = Some(value),
-                        Err(e) => warn!("run {run_id}: could not parse CELERIS_RESULT line: {e}"),
-                    }
+    let streamed = stream_child(
+        child,
+        stdout_log_path,
+        stderr_log_path,
+        start,
+        &stream_limits,
+        run_id,
+        sink,
+        "langmem runner",
+        |line| {
+            if let Some(rest) = line.strip_prefix(PROGRESS_PREFIX) {
+                progress::emit_status(sink, &truncate_chars(rest.trim(), PROGRESS_LINE_MAX_CHARS));
+            } else if let Some(rest) = line.strip_prefix(RESULT_PREFIX) {
+                match serde_json::from_str::<serde_json::Value>(rest) {
+                    Ok(value) => task_result = Some(value),
+                    Err(e) => warn!("run {run_id}: could not parse CELERIS_RESULT line: {e}"),
                 }
             }
-        }
-    }
+        },
+    )
+    .await?;
+    let exit_status = streamed.exit;
 
-    let exit_status = if timeout_terminal.is_some() {
-        kill_now(&mut child, limits.kill_grace).await?
-    } else {
-        reap_after_terminal(&mut child, limits.kill_grace).await?
-    };
-
-    if let Err(e) = stderr_task.await {
-        warn!("run {run_id}: stderr capture task failed: {e}");
-    }
-    stdout_file.flush().await?;
-
-    if let Some(terminal) = timeout_terminal {
+    if let Some(terminal) = streamed.timeout {
         // タイムアウトは供給側失敗として分類しない（他アダプタと同じ。ADR-0010 D5）。
         return finish_run(&run_dir, terminal, None, exit_status).await;
     }
 
-    let stderr_tail = read_tail(&stderr_log_path, 4096).await;
+    let stdout_buf = streamed.stdout;
+    let stderr_tail = streamed.stderr_tail;
     let classify_text = format!("{stdout_buf}\n{stderr_tail}");
 
     // ADR-0047 D4: `langmem` が import できないのは venv のセットアップが要る設定の誤りで、
@@ -484,18 +423,6 @@ async fn terminal_from_summary(req: &RunRequest, start: Instant, summary: &str) 
         },
         ResultFileRead::Text(text) => interpret_result_text(&text, &artifacts_rel, None),
     }
-}
-
-fn single_line_summary(text: &str, max_chars: usize) -> String {
-    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    truncate_chars(&collapsed, max_chars)
-}
-
-fn truncate_chars(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        return s.to_string();
-    }
-    s.chars().take(max).collect()
 }
 
 #[cfg(test)]

@@ -20,7 +20,7 @@
 //! （`task_core::knowledge::Candidate` の配列。検査・適用は `task_ops::knowledge::apply_candidates`）。
 
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -34,9 +34,8 @@ use crate::protocol::RunRequest;
 use crate::provider::classify_provider_failure;
 use crate::research_runner::{
     SUMMARY_MAX_CHARS, progress_or_result, runner_command, single_line_summary, stream_child,
-    write_runner_files,
+    terminal_from_summary, write_runner_files,
 };
-use crate::result_report::{ResultFileRead, interpret_result_text, read_result_file};
 use crate::subprocess::finish_run;
 
 /// run ごとに `runs/<run_id>/langmem_run.py` として書き出すランナー（ADR-0047 D4）。
@@ -375,37 +374,13 @@ async fn run_langmem(
             Ok(artifact) => sink.artifact(&artifact),
             Err(e) => warn!("run {run_id}: could not register knowledge-candidates.json: {e}"),
         }
-        (terminal_from_summary(req, start, &summary).await, None)
+        (
+            terminal_from_summary("langmem", req, start, &summary).await,
+            None,
+        )
     };
 
     finish_run(&run_dir, terminal, provider_failure, exit_status).await
-}
-
-/// ADR 2026-11-15-research-adapter-deadline D4: ランナーの要約から `artifacts/result.json` を書き、結果契約の
-/// 正本（`result_report::read_result_file`・`interpret_result_text`。ADR 2026-11-10-adapter-result-contract D1）で
-/// 読み直して終端を作る。期待の置き場に file があるので誤配置の回収は探索しない。書けなければ
-/// `read_result_file` を呼ばずに `Error{retryable: true}`（reviewer が読む file の無い run を `Done` にしない）。
-/// `start` は監視 loop の開始（`read_result_file` の `run_started` に直す。aider と同じ）。
-async fn terminal_from_summary(req: &RunRequest, start: Instant, summary: &str) -> Terminal {
-    let artifacts_rel = req.artifacts_rel();
-    let body = serde_json::json!({ "summary": summary, "evidence": [] });
-    let written = tokio::fs::write(req.artifact_path("result.json"), format!("{body:#}\n")).await;
-    if let Err(e) = written {
-        return Terminal::Error {
-            message: format!("langmem adapter could not write {artifacts_rel}/result.json: {e}"),
-            retryable: true,
-            usage: None,
-        };
-    }
-    match read_result_file(req, SystemTime::now() - start.elapsed()).await {
-        ResultFileRead::Misplaced(error) => *error,
-        ResultFileRead::Missing => Terminal::Error {
-            message: format!("langmem adapter could not read back {artifacts_rel}/result.json"),
-            retryable: true,
-            usage: None,
-        },
-        ResultFileRead::Text(text) => interpret_result_text(&text, &artifacts_rel, None),
-    }
 }
 
 #[cfg(test)]

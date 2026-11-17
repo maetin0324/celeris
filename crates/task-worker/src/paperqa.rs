@@ -27,7 +27,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Instant, SystemTime};
+use std::time::Instant;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -43,9 +43,8 @@ use crate::protocol::{Answer, RunContext, RunRequest};
 use crate::provider::classify_provider_failure;
 use crate::research_runner::{
     PROGRESS_LINE_MAX_CHARS, PROGRESS_PREFIX, SUMMARY_MAX_CHARS, runner_command,
-    single_line_summary, stream_child, truncate_chars, write_runner_files,
+    single_line_summary, stream_child, terminal_from_summary, truncate_chars, write_runner_files,
 };
-use crate::result_report::{ResultFileRead, interpret_result_text, read_result_file};
 use crate::subprocess::finish_run;
 
 mod render;
@@ -1639,7 +1638,10 @@ async fn run_paperqa(
                 .map(|a| a.answer.as_str())
                 .unwrap_or("");
             let summary = single_line_summary(summary_source, SUMMARY_MAX_CHARS);
-            (terminal_from_summary(req, start, &summary).await, None)
+            (
+                terminal_from_summary("paperqa", req, start, &summary).await,
+                None,
+            )
         }
     } else {
         let pf = classify_provider_failure(&classify_text);
@@ -1654,33 +1656,6 @@ async fn run_paperqa(
     };
 
     finish_run(&run_dir, terminal, provider_failure, exit_status).await
-}
-
-/// ADR 2026-11-15-research-adapter-deadline D4: 回答の要約から `artifacts/result.json` を書き、結果契約の
-/// 正本（`result_report::read_result_file`・`interpret_result_text`。ADR 2026-11-10-adapter-result-contract D1）で
-/// 読み直して終端を作る。期待の置き場に file があるので誤配置の回収は探索しない。書けなければ
-/// `read_result_file` を呼ばずに `Error{retryable: true}`（reviewer が読む file の無い run を `Done` にしない）。
-/// `start` は `run_paperqa` の始まり（`read_result_file` の `run_started` に直す）。
-async fn terminal_from_summary(req: &RunRequest, start: Instant, summary: &str) -> Terminal {
-    let artifacts_rel = req.artifacts_rel();
-    let body = serde_json::json!({ "summary": summary, "evidence": [] });
-    let written = tokio::fs::write(req.artifact_path("result.json"), format!("{body:#}\n")).await;
-    if let Err(e) = written {
-        return Terminal::Error {
-            message: format!("paperqa adapter could not write {artifacts_rel}/result.json: {e}"),
-            retryable: true,
-            usage: None,
-        };
-    }
-    match read_result_file(req, SystemTime::now() - start.elapsed()).await {
-        ResultFileRead::Misplaced(error) => *error,
-        ResultFileRead::Missing => Terminal::Error {
-            message: format!("paperqa adapter could not read back {artifacts_rel}/result.json"),
-            retryable: true,
-            usage: None,
-        },
-        ResultFileRead::Text(text) => interpret_result_text(&text, &artifacts_rel, None),
-    }
 }
 
 /// ADR-0035 D3 / ADR-0063 D1: 証拠の内訳を集計し、閾値未達をどう扱うか決める。
@@ -1806,9 +1781,6 @@ async fn write_sources_json(path: &Path, marked: &[(Candidate, bool)], run_id: &
         Err(e) => warn!("run {run_id}: could not serialize artifacts/sources.json: {e}"),
     }
 }
-
-/// `artifacts/result.json` の `summary`: 改行・連続空白を単一の空白にたたみ（single-line-safe）、
-/// 文字数で上限まで切り詰める。
 
 #[cfg(test)]
 mod tests;

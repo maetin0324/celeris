@@ -26,8 +26,9 @@ tasks: [01M7J3NKVC2KQ4NGJ4GESHJV0B]
 - `messages` の行は残す。`Delivery.notification` の冪等の印（固定の `MessageId`）と、`GET /org/{id}/messages` の読み口のため。
 - 部署に戻す通知（`needs_user` でないもの）は部署の node の `messages` のまま（node の会話の材料で、Console の撤去と関係しない）。
 
-### D3. deprecated API を消す
-- `GET /api/v1/inbox`・`POST /api/v1/reports/read`・`POST /api/v1/reports/notified` を消す。CoS の操作表と skill の記述も同じ変更で消す。
+### D3. 旧い報告の API を消す
+- `POST /api/v1/reports/read`・`POST /api/v1/reports/notified` と、それだけが進めていた `DaemonSnapshot.reports` の `last_notified_at`・`notify_now` を消す。CoS の操作表と skill の記述も同じ変更で消す。
+- `GET /api/v1/inbox` も廃止を認められたが、この試行では残した（試験 14 か所が旧い形の受信箱を読んでおり、`GET /inbox/items` への書き換えが済んでいない）。撤去の条件は試験の書き換えで、責任者は task 01M7J3NKVC2KQ4NGJ4GESHJV0B の次の試行（終わらなければ親 01M7J3N68JRNTP5Q4G934QWF36 の closeout が人に後続 task を提案する）。
 
 ### D4. aider adapter を消す
 - task-worker の `aider.rs`、celeris の `[adapters.aider]` の欄と例の設定を消す。`[adapters.aider]` は読み込みエラーにする（`deny_unknown_fields`）。

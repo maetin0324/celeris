@@ -87,7 +87,6 @@ Live View の grant/check/read は owner attestation を入力するため除外
 | POST | `/browser/trusted-devices/verify` | `browser_credential_attestation` | 人の決定 secrets=exclude。credential・封緘 state・receipt・owner attestation／信頼端末を扱う系列。値を含まない失効・削除も除外。 |
 | DELETE | `/browser/trusted-devices/{id}` | `browser_credential_attestation` | 人の決定 secrets=exclude。credential・封緘 state・receipt・owner attestation／信頼端末を扱う系列。値を含まない失効・削除も除外。 |
 | POST | `/chat/threads/{t}/relays` | `human_instruction_relay` | 人の指示の取り次ぎは認証済み外部主体だけが行う。CoS は指示を作れない。 |
-| POST | `/console/instruct` | `console_instruction_chain` | 人の決定 daemon-wide=no-console。別の指示経路へ入り監査の鎖が二重になる。 |
 | POST | `/cos/inbox/{i}/resolve` | `recursive_cos` | 既存の再帰禁止。操作 envelope 内から CoS 制御 API を呼ばない。override は人の取消・差し戻し専用。 |
 | POST | `/cos/operations` | `recursive_cos` | 既存の再帰禁止。操作 envelope 内から CoS 制御 API を呼ばない。override は人の取消・差し戻し専用。 |
 | POST | `/cos/operations/{o}/override` | `recursive_cos` | 既存の再帰禁止。操作 envelope 内から CoS 制御 API を呼ばない。override は人の取消・差し戻し専用。 |
@@ -225,8 +224,6 @@ R の操作では領域 write は不要だが operation・event・card は同一
 | POST | `/projects/{id}/authority/proposals/{p}/dismiss` | X: `human_only` | `handlers/authority.rs` | 共通 |
 | POST | `/projects/{id}/authority/audit/{a}/outcome` | X: `human_only` | `handlers/authority.rs` | 共通 |
 | POST | `/projects/{id}/unarchive` | A | `lifecycle.rs` | 共通 |
-| POST | `/reports/notified` | A | `reports.rs` | 共通 |
-| POST | `/reports/read` | A | `reports.rs` | 共通 |
 | POST | `/standing-rules` | A | `approvals.rs` | 共通 |
 | DELETE | `/standing-rules/{id}` | A | `approvals.rs` | 共通 |
 
@@ -314,7 +311,6 @@ R の操作では領域 write は不要だが operation・event・card は同一
 | POST | `/chat/threads/{t}/relays` | X: `human_instruction_relay` | `chat/mod.rs` | router のみ |
 | POST | `/chat/threads/{t}/forwards` | A | `chat/mod.rs` | router のみ |
 | POST | `/chat/threads/{t}/proposals` | A | `chat/mod.rs` | router のみ |
-| POST | `/console/instruct` | X: `console_instruction_chain` | `console.rs` | 共通 |
 | POST | `/cos/review-report` | A | `cos/review.rs` | 共通 |
 | POST | `/cos/inbox/{i}/resolve` | X: `recursive_cos` | `cos/inbox.rs` | 共通 |
 | POST | `/cos/operations` | X: `recursive_cos` | `cos/operations.rs` | 共通 |
@@ -543,3 +539,7 @@ ADR 2026-10-28-cos-integrate-task の `POST /tasks/{id}/integration-requests/{re
 
 ## 付記 2026-11-04（A4、ADR 2026-11-04-project-controller §A4）
 - surface に `POST /chat/threads/{t}/proposals`（`chat.proposal_forward`）を ALLOWED で足した。統括 CoS が自分の提案を案件 thread へ `role=system` の入力として渡す経路で、人の発言の取り次ぎ（`chat.relay_forward`）とは別。直接の呼び出しは 403 `chat_proposal_cos_only`。
+
+## 付記: 撤去した経路（2026-11-17）
+
+- `POST /console/instruct`（除外 `console_instruction_chain`）と `POST /reports/read`・`POST /reports/notified`（`report.read`・`report.notified`）は [ADR 2026-11-17-console-deprecated-api-aider-removal](2026-11-17-console-deprecated-api-aider-removal.md) で経路ごと消したので、上の表から行を消した。

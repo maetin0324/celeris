@@ -135,8 +135,6 @@ test.describe("P5-02 全経路 security gate", () => {
       "/api/health",
       "/files/tasks/T1/artifacts/0",
       "/events",
-      "/console/stream",
-      "/api/console/stream",
     ];
   }
 
@@ -170,7 +168,7 @@ test.describe("P5-02 全経路 security gate", () => {
       ).toBe(403);
 
       const protectedRoute =
-        route.startsWith("/api/") || route.startsWith("/files/") || route === "/events" || route === "/console/stream";
+        route.startsWith("/api/") || route.startsWith("/files/") || route === "/events";
       const anonymous = await fetch(`${gateBase}${route}`, { redirect: "manual" });
       expect(anonymous.status, `${route} session`).toBe(protectedRoute ? 401 : route === "/no-such-page" ? 404 : 200);
       expect(anonymous.headers.get("x-content-type-options"), route).toBe("nosniff");
@@ -187,7 +185,7 @@ test.describe("P5-02 全経路 security gate", () => {
     }
 
     // 認証後の中継応答も token を browser へ渡さない。stream は本文を読まず切断する。
-    for (const route of ["/api/health", "/files/tasks/T1/artifacts/0", "/api/console/stream"]) {
+    for (const route of ["/api/health", "/files/tasks/T1/artifacts/0"]) {
       const response = await fetch(`${gateBase}${route}`, { headers: { Cookie: cookie } });
       expect(response.headers.get("x-content-type-options"), route).toBe("nosniff");
       expect(response.headers.get("referrer-policy"), route).toBe("no-referrer");
@@ -195,7 +193,7 @@ test.describe("P5-02 全経路 security gate", () => {
       expect(JSON.stringify([...response.headers]), route).not.toContain(FIXTURE_TOKEN);
       expect(await response.text(), route).not.toContain(FIXTURE_TOKEN);
     }
-    for (const route of ["/events", "/console/stream"]) {
+    for (const route of ["/events"]) {
       const controller = new AbortController();
       const response = await fetch(`${gateBase}${route}`, { headers: { Cookie: cookie }, signal: controller.signal });
       expect(response.status, route).toBe(200);

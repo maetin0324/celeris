@@ -185,29 +185,6 @@ fn the_compaction_objective_contains_every_child_report() {
     assert!(!text.contains("artifacts/result.json"), "{text}");
 }
 
-#[test]
-fn notification_waits_two_hours_unless_there_is_bad_news() {
-    let now = OffsetDateTime::now_utc();
-    // 2 時間未満で未読 → 通知しない。
-    assert!(!notify_now(
-        3,
-        0,
-        Some(now - time::Duration::minutes(30)),
-        now
-    ));
-    // 2 時間以上で未読 → 通知する。
-    assert!(notify_now(3, 0, Some(now - time::Duration::hours(3)), now));
-    // 悪い知らせは即時。
-    assert!(notify_now(
-        1,
-        1,
-        Some(now - time::Duration::minutes(1)),
-        now
-    ));
-    // 未読が無ければ通知しない。
-    assert!(!notify_now(0, 0, None, now));
-}
-
 // ---- `reports` 表（SQLite）----
 
 fn store_with_org() -> SqliteStore {

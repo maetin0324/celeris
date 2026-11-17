@@ -1,7 +1,6 @@
 //! Adapter-specific proxy header transport. The reference is an opaque, daemon-issued value.
 //! Only the transport status remains in run evidence; never log the reference.
 
-use std::io::Write;
 use std::path::Path;
 
 use serde_json::{Value, json};
@@ -135,34 +134,6 @@ pub(crate) fn configure_acp(
     true
 }
 
-/// Aider passes `extra_params.extra_headers` to LiteLLM. The run-local model settings
-/// contain only the opaque reference and no credentials or prompt text.
-pub(crate) fn configure_aider(
-    command: &mut Command,
-    env: &[(String, String)],
-    _model: Option<&str>,
-    extra_args: &[String],
-    run_dir: &Path,
-    req: &RunRequest,
-) -> Option<tempfile::NamedTempFile> {
-    let reference = valid_ref(req)?;
-    if (env_value(env, "OPENAI_API_BASE").is_none() && env_value(env, "OPENAI_BASE_URL").is_none())
-        || extra_args
-            .iter()
-            .any(|arg| arg == "--model-settings-file" || arg.starts_with("--model-settings-file="))
-    {
-        return None;
-    }
-    let body = format!(
-        "- name: aider/extra_params\n  extra_params:\n    extra_headers:\n      {HEADER}: {}\n",
-        json!(reference)
-    );
-    let mut file = tempfile::NamedTempFile::new_in(run_dir).ok()?;
-    file.write_all(body.as_bytes()).ok()?;
-    command.arg("--model-settings-file").arg(file.path());
-    Some(file)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,55 +185,5 @@ mod tests {
             Some("opencode-go/grok-4.6"),
             &request(true),
         ));
-    }
-
-    #[test]
-    fn aider_transport_requires_routing_ref_and_api_base() {
-        let dir = tempfile::tempdir().unwrap();
-        let env = vec![("OPENAI_API_BASE".into(), "http://127.0.0.1:18100/v1".into())];
-        let mut command = Command::new("aider");
-        let settings = configure_aider(
-            &mut command,
-            &env,
-            Some("opencode-go/grok-4.6"),
-            &[],
-            dir.path(),
-            &request(true),
-        );
-        let contents = std::fs::read_to_string(settings.unwrap().path()).unwrap();
-        assert!(contents.contains(HEADER));
-        assert!(
-            configure_aider(
-                &mut Command::new("aider"),
-                &env,
-                Some("qwen/qwen3.8-27b"),
-                &[],
-                dir.path(),
-                &request(true),
-            )
-            .is_some()
-        );
-        assert!(
-            configure_aider(
-                &mut Command::new("aider"),
-                &[],
-                Some("opencode-go/grok-4.6"),
-                &[],
-                dir.path(),
-                &request(true),
-            )
-            .is_none()
-        );
-        assert!(
-            configure_aider(
-                &mut Command::new("aider"),
-                &env,
-                Some("opencode-go/grok-4.6"),
-                &[],
-                dir.path(),
-                &request(false),
-            )
-            .is_none()
-        );
     }
 }

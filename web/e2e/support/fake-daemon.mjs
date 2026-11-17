@@ -86,7 +86,7 @@ export function validateFixture(value, original, location = "$", errors = []) {
 }
 
 export const defaultFixtures = Object.fromEntries(
-  ["health", "inbox", "daemon", "console"].flatMap((key) => {
+  ["health", "inbox", "daemon"].flatMap((key) => {
     const value = fixtureFor(schema.properties[key]);
     const errors = validateFixture(value, schema.properties[key]);
     if (errors.length) throw new Error(`${key}: ${errors.join(", ")}`);
@@ -830,49 +830,6 @@ export function richFixtures() {
           conversation: false,
         },
       ],
-    },
-    "/api/v1/console": {
-      items: [
-        {
-          kind: "human",
-          at: richNow,
-          cursor: "c1",
-          message_id: "M1",
-          node_id: "cos",
-          text: "画面群の長文・多数行・長い path を確認してください。",
-        },
-        {
-          kind: "reply",
-          at: richNow,
-          cursor: "c2",
-          message_id: "M2",
-          node_id: "cos",
-          text: "確認を始めます。",
-          state: "done",
-          steps: [
-            { kind: "tool_use", tool: "read_file", text: `Read ${richPath}` },
-            { kind: "tool_result", tool: "read_file", text: "12 行を読みました" },
-          ],
-        },
-        {
-          kind: "progress",
-          at: richNow,
-          cursor: "c3",
-          title: "画面を検証する",
-          tier: "standard",
-          progress: {
-            task_id: "T1",
-            run_id: "R1",
-            count: 8,
-            tool_count: 2,
-            started_at: richNow,
-            updated_at: richNow,
-            first: [progressLine(1, "tool_use", `Read ${richPath}`, "read_file")],
-            last: [progressLine(8, "tool_result", "表示を確認しました", "read_file")],
-          },
-        },
-      ],
-      next_cursor: null,
     },
   };
 }
@@ -2632,9 +2589,7 @@ export function createFakeDaemon({
   files = { ...(profile === "rich" ? richFiles() : {}), ...files };
   const requests = [];
   const clients = new Set();
-  const consoleClients = new Set();
   let delay = delayMs;
-  let postDelay = 0;
   let streamStatus = initialStreamStatus;
   let timer;
   let faultRule = fault;
@@ -2654,7 +2609,7 @@ export function createFakeDaemon({
     answers: [],
   };
   const chat = createChatFixture();
-  const streamPaths = new Set(["/events", "/api/v1/events", "/api/v1/stream", "/api/v1/console/stream"]);
+  const streamPaths = new Set(["/events", "/api/v1/events", "/api/v1/stream"]);
   const matches = (rule, pathname) =>
     rule !== null &&
     !streamPaths.has(pathname) &&
@@ -2854,31 +2809,6 @@ export function createFakeDaemon({
       });
       res.write(": connected\n\n");
       clients.add(res);
-      return;
-    }
-    if (pathname === "/api/v1/console/stream") {
-      record.query = new URL(req.url ?? "/", "http://x").search;
-      res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
-      const since = new URL(req.url ?? "/", "http://x").searchParams.get("since");
-      res.write(
-        `event: hello\ndata: ${JSON.stringify({ cursor: since ?? "h0", now: "2026-01-01T00:00:00Z", scope: "all" })}\n\n`,
-      );
-      consoleClients.add(res);
-      res.on("close", () => consoleClients.delete(res));
-      return;
-    }
-    if (req.method === "POST" && pathname === "/api/v1/console/instruct") {
-      const chunks = [];
-      req.on("data", (chunk) => chunks.push(chunk));
-      req.on("end", () => {
-        record.body = Buffer.concat(chunks).toString("utf8");
-        const respond = () => {
-          res.writeHead(202, { "content-type": "application/json" });
-          res.end(JSON.stringify({ message_id: "M1", node_id: "cos", task_id: "T1" }));
-        };
-        if (postDelay) setTimeout(respond, postDelay);
-        else respond();
-      });
       return;
     }
     // ops: releases (P4-16)
@@ -3432,14 +3362,6 @@ export function createFakeDaemon({
     setStreamStatus(value) {
       streamStatus = value;
     },
-    // Console（P3-01）: `/api/v1/console/stream` の接続へ block を流す・切る。POST の応答を遅らせる。
-    sendConsoleBlock(block) {
-      const frame = `event: console.block\ndata: ${JSON.stringify(block)}\n\n`;
-      for (const client of consoleClients) client.write(frame);
-    },
-    dropConsoleClients() {
-      for (const client of consoleClients) client.destroy();
-    },
     // 状態の変種: 失敗の規則を替える・保留を解く・SSE の接続を切る。
     setFault(rule) {
       faultRule = rule;
@@ -3453,12 +3375,6 @@ export function createFakeDaemon({
     },
     dropStreamClients() {
       for (const client of clients) client.destroy();
-    },
-    setPostDelay(value) {
-      postDelay = value;
-    },
-    get consoleClients() {
-      return consoleClients.size;
     },
     get streamClients() {
       return clients.size;
@@ -3479,7 +3395,7 @@ export function createFakeDaemon({
       clearInterval(timer);
       chat.close();
       for (const run of held.splice(0)) run();
-      for (const client of [...clients, ...consoleClients]) client.destroy();
+      for (const client of clients) client.destroy();
       await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     },
   };

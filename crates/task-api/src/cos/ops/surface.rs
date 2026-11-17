@@ -179,11 +179,6 @@ pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[
     ),
     (
         "POST",
-        "/api/v1/console/instruct",
-        "console_instruction_chain: 人の決定 daemon-wide=no-console。別の指示経路へ入り監査の鎖が二重になる。",
-    ),
-    (
-        "POST",
         "/api/v1/cos/inbox/{i}/resolve",
         "recursive_cos: 既存の再帰禁止。操作 envelope 内から CoS 制御 API を呼ばない。override は人の取消・差し戻し専用。",
     ),

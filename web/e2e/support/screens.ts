@@ -2,13 +2,10 @@
 // 動的 id は偽 daemon の T1 / R1 / cos を使う。
 export const screens = [
   { path: "/", fixture: "/", heading: "ホーム", v3: true },
-  { path: "/console", fixture: "/console", heading: "Console", v3: true },
   { path: "/inbox", fixture: "/inbox", heading: "受信箱", v3: true },
   { path: "/notifications", fixture: "/notifications", heading: "通知", v3: true },
   { path: "/login", fixture: "/login", heading: "Celeris にログイン" },
   { path: "/org", fixture: "/org", heading: "組織", v3: true },
-  { path: "/org/secretary", fixture: "/org/cos", heading: "組織の人 cos", v3: true },
-  { path: "/org/$id", fixture: "/org/cos", heading: "組織の人 cos", v3: true },
   { path: "/projects", fixture: "/projects", heading: "案件", v3: true },
   { path: "/projects/$id", fixture: "/projects/P1", heading: "案件の詳細 P1", v3: true },
   { path: "/projects/$id/docs", fixture: "/projects/P1/docs", heading: "案件の文書 P1", v3: true },

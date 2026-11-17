@@ -159,11 +159,6 @@ function NodeDetail({ node, list }: { node: OrgNode; list: OrgList }) {
         level={3}
         title={node.name}
         description={node.brief || `${kindLabel[node.kind]} · ${node.id}`}
-        actions={
-          <a className={buttonClassName} href={`/org/${encodeURIComponent(node.id)}`}>
-            話す
-          </a>
-        }
       >
         <DataList aria-label="設定の現在値" items={settingItems(node, list.items, profile)} />
       </Section>

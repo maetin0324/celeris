@@ -49,8 +49,8 @@ function listDomain<const D extends string>(domain: D) {
 }
 
 /**
- * 受信箱。`list` は旧 `GET /inbox`（互換）、`itemList` / `item` は ADR-0133 の `GET /inbox/items`。
- * どちらも `['inbox']` の下にあるので、`inboxKeys.all` の invalidate で両方が stale になる。
+ * 受信箱。`itemList` / `item` は ADR-0133 の `GET /inbox/items`。
+ * どれも `['inbox']` の下にあるので、`inboxKeys.all` の invalidate で全部が stale になる。
  */
 export const inboxKeys = {
   ...listDomain("inbox"),
@@ -94,11 +94,6 @@ export const skillKeys = listDomain("skills");
 export const configKeys = listDomain("config");
 export const mcpKeys = listDomain("mcp");
 
-export const consoleKeys = {
-  all: ["console"] as const,
-  conversation: (scope: string) => ["console", scope] as const,
-};
-
 /** CoS チャット（ADR 2026-10-05-cos-chat-home D2）。stream の状態は query にせず features/chat/data の reducer が持つ。
  * staleTime は表に無い key の既定（0）で足りるので queryKeys（D5 の表と対の一覧）には入れない。 */
 export const chatKeys = {
@@ -134,5 +129,4 @@ export const queryKeys = {
   skills: skillKeys,
   config: configKeys,
   mcp: mcpKeys,
-  console: consoleKeys,
 } as const;

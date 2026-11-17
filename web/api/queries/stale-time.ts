@@ -33,7 +33,6 @@ export const STALE_TIME_DEFAULTS: readonly (readonly [QueryKey, number])[] = [
   [["skills"], 60_000],
   [["config"], 60_000],
   [["mcp"], 60_000],
-  [["console"], 0],
 ];
 
 function isPrefix(prefix: QueryKey, key: QueryKey): boolean {

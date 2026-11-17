@@ -228,8 +228,6 @@ run が書く `artifacts/knowledge-candidates.json` の各候補
 
 ### 見える場所
 
-- Console の `knowledge` ブロック: 「この仕事から知識 N 件: 取り込み a / 候補 b / 破棄 c」
-  （`GET /console`。適用が終わってから 1 件出る。`_inbox` への案内は `/knowledge/inbox`）
 - タスクのタイムライン（`GET /tasks/{id}/timeline`）: `kind: "knowledge"` の 1 件
   （`state: scheduled | applied | failed`。`via` が `fallback:<adapter>` なら「（cheap のハーネスで抽出）」）
 - `_inbox` の一覧（`GET /knowledge/inbox`）: 各候補の `op` と、取り込み元のタスクへのリンク（`sources`

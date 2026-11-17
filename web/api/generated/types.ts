@@ -1425,143 +1425,6 @@ export type ConsentPolicy = {
   "selector": string;
 };
 
-export type ConsoleBlock = {
-  "at": string;
-  "author"?: string | null;
-  "cursor": string;
-  "kind": "human";
-  "message_id": string;
-  "node_id": string;
-  "project_id"?: ProjectId | null;
-  "task_id"?: TaskId | null;
-  "text": string;
-} | {
-  "actions_result"?: MessageMetadata | null;
-  "at": string;
-  "cursor": string;
-  "kind": "reply";
-  "message_id": string;
-  "node_id": string;
-  "project_id"?: ProjectId | null;
-  "run_id"?: string | null;
-  "state"?: ConsoleReplyState;
-  "steps"?: Array<ConsoleReplyStep>;
-  "task_id"?: TaskId | null;
-  "text": string;
-  "thinking"?: string | null;
-} | {
-  "at": string;
-  "cursor": string;
-  "kind": "task";
-  "task": ConsoleTaskLine;
-} | {
-  "assignee"?: string | null;
-  "at": string;
-  "cursor": string;
-  "harness"?: string | null;
-  "kind": "progress";
-  "progress": ConsoleProgress;
-  "project_id"?: ProjectId | null;
-  "tier": Tier;
-  "title": string;
-} | {
-  "answer"?: string | null;
-  "answered": boolean;
-  "at": string;
-  "cursor": string;
-  "kind": "question";
-  "node_id"?: string | null;
-  "project_id"?: ProjectId | null;
-  "run_id": string;
-  "task_id": TaskId;
-  "text": string;
-} | {
-  "approval": Approval;
-  "at": string;
-  "cursor": string;
-  "kind": "approval";
-} | {
-  "at": string;
-  "cursor": string;
-  "kind": "report";
-  "report": Report;
-} | {
-  "at": string;
-  "cursor": string;
-  "discarded": number;
-  "inbox": number;
-  "ingested": number;
-  "kind": "knowledge";
-  "project_id"?: ProjectId | null;
-  "run_task_id": TaskId;
-  "state": string;
-  "task_id": TaskId;
-  "task_title": string;
-  "via"?: string | null;
-};
-
-export type ConsoleHello = {
-  "cursor": string;
-  "now": string;
-  "scope": string;
-};
-
-export type ConsoleInstructAccepted = {
-  "message_id": string;
-  "node_id": string;
-  "task_id": TaskId;
-};
-
-export type ConsolePage = {
-  "items": Array<ConsoleBlock>;
-  "next_cursor"?: string | null;
-};
-
-export type ConsoleProgress = {
-  "count": number;
-  "first": Array<ConsoleProgressLine>;
-  "last": Array<ConsoleProgressLine>;
-  "last_status"?: string | null;
-  "run_id": string;
-  "started_at": string;
-  "task_id": TaskId;
-  "tool_count": number;
-  "truncated"?: boolean;
-  "updated_at": string;
-};
-
-export type ConsoleProgressLine = {
-  "at": string;
-  "error"?: boolean;
-  "kind"?: ProgressKind | null;
-  "seq": number;
-  "text": string;
-  "tool"?: string | null;
-};
-
-export type ConsoleReplyState = "streaming" | "done";
-
-export type ConsoleReplyStep = {
-  "error"?: boolean;
-  "kind": ProgressKind;
-  "text": string;
-  "tool"?: string | null;
-};
-
-export type ConsoleTaskLine = {
-  "assignee"?: string | null;
-  "elapsed_secs"?: number | null;
-  "from": Status;
-  "harness"?: string | null;
-  "mode"?: string | null;
-  "project_id"?: ProjectId | null;
-  "reason": string;
-  "task_id": TaskId;
-  "tier": Tier;
-  "title": string;
-  "to": Status;
-};
-
 export type ContainerProbeView = {
   "detail": string;
   "runtime": string;
@@ -3636,11 +3499,6 @@ export type InputCondition = {
 
 export type InstanceRole = "active" | "standby" | "draining" | "verify";
 
-export type InstructBody = {
-  "scope"?: string | null;
-  "text": string;
-};
-
 export type IntegrateBody = {
   "confirm"?: boolean;
   "method": IntegrationMethod;
@@ -5268,22 +5126,8 @@ export type ReportList = {
 };
 
 export type ReportsLive = {
-  "last_notified_at"?: string | null;
-  "notify_now": boolean;
   "unread_bad_news": number;
   "unread_secretary": number;
-};
-
-export type ReportsNotifiedResult = {
-  "last_notified_at": string;
-};
-
-export type ReportsReadBody = {
-  "ids": Array<string>;
-};
-
-export type ReportsReadResult = {
-  "updated": number;
 };
 
 export type RequestRoutingAudit = {

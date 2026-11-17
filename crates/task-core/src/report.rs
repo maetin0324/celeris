@@ -70,8 +70,6 @@ pub fn support_kind(task: &Task) -> Option<&'static str> {
 pub const DEFAULT_COMPRESS_AFTER: usize = 4;
 /// `[reports] compress_after_secs` の既定（2 時間。SPEC §3.5「通知は数時間単位」）。
 pub const DEFAULT_COMPRESS_AFTER_SECS: u64 = 7_200;
-/// 通知の間隔（2 時間）。`BadNews` だけはこれを待たない。
-pub const NOTIFY_INTERVAL_SECS: i64 = 7_200;
 
 /// `headline` の最大文字数（文字数で切る。バイトではない）。
 pub const HEADLINE_MAX_CHARS: usize = 120;
@@ -210,18 +208,13 @@ impl Default for ReportFilter {
     }
 }
 
-/// 未読の件数（`DaemonSnapshot.reports` と GUI の通知判定に使う観測値。ADR-0033 D3）。
+/// 未読の件数（`DaemonSnapshot.reports` の観測値。ADR-0033 D3）。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ReportsLive {
     /// 秘書レベル（`level = 0`）の未読の件数。
     pub unread_secretary: u32,
-    /// そのうち `bad_news` の件数（0 でなければ即通知）。
+    /// そのうち `bad_news` の件数。
     pub unread_bad_news: u32,
-    /// 前回 GUI が通知した時刻（RFC 3339）。`POST /reports/notified` が進める。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_notified_at: Option<String>,
-    /// 「前回の通知から 2 時間以上経ち未読がある」か「`bad_news` の未読がある」。
-    pub notify_now: bool,
 }
 
 // ---- 決定的な組み立て（LLM を呼ばない。DESIGN 原則 1）----
@@ -602,25 +595,6 @@ pub fn compaction_objective(node: &OrgNode, pending: &[Report]) -> String {
          `objective` に書いたこの文とは別に、そこに常に正確な場所が指示されます）。\n",
     );
     out
-}
-
-/// GUI に通知させるか（決定的。ADR-0033 D3 / SPEC §3.5「通知は数時間単位」）。
-pub fn notify_now(
-    unread_secretary: u32,
-    unread_bad_news: u32,
-    last_notified_at: Option<OffsetDateTime>,
-    now: OffsetDateTime,
-) -> bool {
-    if unread_bad_news > 0 {
-        return true;
-    }
-    if unread_secretary == 0 {
-        return false;
-    }
-    match last_notified_at {
-        None => true,
-        Some(last) => (now - last).whole_seconds() >= NOTIFY_INTERVAL_SECS,
-    }
 }
 
 // ---- `reports` 表の読み書き（SQL はここだけ）----

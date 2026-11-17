@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { startFixtureGateway } from "../support/fixture-gateway";
 
-test("shared rich fixture renders data on the seven task surfaces and Console", async ({ page }) => {
+test("shared rich fixture renders data on the seven task surfaces", async ({ page }) => {
   const gateway = await startFixtureGateway();
   try {
     await page.goto(`${gateway.base}/tasks`);
@@ -28,10 +28,6 @@ test("shared rich fixture renders data on the seven task surfaces and Console", 
 
     await page.goto(`${gateway.base}/artifacts?project=P1`);
     await expect(page.getByTestId("artifacts-list").locator("[data-artifact]")).toHaveCount(12);
-
-    await page.goto(`${gateway.base}/console`);
-    await expect(page.locator("[data-console]")).toContainText("画面群の長文");
-    await expect(page.locator("[data-console]")).toContainText("read_file");
   } finally {
     await gateway.close();
   }

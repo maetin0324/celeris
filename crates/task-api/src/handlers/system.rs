@@ -177,7 +177,7 @@ pub(super) async fn daemon(State(state): State<ApiState>, RawQuery(raw): RawQuer
         StatusCode::OK,
         &DaemonView {
             now: now_rfc3339(),
-            // ADR-0033 D3: `reports` だけは API が埋める（`last_notified_at` は API のメモリにある）。
+            // ADR-0033 D3: `reports` だけは API が埋める。
             snapshot: daemon_snapshot_with_reports(&state),
         },
     ))
@@ -205,8 +205,7 @@ pub(super) async fn metrics_scratch(
 /// 認可の件数を載せる。
 fn daemon_snapshot_with_reports(state: &ApiState) -> Option<task_ops::daemon::DaemonSnapshot> {
     let mut snapshot = state.snapshot()?;
-    snapshot.reports =
-        crate::reports::reports_live(&state.inner.store, crate::reports::last_notified_at(state));
+    snapshot.reports = crate::reports::reports_live(&state.inner.store);
     snapshot.approvals_pending = crate::approvals::approvals_pending(&state.inner.store);
     snapshot.decisions_open =
         task_ops::decision::open_count(state.inner.store.as_ref()).unwrap_or(0);

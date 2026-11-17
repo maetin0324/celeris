@@ -2,13 +2,10 @@
 // web/routes/ の宣言と同じ集合であることを server/spa-routes.test.mjs が routeTree.gen.ts と照らして確かめる。
 export const spaRoutePatterns = [
   "/",
-  "/console",
   "/inbox",
   "/notifications",
   "/login",
   "/org",
-  "/org/secretary",
-  "/org/$id",
   "/projects",
   "/projects/$id",
   "/projects/$id/docs",

@@ -63,10 +63,15 @@ pub(crate) async fn timeline(
 ///
 /// RFC 3339 は**文字列のままでは比べられない**: `…:00.500Z` は `…:00Z` より後の時刻なのに
 /// `'.' < 'Z'` なので文字列では前に来る（`created_at` には小数秒が付く。Phase 53 の監査で発見）。
-/// 時刻として比べる規則は `task_ops::console::at_nanos` に 1 つだけ置き、`GET /console`（ADR-0048 D1）
-/// と共有する（解析できない `at` は 0 = いちばん古い扱い）。
+/// 時刻（Unix ナノ秒）として比べる。解析できない `at` は 0 = いちばん古い扱い。
 fn sort_items(items: &mut [TimelineItem]) {
-    items.sort_by_key(|item| task_ops::console::at_nanos(at_of(item)));
+    items.sort_by_key(|item| at_nanos(at_of(item)));
+}
+
+fn at_nanos(at: &str) -> i128 {
+    time::OffsetDateTime::parse(at, &time::format_description::well_known::Rfc3339)
+        .map(|t| t.unix_timestamp_nanos())
+        .unwrap_or(0)
 }
 
 pub(crate) fn at_of(item: &TimelineItem) -> &str {
@@ -291,6 +296,13 @@ fn release_items(
 mod tests {
     use super::*;
     use crate::types::TimelineItem;
+
+    /// 小数秒の付いた時刻を文字列でなく時刻として比べる（`'.' < 'Z'` で順が狂わない）。
+    #[test]
+    fn at_nanos_orders_fractional_seconds_as_time() {
+        assert!(at_nanos("2026-09-20T01:00:00Z") < at_nanos("2026-09-20T01:00:00.5Z"));
+        assert_eq!(at_nanos("読めない"), 0);
+    }
 
     /// ADR-0079 R6-4: 本番 DB の写しに対するタイムラインの計測（手で走らせる。`CELERIS_TIMELINE_PROFILE_DB` に
     /// `sqlite3 "file:…?mode=ro" ".backup <copy>"` で取った写し、`CELERIS_TIMELINE_PROFILE_TASK` に task id）。

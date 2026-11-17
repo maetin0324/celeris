@@ -47,7 +47,6 @@ pub const DENIED_PATHS: &[(&str, &str)] = &[
     ("/api/v1/chat/attachments/*/content", "添付の生 bytes"),
     ("/api/v1/chat/attachments/*/preview", "添付の生 bytes"),
     ("/api/v1/stream", "SSE（終わらない応答）"),
-    ("/api/v1/console/stream", "SSE（終わらない応答）"),
     ("/api/v1/chat/threads/*/stream", "SSE（終わらない応答）"),
 ];
 

@@ -3,8 +3,6 @@
 
 pub mod acp;
 pub mod adapter;
-/// ADR-0061（Phase 104）: `aider` CLI アダプタ（明確で局所的な少数ファイル修正向け）。
-pub mod aider;
 pub mod artifact;
 pub mod browser;
 pub mod browser_action;
@@ -94,7 +92,6 @@ pub use adapter::{
     AdapterError, AdapterSetting, AdapterSettings, Configured, EnvNotAccepted, EventSink,
     LlmEndpoint, RunLimits, RunOutcome, Terminal, WorkerAdapter, configure_env,
 };
-pub use aider::{AiderAdapter, AiderConfig};
 pub use browser_specialist::BrowserSpecialistAdapter;
 pub use claude_account::{
     AccountCheck, AccountCheckResult, LoginError, LoginOutcome, LoginResult, LoginSession,

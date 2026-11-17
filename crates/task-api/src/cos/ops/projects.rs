@@ -57,8 +57,6 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
         "/api/v1/standing-rules/{id}",
         "standing_rule.delete",
     ),
-    ("POST", "/api/v1/reports/read", "report.read"),
-    ("POST", "/api/v1/reports/notified", "report.notified"),
     ("POST", "/api/v1/projects/{id}/docs/init", "docs.init"),
     ("PUT", "/api/v1/projects/{id}/docs/page", "docs.page_put"),
     (
@@ -260,14 +258,6 @@ pub(crate) fn dispatch(
                 &matched.id.unwrap_or_default(),
                 Some(audit),
             )?)
-        }
-        "report.read" => {
-            let input = serde_json::from_value(body).map_err(decode)?;
-            audited(crate::reports::mark_read_op(store, input, Some(audit))?)
-        }
-        "report.notified" => {
-            let crate::lifecycle::EmptyBody {} = decode_optional(body).map_err(decode)?;
-            crate::reports::notified_op(store, &env.api, audit)
         }
         "docs.init" | "docs.page_put" | "docs.page_delete" | "docs.maintenance" => {
             let raw_id = matched.id.unwrap_or_default();

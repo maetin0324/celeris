@@ -7,7 +7,6 @@ use task_core::decision::{
     DecisionRaisedBy, DecisionRequest, DecisionStatus,
 };
 use task_core::integration_request::IntegrationRequest;
-use task_core::report::{Report, ReportId, ReportKind};
 use task_core::{Event, NoticeEvent, NoticeKind, Status, TaskKind};
 use time::OffsetDateTime;
 
@@ -479,58 +478,6 @@ async fn read_all_obeys_kind_and_project_filters() {
     let count = send(&app, get_admin("/api/v1/notifications/unread-count")).await;
     assert_eq!(count.json()["unread"], 2);
 }
-
-#[tokio::test]
-async fn legacy_report_read_also_marks_its_notice_read() {
-    let env = admin_env();
-    let at = OffsetDateTime::now_utc();
-    let report = Report {
-        id: ReportId::new(),
-        project_id: None,
-        node_id: "secretary".into(),
-        task_id: None,
-        kind: ReportKind::Result,
-        level: 0,
-        headline: "result".into(),
-        body: "body".into(),
-        sources: vec![],
-        read_at: None,
-        created_at: at,
-    };
-    env.store.report_append(&report).unwrap();
-    env.store
-        .notice_record(&NoticeEvent {
-            source_key: format!("report:{}", report.id),
-            kind: NoticeKind::Report,
-            group_key: "report:secretary".into(),
-            title: "result".into(),
-            summary: "result".into(),
-            project_id: None,
-            task_id: None,
-            target: Some(task_core::NoticeTarget {
-                kind: "report".into(),
-                id: report.id.to_string(),
-            }),
-            links: vec![],
-            at,
-        })
-        .unwrap();
-    let app = env.router();
-    let old = send(
-        &app,
-        post_admin(
-            "/api/v1/reports/read",
-            &json!({"ids":[report.id.to_string()]}),
-        ),
-    )
-    .await;
-    assert_eq!(old.status, 200, "{}", old.text());
-    assert_eq!(old.header("deprecation"), Some("true"));
-    assert_eq!(old.json()["updated"], 1);
-    let count = send(&app, get_admin("/api/v1/notifications/unread-count")).await;
-    assert_eq!(count.json()["unread"], 0);
-}
-
 fn tree_child(parent: &task_core::Task, status: Status, unit_key: &str) -> task_core::Task {
     let mut child = new_task(TaskKind::Execute, status);
     child.parent_id = Some(parent.id);

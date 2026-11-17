@@ -478,11 +478,10 @@ fn a_guard_whose_db_is_gone_does_not_block_spawns() {
 /// 呼ぶ所が残っていない）。新しい adapter を足したときにこの一覧も足す。
 #[test]
 fn every_worker_spawn_site_goes_through_launch() {
-    let sites: [(&str, &str, usize); 8] = [
+    let sites: [(&str, &str, usize); 7] = [
         ("subprocess.rs", include_str!("subprocess.rs"), 1),
         ("claude_code.rs", include_str!("claude_code.rs"), 1),
         ("codex.rs", include_str!("codex.rs"), 1),
-        ("aider.rs", include_str!("aider.rs"), 1),
         ("acp.rs", include_str!("acp.rs"), 1),
         // 研究系 adapter（langmem・local-deep-research・paperqa）の起動は全部ここを通る。
         ("research_runner.rs", include_str!("research_runner.rs"), 1),

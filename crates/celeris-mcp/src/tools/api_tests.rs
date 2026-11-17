@@ -82,7 +82,6 @@ fn deny_list_blocks_secret_paths() {
         "/api/v1/chat/attachments/a1/content",
         "/api/v1/chat/attachments/a1/preview",
         "/api/v1/stream",
-        "/api/v1/console/stream",
         "/api/v1/chat/threads/t1/stream",
         "/api/v1/future/token",
         "/api/v1/x/Cookies",

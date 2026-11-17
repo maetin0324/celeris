@@ -1306,22 +1306,6 @@ fn loads_acp_opencode_example_config() {
     );
 }
 
-/// ADR-0061: `aider` 用の例の設定ファイルが読め、設定検証を通る。
-#[test]
-fn loads_aider_example_config() {
-    let path = Path::new(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../config/celeris.aider.example.toml"
-    ));
-    let cfg = Config::load(path).unwrap();
-    assert!(cfg.validate().is_ok());
-    assert_eq!(cfg.harness_declarations["aider"].kind, "aider");
-    assert_eq!(
-        cfg.llm_sources["anthropic_api"].models,
-        vec!["claude-sonnet-5-5"]
-    );
-}
-
 /// ADR-0063 Phase 109d C2: `[adapters.paperqa]` の既定値（python インタプリタを素の状態で使う。
 /// `pqa` CLI ではない）。
 #[test]

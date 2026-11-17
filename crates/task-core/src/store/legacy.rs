@@ -1,4 +1,5 @@
-//! Console compatibility (`GET /console`, `POST /console/instruct`, `POST /org/cos/messages`).
+//! The CoS node's `messages` rows on the CoS chat (`POST /org/cos/messages` and the delivery
+//! notice). The Console readers were removed (ADR 2026-11-17-console-deprecated-api-aider-removal).
 //!
 //! ADR 2026-10-22-cos-fixed-threads D2': Console input to the CoS is queued on the fixed
 //! general or project CoS thread (never on a legacy thread). The one-time projection of the
@@ -11,12 +12,11 @@ use time::OffsetDateTime;
 use ulid::Ulid;
 
 use super::{SqliteStore, StoreError, format_rfc3339};
+use crate::Message;
 use crate::chat::store::{
-    chat_ts, cos_thread_ensure_tx, emit_message, emit_queue, immediate, message_require, read_tx,
-    writer,
+    chat_ts, cos_thread_ensure_tx, emit_message, emit_queue, immediate, message_require, writer,
 };
 use crate::chat::{CHAT_MESSAGE_TEXT_MAX_BYTES, CHAT_QUEUE_MAX, ChatError};
-use crate::{Message, MessageId, MessageRole, ProjectId, TaskId};
 
 const CURSOR: &str = "cos_chat_legacy_messages_rowid";
 
@@ -37,95 +37,17 @@ struct OldMessage {
 }
 
 impl SqliteStore {
-    /// New CoS chat rows visible in the old Console. Projected legacy rows are
-    /// already present in `messages`; run id also suppresses a duplicate reply.
-    pub fn chat_legacy_console_messages(
-        &self,
-        project_id: Option<ProjectId>,
-        node_id: Option<&str>,
-        after: Option<&str>,
-        limit: usize,
-    ) -> Result<Vec<Message>, ChatError> {
-        if node_id.is_some_and(|id| id != crate::COS_ID) {
-            return Ok(Vec::new());
-        }
-        read_tx(self, |conn| {
-            let order = if after.is_some() { "ASC" } else { "DESC" };
-            let mut stmt = conn.prepare(&format!(
-            "SELECT c.id,t.project_id,c.role,c.text,c.run_id,c.metadata_json, \
-             CASE WHEN c.role='assistant' THEN c.updated_at ELSE c.created_at END, \
-             COALESCE(json_extract(c.metadata_json,'$.legacy_source.task_id'), \
-                      json_extract(input.metadata_json,'$.legacy_source.task_id')) \
-             FROM chat_messages c JOIN chat_threads t ON t.id=c.thread_id \
-             LEFT JOIN chat_messages input ON input.id=c.reply_to_id \
-             WHERE c.legacy_message_id IS NULL AND c.role IN ('user','assistant') \
-             AND (c.role='user' AND c.state!='cancelled' OR c.role='assistant' AND c.state='completed') \
-             AND (?1 IS NULL OR t.project_id=?1) \
-             AND (?2 IS NULL OR CASE WHEN c.role='assistant' THEN c.updated_at ELSE c.created_at END>=?2) \
-             AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.node_id='cos' \
-               AND m.project_id IS t.project_id AND m.run_id=c.run_id \
-               AND c.role='assistant') \
-             ORDER BY 7 {order},c.id {order} LIMIT ?3",
-        ))?;
-            let raw = stmt
-                .query_map(
-                    params![project_id.map(|p| p.to_string()), after, limit as i64],
-                    |r| {
-                        Ok((
-                            r.get::<_, String>(0)?,
-                            r.get::<_, Option<String>>(1)?,
-                            r.get::<_, String>(2)?,
-                            r.get::<_, String>(3)?,
-                            r.get::<_, Option<String>>(4)?,
-                            r.get::<_, String>(5)?,
-                            r.get::<_, String>(6)?,
-                            r.get::<_, Option<String>>(7)?,
-                        ))
-                    },
-                )?
-                .collect::<Result<Vec<_>, _>>()?;
-            raw.into_iter()
-                .map(
-                    |(id, project, role, text, run_id, metadata, created, task)| {
-                        let meta: serde_json::Value = serde_json::from_str(&metadata)?;
-                        let task_id = task.and_then(|s| s.parse::<TaskId>().ok());
-                        let author = meta
-                            .pointer("/legacy_source/metadata/author")
-                            .and_then(|v| v.as_str())
-                            .map(str::to_string);
-                        Ok(Message {
-                            id: id.parse::<MessageId>().map_err(|_| {
-                                ChatError::Invalid("invalid chat message id".into())
-                            })?,
-                            node_id: crate::COS_ID.to_owned(),
-                            project_id: project.and_then(|p| p.parse::<ProjectId>().ok()),
-                            role: if role == "user" {
-                                MessageRole::User
-                            } else {
-                                MessageRole::Node
-                            },
-                            text,
-                            run_id,
-                            task_id,
-                            metadata: author.map(|author| crate::MessageMetadata {
-                                author: Some(author),
-                                ..Default::default()
-                            }),
-                            created_at: OffsetDateTime::parse(
-                                &created,
-                                &time::format_description::well_known::Rfc3339,
-                            )
-                            .map_err(|e| ChatError::Invalid(e.to_string()))?,
-                        })
-                    },
-                )
-                .collect()
-        })
+    /// ADR 2026-11-17-console-deprecated-api-aider-removal D2: project the CoS node's `messages`
+    /// rows (the delivery notice for the human) onto the fixed CoS thread right away, with the same
+    /// projection the writable open runs. A row already projected is never projected again.
+    pub fn cos_messages_project(&self) -> Result<(), StoreError> {
+        let mut conn = self.lock()?;
+        Self::backfill_legacy_cos(&mut conn)
     }
 
     /// Queue a Console input once, keyed by its old message id, on the fixed CoS thread of the
-    /// scope (ADR 2026-10-22-cos-fixed-threads D2'). The old message remains readable by
-    /// /console and the queue drives the CoS run.
+    /// scope (ADR 2026-10-22-cos-fixed-threads D2'). The old message stays in `messages` and the
+    /// queue drives the CoS run.
     pub fn chat_console_enqueue(
         &self,
         message: &Message,

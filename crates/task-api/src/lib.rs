@@ -33,8 +33,6 @@ pub mod browser_trusted_devices;
 /// ADR-0043 D5（Phase 54）: 変更の取り込み（差分・merge・PR・衝突タスク）。
 pub mod changes;
 pub mod chat;
-/// ADR-0048 D1（Phase 60a）: Console の読み取り側（一本の流れと SSE）。
-pub mod console;
 pub mod conversation;
 /// ADR 2026-10-05 D2/D3: CoS run credential の認証と監査付き CoS API。
 pub mod cos;
@@ -78,6 +76,7 @@ pub mod routing;
 pub mod routing_eval;
 /// ADR 2026-10-11-llm-source-model-routing-evaluation D3: 段階・根拠表の読み取りと人の段階変更。
 pub mod routing_stage;
+mod run_events;
 pub mod schema;
 /// ADR 2026-11-02-ts-control-layer-boundary 付記 S2-5: TS 制御層の領域ごとの mode の読み出しと切り替え。
 pub mod script_behavior_changes;
@@ -120,9 +119,7 @@ pub use project_plan::{ProjectPlanAccepted, ProjectPlanBody};
 pub use releases::{
     BRANCH_COMMITS_LIMIT, ReleasePromoteError, ReleaseSource, ReleasesFs, SharedReleaseSource,
 };
-pub use reports::{
-    ReportDetail, ReportList, ReportsNotifiedResult, ReportsReadBody, ReportsReadResult,
-};
+pub use reports::{ReportDetail, ReportList};
 pub use schema::{API_V1_SCHEMA_JSON, ApiV1Schema, api_v1_schema_json, api_v1_schema_value};
 pub use state::{ApiClock, ApiState, StreamTuning};
 pub use stats::classify_outcome;
@@ -154,12 +151,6 @@ pub use docs::{
     ArtifactPromoteBody, DocItem, DocPage, DocPagePutBody, DocPageResult, DocsInitResult, DocsTree,
     MAX_TREE_PAGES,
 };
-// ---- ADR-0048 D1/D2（Phase 60a）: Console ----
-pub use console::{
-    ConsoleHello, ConsoleInstructAccepted, EVENT_WINDOW as CONSOLE_EVENT_WINDOW, InstructBody,
-    MAX_LIMIT as CONSOLE_MAX_LIMIT,
-};
-pub use types::{ConsoleBlock, ConsolePage};
 // ---- ADR-0053 D4（Phase 65）: LLM source のローカルプロキシの観測 ----
 pub use types::{
     LlmCelerisTierView, LlmSourceAccountView, LlmSourceBilledCostView, LlmSourceCostView,

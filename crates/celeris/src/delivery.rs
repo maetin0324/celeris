@@ -973,6 +973,11 @@ fn advance(
                     String::new()
                 };
                 store.message_append(&Message { id, node_id: node.id, project_id: Some(d.project_id), role: MessageRole::Node, text: format!("【{label}・自動引き渡し結果】{title}\n{}\n[タスクと部署レビュー](/tasks/{}?tab=changes){}{}", d.detail, d.task_id, release, push_line), run_id: None, task_id: Some(d.task_id), metadata: None, created_at: now })?;
+                // ADR 2026-11-17-console-deprecated-api-aider-removal D2: 人に向けた通知は書いた時点で
+                // CoS チャットの固定スレッドへ写す（daemon の起動を待たない）。
+                if needs_user {
+                    store.cos_messages_project()?;
+                }
             }
             d.notification = Some(id);
             store.delivery_save(Some(old), &d)?;

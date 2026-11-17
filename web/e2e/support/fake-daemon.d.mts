@@ -156,14 +156,10 @@ export function createFakeDaemon(options?: FakeDaemonOptions): {
   setNotices(notices: import("../../api/generated/types").Notice[]): void;
   setDelay(value: number): void;
   setStreamStatus(value: number): void;
-  sendConsoleBlock(block: unknown): void;
-  dropConsoleClients(): void;
   setFault(rule: { status: number; paths?: string[] } | null): void;
   releaseHeld(): void;
   readonly heldCount: number;
   dropStreamClients(): void;
-  setPostDelay(ms: number): void;
-  readonly consoleClients: number;
   readonly streamClients: number;
   start(): Promise<string>;
   close(): Promise<void>;

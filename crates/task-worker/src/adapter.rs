@@ -613,10 +613,6 @@ mod settings_tests {
                 vec![S::LlmEndpoint, S::PermissionMode],
             ),
             (
-                Arc::new(crate::AiderAdapter::new(Default::default())),
-                vec![S::LlmEndpoint, S::PermissionMode],
-            ),
-            (
                 Arc::new(crate::ClaudeCodeAdapter::new(Default::default())),
                 vec![S::LlmEndpoint],
             ),

@@ -12,7 +12,7 @@ import { conversation, expectOnce, makeMessage, startChatGateway, waitForStream 
 const MARKDOWN = [
   "## 結果",
   "",
-  "**太字** と `インライン` と [リンク](/console) と <script>alert(1)</script> は文字のまま。",
+  "**太字** と `インライン` と [リンク](/tasks) と <script>alert(1)</script> は文字のまま。",
   "",
   "| 項目 | 値 |",
   "| --- | --- |",
@@ -43,7 +43,7 @@ test("Markdown・code・表・tool の折りたたみと展開を 1 回だけ表
     });
     await expect(section.getByRole("heading", { name: "結果" })).toBeVisible();
     await expect(section.locator("strong").filter({ hasText: "太字" })).toBeVisible();
-    await expect(section.getByRole("link", { name: "リンク" })).toHaveAttribute("href", "/console");
+    await expect(section.getByRole("link", { name: "リンク" })).toHaveAttribute("href", "/tasks");
     await expect(section).toContainText("<script>alert(1)</script>");
     await expect(section.locator("table")).toHaveCount(1);
     await expect(section.getByRole("cell", { name: "成功" })).toBeVisible();

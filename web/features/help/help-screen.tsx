@@ -66,9 +66,9 @@ export function HelpScreen() {
             <ul className="list-disc space-y-2 pl-5">
               <li>
                 <Link className={linkClass} to="/">
-                  Console
+                  ホーム
                 </Link>
-                では担当に話しかけられます。
+                では CoS に話しかけられます。
               </li>
               <li>
                 <Link className={linkClass} to="/reports">

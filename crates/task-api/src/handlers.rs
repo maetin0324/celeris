@@ -231,8 +231,8 @@ pub(crate) fn router(state: ApiState) -> Router {
         .merge(crate::browser_site_policies::routes())
         .merge(crate::browser_credentials::routes())
         .merge(crate::browser_control::routes())
-        // ADR-0048 D1（Phase 60a）: Console の読み取り側。実装は `crate::console`。
-        .merge(crate::console::routes())
+        // ADR-0048 D2: run のログ画面が開く、その run の全行。
+        .merge(crate::run_events::routes())
         // ADR-0053 D4（Phase 65）: LLM source の観測。実装は `crate::llm_sources`。
         .merge(crate::llm_sources::routes())
         // ADR 2026-10-11-llm-source-model-routing-evaluation 付記 2026-10-12（eval-dispatch 契約 2）:

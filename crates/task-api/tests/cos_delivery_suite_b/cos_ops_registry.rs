@@ -36,12 +36,6 @@ async fn cos_ops_registry_exclusions_record_reasoned_rejections_without_body_or_
         ),
         (
             "POST",
-            "/api/v1/console/instruct",
-            "console_instruction_chain",
-            "監査の鎖が二重になる",
-        ),
-        (
-            "POST",
             "/api/v1/cos/operations/example/override",
             "recursive_cos",
             "override は人の取消・差し戻し専用",

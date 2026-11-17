@@ -148,8 +148,7 @@ test("タブ: 長い画面を末尾まで scroll しても本文の最後がタ�
   const result = await page.evaluate(() => {
     const main = document.querySelector("#main");
     const bar = document.querySelector('[data-testid="mobile-tabbar"]');
-    const slot = document.querySelector("aside[data-console-slot]");
-    if (!main || !bar || !slot) throw new Error("no main / tabbar / console slot");
+    if (!main || !bar) throw new Error("no main / tabbar");
     // main の子孫のうち一番下に描かれた要素。
     let bottom = 0;
     for (const el of Array.from(main.querySelectorAll("*"))) {
@@ -159,13 +158,11 @@ test("タブ: 長い画面を末尾まで scroll しても本文の最後がタ�
     return {
       scrolled: window.scrollY > 0,
       bottom,
-      slot: slot.getBoundingClientRect().bottom,
       barTop: bar.getBoundingClientRect().top,
     };
   });
   expect(result.scrolled).toBe(true);
   expect(result.bottom).toBeLessThanOrEqual(result.barTop);
-  expect(result.slot).toBeLessThanOrEqual(result.barTop + 0.5);
 });
 
 test("タブ: md 以上は出さず、側面の nav のまま（1440px）", async ({ page }) => {

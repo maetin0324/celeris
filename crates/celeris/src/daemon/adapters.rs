@@ -5,9 +5,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use task_worker::{
-    AcpAdapter, AcpConfig, AiderAdapter, AiderConfig, BrowserSpecialistAdapter, ClaudeCodeAdapter,
-    ClaudeCodeConfig, CodexAdapter, CodexConfig, FakeAdapter, LangMemAdapter, LangMemConfig,
-    LdrAdapter, LdrConfig, PaperQaAdapter, PaperQaConfig, PiAdapter, PiConfig, WorkerAdapter,
+    AcpAdapter, AcpConfig, BrowserSpecialistAdapter, ClaudeCodeAdapter, ClaudeCodeConfig,
+    CodexAdapter, CodexConfig, FakeAdapter, LangMemAdapter, LangMemConfig, LdrAdapter, LdrConfig,
+    PaperQaAdapter, PaperQaConfig, PiAdapter, PiConfig, WorkerAdapter,
 };
 
 use super::secrets::merged_env_with_secrets;
@@ -61,16 +61,6 @@ pub fn build_harness_adapters(
                     resume_mode: base.resolved_resume_mode(),
                     resume_bypass: base.resolved_resume_bypass(),
                     subagents: base.resolved_subagents(),
-                }))
-            }
-            AiderAdapter::ID => {
-                let base = &config.adapters.aider;
-                Arc::new(AiderAdapter::new(AiderConfig {
-                    command: command(&base.command),
-                    extra_args: args(&base.extra_args),
-                    model: None,
-                    env: declared_env(config, h).unwrap_or_default(),
-                    container: None,
                 }))
             }
             PiAdapter::ID => Arc::new(PiAdapter::new(pi_config(config, h))),
@@ -185,7 +175,7 @@ pub fn build_harness_adapters(
             }
             _ => {
                 return Err(config::ConfigError::Invalid(format!(
-                    "harnesses.{id}: unknown kind {:?}; expected one of claude_code, codex, aider, \
+                    "harnesses.{id}: unknown kind {:?}; expected one of claude_code, codex, \
                      pi, acp, browser_specialist, paperqa, local_deep_research, langmem, fake",
                     h.kind
                 )));
@@ -212,7 +202,6 @@ fn declared_env(
     match h.kind.replace('_', "-").as_str() {
         ClaudeCodeAdapter::ID => Some(env(&a.claude_code.env, &a.claude_code.env_from_secrets)),
         CodexAdapter::ID => Some(env(&a.codex.env, &a.codex.env_from_secrets)),
-        AiderAdapter::ID => Some(env(&a.aider.env, &a.aider.env_from_secrets)),
         PiAdapter::ID => Some(env(&h.env, &h.env_from_secrets)),
         AcpAdapter::ID | BrowserSpecialistAdapter::ID => {
             Some(env(&a.acp.env, &a.acp.env_from_secrets))
@@ -262,13 +251,12 @@ pub fn secret_usage(config: &Config) -> HashMap<String, Vec<task_api::types::Sec
     }
 
     let mut map: HashMap<String, Vec<task_api::types::SecretUse>> = HashMap::new();
-    let adapters: [(&str, &HashMap<String, String>); 8] = [
+    let adapters: [(&str, &HashMap<String, String>); 7] = [
         (
             ClaudeCodeAdapter::ID,
             &config.adapters.claude_code.env_from_secrets,
         ),
         (CodexAdapter::ID, &config.adapters.codex.env_from_secrets),
-        (AiderAdapter::ID, &config.adapters.aider.env_from_secrets),
         (FakeAdapter::ID, &config.adapters.fake.env_from_secrets),
         (AcpAdapter::ID, &config.adapters.acp.env_from_secrets),
         (

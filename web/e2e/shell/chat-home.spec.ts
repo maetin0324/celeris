@@ -11,7 +11,6 @@ test("ホームは直近の人の会話を URL に選び、再読込後も本文
     await page.reload();
     await expect(page.getByText("進捗を教えて")).toBeVisible();
     await expect(page.getByRole("heading", { level: 1, name: "ホーム" })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Console", exact: true }).first()).toHaveAttribute("href", "/console");
   } finally {
     await gateway.close();
   }

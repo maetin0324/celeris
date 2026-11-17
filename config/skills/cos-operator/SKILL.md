@@ -88,7 +88,7 @@ cron の `cos_review` は、統括 CoS の裏 thread（種別 `review`、題『�
 - 毎回 `idempotency_key`（thread 内で一意。再試行・再送は同じ key）・空でない `reason`・`expected_revision`・
   `policy_version`（入力の「run 固有の操作パラメータ」の `<policy_version>`。`celerisctl` は環境変数から自動で付ける。違う値は 422）を付ける。409 は状態が変わった合図なので読み直して判断し直す。
 - API で人ができる変更操作は全て [operations.md](operations.md) の表にある。表に無いのは人の決定で**除外**した操作
-  （秘密の値・`/console/instruct`・browser の credential/attestation 系・`/cos/*` 自身・撤去済みの入口）だけで、
+  （秘密の値・browser の credential/attestation 系・`/cos/*` 自身・撤去済みの入口）だけで、
   送ると理由付きの 422 になる。拒否を回避する別経路を探さず、人に回す。
 - 外部効果の操作（daemon への依頼・git・Discord・release の昇格。表に「外部効果」）は pending → applied で記録される。
   結果が分からず pending のまま残ったら同じ key で再送しても再実行されないので、人に確認を頼む。

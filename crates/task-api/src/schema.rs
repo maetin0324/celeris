@@ -146,9 +146,6 @@ pub struct ApiV1Schema {
     /// Phase 25（ADR-0033 D3）: 報告（生成は決定的、圧縮は別 run）。
     pub report_list: crate::reports::ReportList,
     pub report_detail: crate::reports::ReportDetail,
-    pub reports_read: crate::reports::ReportsReadBody,
-    pub reports_read_result: crate::reports::ReportsReadResult,
-    pub reports_notified: crate::reports::ReportsNotifiedResult,
     /// Phase 24（ADR-0033 D4）: 対話（`POST /org/{id}/messages` と `GET /org/{id}/messages`）。
     pub message_post: MessagePostBody,
     pub message_accepted: MessageAccepted,
@@ -188,16 +185,6 @@ pub struct ApiV1Schema {
     pub timeline: Timeline,
     /// ADR-0069 D5: `GET /tasks/{id}/routing`。
     pub task_routing: crate::types::TaskRoutingView,
-    // ---- ADR-0048 D1/D2（Phase 60a）: Console の読み取り側 ----
-    /// `GET /console` の応答と、その 1 ブロック（9 種）。
-    pub console: crate::types::ConsolePage,
-    pub console_block: crate::types::ConsoleBlock,
-    /// `GET /console/stream` の最初のフレーム（`event: hello`）。ブロックは `console_block` と同じ形で
-    /// `event: console.block` として流れる。
-    pub console_hello: crate::console::ConsoleHello,
-    // ---- ADR-0048 D3（Phase 60b）: `POST /console/instruct` ----
-    pub console_instruct: crate::console::InstructBody,
-    pub console_instruct_accepted: crate::console::ConsoleInstructAccepted,
     /// Phase 54（ADR-0043 D5）: 変更の取り込み（差分・merge・PR・衝突タスク）。
     pub changes: crate::types::ChangesView,
     pub change_diff: crate::types::ChangeDiffView,

@@ -58,7 +58,7 @@ export function ChatHome() {
         ? Math.max(0, (Number.parseFloat(getComputedStyle(main).paddingBottom) || 0) + frameBottom)
         : 0;
       const shellBottom = column ? Number.parseFloat(getComputedStyle(column).paddingBottom) || 0 : 0;
-      // main の後ろに続く列の中身（Console の置き場の枠線）の分も引き、ページを 1px も伸ばさない。
+      // main の後ろに続く列の中身の分も引き、ページを 1px も伸ばさない。
       const afterMain =
         main && column
           ? Math.max(0, column.getBoundingClientRect().bottom - shellBottom - main.getBoundingClientRect().bottom)

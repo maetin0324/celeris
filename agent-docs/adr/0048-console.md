@@ -200,3 +200,7 @@ D1 の全案件 Console stream は /console の監視用として残し、D2 の
 D4 のホームはスレッド別チャットへ置き換え、非チャット情報は既定で隠す。既存の履歴・入力 API は新 ADR D6 の互換 facade へ移す。
 D4 の「通知はそのまま」も置き換え、通常の人向け通知は CoS の判断依頼だけとし、不在時のみ直接通知に退避する。
 非 CoS ノードの経路は維持する。本文は当時の決定として残し、切替と検証は後続実装で行う。
+
+## 付記: Console の撤去（2026-11-17）
+
+- `GET /console`・`GET /console/stream`・`POST /console/instruct` と web の `/console`・`/org/:id` の画面は [ADR 2026-11-17-console-deprecated-api-aider-removal](2026-11-17-console-deprecated-api-aider-removal.md) D1 で消した。自動引き渡しの人に向けた通知は同 D2 で CoS チャットの固定スレッドへ書いた時点で写す。`GET /tasks/{id}/runs/{run_id}/events` は残した。

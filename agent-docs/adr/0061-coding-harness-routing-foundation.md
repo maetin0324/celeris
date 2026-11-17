@@ -173,3 +173,7 @@ OpenAI 互換モック HTTP サーバ（`127.0.0.1`、外部ネットワーク�
 （`#[ignore]`。`cargo test --workspace` の既定では走らない。`AIDER_TEST_BIN` で実行ファイルを指定）
 として実行可能な形でリポジトリに残した（ローカルの HTTP モックだけを使うので CLAUDE.md
 「テストで外部ネットワークに出ない」に沿う）。手順と実行結果は `docs/PROGRESS.md` Phase 104 参照。
+
+## 付記: aider adapter の撤去（2026-11-17）
+
+- `aider` adapter（`crates/task-worker/src/aider.rs`）と `[adapters.aider]`・例の設定 `config/celeris.aider.example.toml` は [ADR 2026-11-17-console-deprecated-api-aider-removal](2026-11-17-console-deprecated-api-aider-removal.md) D4 で消した（本番の config に記述が無く、本番の runs に adapter=aider は 0 件）。routing の骨格が返す `aider` の名前は未導入の harness の名前として残る。

@@ -266,7 +266,6 @@ it("serves schema-valid rich data without changing the default profile", async (
     ["tasks/T1/tree", "tree"],
     ["tasks/T1/artifacts", "artifact_list"],
     ["projects/P1", "project_detail"],
-    ["console", "console"],
     ["org", "org_list"],
     ["projects/P1/docs", "docs_tree"],
     ["projects/P1/docs/page", "doc_page"],
@@ -290,8 +289,6 @@ it("serves schema-valid rich data without changing the default profile", async (
   ).toHaveLength(15);
   expect(((await (await get("/tasks/T1/artifacts")).json()) as { items: unknown[] }).items).toHaveLength(12);
   expect((await (await get("/tasks/T1/runs/R1/stdout")).text()).split("\n")).toHaveLength(28);
-  expect(((await (await get("/console")).json()) as { items: unknown[] }).items).toHaveLength(3);
-  expect(defaultFixtures["/api/v1/console"]).not.toEqual(rich["/api/v1/console"]);
 });
 
 it("serves schema-valid reports, approvals and review-pending execution data in the rich profile", () => {

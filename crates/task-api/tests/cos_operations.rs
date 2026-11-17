@@ -452,7 +452,6 @@ async fn cos_chat_ops_api_rejects_unregistered_operations_regardless_of_skill() 
     let cases = [
         // Excluded by the human decision, and paths no registry knows (cron, project lifecycle and
         // standing rules are registered since ADR 2026-10-09-cos-operations-all-mutations D3).
-        ("console", "POST", "/api/v1/console/instruct"),
         ("secret", "PUT", "/api/v1/secrets/s1"),
         ("unknown", "POST", "/api/v1/no-such-route"),
     ];

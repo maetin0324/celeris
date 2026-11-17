@@ -14,7 +14,7 @@ import { useShellServerState } from "./use-server-state";
 
 type NavBadgeView = ReturnType<typeof badgeView>;
 
-// root の shell（P2-02）。ナビ・ヘッダ・Console の置き場・接続状態・outlet を持つ。
+// root の shell（P2-02）。ナビ・ヘッダ・接続状態・outlet を持つ。
 // daemon の状態では mount を変えない（server state を待つ Suspense や条件付きの描画を置かない）。
 // md 以上は幅 --spacing-nav の左列、md 未満は上の帯と「メニュー」で開く一覧（DESIGN.md「幅ごとの規則」）。
 export function Shell({ children }: { children: ReactNode }) {
@@ -147,7 +147,7 @@ export function Shell({ children }: { children: ReactNode }) {
           </p>
         )}
       </header>
-      {/* md 未満は画面下の固定タブ（MobileTabBar）が覆う分だけ列の下を空け、本文と Console の置き場を隠さない。 */}
+      {/* md 未満は画面下の固定タブ（MobileTabBar）が覆う分だけ列の下を空け、本文を隠さない。 */}
       <div className="flex min-w-0 flex-1 flex-col bg-surface pb-shell-inset">
         {server.down && (
           <p
@@ -161,7 +161,6 @@ export function Shell({ children }: { children: ReactNode }) {
         <main id="main" tabIndex={-1} className="min-w-0 flex-1 p-4 focus:outline-none md:p-6">
           {children}
         </main>
-        <aside data-console-slot aria-label="Console" className="border-t border-border" />
       </div>
       <MobileTabBar
         badges={badges}

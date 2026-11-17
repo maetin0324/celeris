@@ -51,6 +51,7 @@
   `POST /tasks/{id}/rereview` は reviewing で再同期が上限で止まっている task も受け付け（reviewer 条件の有無・support task を問わない）、遷移せず event `review_resync_resumed`
   （`reason: human`）を残す（応答の `reason` は `review_resync_resumed`、`from`/`to` は `reviewing`）。task の event に
   `reviewer_passed`・`reviewer_pass_reused`・`review_resync_halted`・`review_resync_resumed` を足した。
+- 改訂: 2026-11-17（ADR 2026-11-17-console-deprecated-api-aider-removal D1・D3）— **破壊的。v1 のまま**。エンドポイント 87 `GET /console`・88 `GET /console/stream`・96 `POST /console/instruct`・124 `POST /reports/read`・125 `POST /reports/notified` と型 `ConsolePage`・`ConsoleBlock`・`ConsoleHello`・`InstructBody`・`ConsoleInstructAccepted`・`ReportsReadBody`・`ReportsReadResult`・`ReportsNotifiedResult`、`DaemonSnapshot.reports` の `last_notified_at`・`notify_now` を消した。CoS 操作の `report.read`・`report.notified` と除外の `console_instruction_chain` も消した。既読は `POST /notifications/read-all`・`POST /notifications/{id}/read`。
 - 改訂: 2026-10-23（ADR 2026-10-23-stage-order-and-plan-stall D3〜D5）— **追加。v1 のまま**。`TaskWait` に kind `plan_stalled`（`stage`・`unit_keys`・`detail`）、
   `DaemonSnapshot.stalled_tasks[]`（`task_id`・`reason`・`detail`・`since`・`at`）、`Inbox.attention[]` に type `stalled`、受信箱の kind `stalled`
   （選択肢 replan・cancel は人の手を示すだけ。答えると 409 `native_action_required`）を足した。計画の採用（新規・replan）は有効な行に解決できない依存を422 `validation`（文は `work unit <key> depends on <dep>, which has no live work unit row ...`）で拒む。
@@ -472,8 +473,6 @@ token_file = "api.token"
 | 84 | PUT | `/projects/{id}/docs/page` | ページを既定のブランチに直接コミットする（**管理系**） | 200 `DocPageResult` | 一時 worktree + `git commit` |
 | 85 | DELETE | `/projects/{id}/docs/page` | ページを消す（**管理系**） | 200 `DocPageResult` | 一時 worktree + `git commit` |
 | 86 | POST | `/tasks/{id}/artifacts/promote` | 成果物をページに昇格する（**管理系**） | 200 `DocPageResult` | 成果物 + 一時 worktree |
-| 87 | GET | `/console` | 全案件の流れ（正規化したブロック、時刻順、カーソル付き。ADR-0048 D1、Phase 60a） | `ConsolePage` | events + messages + approvals + reports + knowledge_runs |
-| 88 | GET | `/console/stream` | 同じブロックを SSE で流す（`event: console.block`） | SSE | 同上 |
 | 89 | GET | `/tasks/{id}/runs/{run_id}/events` | その run のイベントだけ（折り畳んだ進行を開いたとき） | `EventsPage` | store `event_rows_for` |
 | 90 | GET | `/knowledge/tree` | 知識ベースのツリー（`?scope=` / `?q=`。ADR-0047、Phase 61） | `KnowledgeTree` | `index.json` + `grep` |
 | 91 | GET | `/knowledge/page` | ページ 1 枚（raw / html / front matter / 履歴 / etag） | `KnowledgePage` | ファイル + 履歴 |
@@ -483,7 +482,6 @@ token_file = "api.token"
 | 93b | POST | `/knowledge/inbox` | 候補を 1 件作る（添付の pin つき。**管理系**、CoS は `knowledge.record`） | 201 `KnowledgeRecordResult` | ファイル + コミット + `chat_attachment_refs` |
 | 94 | POST | `/knowledge/inbox/{id}/accept` | 候補を正本に取り込む（**管理系**） | 200 `KnowledgePageResult` | ファイル + コミット |
 | 95 | POST | `/knowledge/inbox/{id}/reject` | 候補を捨てる（**管理系**） | 200 `KnowledgeRejectResult` | ファイル + コミット |
-| 96 | POST | `/console/instruct` | CoS への指示（Console から。ADR-0048 D3、Phase 60b）（**管理系**） | 202 `ConsoleInstructAccepted` | `crate::console` + `task_ops::conversation` |
 | 97 | GET | `/llm/sources` | LLM source ごとの到達性・残量・cooldown・直近 1 時間の要求数（ADR-0053 D4。`[llm_proxy]` が無効なら 409） | `LlmSourcesView` | celeris の `LlmSourcesReader` |
 | — | GET | `/llm/sources/{source_id}` | source 1 件の詳細（一覧と同じ catalog・health view） | `LlmSourceView` | celeris の `LlmSourcesReader` |
 | 103 | GET | `/harnesses` | LLM harness 宣言・適格規則・route candidates | `Vec<HarnessView>` | celeris の `HarnessesReader` |
@@ -513,8 +511,6 @@ token_file = "api.token"
 | 121 | GET | `/org/{id}/memory` | そのノードの覚え書き（`?project=`。`[memory] dir` が無ければ 409。§3.62） | `MemoryView` | `[memory] dir` のファイル |
 | 122 | GET | `/reports` | 報告の一覧（ADR-0033 D3。§3.50） | `ReportList` | store |
 | 123 | GET | `/reports/{id}` | 報告 1 件（§3.51） | `ReportDetail` | store |
-| 124 | POST | `/reports/read` | 報告を既読にする（§3.52）（**管理系**） | `ReportsReadResult` | store |
-| 125 | POST | `/reports/notified` | 通知済みの時刻を進める（§3.53）（**管理系**） | `ReportsNotifiedResult` | store |
 | 126 | GET | `/approvals` | 認可の一覧（`?pending=&project=&node=`。ADR-0033 D5。§3.56） | `ApprovalList` | store |
 | 127 | POST | `/approvals/{id}/decide` | 認可を決める（§3.57）（**管理系**） | `ApprovalDecideResult` | store + task-ops |
 | 128 | GET | `/standing-rules` | 永続の認可の一覧（`?node=`。§3.58） | `StandingRuleList` | store |
@@ -1801,16 +1797,9 @@ GET /api/v1/reports?project=<ULID>&node=<org id>&level=<n>&unread=true&limit=50
 - `{report, sources_expanded[]}`。`sources_expanded` は `report.sources` の順に引いた元の報告（消えていたものは飛ばす）。
 - 無い id・ULID でない id は 404 `report_not_found`。
 
-#### 3.52 `POST /reports/read` → 200 `{updated}`（**管理系**）
+#### 3.52 `POST /reports/read` → 200 `{updated}`（**管理系**）（廃止。2026-11-17、ADR 2026-11-17-console-deprecated-api-aider-removal）
 
-- 本文 `{"ids": ["<report id>", …]}`。既に既読のものは触らない（`updated` は未読から既読に変わった件数）。
-- ULID でない id は 404 `report_not_found`（無い ULID は数えずに飛ばす）。
-
-#### 3.53 `POST /reports/notified` → 200 `{last_notified_at}`（**管理系**）
-
-- GUI がブラウザ通知を出したときに呼ぶ（本文は取らない）。次の通知は**2 時間後**まで出ない（`bad_news` の未読を除く。
-  SPEC §3.5「通知は数時間単位」）。
-- `last_notified_at` は **API プロセスのメモリ**にある観測値で、DB には書かない（celeris を再起動すると「まだ通知していない」に戻る）。
+#### 3.53 `POST /reports/notified` → 200 `{last_notified_at}`（**管理系**）（廃止。2026-11-17、ADR 2026-11-17-console-deprecated-api-aider-removal）
 
 #### `GET /daemon` への追加（3.20）
 
@@ -2776,80 +2765,9 @@ Console は「全案件の流れが一本で見える画面」。celeris は**�
 イベントの種類やアダプタごとの差を知らない。**読み取りだけ**で状態は変えない。入力（`POST /console/instruct`）と
 CoS の `actions` は ADR-0048 D3（§3.107）。
 
-#### 3.98 `GET /console?scope=&since=&limit=` → 200 `ConsolePage`
+#### 3.98 `GET /console?scope=&since=&limit=` → 200 `ConsolePage`（廃止。2026-11-17、ADR 2026-11-17-console-deprecated-api-aider-removal）
 
-| クエリ | 既定 | 説明 |
-|---|---|---|
-| `scope` | `all` | `all` / `project:<ULID>` / `node:<org ノード id>`。形が違えば 400 |
-| `since` | – | 前回の `next_cursor`（**不透明な文字列**。GUI は中身を解釈しない）。形が違えば 400 |
-| `limit` | 100 | 1〜**200**（超えたら 200 に丸める。0 は 400） |
-
-- `items` は**時刻の昇順**（新しいものが最後。GUI は下に足す）。
-- `since` **無し**は「いちばん新しい `limit` 件」、`since` **有り**は「そのカーソルより後の `limit` 件」。
-  同じブロックを 2 回返さない。
-- `next_cursor` は最後のブロックの位置。1 件も無ければ渡した `since` をそのまま返す（増分取得に使える）。
-- 引きはすべて上限付き（`events` は 1 回 4,000 件の窓、対話・認可・報告は `limit × 4`（最大 800））。
-  窓より古いものは `GET /tasks/{id}/events` や `GET /reports` で見る。
-
-ブロックは `kind` で 8 種（ADR-0048 D1 の 8 種から `milestone` を除いた 7 種 + ADR-0047 D5 の `knowledge`）。
-`milestone`（途中目標の提案）は ADR-0079 D13 で途中目標を凍結したので出さない（行は `GET /projects/{id}?include_frozen=true` で読む）。
-どれも `at`（RFC 3339）と `cursor` を持つ:
-
-| `kind` | 中身 | 由来 |
-|---|---|---|
-| `human` | 人の発言（`text` / `node_id` / `project_id` / `task_id`）。ADR-0056 D2: `author`（`mcp:<client_id>`。旧 MCP 入力が付けた発言。2026-10-08 以降の MCP は通常チャットへ投入。人の発言は省略）で GUI は「外部（<client name>）」の帯を出せる | `messages`（`role = user`） |
-| `reply` | CoS・部署ノードの返事（Markdown。`run_id` 付き）。CoS が `actions`（§3.107）を宣言していれば `actions_result`（`MessageMetadata`: `actions_executed[]` / `actions_failed[]`）。ADR-0054 D2: `state`（`streaming` \| `done`。省略時 `done`）・`thinking`（run 中の最新の思考 1 行。置き換え式）・`steps[]`（`{kind: tool_use\|tool_result, tool?, text, error?}`。run 中の道具の呼び出しを順番どおり） | `messages`（`role = node`）。`state = streaming` のときは対話 run の `Event::WorkerProgress` から合成（まだ `messages` に確定していない） |
-| `task` | 開始・終了・失敗・中止・割り込みの 1 行（`task`: `from` / `to` / `reason` / `assignee` / `harness` / `tier` / `mode` / `elapsed_secs`） | `Event::Transitioned` |
-| `progress` | run ごとに束ねたワーカーの進行。`progress`: `run_id` / `count` / `tool_count` / `last_status` / `started_at` / `updated_at` / `first[]` / `last[]` / `truncated`。見出し用に `title` / `assignee` / `harness` / `tier` | `Event::WorkerProgress`（ADR-0048 D2 の正規化） |
-| `question` | ディスパッチャの質問（`text` / `answered` / `answer` / `run_id`） | `Event::QuestionRaised` + `Event::Answered` |
-| `approval` | 認可 1 件（`Approval` をそのまま。`decision` / `answer` / `decided_at` 付き） | `approvals` |
-| `report` | 報告（見出しと本文） | `reports` |
-| `knowledge` | 知識整理 run の結果（ADR-0047 D4/D5）。`task_id` / `task_title` / `run_task_id` / `state`（`applied` \| `failed`。`scheduled` は出ない）/ `ingested` / `inbox` / `discarded` / `via`（ADR-0052 D2。`"langmem"` \| `"fallback:<adapter>"`。GUI は後者に「cheap のハーネスで抽出」を出す） | `knowledge_runs`（`state != scheduled`）+ 元のタスク |
-
-範囲の効き方:
-
-- `project:<id>`: そのタスク（`tasks.project_id`）・その案件についての対話（`messages.project_id`）・
-  報告（`reports.project_id`）。
-- `node:<id>`: そのノードが担当のタスク（`tasks.assignee`）・そのノードとの対話（`messages.node_id`）・
-  そのノードの報告（`reports.node_id`）。
-- 同じ質問が `approvals` にもあるときは **`approval` の側だけ**出す（同じことを 2 回出さない）。
-
-`progress` の `first[]` / `last[]` は折り畳みの見出し用に**始めの 3 行と終わりの 3 行**だけ
-（`truncated = true` なら間が省かれている）。全行は §3.100 で取る。1 行は
-`{at, seq, kind?, tool?, text, error?}` で、`text` は `summary` があればそれ、無ければ `msg`。
-
-**育つ返事（ADR-0054 D2）**: 対話 run（`task.conversation` あり。CoS の対話・ノードとの対話の
-どちらも）の進行は、他のタスクのような折り畳んだ `progress` ではなく、**`reply`（`state = "streaming"`）**
-として出る。`kind = thinking` の行は `thinking` を**置き換え**（積み上げない。最新の 1 行）、
-`kind = text` の行は `text` に**そのまま追記**（アダプタが部分文字列で送るぶんだけ）、
-`kind = tool_use` / `tool_result` の行は `steps[]` に**順番どおり追加**する（`tool_use` は `tool` +
-`summary`、`tool_result` は折り畳み用に 1 行）。`kind = status` の行はここには出さない。
-run が終わり `messages` に確定すると、**別の `reply` ブロック**（`state = "done"`、`thinking`/`steps` は
-空）が届く。GUI は同じ `run_id` の `reply` を 1 つの吹き出しとして扱う（§3.99 の SSE の積み方を参照）。
-
-#### 3.99 `GET /console/stream?scope=&since=`
-
-`GET /stream` と同じ枠組み（認証・同時接続数 16・`heartbeat`・停止で閉じる）。`scope` は §3.98 と同じ。
-
-```
-event: hello
-data: {"cursor":"00001789…000.12345.e12345","scope":"all","now":"…"}
-
-event: console.block
-data: {…§3.98 のブロック 1 件…}
-
-event: heartbeat
-data: {"now":"…"}
-```
-
-- `since` を渡さなければ**「今」から**（履歴は §3.98 で取る）。
-- `progress` と、対話 run の育つ `reply`（`state = "streaming"`）は **run ごとに 1 秒に 1 回まで**にまとめて
-  流す（1 回の道具呼び出しごとにフレームが飛ばない）。流れてくる `progress` ブロックは**その run の積み上げ**
-  （`count` / `tool_count` はその接続で見た合計）。育つ `reply` は**その接続で見た増分だけ**（`text` は
-  その回で届いた分だけ・GUI 側が同じ `run_id` の既存の吹き出しに追記する。`thinking` は最新の値で置き換え）。
-- `task` / `human` / `question` / `approval` / `report` と、確定した `reply`
-  （`state = "done"`）はまとめずにそのまま流す（対話・認可・報告は 1 秒ごとに見に行く）。
-- `Last-Event-ID` は使わない（`id:` を付けない。再開は `since` で行う）。
+#### 3.99 `GET /console/stream?scope=&since=`（廃止。2026-11-17、ADR 2026-11-17-console-deprecated-api-aider-removal）
 
 #### 3.100 `GET /tasks/{id}/runs/{run_id}/events?after_seq=&limit=` → 200 `EventsPage`
 
@@ -2979,58 +2897,7 @@ author / committer は `Celeris (human) <celeris@local>`（`celerisctl knowledge
 - `_inbox/<id>.md` を消してコミットする（履歴には残る）。応答は `{"id": "…", "sha": "…"}`
 - 知らない id は 404 `candidate_not_found`
 
-### 3.107 `POST /console/instruct` → 202 `ConsoleInstructAccepted`（管理系。ADR-0048 D3）
-
-Console の入力欄の文の入口。`POST /org/{id}/messages`（§3.47）と同じ経路に載せるだけで、返事は待たない
-（`GET /console` / `GET /console/stream` で拾う）。
-
-```json
-{"text": "@software-engineering このバグを直して", "scope": null}
-```
-
-`InstructBody`: `text`（必須。空白だけは 422 `validation`）、`scope`（省略可。`all` / `node:<id>` /
-`project:<id>`。形が違えば 400 `bad_request`）。
-
-- **相手の決め方**（決定的。LLM は関与しない）:
-  1. `scope = node:<id>` → そのノード。
-  2. それ以外で `text` が `@<node-id> `（`@` の直後に空白でない 1 語、その後ろに空白）で始まる → その
-     ノード。**`@<node-id> ` は送る本文から取り除く**（残りの本文だけがそのノードへの発言になる）。
-  3. `scope = project:<id>` で `@mention` が無い → **CoS**（組織の根。`OrgKind::Secretary`）への対話を
-     その案件に紐づける（`Message.project_id` / `Task.project_id` がその案件）。
-  4. それ以外（省略・`all`、`@mention` 無し）→ CoS への対話（案件に紐づかない）。
-- ノード宛て（1・2）は知らない id なら 404 `org_node_not_found`。CoS 宛て（3・4）は組織に CoS
-  （`OrgKind::Secretary` のノード）が無ければ 404 `org_node_not_found`（`id: "cos"`）。
-- 応答 `ConsoleInstructAccepted`: `message_id`（入った `role = "user"` の行）、`task_id`（起こした対話用
-  タスク）、`node_id`（実際に話しかけた相手。ノード宛てならそのノード、CoS 宛てなら CoS の id）。
-- CoS への対話 run の前置きには、通常の CoS 対話（§3.47 のノード一覧）に加えて**進行中の案件とその途中目標**
-  （`proposed` / `active` の案件だけ）と、`actions` の宣言の仕方（JSON の形と目安）が入る。CoS が結果ファイルに
-  `actions`（`create_task` / `propose_project` / `add_milestone` / `ask_human`）を宣言すると、taskd が**決定的に**
-  実行する（LLM はしない）:
-  - `create_task`: **`ready`**（人の Go 済み）のタスクを作る。`assignee` を省けば次 tick の matching（ADR-0046 D5）が
-    決める。`project` / `milestone` は id（省略可）、`harness` はハーネス id（`[[harnesses]]` を設定していれば検証）、
-    `acceptance` は 1 件以上必須。
-  - `propose_project`: `proposed` の案件を作る。`repos[]` は**絶対パス**（1 件目が primary。名前・種類は
-    `POST /projects/{id}/repos` と同じ既定から決める）。
-  - `add_milestone`: 既存の案件の末尾に `proposed` の途中目標を足す。**ADR-0079 D12 で廃止**（「途中目標は root task の段階で表す」の理由付きで落ち、人に見える。代わりに `create_task.stages_hint`）。
-  - `ask_human`: taskd 側では何も作らない（人への問いかけ自体が返事の本文）。「実行できた」として記録するだけ。
-  - 検証に落ちた action（知らない harness / repos / 案件など）は**実行されない**。CoS の返事の Markdown に
-    「実行できなかった action: …」の節が付き、`reply` ブロックの `actions_result.actions_failed[]` にも理由が残る。
-  - 実行結果は `Message.metadata`（`MessageMetadata`）に残り、`GET /console` の `reply` ブロックが
-    `actions_result` として運ぶ（§3.98 の表）。**同じ run の actions は 1 回だけ実行される**（冪等）。
-  - CoS が `actions` を出すと run はそこで終わる（サブエージェントに一通り投げたら一旦止まる。ADR-0054
-    D2）。作った `create_task` は `task` ブロックとして返事の直下に出て、その後の進行はそのタスク**自身**
-    の run として折り畳みの `progress` で流れる（既定は折り畳み。§3.98）。
-- **入力のキュー（ADR-0054 D2）**: 同じノード（**CoS は案件をまたいでも 1 つの列**。D1 の継続
-  セッションが `project_id` に関わらず全体で 1 本のため。CoS 以外のノードは案件ごとに別の列）に未終了の
-  対話用タスクがあれば、新しい `POST /console/instruct` は 202 を返しつつ、その対話用タスクを**依存**
-  （`depends_on`）として作る。run は前の対話が終わるまで始まらない（202 の応答自体はすぐ返る。「投げた」
-  ことと「run が始まった」ことは別）。
-- **CoS の対話 run に許す読み取りの道具（ADR-0054 D2）**: `celerisctl knowledge search|get`・
-  `celerisctl ls|show`（タスク）・`celerisctl projects ls|show`（案件）だけ。書く操作は
-  §3.107 の `actions` 経由だけ（対話 run 自身は道具を使わない、という ADR-0033 D4 の原則の例外はこれだけ）。
-  アダプタごとの実現（GUI からは見えない、taskd 内部の話）は claude-code が `--allowedTools`、codex が
-  `sandbox_mode="read-only"`、ACP は道具単位の許可が無いため対話 run 中は道具の許可要求を一律拒否
-  （ADR-0054 を参照）。
+### 3.107 `POST /console/instruct` → 202 `ConsoleInstructAccepted`（管理系。ADR-0048 D3）（廃止。2026-11-17、ADR 2026-11-17-console-deprecated-api-aider-removal）
 
 ### 3.108 `GET /llm/sources` → 200 `LlmSourcesView`（ADR-0053 D4）
 
@@ -3731,8 +3598,6 @@ registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surfac
 | projects | `POST /projects/{id}/authority/proposals` | `authority.grant_propose`（人の発言を引いた提案。許可そのものは人だけが作る） |
 | projects | `POST /standing-rules` | `standing_rule.create`（人の決定で CoS にも許可） |
 | projects | `DELETE /standing-rules/{id}` | `standing_rule.delete` |
-| projects | `POST /reports/read` | `report.read`（対応する通知も同じ transaction で既読） |
-| projects | `POST /reports/notified` | `report.notified`（API のメモリの通知時刻。再送では進めない） |
 | projects | `POST /projects/{id}/docs/init` | `docs.init`（外部効果: pending → applied） |
 | projects | `PUT /projects/{id}/docs/page` | `docs.page_put`（外部効果。etag 不一致・main 編集中・path の誤りは変更前の拒否で `rejected`） |
 | projects | `DELETE /projects/{id}/docs/page` | `docs.page_delete`（`path`・`etag`・`message` は body。外部効果） |
@@ -3797,7 +3662,7 @@ tasks の実行計画初回採用 `POST /api/v1/tasks/{id}/execution-plan`（`ex
 
 除外（422 `cos_operation_not_allowed`、detail に理由コード）: 秘密の値を扱う操作（`secret_operations`。`/secrets/*`・
 `/llm/sources/{source_id}/accounts/{account_id}/login*`・`/clusters/{id}/connect*`）、browser の credential/attestation 系
-（`browser_credential_attestation`）、`/console/instruct`（`console_instruction_chain`）、`/cos/*`（`recursive_cos`。登録済みの `POST /cos/review-report` を除く）、
+（`browser_credential_attestation`）、`/cos/*`（`recursive_cos`。登録済みの `POST /cos/review-report` を除く）、
 ADR-0079 で撤去済みの入口（`removed_by_adr_0079`）。
 path の placeholder は 1 segment（英数字・`-`・`_`・`.`・`:`）に一致する。
 
@@ -4099,7 +3964,6 @@ data: {"reason":"cursor_too_old","cursor":20000}
 | 終了 | クライアントが切ればサーバは購読ループを止める。celeris の停止時は接続を閉じる |
 
 `data` は 1 行の JSON（`event: <name>\n[id: <id>\n]data: <json>\n\n`）。型は `StreamHello` / `EventRow` / `DaemonSnapshot` / `StreamHeartbeat` / `StreamReset`（§6）。
-`GET /console/stream` は同じ枠組み（`hello` / `heartbeat` に加えて `console.block`）を使う別の stream（§3.99）。
 
 ### チャット stream `GET /chat/threads/{t}/stream`（ADR 2026-10-05-cos-chat-home D2）
 

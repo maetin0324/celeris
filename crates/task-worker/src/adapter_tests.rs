@@ -96,10 +96,9 @@ fn run_common_cost_estimate_keeps_reported_cost() {
 #[test]
 fn research_deadline_continues_from_checkpoint_per_adapter() {
     use crate::{
-        AcpAdapter, AcpConfig, AiderAdapter, AiderConfig, BrowserSpecialistAdapter,
-        ClaudeCodeAdapter, ClaudeCodeConfig, CodexAdapter, CodexConfig, FakeAdapter,
-        LangMemAdapter, LangMemConfig, LdrAdapter, LdrConfig, PaperQaAdapter, PaperQaConfig,
-        PiAdapter, PiConfig,
+        AcpAdapter, AcpConfig, BrowserSpecialistAdapter, ClaudeCodeAdapter, ClaudeCodeConfig,
+        CodexAdapter, CodexConfig, FakeAdapter, LangMemAdapter, LangMemConfig, LdrAdapter,
+        LdrConfig, PaperQaAdapter, PaperQaConfig, PiAdapter, PiConfig,
     };
     let acp: Arc<dyn WorkerAdapter> = Arc::new(AcpAdapter::new(AcpConfig::default()));
     let table: Vec<(Arc<dyn WorkerAdapter>, bool)> = vec![
@@ -110,7 +109,6 @@ fn research_deadline_continues_from_checkpoint_per_adapter() {
         (Arc::new(CodexAdapter::new(CodexConfig::default())), true),
         (Arc::clone(&acp), true),
         (Arc::new(PiAdapter::new(PiConfig::default())), true),
-        (Arc::new(AiderAdapter::new(AiderConfig::default())), true),
         (Arc::new(FakeAdapter::default()), true),
         (Arc::new(BrowserSpecialistAdapter::new(acp)), true),
         (

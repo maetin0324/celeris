@@ -571,3 +571,7 @@ D2「再開中は未配送 seq 以後の差分と現在の規則だけを渡す�
 - host lab/personalの認証のSHA-256・mtime・sizeは前後不変。hostの認証・本番config/DB/release/systemdを変更していない。隔離認証コピーは計測後に削除。summaryありthread・他harnessの効果は不明。
 - 証跡: task `01M4DE3G78D16NJ80SEMWVAVAK` の `wu/lab-bench/artifacts/resume-delta-bench-lab/` に `{before,before-2,after,after-2}/runs.json`、各 `summary.json`、`compare.md`（全runのaccount_idとcommit出所）、`validation.json`、`binary-provenance.json`、`host-integrity.json`。
 - 検証: CoS chat 152件、resume差分配送12件、workspace clippy、shell構文、引数拒否4ケース、driverのcompleted/failed/fresh停止3ケース、文書リンク・progress-indexはすべて成功。
+
+## 付記: Console の撤去（2026-11-17）
+
+- `GET /console`・`GET /console/stream`・`POST /console/instruct` と web の `/console`・`/org/:id` の画面は [ADR 2026-11-17-console-deprecated-api-aider-removal](2026-11-17-console-deprecated-api-aider-removal.md) D1 で消した。自動引き渡しの人に向けた通知は同 D2 で CoS チャットの固定スレッドへ書いた時点で写す。`GET /tasks/{id}/runs/{run_id}/events` は残した。

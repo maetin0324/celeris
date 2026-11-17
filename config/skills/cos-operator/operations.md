@@ -88,8 +88,6 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 | 許可を取り消す | `POST /api/v1/projects/<id>/authority/grants/<g>/revoke` | authority.grant_revoke | `{"reason":"…"}`（省略可）。`<id>` は行の台帳（global の行は `global`） |
 | 永続の認可の追加 | `POST /api/v1/standing-rules` | standing_rule.create | `{"rule":"…","node_id":"…"}`（node_id 省略で全員向け）。人の決定で CoS にも許可 |
 | 永続の認可の削除 | `DELETE /api/v1/standing-rules/<id>` | standing_rule.delete | body なし。無ければ 404 |
-| 報告を既読化（旧入口） | `POST /api/v1/reports/read` | report.read | `{"ids":["…"]}`。対応する通知も既読。新しくは notification.read を使う |
-| 通知時刻を進める（旧入口） | `POST /api/v1/reports/notified` | report.notified | body は `{}`。API のメモリの値で、再起動で戻る |
 | 文書リポジトリの用意 | `POST /api/v1/projects/<id>/docs/init` | docs.init | body は `{}`。外部効果（git）扱い: pending → applied、再送は再実行しない |
 | 文書ページの作成・更新 | `PUT /api/v1/projects/<id>/docs/page` | docs.page_put | `{"path":"docs/x.md","body":"…","etag":"…","message":"…"}`。既存ページは etag 必須（違えば 409、rejected で記録） |
 | 文書ページの削除 | `DELETE /api/v1/projects/<id>/docs/page` | docs.page_delete | `{"path":"…","etag":"…"}` を body で送る（operation の path に query は付けられない） |
@@ -174,7 +172,6 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 | `browser_credential_attestation` | `/browser/identities*`、`/browser/trusted-devices*`、`/tasks/<id>/browser/waits/<w>/{credential,decision,registered,revoke}`、`/tasks/<id>/browser/live/<run>/<session>/{check,grant,read}` | credential・封緘 state・receipt・owner attestation／信頼端末を扱う |
 | `human_instruction_relay` | `POST /chat/threads/{t}/relays` | 人の指示の取り次ぎは外部主体専用。CoS は指示を作れない |
 | `human_only`（authority） | `POST /projects/<id>/authority/grants`、`…/authority/proposals/<p>/dismiss`、`…/authority/audit/<a>/outcome` | 許可を作る・提案を断る・状態不明の結果を閉じるのは人だけ（ADR 2026-11-04-project-controller A7） |
-| `console_instruction_chain` | `POST /console/instruct` | 別の指示経路へ入り監査の鎖が二重になる |
 | `recursive_cos` | `/cos/operations`・`/cos/operations/<o>/override`・`/cos/inbox/<i>/resolve`・`/cos/threads/<t>/checkpoint` | CoS 制御 API の再帰。受信箱の解決は envelope の外で直接呼ぶ |
 | `removed_by_adr_0079` | `POST /plans`、`/milestones/*`、`/projects/<id>/{milestones,plan,project-plan/<v>/decide}` | 撤去済みの 410 の互換入口 |
 

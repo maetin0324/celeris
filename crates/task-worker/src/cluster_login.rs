@@ -277,9 +277,6 @@ pub fn resolve_master_launcher(
     crate::detach::resolve_detach_launcher(configured, has_systemd_run, has_xdg_runtime_dir)
 }
 
-/// `path_env`（`PATH` の値）に実行可能な `name` があるか（`which name` 相当）。
-pub use crate::detach::path_has_executable;
-
 /// 実際のプロセス環境から `systemd-run` が `PATH` にあるか調べる（`resolve_master_launcher` の
 /// 呼び出し側が使う、非純粋な便利関数。判定そのものは [`resolve_master_launcher`] が純関数で持つ）。
 pub use crate::detach::systemd_run_on_path;

@@ -68,3 +68,48 @@ pub mod workspace;
 pub mod docs_maintenance;
 
 mod browser_doctor;
+
+#[cfg(test)]
+mod tests {
+    use crate::error::CliError;
+    use task_core::{SqliteStore, TaskId};
+
+    /// id を 1 つ取る accept・cancel・rereview・retry は、存在しない task の id と形の悪い id を
+    /// どちらも `CliError::Message` で返す（store の誤りや panic にしない）。
+    #[test]
+    fn task_id_commands_return_message_errors_for_missing_and_invalid_ids() {
+        let store = SqliteStore::open_in_memory().expect("open store");
+        for id in [TaskId::new().to_string(), "not-a-valid-id".to_string()] {
+            let results = [
+                (
+                    "accept",
+                    super::accept::run(&store, super::accept::AcceptArgs { id: id.clone() }),
+                ),
+                (
+                    "cancel",
+                    super::cancel::run(&store, super::cancel::CancelArgs { id: id.clone() }),
+                ),
+                (
+                    "rereview",
+                    super::rereview::run(&store, super::rereview::RereviewArgs { id: id.clone() }),
+                ),
+                (
+                    "retry",
+                    super::retry::run(
+                        &store,
+                        super::retry::RetryArgs {
+                            id: id.clone(),
+                            draft: false,
+                        },
+                    ),
+                ),
+            ];
+            for (name, result) in results {
+                assert!(
+                    matches!(result, Err(CliError::Message(_))),
+                    "{name} {id}: {result:?}"
+                );
+            }
+        }
+    }
+}

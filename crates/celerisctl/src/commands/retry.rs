@@ -45,38 +45,3 @@ pub fn run(store: &SqliteStore, args: RetryArgs) -> Result<ExitCode, CliError> {
     }
     Ok(ExitCode::SUCCESS)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use task_core::{SqliteStore, TaskId};
-
-    #[test]
-    fn run_on_missing_task_returns_message_error() {
-        let store = SqliteStore::open_in_memory().expect("open store");
-        let missing_id = TaskId::new().to_string();
-
-        let result = run(
-            &store,
-            RetryArgs {
-                id: missing_id,
-                draft: false,
-            },
-        );
-        assert!(matches!(result, Err(CliError::Message(_))));
-    }
-
-    #[test]
-    fn run_on_invalid_id_returns_message_error() {
-        let store = SqliteStore::open_in_memory().expect("open store");
-
-        let result = run(
-            &store,
-            RetryArgs {
-                id: "not-a-valid-id".to_string(),
-                draft: false,
-            },
-        );
-        assert!(matches!(result, Err(CliError::Message(_))));
-    }
-}

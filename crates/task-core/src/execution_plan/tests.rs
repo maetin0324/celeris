@@ -578,38 +578,15 @@ fn dependents_to_block_finds_the_transitive_closure() {
 /// ADR-0072 D8 / ADR-0003 D6: 生成スキーマとコミット済みファイルの一致。`UPDATE_SCHEMA=1` で再生成。
 #[test]
 fn committed_schema_matches_generated() {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../docs/protocol/execution-plan.schema.json"
-    );
-    let generated = serde_json::to_string_pretty(&schema_value()).unwrap() + "\n";
-    if std::env::var_os("UPDATE_SCHEMA").is_some() {
-        std::fs::write(path, &generated).unwrap();
-    }
-    let committed = std::fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("read {path}: {e} (run with UPDATE_SCHEMA=1 to generate)"));
-    assert_eq!(
-        committed, generated,
-        "schema drift: run `UPDATE_SCHEMA=1 cargo test -p task-core`"
-    );
+    crate::assert_committed_schema("protocol/execution-plan.schema.json", &schema_value());
 }
 
 /// ADR-0074 D5.3（Phase F1）: `execution-plan-delta/1` の生成スキーマとコミット済みファイルの一致。
 #[test]
 fn delta_committed_schema_matches_generated() {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../docs/protocol/execution-plan-delta.schema.json"
-    );
-    let generated = serde_json::to_string_pretty(&delta_schema_value()).unwrap() + "\n";
-    if std::env::var_os("UPDATE_SCHEMA").is_some() {
-        std::fs::write(path, &generated).unwrap();
-    }
-    let committed = std::fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("read {path}: {e} (run with UPDATE_SCHEMA=1 to generate)"));
-    assert_eq!(
-        committed, generated,
-        "schema drift: run `UPDATE_SCHEMA=1 cargo test -p task-core`"
+    crate::assert_committed_schema(
+        "protocol/execution-plan-delta.schema.json",
+        &delta_schema_value(),
     );
 }
 

@@ -615,28 +615,6 @@ fn resolve_master_launcher_explicit_values_ignore_the_environment() {
     ));
 }
 
-#[test]
-fn path_has_executable_finds_an_executable_file_in_one_of_the_path_dirs() {
-    let empty_dir = tempfile::tempdir().unwrap();
-    let bin_dir = tempfile::tempdir().unwrap();
-    let path_env = std::env::join_paths([empty_dir.path(), bin_dir.path()])
-        .unwrap()
-        .into_string()
-        .unwrap();
-    assert!(!path_has_executable(&path_env, "systemd-run"));
-
-    write_executable(&bin_dir.path().join("systemd-run"), "#!/bin/sh\nexit 0\n");
-    assert!(path_has_executable(&path_env, "systemd-run"));
-}
-
-#[test]
-fn path_has_executable_ignores_non_executable_files() {
-    let bin_dir = tempfile::tempdir().unwrap();
-    std::fs::write(bin_dir.path().join("systemd-run"), "not executable").unwrap();
-    let path_env = bin_dir.path().to_string_lossy().into_owned();
-    assert!(!path_has_executable(&path_env, "systemd-run"));
-}
-
 /// (e) 偽 `systemd-run`（`--` の後を `exec` するだけ）を経由しても、`Command::envs` で渡した
 /// `SSH_ASKPASS` 等の環境変数が末端の ssh まで届く（`--scope` は呼び出し元の環境を継ぐ、という
 /// ADR-0060 の前提を実プロセスで確かめる）。

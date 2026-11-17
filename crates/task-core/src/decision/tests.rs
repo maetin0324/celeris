@@ -329,18 +329,5 @@ fn worker_decisions_beyond_the_cap_are_bundled() {
 /// D7 / R1a (e): `decision.schema.json` の生成スキーマとコミット済みファイルの一致。
 #[test]
 fn decision_committed_schema_matches_generated() {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../docs/protocol/decision.schema.json"
-    );
-    let generated = serde_json::to_string_pretty(&schema_value()).unwrap() + "\n";
-    if std::env::var_os("UPDATE_SCHEMA").is_some() {
-        std::fs::write(path, &generated).unwrap();
-    }
-    let committed = std::fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("read {path}: {e} (run with UPDATE_SCHEMA=1 to generate)"));
-    assert_eq!(
-        committed, generated,
-        "schema drift: run `UPDATE_SCHEMA=1 cargo test -p task-core`"
-    );
+    crate::assert_committed_schema("protocol/decision.schema.json", &schema_value());
 }

@@ -770,19 +770,6 @@ async fn llm_auth_failure_is_classified_as_adapter_error() {
     assert!(dir.path().join("runs/run-9/result.json").is_file());
 }
 
-/// 要約は空白をたたんで単一行にし、上限文字数で切り詰める。
-#[test]
-fn single_line_summary_collapses_whitespace_and_truncates() {
-    let long_answer = format!("Answer: {}", "word ".repeat(2000));
-    let summary = single_line_summary(&long_answer, SUMMARY_MAX_CHARS);
-    assert!(!summary.contains('\n'));
-    assert!(summary.chars().count() <= SUMMARY_MAX_CHARS);
-
-    let with_newlines = "Answer: line one\nline two\n\n  line three  ";
-    let collapsed = single_line_summary(with_newlines, SUMMARY_MAX_CHARS);
-    assert_eq!(collapsed, "Answer: line one line two line three");
-}
-
 // ------------------------------------------------------------ ADR-0035（Phase 34）
 
 /// 依頼文が日本語でも、その中の英数字の名詞句が検索語になる（ADR-0035 D1 手順 1。決定的、LLM 無し）。

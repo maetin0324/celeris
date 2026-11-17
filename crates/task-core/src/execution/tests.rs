@@ -605,20 +605,7 @@ fn mixing_two_different_repairable_classes_is_substantive() {
 /// ADR-0072 D8 / ADR-0003 D6: 生成スキーマとコミット済みファイルの一致。`UPDATE_SCHEMA=1` で再生成。
 #[test]
 fn committed_schema_matches_generated() {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../docs/protocol/checkpoint.schema.json"
-    );
-    let generated = serde_json::to_string_pretty(&schema_value()).unwrap() + "\n";
-    if std::env::var_os("UPDATE_SCHEMA").is_some() {
-        std::fs::write(path, &generated).unwrap();
-    }
-    let committed = std::fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("read {path}: {e} (run with UPDATE_SCHEMA=1 to generate)"));
-    assert_eq!(
-        committed, generated,
-        "schema drift: run `UPDATE_SCHEMA=1 cargo test -p task-core`"
-    );
+    crate::assert_committed_schema("protocol/checkpoint.schema.json", &schema_value());
 }
 
 // ---- ADR-0120: IntegrationRepair ----

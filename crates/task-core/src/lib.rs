@@ -418,6 +418,23 @@ fn workspace_root_priority_cli_store_config() {
     local_machine::tests::workspace_root_priority_cli_store_config();
 }
 
+/// 生成スキーマ（`value`）とコミット済みの `docs/<rel>` が一致することを見る試験の共通部（ADR-0003 D6）。
+/// `UPDATE_SCHEMA=1` で `docs/<rel>` を書き直す。
+#[cfg(test)]
+pub(crate) fn assert_committed_schema(rel: &str, value: &serde_json::Value) {
+    let path = format!("{}/../../docs/{rel}", env!("CARGO_MANIFEST_DIR"));
+    let generated = serde_json::to_string_pretty(value).unwrap() + "\n";
+    if std::env::var_os("UPDATE_SCHEMA").is_some() {
+        std::fs::write(&path, &generated).unwrap();
+    }
+    let committed = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("read {path}: {e} (run with UPDATE_SCHEMA=1 to generate)"));
+    assert_eq!(
+        committed, generated,
+        "schema drift: run `UPDATE_SCHEMA=1 cargo test -p task-core`"
+    );
+}
+
 /// `by`・`actor` が CoS の書いたものか（ADR 2026-10-27-api-principals: 新しい記録は `cos:<thread_id>`、
 /// それ以前の追記済み event は `cos`）。
 pub fn is_cos_actor(by: &str) -> bool {

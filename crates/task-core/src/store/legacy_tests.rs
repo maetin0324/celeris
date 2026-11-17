@@ -161,10 +161,13 @@ fn chat_console_projection_lands_on_fixed_cos_threads_without_legacy_threads() {
     );
 }
 
-/// A database that migration 0092 left with legacy threads keeps projecting old Console rows
-/// into them; the projection never creates a legacy thread.
+/// ADR 2026-11-17（Console・旧 API・aider の撤去） D2: legacy threads kept by migration 0092 are
+/// read-only history. A CoS row not yet projected (the delivery notice written after the cutover)
+/// lands on the fixed CoS thread of its scope even when the scope also has a legacy thread, both
+/// at the open and when the delivery projects it right away; the projection creates no legacy
+/// thread. Production has projects with both threads, and the web lists only open threads.
 #[test]
-fn chat_console_projection_reuses_legacy_threads_kept_by_migration_0092() {
+fn chat_cos_projection_lands_on_fixed_threads_even_beside_legacy_threads() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("v91.sqlite3");
     let mut conn = Connection::open(&path).expect("open fixture");
@@ -175,43 +178,57 @@ fn chat_console_projection_reuses_legacy_threads_kept_by_migration_0092() {
     for version in (1..=37).chain(41..=67).chain(70..=91) {
         SqliteStore::apply_migration_version(&mut conn, version).expect("schema 91");
     }
-    conn.execute_batch(
+    let project = crate::ProjectId(ulid::Ulid::new());
+    conn.execute_batch(&format!(
         "INSERT INTO projects(id,title,request,status,created_at,updated_at) \
-           VALUES('p1','案件一','案件一','active','2026-10-05T00:00:00Z','2026-10-05T00:00:00Z');
+           VALUES('{project}','案件一','案件一','active','2026-10-05T00:00:00Z','2026-10-05T00:00:00Z');
          INSERT INTO chat_threads(id,kind,title,status,created_at,updated_at) \
            VALUES('legacy:global','legacy','旧 CoS 会話','open','2026-10-05T00:00:00Z','2026-10-05T00:00:00Z');
+         INSERT INTO chat_threads(id,kind,title,project_id,status,created_at,updated_at,archived_at) \
+           VALUES('legacy:project:{project}','legacy','旧案件一','{project}','archived', \
+                  '2026-10-05T00:00:00Z','2026-10-05T00:00:00Z','2026-10-06T00:00:00Z');
          INSERT INTO messages(id,node_id,project_id,role,text,created_at) \
            VALUES('old-global','cos',NULL,'user','全体の旧本文','2026-10-05T00:00:01Z'),
-                 ('old-p1','cos','p1','user','案件の旧本文','2026-10-05T00:00:02Z');",
-    )
+                 ('old-p1','cos','{project}','user','案件の旧本文','2026-10-05T00:00:02Z');"
+    ))
     .expect("v91 rows");
     drop(conn);
-    drop(SqliteStore::open(&path).expect("migrate to 92 and project"));
-    assert_eq!(
-        count(
-            &path,
-            "SELECT count(*) FROM chat_messages WHERE legacy_message_id='old-global' \
-             AND thread_id='legacy:global'"
-        ),
-        1
-    );
-    // The project had no legacy thread: its row lands on the project's CoS thread.
-    let p1 = cos_thread(&path, Some("p1"));
-    assert_eq!(
+    let store = SqliteStore::open(&path).expect("migrate to 92 and project");
+    let general = cos_thread(&path, None);
+    let p1 = cos_thread(&path, Some(&project.to_string()));
+    let on = |id: &str, thread: &str| {
         count(
             &path,
             &format!(
-                "SELECT count(*) FROM chat_messages WHERE legacy_message_id='old-p1' AND thread_id='{p1}'"
-            )
-        ),
-        1
-    );
+                "SELECT count(*) FROM chat_messages WHERE legacy_message_id='{id}' AND thread_id='{thread}'"
+            ),
+        )
+    };
+    assert_eq!(on("old-global", &general), 1);
+    assert_eq!(on("old-p1", &p1), 1);
+
+    let notice = crate::Message {
+        id: crate::MessageId::new(),
+        node_id: crate::COS_ID.to_owned(),
+        project_id: Some(project),
+        role: crate::MessageRole::Node,
+        text: "【デプロイ準備完了・自動引き渡し結果】".to_owned(),
+        run_id: None,
+        task_id: None,
+        metadata: None,
+        created_at: time::OffsetDateTime::now_utc(),
+    };
+    store.message_append(&notice).expect("delivery notice");
+    store.cos_messages_project().expect("project the notice");
+    assert_eq!(on(&notice.id.to_string(), &p1), 1);
+    let legacy_rows = "SELECT count(*) FROM chat_messages WHERE thread_id LIKE 'legacy:%'";
+    assert_eq!(count(&path, legacy_rows), 0);
     assert_eq!(
         count(
             &path,
-            "SELECT count(*) FROM chat_threads WHERE kind='legacy'"
+            "SELECT count(*) FROM chat_threads WHERE kind='legacy' AND next_seq=1"
         ),
-        1
+        2
     );
 }
 

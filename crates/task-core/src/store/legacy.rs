@@ -2,9 +2,9 @@
 //! notice). The Console readers were removed (ADR 2026-11-17（Console・旧 API・aider の撤去）).
 //!
 //! ADR 2026-10-22-cos-fixed-threads D2': Console input to the CoS is queued on the fixed
-//! general or project CoS thread (never on a legacy thread). The one-time projection of the
-//! pre-chat Console rows (`backfill_legacy_cos`) reuses the legacy threads migration 0092 kept
-//! and otherwise lands on the fixed CoS thread of the scope: nothing creates a legacy thread.
+//! general or project CoS thread (never on a legacy thread). The projection of the CoS rows
+//! (`backfill_legacy_cos`) also lands on the fixed CoS thread of the scope: legacy threads are
+//! read-only history and are never written (ADR 2026-11-17（Console・旧 API・aider の撤去） D2).
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde_json::{Value, json};
@@ -163,7 +163,8 @@ impl SqliteStore {
                     )));
                 }
             };
-            let thread_id = backfill_thread(&tx, old.project_id.as_deref(), &old.created_at)?;
+            let thread_id = cos_thread_ensure_tx(&tx, old.project_id.as_deref(), &old.created_at)
+                .map_err(|e| StoreError::Invalid(e.to_string()))?;
             let source_metadata = old
                 .metadata_json
                 .as_deref()
@@ -205,27 +206,4 @@ impl SqliteStore {
         tx.commit()?;
         Ok(())
     }
-}
-
-/// Where a projected pre-chat Console row goes: the legacy thread of its scope when migration
-/// 0092 kept one, otherwise the fixed general or project CoS thread. Legacy threads are never
-/// created here (ADR 2026-10-22-cos-fixed-threads D1).
-fn backfill_thread(
-    tx: &rusqlite::Transaction<'_>,
-    project_id: Option<&str>,
-    at: &str,
-) -> Result<String, StoreError> {
-    let legacy_id = match project_id {
-        Some(id) => format!("legacy:project:{id}"),
-        None => "legacy:global".to_owned(),
-    };
-    let kept: bool = tx.query_row(
-        "SELECT EXISTS(SELECT 1 FROM chat_threads WHERE id=?1 AND kind='legacy')",
-        [&legacy_id],
-        |r| r.get(0),
-    )?;
-    if kept {
-        return Ok(legacy_id);
-    }
-    cos_thread_ensure_tx(tx, project_id, at).map_err(|e| StoreError::Invalid(e.to_string()))
 }

@@ -8,7 +8,7 @@ tasks: [01M7J3NKVC2KQ4NGJ4GESHJV0B]
 
 ## 文脈
 - ホームは CoS チャット（ADR 2026-10-05）で、人が Console に書いた最後の message は 2026-10-21 だった（operator が本番 DB で確認）。その後に Console の node に書かれていたのは `crates/celeris/src/delivery.rs` の自動引き渡しの通知（「取り込み完了」「デプロイ準備完了」「取り込み・リリース準備の確認が必要」）だけだった。
-- この通知は `messages`（node_id='cos'）に書かれ、Console の画面で読めるほか、daemon の起動時の写し（`SqliteStore::backfill_legacy_cos`）が CoS の固定スレッドへ写していた。CoS チャットに届くのは次の daemon の起動の後だった。
+- この通知は `messages`（node_id='cos'）に書かれ、Console の画面で読めるほか、daemon の起動時の写し（`SqliteStore::backfill_legacy_cos`）が CoS のスレッドへ写していた。写し先は migration 0092 が残した legacy スレッドがある scope ではそちら（archived で web に出ない）、無い scope では固定スレッドで、写るのは次の daemon の起動の後だった。
 - `GET /api/v1/inbox`・`POST /reports/read`・`POST /reports/notified` は deprecated の印の付いた旧 API で、受信箱は `GET /api/v1/feed`・通知の既読は feed の操作に移っていた。
 - aider adapter は本番の config に記述が無く、本番の runs に adapter=aider は 0 件（operator が確認）。
 
@@ -23,6 +23,8 @@ tasks: [01M7J3NKVC2KQ4NGJ4GESHJV0B]
 
 ### D2. 自動引き渡しの通知は書いた時点で CoS チャットへ写す
 - 人に向けた通知（`needs_user`。秘書の node に書くもの）は、`messages` への追記の直後に CoS の固定スレッドへ写す（`SqliteStore::cos_messages_project`。起動時の写しと同じ関数で、同じ行を 2 回写さない）。通知の行き先は Console から CoS チャットになり、daemon の起動を待たない。
+- 写し先はその scope の固定 CoS スレッド（案件の通知は案件の CoS スレッド）だけにする。migration 0092 が残した `legacy:global`・`legacy:project:<id>` があっても入れない（[ADR 2026-10-22-cos-fixed-threads](2026-10-22-cos-fixed-threads.md) の D1 の写しの規則を置き換え、付記で指した）。初回の review の指摘: 旧い規則のままだと、本番の主な案件（legacy と固定の両方のスレッドがある）では通知が archived の legacy スレッドに入り、web（open のスレッドだけを一覧する）で読めなかった。0092 の時点にあった旧 Console の行は 0092 を当てた open で写し終えているので、規則を変えて動く行は 0092 より後の通知だけである。
+- 0092 の後から本 release の起動までに legacy スレッドへ写った通知は移さない（legacy は読むだけの履歴。`messages` の行と task・release の画面の配送の状態は残る）。
 - `messages` の行は残す。`Delivery.notification` の冪等の印（固定の `MessageId`）と、`GET /org/{id}/messages` の読み口のため。
 - 部署に戻す通知（`needs_user` でないもの）は部署の node の `messages` のまま（node の会話の材料で、Console の撤去と関係しない）。
 

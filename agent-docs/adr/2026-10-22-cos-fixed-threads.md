@@ -147,3 +147,12 @@ task-api `console_instruct.rs`（Console・org の入力が統括／案件の Co
 案件スレッドの item が人へ回されると、統括スレッドに札（source triple で冪等、元の件の state から解消表示）が出る。
 D5 の「web のホームは統括 CoS を先頭に各案件 CoS を一覧し、選ぶと切り替わる」は置き換えた: ホームは統括 CoS を開き、
 案件スレッドは札の参照と案件の画面から `/?thread=<id>` で開く読む用の導線だけにする。
+
+## 付記（2026-11-17、[2026-11-17-console-deprecated-api-aider-removal](2026-11-17-console-deprecated-api-aider-removal.md) D2）
+
+D1 の「`backfill_legacy_cos` は migration 0092 が残した legacy スレッドがあればそこへ入れる」を置き換えた。まだ写していない CoS の
+`messages` 行は、legacy スレッドがあってもその scope の固定 CoS スレッドへ入れる。legacy スレッドには何も書かない（読むだけ）。
+写しは書き込み可能な open のたびに migration の直後に走るので、0092 の時点にあった旧 Console の行は 0092 を当てた open で
+legacy スレッドへ写し終えている。その後に写る行は 0092 より後に書かれた行（自動引き渡しの通知）だけで、Console の撤去の後は
+人がこれを固定スレッドでしか読めない。試験 `chat_console_projection_reuses_legacy_threads_kept_by_migration_0092` は
+`chat_cos_projection_lands_on_fixed_threads_even_beside_legacy_threads` に置き換えた。

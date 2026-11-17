@@ -478,12 +478,19 @@ fn a_guard_whose_db_is_gone_does_not_block_spawns() {
 /// 呼ぶ所が残っていない）。新しい adapter を足したときにこの一覧も足す。
 #[test]
 fn every_worker_spawn_site_goes_through_launch() {
-    let sites: [(&str, &str, usize); 10] = [
+    let sites: [(&str, &str, usize); 8] = [
         ("subprocess.rs", include_str!("subprocess.rs"), 1),
         ("claude_code.rs", include_str!("claude_code.rs"), 1),
         ("codex.rs", include_str!("codex.rs"), 1),
         ("aider.rs", include_str!("aider.rs"), 1),
         ("acp.rs", include_str!("acp.rs"), 1),
+        // 研究系 adapter（langmem・local-deep-research・paperqa）の起動は全部ここを通る。
+        ("research_runner.rs", include_str!("research_runner.rs"), 1),
+        ("workspace.rs", include_str!("workspace.rs"), 1),
+        ("container.rs", include_str!("container.rs"), 0),
+    ];
+    // 研究系 adapter は `research_runner::runner_command` だけで起動し、`Command` を自分で組まない。
+    let research: [(&str, &str, usize); 3] = [
         ("langmem.rs", include_str!("langmem.rs"), 1),
         (
             "local_deep_research.rs",
@@ -491,9 +498,13 @@ fn every_worker_spawn_site_goes_through_launch() {
             1,
         ),
         ("paperqa.rs", include_str!("paperqa.rs"), 2),
-        ("workspace.rs", include_str!("workspace.rs"), 1),
-        ("container.rs", include_str!("container.rs"), 0),
     ];
+    for (name, src, commands) in research {
+        assert_eq!(src.matches("runner_command(").count(), commands, "{name}");
+        assert!(!src.contains("Command::new("), "{name} builds its own Command");
+        assert!(!src.contains("crate::db_guard::launch("), "{name}");
+        assert!(!src.contains("crate::container::wrap("), "{name}");
+    }
     for (name, src, launches) in sites {
         assert_eq!(
             src.matches("crate::db_guard::launch(").count(),

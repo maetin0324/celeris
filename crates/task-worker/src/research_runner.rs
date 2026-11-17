@@ -10,13 +10,11 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Instant;
 
-use tokio::io::{AsyncWriteExt, BufReader};
+use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, Command};
 use tracing::warn;
 
-use crate::adapter::{
-    AdapterError, EventSink, RunLimits, Terminal, next_line, spawn_capture_stderr,
-};
+use crate::adapter::{AdapterError, EventSink, RunLimits, Terminal, next_line, open_child_streams};
 use crate::subprocess::{LineOutcome, kill_now, read_tail, reap_after_terminal};
 
 /// ランナー（`script`）と入力（`input`、整形した JSON と末尾の改行）を `run_dir` に書き、両方の path を返す。
@@ -85,14 +83,8 @@ pub(crate) async fn stream_child(
     label: &str,
     mut on_line: impl FnMut(&str),
 ) -> Result<StreamedRun, AdapterError> {
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| AdapterError::Other("worker stdout was not piped".into()))?;
-    let stderr_task = spawn_capture_stderr(&mut child, &stderr_log_path, run_id)?;
-
-    let mut stdout_file = tokio::fs::File::create(&stdout_log_path).await?;
-    let mut reader = BufReader::new(stdout);
+    let (mut reader, mut stdout_file, stderr_task) =
+        open_child_streams(&mut child, &stdout_log_path, &stderr_log_path, run_id).await?;
 
     let mut last_activity = Instant::now();
     let mut stdout_buf = String::new();

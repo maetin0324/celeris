@@ -23,8 +23,8 @@ use axum::http::{HeaderMap, StatusCode};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use task_core::{
-    COS_ID, Event, EventRow, KnowledgeRunState, ListFilter, ListOrder, Message, MessageRole,
-    OrgKind, ProjectId, ReportFilter, SqliteStore, Status, Task, TaskId,
+    COS_ID, Event, EventRow, KnowledgeRunState, Message, MessageRole, OrgKind, ProjectId,
+    ReportFilter, SqliteStore, Status, Task, TaskId,
 };
 use task_ops::console::{ConsoleCursor, at_nanos, group_progress, task_line};
 use time::OffsetDateTime;
@@ -796,27 +796,6 @@ fn run_of(event: &Event) -> Option<&str> {
         | Event::Delegated { run_id, .. } => Some(run_id.as_str()),
         _ => None,
     }
-}
-
-/// 案件の全タスクを引く（`Scope::Project` の範囲検査を SQL 側でやりたくなったときの入口。
-/// いまは `Scope::covers` が `Task.project_id` を見るので使っていない）。
-#[allow(dead_code)]
-fn project_task_ids(
-    store: &SqliteStore,
-    project_id: ProjectId,
-    limit: usize,
-) -> Result<Vec<TaskId>, ApiProblem> {
-    let filter = ListFilter {
-        project_id: Some(project_id),
-        ..ListFilter::default()
-    };
-    Ok(store
-        .list_page(&filter, ListOrder::CreatedDesc, None, limit)
-        .map_err(store_problem)?
-        .items
-        .into_iter()
-        .map(|t| t.id)
-        .collect())
 }
 
 // ---- GET /console/stream（SSE）----

@@ -42,7 +42,7 @@ use task_core::ProgressKind;
 
 use crate::adapter::{
     AdapterError, AdapterSetting, AdapterSettings, Configured, EventSink, RunLimits, RunOutcome,
-    Terminal, WorkerAdapter, deadline_terminal, spawn_capture_stderr,
+    Terminal, WorkerAdapter, deadline_terminal, open_child_streams,
 };
 use crate::claude_code::build_prompt_with_skill_list;
 use crate::cos_chat::capabilities::{
@@ -899,14 +899,8 @@ async fn run_acp(
         .stdin
         .take()
         .ok_or_else(|| AdapterError::Other("worker stdin was not piped".into()))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| AdapterError::Other("worker stdout was not piped".into()))?;
-    let stderr_task = spawn_capture_stderr(&mut child, &stderr_log_path, run_id)?;
-
-    let mut stdout_file = tokio::fs::File::create(&stdout_log_path).await?;
-    let mut reader = BufReader::new(stdout);
+    let (mut reader, mut stdout_file, stderr_task) =
+        open_child_streams(&mut child, &stdout_log_path, &stderr_log_path, run_id).await?;
     // 本文のチャンクをまとめる入れ物（run 全体で 1 つ。initialize の前から使う）。
     let mut chunks = ChunkBuffer {
         cos_chat: req.context.cos_chat.is_some(),

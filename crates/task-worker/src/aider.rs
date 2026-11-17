@@ -23,13 +23,13 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use task_core::Usage;
-use tokio::io::{AsyncWriteExt, BufReader};
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tracing::warn;
 
 use crate::adapter::{
     AdapterError, AdapterSetting, AdapterSettings, Configured, EventSink, RunLimits, RunOutcome,
-    Terminal, WorkerAdapter, next_line, spawn_capture_stderr, with_estimated_cost,
+    Terminal, WorkerAdapter, next_line, open_child_streams, with_estimated_cost,
 };
 use crate::claude_code::build_prompt;
 use crate::delegate_file::forward_delegate_file;
@@ -177,14 +177,8 @@ async fn run_aider(
     let mut child = crate::subprocess::spawn_after_notice(sink, &mut command)?;
     let _process_group = crate::process_group::ProcessGroup::register(run_id, child.id());
 
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| AdapterError::Other("worker stdout was not piped".into()))?;
-    let stderr_task = spawn_capture_stderr(&mut child, &paths.stderr_log, run_id)?;
-
-    let mut stdout_file = tokio::fs::File::create(&paths.stdout_log).await?;
-    let mut reader = BufReader::new(stdout);
+    let (mut reader, mut stdout_file, stderr_task) =
+        open_child_streams(&mut child, &paths.stdout_log, &paths.stderr_log, run_id).await?;
 
     let start = Instant::now();
     let mut last_activity = Instant::now();

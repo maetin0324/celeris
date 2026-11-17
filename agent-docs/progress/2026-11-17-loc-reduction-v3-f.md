@@ -83,7 +83,13 @@ completed: 2026-11-17
 - C・D・E・F の unit の合計: 2,701 + 2,558 + 1,753 + 4,223 = 11,235 行 = 固定の 11,235 行（差 0 行）。
 - 試行 2 の 3 回目の run（承認なしの残りの候補）の分は unit 3,952 → 4,151 の 199 行。試行 3 の分は 4,151 → 4,223 の 72 行（`backfill_thread` の削除、`terminal_from_summary` の写し 2 つ、宙に浮いた doc comment）。
 
-## 検査（試行 2、提出時の HEAD で実行。基準は `git merge-base HEAD main`）
+## 検査（試行 3。基準は `git merge-base HEAD main`）
+- `bash scripts/dev/test-affected.sh` → exit 0（件名「進捗を試行 3 に合わせる」の commit で実行。その後の commit はこの進捗ファイルの検査の節だけ）。repo-health `verdict=pass`（new=0・worsened=0）、nextest `8446 tests run: 8446 passed, 22 skipped`、web の型検査と unit（vitest `705 passed`、gateway の node --test `110 pass`）、`test-ts-verify: 20 passed`。
+- 途中の実行で task-core `event_row_schema_matches_committed` と task-worker `committed_schema_matches_generated` が落ちた（doc comment の直しが生成 schema に写る）。`UPDATE_SCHEMA=1` で `docs/api/v1/event.schema.json`・`docs/protocol/worker-protocol.schema.json` を作り直して直した。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。`sh scripts/dev/progress-index.sh --check` → `ok`。size check（`2500 1 - - -`）→ exit 0、`OK []`。
+- 名指しの試験: `cargo nextest run -p task-core -p task-worker -p celeris --lib -E 'test(chat_) | test(legacy) | test(delivery) | test(paperqa) | test(langmem) | test(local_deep_research) | test(research_runner)'` → 393 passed。新しい試験は試行 2 の `legacy.rs` に戻すと落ちた（1 failed）。
+
+## 検査（試行 2、試行 2 の提出時の HEAD で実行）
 - `bash scripts/dev/test-affected.sh` → exit 0。repo-health `verdict=pass`（new=0・worsened=0）、nextest `8446 tests run: 8446 passed, 22 skipped`（celeris・celeris-campaign・celeris-credentiald・celeris-mcp・celeris-script・celerisctl・e2e・llm-proxy・routing-eval・task-api・task-core・task-dispatch・task-ops・task-worker）、web の型検査と unit（vitest `705 passed`、gateway の node --test `110 pass`）、`test-ts-verify: 20 passed`。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。`sh scripts/dev/progress-index.sh --check` → `ok`。
 - 試行 2 の途中で、task-api の `cos_ops_registry_matches_adr_domain_assignment_and_exclusions` が 1 件落ちた（ADR 2026-10-09-cos-operations-all-mutations の表に撤去した 3 経路の行が残っていた）。表から行を消し、付記を足して直した。

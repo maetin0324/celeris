@@ -2,8 +2,8 @@
 //! コマンドは shell を介さず argv で実行し、対象外の変更・失敗・timeout は人に回す。
 
 use super::{
-    ClassifiedPath, ConflictKind, IntegrationRequest, Resolution, ResolutionAction, ResolveAttempt,
-    ResolveContext, git, recommendation,
+    ClassifiedPath, ConflictKind, ResolutionAction, ResolveAttempt,
+    ResolveContext, git,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
@@ -149,60 +149,6 @@ pub fn resolve_with_rule(
         });
     }
     Ok(ResolveAttempt::Handled { actions })
-}
-
-/// 衝突が無くても再生成で差分が出れば対象の path だけを commit する。差分が無ければ
-/// 空の actions で `Resolved`。コマンド失敗・timeout・対象外の変更は `NeedsHuman`。
-pub fn regenerate_if_drifted(
-    repo: &Path,
-    ctx: &ResolveContext,
-    rule: &GeneratedRule,
-) -> Result<Resolution, String> {
-    let changed = match regenerate(repo, repo, rule) {
-        Ok(changed) => changed,
-        Err(reason) => return Ok(needs_human(ctx, reason, Vec::new())),
-    };
-    if changed.is_empty() {
-        return Ok(Resolution::Resolved {
-            actions: Vec::new(),
-        });
-    }
-    let paths: Vec<&str> = changed.iter().map(String::as_str).collect();
-    let mut add = vec!["add", "-A", "--"];
-    add.extend(&paths);
-    git(repo, &add)?;
-    let message = format!("生成物を再生成: {}", rule.display_cmd());
-    let mut commit = vec!["commit", "-q", "-m", &message, "--"];
-    commit.extend(&paths);
-    git(repo, &commit)?;
-    let sha = git(repo, &["rev-parse", "HEAD"])?.trim().to_string();
-    let actions = changed
-        .into_iter()
-        .map(|path| ResolutionAction {
-            path,
-            kind: ConflictKind::Generated,
-            detail: format!("drift を `{}` で再生成し commit {sha}", rule.display_cmd()),
-        })
-        .collect();
-    Ok(Resolution::Resolved { actions })
-}
-
-fn needs_human(ctx: &ResolveContext, reason: String, conflict_files: Vec<String>) -> Resolution {
-    Resolution::NeedsHuman {
-        request: Box::new(IntegrationRequest {
-            target_branch: ctx.target_branch.clone(),
-            target_sha: ctx.target_sha.clone(),
-            source_branch: ctx.source_branch.clone(),
-            source_sha: ctx.source_sha.clone(),
-            merge_base: ctx.merge_base.clone(),
-            conflict_files,
-            intent: Vec::new(),
-            reason,
-            recommendation: recommendation(ConflictKind::Generated).into(),
-            actions: Vec::new(),
-            candidate_sha: None,
-        }),
-    }
 }
 
 /// 規則を走らせるディレクトリ。`cargo_workspace` の規則は衝突 path の親で、`Cargo.toml` が要る。

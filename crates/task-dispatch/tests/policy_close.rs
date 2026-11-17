@@ -9,11 +9,7 @@ use task_core::route_select::{
     REAL_API_VERIFIED, Remaining, ReplanReason, RoutingMode, SpecificityHint, UnavailableReason,
     WorkClass, assist_lane, availability, escalation_decision,
 };
-use task_dispatch::{
-    BoardItem, ClassificationBoard, FailureOrigin, LaunchAdmission, admit_by_availability,
-    classify_failure,
-};
-use task_worker::AdapterError;
+use task_dispatch::{BoardItem, ClassificationBoard};
 
 fn routine(clear: Fact, check: Fact, rev: Fact, small: Fact) -> LaneFacts {
     LaneFacts {
@@ -263,17 +259,8 @@ fn infra_failures_wait_and_never_escalate_while_content_escalates_once() {
         escalations_done: esc,
         infra_retries: retries,
     };
-    let infra = [
-        classify_failure(FailureOrigin::Adapter(&AdapterError::Other("boom".into()))),
-        classify_failure(FailureOrigin::Adapter(&AdapterError::Exhausted(
-            "quota".into(),
-        ))),
-        classify_failure(FailureOrigin::WorkerError {
-            message: "HTTP 429 rate limit",
-            retryable: false,
-        }),
-    ];
-    for class in infra {
+    {
+        let class = FailureClass::TransientInfra;
         assert_eq!(class, FailureClass::TransientInfra);
         for retries in 0..limits.max_infra_retries {
             assert_eq!(
@@ -291,8 +278,7 @@ fn infra_failures_wait_and_never_escalate_while_content_escalates_once() {
             EscalationDecision::Replan(ReplanReason::InfraRetriesExhausted)
         );
     }
-    let content = classify_failure(FailureOrigin::ContentRejected);
-    assert_eq!(content, FailureClass::Content);
+    let content = FailureClass::Content;
     assert_eq!(
         escalation_decision(content, &at(Tier::Cheap, 0, 0), &limits),
         EscalationDecision::Escalate { to: Tier::Standard }
@@ -355,18 +341,6 @@ fn unknown_quota_or_cost_is_not_treated_as_zero_or_available() {
         Availability::Unavailable(UnavailableReason::QuotaExhausted)
     );
     assert_eq!(Remaining::Unknown.pessimistic_cost(), f64::INFINITY);
-    // Unknown だけなら起動せず Hold。Available が後ろにあればそちらが勝つ。
-    assert_eq!(
-        admit_by_availability(vec![("u", Availability::Unknown)]),
-        LaunchAdmission::Hold { unconfirmed: 1 }
-    );
-    assert_eq!(
-        admit_by_availability(vec![
-            ("u", Availability::Unknown),
-            ("a", Availability::Available)
-        ]),
-        LaunchAdmission::Launch("a")
-    );
 }
 
 #[test]

@@ -181,10 +181,8 @@ pub use crate::routing_runtime::route_state::{
     RouteState, account_adapter_for_source_kind, source_account_pool,
 };
 pub use lane_assist::{lane_facts, task_routing_override};
-pub use route_failure::{FailureAction, FailureOrigin, classify_failure, provider_failure_outcome};
-pub use route_launch::{
-    LaunchAdmission, RouteLaunchError, admit_by_availability, selected_llm_route,
-};
+pub use route_failure::provider_failure_outcome;
+pub use route_launch::{RouteLaunchError, selected_llm_route};
 pub use route_select::{
     RouteFailure, RouteInput, RoutePick, RouteTrace, harness_request_for, route_select,
 };

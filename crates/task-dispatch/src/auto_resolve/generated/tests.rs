@@ -160,43 +160,7 @@ fn conflict_uses_rule_env_and_records_action() {
 }
 
 #[test]
-fn drift_is_committed_once_and_rerun_is_noop() {
-    let tmp = new_repo();
-    let repo = tmp.path();
-    let bin = tempfile::tempdir().unwrap();
-    write(
-        repo,
-        "docs/protocol/task.schema.json",
-        "{\"v\":\"stale\"}\n",
-    );
-    write(repo, "src/lib.rs", "// code\n");
-    let head = commit(repo, "base");
-    let mut rule = schema_rule(generator(bin.path(), REGEN));
-    rule.env.insert("GEN_VALUE".into(), "fresh".into());
-    let ctx = ctx(head.clone(), head.clone(), None);
-
-    let Resolution::Resolved { actions } = regenerate_if_drifted(repo, &ctx, &rule).unwrap() else {
-        panic!("drift must be committed");
-    };
-    assert_eq!(actions.len(), 2);
-    assert_ne!(command(repo, &["rev-parse", "HEAD"]), head);
-    assert!(command(repo, &["log", "-1", "--format=%s"]).starts_with("生成物を再生成"));
-    assert_eq!(
-        command(repo, &["show", "HEAD:docs/protocol/task.schema.json"]),
-        "{\"v\":\"fresh\"}"
-    );
-    assert!(command(repo, &["status", "--porcelain"]).is_empty());
-
-    let after = command(repo, &["rev-parse", "HEAD"]);
-    let Resolution::Resolved { actions } = regenerate_if_drifted(repo, &ctx, &rule).unwrap() else {
-        panic!("no drift must resolve");
-    };
-    assert!(actions.is_empty());
-    assert_eq!(command(repo, &["rev-parse", "HEAD"]), after);
-}
-
-#[test]
-fn command_failure_needs_human_in_merge_and_drift() {
+fn command_failure_needs_human_in_merge() {
     let tmp = new_repo();
     let repo = tmp.path();
     let bin = tempfile::tempdir().unwrap();
@@ -212,19 +176,6 @@ fn command_failure_needs_human_in_merge_and_drift() {
         request.reason
     );
     assert!(repo.join(".git/MERGE_HEAD").exists());
-
-    let clean = new_repo();
-    let clean_repo = clean.path();
-    write(clean_repo, "docs/protocol/task.schema.json", "{}\n");
-    let head = commit(clean_repo, "base");
-    let rule = schema_rule(failing);
-    let Resolution::NeedsHuman { request } =
-        regenerate_if_drifted(clean_repo, &ctx(head.clone(), head.clone(), None), &rule).unwrap()
-    else {
-        panic!("command failure must need human");
-    };
-    assert!(request.reason.contains("失敗"));
-    assert_eq!(command(clean_repo, &["rev-parse", "HEAD"]), head);
 }
 
 #[test]
@@ -235,24 +186,17 @@ fn out_of_scope_write_and_timeout_need_human() {
     write(repo, "docs/protocol/task.schema.json", "{}\n");
     write(repo, "src/lib.rs", "// code\n");
     let head = commit(repo, "base");
-    let ctx = ctx(head.clone(), head.clone(), None);
     let rule = schema_rule(generator(bin.path(), "echo x >> src/lib.rs\n"));
-    let Resolution::NeedsHuman { request } = regenerate_if_drifted(repo, &ctx, &rule).unwrap()
-    else {
-        panic!("out-of-scope write must need human");
-    };
-    assert!(request.reason.contains("src/lib.rs"));
+    let reason = regenerate(repo, repo, &rule).expect_err("out-of-scope write must need human");
+    assert!(reason.contains("src/lib.rs"));
     assert_eq!(command(repo, &["rev-parse", "HEAD"]), head);
 
     // timeout は sleep の長さに依らず、上限 0 秒で決定的に起こす。
     command(repo, &["checkout", "-q", "--", "src/lib.rs"]);
     let mut rule = schema_rule(vec!["sleep".into(), "30".into()]);
     rule.timeout_secs = Some(0);
-    let Resolution::NeedsHuman { request } = regenerate_if_drifted(repo, &ctx, &rule).unwrap()
-    else {
-        panic!("timeout must need human");
-    };
-    assert!(request.reason.contains("終わらない"), "{}", request.reason);
+    let reason = regenerate(repo, repo, &rule).expect_err("timeout must need human");
+    assert!(reason.contains("終わらない"), "{reason}");
 }
 
 #[test]

@@ -121,3 +121,11 @@ account/source の互換・同時実行・cooldown・quota・予算をコード�
   投稿では「版 `mlsys-min-1` ＝ この付記時点の設定の lane 対応」と記し、投稿に載せる具体的な model/source は、投稿時の本番設定から写して併記する（本 ADR は値を固定しない）。
 - 表の内容または lane 規則（D3・D4・D7 の閾値）を変えるときは版を上げる。
 - 未検証: Jev 実 API 統合（`real_api_verified = false`）。fixed に戻った記録とは別。
+
+## 付記（2026-11-16、loc-reduction-v3 E）: 未配線の D6・D7 の dispatcher 側の判断を消す
+
+- 日付: 2026-11-16
+- 状態: 採用（人の決定。task 01M7J3NKVAH9NG53C5FEFNQJYK の問いへの答え）
+- task-dispatch の `classify_failure`・`FailureOrigin`・`FailureAction`・`Dispatcher::decide_route_failure`（D7）と `admit_by_availability`・`LaunchAdmission`（D6）を消した。「配線は後続の統合葉」とした入口で、本番の起動・失敗の経路から一度も呼ばれず、試験（`dispatcher/tests/route_failure_escalation.rs`、`tests/policy_close.rs` の一部）だけが呼んでいた。
+- D6・D7 の規則の本体（task-core `route_select` の `availability`・`split_by_availability`・`escalation_decision`）は task-core にあり、この変更の範囲（task-dispatch・celeris）の外なので残す。`policy_close.rs` の 2 試験は task-core の判定（`availability`・`escalation_decision`）を直接確かめる形で残した。
+- 上の「実装との突き合わせ」の表の D6・D7 の行の `admit_by_availability`・`classify_failure`・`decide_route_failure`・`route_failure_escalation.rs`、表の下の再 export の 2 文は当時の記録で、現行の実装ではない。dispatcher の起動・失敗の経路に D6・D7 を配線するときは、その変更で dispatcher 側の判断を作る。

@@ -183,7 +183,7 @@ async fn done_then_command_review_passes_and_events_are_recorded() {
                 ..
             } => format!("command_checked:{criterion_idx}:{cmd}:{exit:?}:{pass}"),
             Event::DeliverySkipped { reason, .. } => format!("delivery_skipped:{}", reason.code()),
-            // ADR-0074 D4（Phase F3 quota）: `finish_worker_result` が毎 run 出す
+            // ADR-0074 D4（Phase F3 quota）: `finish_worker_result_with` が毎 run 出す
             // `QuotaEstimated`（このテストの provider `p1` はアカウントプールを使わないので
             // `free`）。中身は quota 専用のテストで確かめるので、ここでは種別だけを見る。
             Event::QuotaEstimated { .. } => "quota_estimated".into(),

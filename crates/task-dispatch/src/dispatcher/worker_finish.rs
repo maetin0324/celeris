@@ -1,4 +1,4 @@
-//! worker run の終了処理（`finish_worker_result` と finalise の失敗の後始末）。同じ transaction の組と `release_quota_if_tracked` はそのまま。ADR-0082 の L3。
+//! worker run の終了処理（`finish_worker_result_with` と finalise の失敗の後始末）。同じ transaction の組と `release_quota_if_tracked` はそのまま。ADR-0082 の L3。
 
 use super::*;
 use crate::{run_settlement, sessions};
@@ -255,7 +255,7 @@ impl Dispatcher {
         // ADR-0072 D14/D6・E4 (g): この WU に決定的な `checks`（`Command`）があり、run が
         // `Terminal::Done` で終わったのなら、WU を `done` にする前にそれらを実行する（`review.rs` の
         // Command 実行を再利用）。checks が無い WU・atomic な run はこれまでどおり即座に
-        // `finish_worker_result` へ進む。
+        // `finish_worker_result_with` へ進む。
         if let Some(wu) = &current_wu
             && !wu.spec.checks.is_empty()
             && matches!(

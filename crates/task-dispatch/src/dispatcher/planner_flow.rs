@@ -793,7 +793,7 @@ impl Dispatcher {
     /// ADR-0072 D17（Phase E4b 項目1）: replan の planner run に渡す「起こした理由」。events を
     /// 新しい方から辿り、決定的に文字列化する（events が正本。D5）。
     /// - WU の failed/limit からの replan（`execution_scheduler::decide` が `outcome_str = "replan:
-    ///   <why>"` を書く。`crate::dispatcher` の `finish_worker_result` 参照）は、その `<why>` をそのまま使う。
+    ///   <why>"` を書く。`crate::dispatcher` の `finish_worker_result_with` 参照）は、その `<why>` をそのまま使う。
     /// - 実質的な review 不合格（D17 4.、`Trigger::ReviewFail` の後の再 dispatch）は、直近の
     ///   `Event::ReviewVerdict{pass:false}` の理由を添える。
     /// - どちらでもなければ（人の依頼 D17 5. など）決定的な既定文を返す。

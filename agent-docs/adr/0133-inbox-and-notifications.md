@@ -515,3 +515,17 @@ smoke と同じ台本）を手元で再現し、修正後の debug build で煙�
 - 試験: `task_ops::human_inbox::tests::human_inbox_never_has_knowledge_review`、
   `task-api` `tests/knowledge.rs::candidates_never_appear_in_the_human_inbox`（候補 2 件で受信箱に項目無し・404・
   通知に無し・知識画面の accept は動く）。
+
+## 付記: 旧い走査の撤去と D6 の設定の残り（2026-11-17、task 01M7J3NKVAH9NG53C5FEFNQJYK）
+
+- D6 の 2 経路（`InboxNew`・`Digest`）は 2026-10-05 の付記で CoS へ置き換わり、daemon は呼んでいなかった。
+  互換の試験のためだけに残っていた celeris `notify.rs` の `scan`・`schedule`・`schedule_routes` とその試験を消した。
+- `[notify]` の `inbox_batch_secs`・`inbox_reminder_secs`・`digest_interval_secs`・`digest_max_lines` は
+  どの送り出しも読まない。`GET /api/v1/notify` の 4 値（task-api）が残るので、celeris の設定の欄と受け渡し
+  （`daemon/api.rs`）も残した。撤去の条件: task-api の `GET /api/v1/notify` の 4 値を消す変更（責任者は
+  task 01M7J3NKVC2KQ4NGJ4GESHJV0B、task-api を write set に持つ）。同じ変更で celeris の 4 欄・既定値の関数・
+  受け渡し・試験を消し、4 欄を読み込みエラーにする（`NotifyConfig` は `deny_unknown_fields`）。本番の `[notify]` は
+  この 4 欄を書いていない（2026-11-17 に読み取りで確認）ので、本番 config の書き換えは要らない。
+- task-core の `notification_scan_at`・`notification_scan_mark`（migration 0019 の `notification_scan_state`）は
+  呼び手が消えた `schedule` だけだった。task-core を write set に持つ後続の task が消す（表を migration で
+  消すかは同じ task が決める）。

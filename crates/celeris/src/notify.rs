@@ -30,7 +30,7 @@ const WEBHOOK_USERNAME: &str = "Celeris";
 /// `Retry-After` が読めないときに待つ既定の秒数（ADR-0037 D3。実機 2026-09-18: 8 件一斉送信で 429）。
 pub const DEFAULT_RETRY_AFTER_SECS: u64 = 5;
 
-/// `[notify]`（ADR-0037 D2 / D3、ADR-0133 D6）。秘密の id と二経路の間隔を持つ。
+/// `[notify]`（ADR-0037 D2 / D3）。末尾の 4 欄は ADR-0133 D6 の旧い経路の設定で、`GET /api/v1/notify` だけが読む（ADR-0133 の付記 2026-11-17）。
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct NotifyConfig {
@@ -43,16 +43,16 @@ pub struct NotifyConfig {
     /// 例: `"http://192.168.1.103:7720"`。無ければ文面にリンクを入れない。
     #[serde(default)]
     pub web_base_url: Option<String>,
-    /// 新しい受信箱項目を同じ一通に束ねる猶予。
+    /// 旧い受信箱の新着の経路の束ねる猶予（送り出しには効かない）。
     #[serde(default = "default_inbox_batch_secs")]
     pub inbox_batch_secs: u64,
-    /// 未回答の項目を一度だけ再通知するまでの秒数。
+    /// 旧い再通知の経路の秒数（送り出しには効かない）。
     #[serde(default = "default_inbox_reminder_secs")]
     pub inbox_reminder_secs: u64,
-    /// 通知の要約間隔。ゼロなら外部へ送らない。
+    /// 旧い要約の経路の間隔（送り出しには効かない）。
     #[serde(default = "default_digest_interval_secs")]
     pub digest_interval_secs: u64,
-    /// 要約に載せる種類の最大行数。
+    /// 旧い要約の経路の最大行数（送り出しには効かない）。
     #[serde(default = "default_digest_max_lines")]
     pub digest_max_lines: usize,
 }

@@ -164,6 +164,7 @@ fn policy() -> ReviewPolicy {
                 "^crates/alpha/src/".to_string(),
                 "^scripts/health/".to_string(),
             ],
+            invariants: Vec::new(),
         }],
         invariants: BTreeMap::from([("events-append-only".to_string(), "RULES.md".to_string())]),
         definition_sha256: "sha-policy".to_string(),
@@ -192,7 +193,7 @@ fn high_risk() -> RiskAssessment {
     RiskAssessment {
         level: RiskLevel::High,
         reasons: vec![
-            "path_class:dispatch+new_state".to_string(),
+            "path_class:dispatch:crates/alpha/src/plan.rs".to_string(),
             "new_fallback".to_string(),
         ],
     }
@@ -496,7 +497,7 @@ fn change_rules_design_review_prompt_shows_the_plan_and_the_design_shape() {
         "- removals:\n  - 旧い check_plan 経路\n",
         "- invariants:\n  - events は追記専用\n",
         "- level: `high`\n",
-        "  - `path_class:dispatch+new_state`\n",
+        "  - `path_class:dispatch:crates/alpha/src/plan.rs`\n",
         "  - `new_fallback`\n",
         "- owner 地図: `docs/architecture-map.md`",
         "  - `dispatch`: `^crates/alpha/src/`、`^scripts/health/`\n",

@@ -64,7 +64,8 @@ pub(super) fn missing_message(classes: &[String]) -> String {
 
 /// D3.3: 高 risk の path class（`high_risk_classes`、呼び出し側が review policy から求めた名前）を変える
 /// planner の計画に brief が無ければ `DesignBriefMissing` で差し戻す（既存の検証失敗の再試行と同じ経路）。
-/// planner 以外の計画（人の計画 `PlanOrigin::Human` など）は brief を必須にしない（risk 判定が `brief_absent_human_plan` で `Low` にする）。
+/// planner 以外の計画（人の計画 `PlanOrigin::Human` など）は brief を必須にしない（risk の判定は brief によらず `High` に
+/// し、理由に `brief_absent_human_plan` を足す。ADR 2026-11-17-boundary-change-risk-review D1）。
 /// class が空（高 risk の path に触れない）なら brief は任意。
 pub fn require_design_brief(
     spec: &ExecutionPlanSpec,

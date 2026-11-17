@@ -26,6 +26,7 @@ pub(super) fn policy() -> ReviewPolicy {
         high_risk: vec![PathClass {
             class: CLASS.to_string(),
             paths: vec![CLASS_PATH.to_string(), "^crates/task-store/".to_string()],
+            invariants: Vec::new(),
         }],
         invariants: BTreeMap::from([(INVARIANT.to_string(), "CLAUDE.md".to_string())]),
         definition_sha256: "d".to_string(),
@@ -338,9 +339,12 @@ fn change_rules_planner_brief_section_with_a_review_policy() {
         "High",
         "Unknown",
         "設計 review",
+        "`new_*` の宣言によらず High",
     ] {
         assert!(brief.contains(needle), "{needle}: {brief}");
     }
+    // ADR 2026-11-17-boundary-change-risk-review D1: 旧い規則（class ∧ `new_*` の宣言で High）を説明しない。
+    assert!(!brief.contains("のどれかを宣言した計画"), "{brief}");
     assert!(
         !brief.contains(CLASS) && !brief.contains(CLASS_PATH),
         "{brief}"

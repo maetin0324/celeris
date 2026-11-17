@@ -1811,7 +1811,7 @@
     },
     "DesignBrief": {
       "additionalProperties": false,
-      "description": "ADR 2026-11-07-health-review-integration D3.1: 実装前に短く整理する設計 brief。risk の判定\n（`design_review::assess_risk`）は `new_*` の宣言と write path から決まる（D3.3）。",
+      "description": "ADR 2026-11-07-health-review-integration D3.1: 実装前に短く整理する設計 brief。risk の判定\n（`design_review::assess_risk`）は write path と `new_fallback` の宣言から決まり、ほかの `new_*` の宣言は level を\n変えない（ADR 2026-11-17-boundary-change-risk-review D1）。",
       "properties": {
         "invariants": {
           "description": "守る不変条件（名前は自由文）。",
@@ -3392,6 +3392,13 @@
         "class": {
           "type": "string"
         },
+        "invariants": {
+          "description": "ADR 2026-11-17-boundary-change-risk-review D2: この class が守る不変条件の名前（`ReviewPolicy.invariants` の\nkey）。任意の欄で、書かない profile もある。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "paths": {
           "items": {
             "type": "string"
@@ -4019,7 +4026,7 @@
       "type": "object"
     },
     "RiskAssessment": {
-      "description": "D3.3: risk の判定の結果。`reasons` は判定の根拠の機械向けの語（`review_policy_absent`・\n`review_policy_unavailable:<要約>`・`path_class:<class>+<欄>`・`new_fallback`・`brief_absent_human_plan`）。\n高 risk の path に触れない `Low` は空。",
+      "description": "D3.3: risk の判定の結果。`reasons` は判定の根拠の機械向けの語（`review_policy_absent`・\n`review_policy_unavailable:<要約>`・`path_class:<class>:<path>`・`invariant:<class>:<名前>`・`declared:<欄>`・\n`brief_absent_human_plan`・`new_fallback`。ADR 2026-11-17-boundary-change-risk-review D1）。`Low` は空。",
       "properties": {
         "level": {
           "$ref": "#/$defs/RiskLevel"

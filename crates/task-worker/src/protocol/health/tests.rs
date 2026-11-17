@@ -131,6 +131,7 @@ fn health_protocol_run_workspace_review_policy_round_trips() {
                 high_risk: vec![PathClass {
                     class: "dispatch-state".into(),
                     paths: vec!["^crates/task-store/".into()],
+                    invariants: Vec::new(),
                 }],
                 invariants: BTreeMap::from([("task-state-in-sqlite".into(), "CLAUDE.md".into())]),
                 definition_sha256: "c".repeat(64),

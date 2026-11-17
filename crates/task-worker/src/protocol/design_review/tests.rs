@@ -38,13 +38,14 @@ fn request() -> DesignReviewRequest {
         plan_summary: "units: store-move (crates/task-core/src/store/)".into(),
         risk: RiskAssessment {
             level: RiskLevel::High,
-            reasons: vec!["path_class:store+new_state".into()],
+            reasons: vec!["path_class:store:crates/task-core/src/store/tasks.rs".into()],
         },
         review_policy: Some(ReviewPolicy {
             owner_map: Some("docs/architecture-map.md".into()),
             high_risk: vec![PathClass {
                 class: "store".into(),
                 paths: vec!["^crates/task-core/src/store/".into()],
+                invariants: Vec::new(),
             }],
             invariants: Default::default(),
             definition_sha256: "d".repeat(64),

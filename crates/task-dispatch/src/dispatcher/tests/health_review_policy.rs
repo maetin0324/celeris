@@ -28,6 +28,7 @@ fn expected(class: &str) -> task_core::design_review::ReviewPolicy {
         high_risk: vec![task_core::design_review::PathClass {
             class: class.into(),
             paths: vec!["^crates/task-store/".into()],
+            invariants: Vec::new(),
         }],
         invariants: [("events-append-only".to_string(), "CLAUDE.md".to_string())]
             .into_iter()

@@ -126,7 +126,7 @@ fn pending_design_review_with(
                 plan: Box::new(spec),
                 risk: task_core::design_review::RiskAssessment {
                     level: task_core::design_review::RiskLevel::High,
-                    reasons: vec!["path_class:store+new_state".to_string()],
+                    reasons: vec![format!("path_class:store:{STORE_PATH}")],
                 },
                 policy_sha256: Some(DIGEST.to_string()),
             },

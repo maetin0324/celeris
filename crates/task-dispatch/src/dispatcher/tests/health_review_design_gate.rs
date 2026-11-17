@@ -159,7 +159,7 @@ async fn health_review_design_gate_low_risk_plan_is_adopted_without_a_reviewer_r
     );
 }
 
-/// D3.5: 高 risk の path に触れ brief が `new_state` を宣言した計画は採用されず、`DesignReviewRequested` が書かれ、
+/// D3.5: 高 risk の path に触れる計画（brief は `new_state` も宣言する）は採用されず、`DesignReviewRequested` が書かれ、
 /// 設計 review の reviewer run が 1 本だけ起きる（文脈は `ReviewRequest.design` だけ）。その run の終わりは task の
 /// final review の判定に流れない（`ReviewVerdict` が無く、WU は起きない）。この試験の reviewer は `review.json` を
 /// 書かないので判定は不合格（`DesignReviewed { pass: false }`。design-verdict）で、planner がもう一度起きる（2 回目は
@@ -188,7 +188,13 @@ async fn health_review_design_gate_high_risk_plan_requests_a_design_review_befor
         unreachable!()
     };
     assert_eq!(risk.level, task_core::design_review::RiskLevel::High);
-    assert_eq!(risk.reasons, vec!["path_class:store+new_state".to_string()]);
+    assert_eq!(
+        risk.reasons,
+        vec![
+            format!("path_class:store:{STORE_PATH}"),
+            "declared:new_state".into()
+        ]
+    );
     assert_eq!(policy_sha256.as_deref(), Some(DIGEST));
     assert!(plan.design_brief.is_some());
 

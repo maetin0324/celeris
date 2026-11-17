@@ -795,8 +795,9 @@ new: [{rule_id, fingerprint, severity, delta, path?}], truncated}, policy: {sour
 risk（`task_core::design_review::assess_risk`）が `high`・`unknown` の計画は、採用の前に reviewer run で設計 review
 する。その run の `context.review` は `summary`・`evidence`・`criteria` が空で、`design`（`DesignReviewRequest`）を持つ:
 `{brief?, plan_summary, risk: {level, reasons?}, review_policy?}`。`brief` は計画の設計 brief（無い計画では省略）、
-`risk.level` は `high` / `unknown`、`reasons` は判定の根拠（`path_class:<class>+new_state`・`new_fallback`・
-`review_policy_unavailable:<要約>` など）、`review_policy` は判定に使った base 側の方針（読めなかった `unknown` では省略）。
+`risk.level` は `high` / `unknown`、`reasons` は判定の根拠（`path_class:<class>:<path>`・`invariant:<class>:<名前>`・
+`declared:<欄>`・`brief_absent_human_plan`・`new_fallback`・`review_policy_unavailable:<要約>`。高 risk の class に合う path を
+書く計画は brief の `new_*` の宣言によらず `high`。ADR 2026-11-17-boundary-change-risk-review D1）、`review_policy` は判定に使った base 側の方針（読めなかった `unknown` では省略）。
 reviewer は `review.json` に `design`（`DesignVerdictOut`）を書く:
 
 ```json

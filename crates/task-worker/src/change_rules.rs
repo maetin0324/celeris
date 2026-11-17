@@ -97,8 +97,8 @@ pub fn design_brief_section(context: &RunContext) -> String {
             out.push_str(&format!(
                 "- {classes}\n\
                  - celeris は review 方針・書き込む path・brief から risk を決める（LLM は使わない）。高 risk の \
-                 class の path を変えて `new_state`・`new_branch`・`new_fallback`・`new_port` のどれかを宣言した計画と、\
-                 `new_fallback` を宣言した計画は High。review 方針を読めなかったときは Unknown。High と Unknown の\
+                 class の path を書く計画は、`new_*` の宣言によらず High（既存の分岐の条件を変えるだけでも同じ）。\
+                 `new_fallback` を宣言した計画は path に依らず High。review 方針を読めなかったときは Unknown。High と Unknown の\
                  計画は、採用の前に reviewer が設計 review をする。不合格なら指摘を受けて計画を作り直す（2 回続けて\
                  不合格なら人の判断を待つ）。\n\n"
             ));

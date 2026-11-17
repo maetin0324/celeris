@@ -198,7 +198,7 @@
     },
     "DesignBrief": {
       "additionalProperties": false,
-      "description": "ADR 2026-11-07-health-review-integration D3.1: 実装前に短く整理する設計 brief。risk の判定\n（`design_review::assess_risk`）は `new_*` の宣言と write path から決まる（D3.3）。",
+      "description": "ADR 2026-11-07-health-review-integration D3.1: 実装前に短く整理する設計 brief。risk の判定\n（`design_review::assess_risk`）は write path と `new_fallback` の宣言から決まり、ほかの `new_*` の宣言は level を\n変えない（ADR 2026-11-17-boundary-change-risk-review D1）。",
       "properties": {
         "invariants": {
           "description": "守る不変条件（名前は自由文）。",

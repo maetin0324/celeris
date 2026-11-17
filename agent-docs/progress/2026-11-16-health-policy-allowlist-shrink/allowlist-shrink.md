@@ -1,8 +1,8 @@
 ---
 title: 許可の一覧の行を消すだけの変更を policy.changed に数えない（ADR・profile・engine・試験）
 tasks: [01M7KATBGCRQRZ5NWXHXVWYPZ8]
-status: blocked
-updated: 2026-11-16
+status: done
+updated: 2026-11-17
 completed: 2026-11-16
 ---
 
@@ -46,6 +46,9 @@ completed: 2026-11-16
 - `sh scripts/dev/progress-index.sh --check` → exit 0、`sh scripts/dev/check-doc-links.sh` → exit 0、`sh scripts/dev/check-adr-numbers.sh` → exit 0（453 files）
 - `cargo fmt --all -- --check` → exit 0。`cargo clippy --workspace -- -D warnings` → exit 0
 - `bash scripts/dev/test-affected.sh --list` → 対象なし（crate の変更が無い）。`bash scripts/dev/test-affected.sh` → exit 1。先頭の `check-health.sh` が `policy.changed`（必須）の fail で止まった。ほかの必須 rule は全部 pass。この branch は policy の file に ADR・進捗・試験を加えて変えるので、D6.2 の「変更 path が全部 `policy.files`」に当たらず exit 0 にならない（ADR health-review-integration の実装の記録「進捗 file と検査器の試験は policy の file に入らない」と同じ。先例の policy の branch も人の承認と operator の merge で通した）。
+
+## 結果（2026-11-17）
+- 人がこの WU の policy の差分を承認し、operator が branch を main に no-ff で merge した（件名「integrate 01M7KATBGC: 許可の一覧から行を消すだけの変更を policy.changed に数えない（policy の branch、人の承認と operator の hand merge）」）。下の health check の fail は policy の branch では想定どおりで、修復の対象にしなかった。task の進捗は [2026-11-16-health-policy-allowlist-shrink](../2026-11-16-health-policy-allowlist-shrink.md)。
 
 ## WU の health check（`celeris:repo-health/1`）が通らない（attempt 2 で確認）
 - 前回の run の後、celeris の WU の check `celeris:repo-health/1`（expected 0）が `health:policy.changed:<fingerprint>`（evidence: `engine.py`・`profile.py`・`celeris.toml`・`rules/policy_changed.py`）で落ちた。

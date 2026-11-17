@@ -28,7 +28,9 @@ tasks: [01M7J3NKVC2KQ4NGJ4GESHJV0B]
 
 ### D3. 旧い報告の API を消す
 - `POST /api/v1/reports/read`・`POST /api/v1/reports/notified` と、それだけが進めていた `DaemonSnapshot.reports` の `last_notified_at`・`notify_now` を消す。CoS の操作表と skill の記述も同じ変更で消す。
-- `GET /api/v1/inbox` も廃止を認められたが、この試行では残した（試験 14 か所が旧い形の受信箱を読んでおり、`GET /inbox/items` への書き換えが済んでいない）。撤去の条件は試験の書き換えで、責任者は task 01M7J3NKVC2KQ4NGJ4GESHJV0B の次の試行（終わらなければ親 01M7J3N68JRNTP5Q4G934QWF36 の closeout が人に後続 task を提案する）。
+- `GET /api/v1/inbox` も廃止を認められたが残した。release の検証 `scripts/selfdeploy/verify.sh` の `probe_api` がこの path の 200 と JSON を求めており（候補の release を検証で落とす）、`scripts/selfdeploy/` は高 risk の path class（selfdeploy）で、人が認めた write set の外にある。ほかに `scripts/dev/daemon-soak/daemon_soak.py` の読み取り GET と、試験 14 か所（`crates/celeris/tests/integration_api.rs` 5・task-api の `browser_waits`・`decisions` 2・`execution` 2・`integration_repair`・`list_and_detail`・`unmapped_suite_a/approvals`・`inbox_notifications`・`request_lock_counts`）が旧い形を読む。
+  - 撤去の条件: `verify.sh` の `probe_api` を `GET /api/v1/inbox/items` に替える変更（selfdeploy の設計 review を通す）と、上の試験・soak の書き換え。
+  - 撤去の責任者: 親 01M7J3N68JRNTP5Q4G934QWF36 の closeout が人に後続 task（selfdeploy の write set を持つもの）を提案する。
 
 ### D4. aider adapter を消す
 - task-worker の `aider.rs`、celeris の `[adapters.aider]` の欄と例の設定を消す。`[adapters.aider]` は読み込みエラーにする（`deny_unknown_fields`）。

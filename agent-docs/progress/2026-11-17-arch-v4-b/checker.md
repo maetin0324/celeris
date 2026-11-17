@@ -14,7 +14,13 @@ completed: 2026-11-17
 - [ADR 2026-11-17 repo-health-scc-edges-logical-modules](../../adr/2026-11-17-repo-health-scc-edges-logical-modules.md) の D1〜D4 を既存の検査器 3 file の修正で実装し、D6 の試験 8 件を足した。新しい rule・検査器の file・config 欄・切替 flag は足していない。
 - この branch は policy の file（`scripts/dev/repo-health/**`）を変えるので、`policy.changed` が fail になり、check-health・test-affected・WU の check `celeris:repo-health/1` は exit 1 になる（想定どおり。修復しない）。`policy.changed` 以外の必須 rule 15 件中 14 件は pass。
 - 人がすること: 下の「人が承認する policy の差分の要約」を読み、差分を承認するか決める。承認したら operator が既存の D6.4 の経路（policy だけの branch の hand merge）で main に入れる。この WorkUnit は自分で承認していない。
-- ADR から 2 点を変えて実装した（「ADR との違い」）。ADR への付記は closeout か人の判断に回す（「提案」）。
+- ADR から 3 点を変えて実装した（「ADR との違い」）。ADR への付記は closeout か人の判断に回す（「提案」）。
+
+## WU の check の不合格（retry の run で確かめた）
+- 前の run の後、WU の check `celeris:repo-health/1`（期待 exit 0）は `health:policy.changed:<指紋>`（evidence は本体 3 file）で不合格になった。
+- retry の run で check-health を回し直し、fail 級の finding は `policy.changed` の 1 件だけ（指紋は前の run の check と同じ値）、`policy.changed` 以外の必須 rule 14 件は pass と確かめた。
+- この check は、成果をどう直しても通らない。検査器の dispatch 側（`health_review/gate.rs` の PolicyOnly）は、変更 path が全部 policy の file のときだけ合格にする。この WorkUnit の受け入れ条件は policy の file でない試験 `scripts/tests/test_repo_health_scc_edges.py` とこの進捗 file を求める。objective のとおり修復しない。
+- retry の run では policy の file を変えていない（変えたのはこの進捗 file だけ）。同じ指紋が残るので、次の check は ADR health-enforcement-loop D4.3 の往復の判定で task を Blocked にし、木の root の受信箱に 1 件上げる。人はそこで下の差分を読み、承認するか決める。
 
 ## 実装前 brief（7 項目）
 ADR の brief（1〜7）をそのまま使う。実装で足した点だけ書く。
@@ -46,8 +52,8 @@ ADR の brief（1〜7）をそのまま使う。実装で足した点だけ書�
 3. 論理 module の表は本体の file だけでなく、検査の対象の Rust の file 全部（試験・道具の file も）に作る。`crate::x` が module かの判定が今まで path の存在で見ていた本体の外の file を、表の lookup でも同じに扱うため。辺の元は今までどおり本体の file だけ。
 
 ## 試験の結果（提出時の HEAD で実行）
-- `python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health_scc_edges.py' -v`: 8 件 OK（約 1.8 s）。
-- `python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health*.py'`: 119 件 OK（新 8 件 + 既存 111 件、約 52 s）。
+- `python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health_scc_edges.py' -v`: 8 件 OK（約 1.7 s）。
+- `python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health*.py'`: 119 件 OK（新 8 件 + 既存 111 件、約 50 s）。
 
 | 試験 | head の変更 | 結果 |
 |---|---|---|
@@ -74,6 +80,7 @@ ADR の brief（1〜7）をそのまま使う。実装で足した点だけ書�
 - コマンド: `python3 -I <検査器>/repo_health.py --repo . --base $CELERIS_WU_BASE --head HEAD --policy-version 1 --rules deps.cycle,size.responsibility-growth --out <json>`（両方とも exit 1。原因は `policy.changed` だけ）。
   循環ごとの行の数は、検査器の `lang_deps.build` を包んで head の graph を取り出す道具（run の `$TMPDIR/tools/scc_lines.py`、`--base $(git merge-base HEAD main)`）で数えた。
 - 判定: 旧も新も deps.cycle は pass（17 件すべて existing）、size.responsibility-growth は pass（94 件すべて existing）。新の検査器で組の finding（`cycle-edge:`）は 0 件。base と head の Rust は同じなので、理由なく fail に変わった件は無い。
+- retry の run で、提出時の HEAD に旧新の検査器を当て直した（各約 26 s、`--base $(git merge-base HEAD main)`）。旧新とも deps.cycle 17 件・size.responsibility-growth 94 件が existing、`policy.changed` だけが new。循環の finding の鍵（scope）で違うのは 2 件（旧だけ `crates/task-worker/src/browser`、新だけ `crates/task-dispatch/src/project_controller`。下の表の併合と新しい循環）。size の値の違いは下の表の 3 件と一致した。
 - Rust の単位が変わった file は 16 個で、ADR の背景の表の 16 file と一致した（task-core 2、task-dispatch 9、task-worker 5）。
 - 依存の辺の総数は 9,843 → 9,869（+26。単位の付け替えで自分の単位への辺でなくなった行と、`super::` の行）。`super::` の解決で新しく辺になった行は 6 本（task-api `cos/ops/admin.rs` 4 本、task-dispatch `health_review/design_verdict.rs` 1 本、task-worker `protocol/cos_chat.rs` 1 本）。
 
@@ -86,7 +93,7 @@ ADR の brief（1〜7）をそのまま使う。実装で足した点だけ書�
 | task-dispatch | 3・4・22（dispatcher・review・undeclared_artifacts） | 4・7・51（+ health_review） | `#[path]` の 8 file が dispatcher になり、`health_review/check_item.rs` の `use crate::health_review::gate::…` が dispatcher→health_review、`health_review/input.rs` の `use crate::dispatcher::Dispatcher` が health_review→dispatcher になって閉じた。物理の単位では自分の単位への辺で見えなかった |
 | task-dispatch | — | 2・2・2（project_controller・project_decider_ts） | `lib.rs` の `#[path = "dispatcher/project_decider_ts.rs"]` で単位 project_decider_ts になり、project_controller との相互の参照が循環になった（物理では dispatcher の file） |
 | task-worker | 3・3・5（adapter・progress・tool_policy）と 6・12・19（browser・browser_action・browser_launcher・browser_policy・browser_shared_cdp・protocol） | 12・24・85（2 つが併合し、browser_ledger・cos_chat・preamble が加わった） | `protocol/cos_chat.rs:62` の `super::super::cos_chat::HarnessCapabilities` が protocol→cos_chat の辺になり、cos_chat→protocol・preamble・tool_policy と閉じた。`browser_conformance.rs`（論理は browser）の `crate::browser_ledger` が browser→browser_ledger になり、browser_ledger→browser と閉じた |
-| 他の 13 件（campaign 46・211・347、task-ops 4 件、celeris-mcp、routing-eval、script-runtime、task-worker 2 単位、web の TS 3 件） | — | 同じ | 変化なし |
+| 他の 12 件（campaign 46・211・347、task-ops 4 件、celeris-mcp、routing-eval、script-runtime、task-worker 2 単位、web の TS 3 件） | — | 同じ | 変化なし |
 
 `size.responsibility-growth`（94 件のまま。値か鍵が変わったのは 3 件）:
 
@@ -97,7 +104,7 @@ ADR の brief（1〜7）をそのまま使う。実装で足した点だけ書�
 | fn_lines `run_registered`（517 行） | 鍵 `crates/task-worker/src/browser_launcher_run::run_registered` | 鍵 `crates/task-worker/src/browser::run_registered` | `browser_launcher_run.rs` の論理 module が browser。base と head を同じ版で数えるので existing のまま |
 
 ## 検査（提出時の HEAD で実行）
-- `bash scripts/dev/test-affected.sh`: exit 1（約 96 s）。最初の check-health で `policy.changed` だけが fail（findings 698、new 1 = policy.changed、worsened 0）になり、試験の前に止まった（想定どおり）。
+- `bash scripts/dev/test-affected.sh`: exit 1（前の run 約 96 s、retry の run 約 84 s）。最初の check-health で `policy.changed` だけが fail（findings 698、new 1 = policy.changed、worsened 0）になり、試験の前に止まった（想定どおり）。
 - check-health の report を読んで、`policy.changed` 以外の必須 rule は 14 件すべて pass（deps.cycle 17 件・size 94 件はすべて existing）。
 - `cargo fmt --all -- --check`: exit 0。`cargo clippy --workspace -- -D warnings`: exit 0（Rust は変えていない）。
 - 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` と `git diff --name-only $CELERIS_WU_BASE HEAD` は上の 4 file と、この進捗 file だけ。

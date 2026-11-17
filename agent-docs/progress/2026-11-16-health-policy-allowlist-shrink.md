@@ -1,13 +1,12 @@
 ---
 title: repo health: 許可の一覧から行を消すだけの変更を policy.changed に数えない（policy だけの branch）
 tasks: [01M7KATBGCRQRZ5NWXHXVWYPZ8]
-status: done
+status: blocked
 updated: 2026-11-17
-completed: 2026-11-17
 ---
 # repo health: 許可の一覧から行を消すだけの変更を policy.changed に数えない（policy だけの branch）
 
-完了日: 2026-11-17
+完了日: 未。WorkUnit repair-1 が engine.py を直した。この policy の差分は人の承認と operator の merge を待つ（下の「repair-1」）。
 
 人の決定（2026-11-16、operator が中継）: 許可の一覧（`scripts/dev/human-text-lint.allow`・`scripts/dev/adr-allowed-duplicates.txt`）から行を消すだけの変更は、repo health の `policy.changed` に数えない。行を足す・書き換える変更は今までどおり数える。この task は policy の file・その試験・ADR・進捗だけを変える policy の branch（先例 01M76BYGKY7R8SBZ22AZGJ72SP、[ADR 2026-11-07-health-review-integration](../adr/2026-11-07-health-review-integration.md) D6.6）。
 
@@ -20,6 +19,7 @@ completed: 2026-11-17
 - `integrate 01M7KATBGC: 許可の一覧から行を消すだけの変更を policy.changed に数えない（policy の branch、人の承認と operator の hand merge）` — operator が main に入れた no-ff の merge。
 - `health-policy-allowlist-shrink: 進捗を閉じ、policy の差分の成果物の要点と提出時の検査の結果を書く` — この進捗と、WU の進捗の status を done にする変更（WorkUnit closeout の 1 回目の run）。
 - `health-policy-allowlist-shrink: hand merge の後の再検査の結果を進捗に書く` — 証拠を merge の前（policy の branch）と提出時の HEAD（merge の後）に分け、is-ancestor の確認を足す（WorkUnit closeout の replan の後の run）。
+- `health-policy-allowlist-shrink: '\n' 以外の改行の文字を含む許可の一覧は比べずに数える付記 A1 を ADR に足す`、`health-policy-allowlist-shrink: '\n' 以外の改行の文字を含む許可の一覧は比べずに policy.changed に数える`、`health-policy-allowlist-shrink: repair-1 の修復と検査の結果を進捗に書く` — WorkUnit repair-1（reviewer の指摘の修復。[repair-1](2026-11-16-health-policy-allowlist-shrink/repair-1.md)）。
 - 成果物（repo の外）: `allowlist-shrink-policy-diff.md`（前と後の判定の表、対象から外れる条件、再現の command と exit code、E の例、dispatcher への効き方）と、再現の script `allowlist-shrink-policy-diff-repro.sh`・その出力 `allowlist-shrink-policy-diff-repro.out.txt`。WorkUnit closeout の成果物の dir と task の成果物の dir の両方に置いた。
 
 ## 判定の前と後（成果物の表の要点）
@@ -50,8 +50,13 @@ completed: 2026-11-17
 - `bash scripts/dev/test-affected.sh` → exit 1（WU allowlist-shrink の run、merge の前）。冒頭の `check-health.sh` が上の `policy.changed` の fail で止まった。先例 01M76BYGKY と同じで、人の承認と operator の merge で通した。
 - task の受け入れ 4 の式（`policy.changed` 以外の必須 rule が pass か not_applicable）→ base = merge の第 1 親で `[]`・exit 0（`policy.changed=true`）。
 
+## repair-1（2026-11-17）: `'\n'` 以外の改行の文字の抜け道を塞ぐ
+- 指摘（reviewer 01M7KJH9BREHTYP8GWC2M2ZWJW、受け入れ 5 が不合格）: `human-text-lint.allow` に `#note<CR>slop_vocabulary<TAB>NEW-SNIPPET-NOT-IN-BASE<TAB>smuggled` を 1 行足すと、engine は `'\n'` だけで分けて注釈の 1 行として除き `policy.changed=false`、text mode で読む `check-human-text.py` には新しい許可が入った。
+- 直し: [ADR 付記 A1](../adr/2026-11-16-health-policy-allowlist-shrink.md) を先に commit し、`engine.py` の `_content_lines` が `str.splitlines` の区切りのうち `'\n'` 以外の文字（9 個）を含む内容を None（比べずに数える）にした。試験 2 件を足した。詳細と証拠は [repair-1](2026-11-16-health-policy-allowlist-shrink/repair-1.md)。
+- 人の承認と merge: `engine.py` は policy の file なので、この差分も `policy.changed=true` になる。人が成果物 `allowlist-shrink-policy-diff.md` の「追加の policy の差分」節で承認し、operator が task の branch を main に merge するまで、受け入れ 8 と、main との差分を `agent-docs/progress/` だけに限る範囲外差分の検査は通らない。
+
 ## 未解決
-- closeout の進捗の commit は main に無いので、提出時の HEAD では `git merge-base --is-ancestor HEAD main` が exit 1 になる（task の受け入れ 8）。closeout の統合が main に入れば exit 0 になる。
+- repair-1 の 3 commit は main に無いので、提出時の HEAD では `git merge-base --is-ancestor HEAD main` が exit 1 になる（task の受け入れ 8）。人が追加の policy の差分を承認し、operator が task の branch を main に merge すれば exit 0 になる。
 - WorkUnit closeout の 1 回目の run は、計画の check（`check-health.sh` の後、必須 rule が pass 以外なら不合格）が merge の後の doc-only の not_applicable で必ず落ちるため、`plan_issue` を申告した。replan の後の check は pass と not_applicable を合格に数え、この run で exit 0 を確かめた。
 - LoC 削減 v3 E（01M7J3NKVAH9NG53C5FEFNQJYK）の branch は 2026-11-17 の時点でこの merge を含まない。E は base がこの merge を含む main になった後（review 前の main 同期の後）に後の判定で評価される。同期の後の E の report は未確認。
 - `HealthPolicyState.files`（`crates/task-dispatch/src/health_review/input.rs`）は blob の違う policy の file の一覧なので、数えなかった許可の一覧も reviewer の prompt に `changed=false` と並んで出る。`changed=false` では D6.1・D6.3・D6.4 は働かない（ADR D4）。Rust は変えていない。

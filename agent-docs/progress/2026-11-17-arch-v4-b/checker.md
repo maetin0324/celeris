@@ -15,6 +15,7 @@ completed: 2026-11-17
 - merge の前は、この branch が policy の file（`scripts/dev/repo-health/**`）を変えるので、`policy.changed` が fail になり、check-health・test-affected・WU の check `celeris:repo-health/1` は exit 1 だった（想定どおり。修復しない）。`policy.changed` 以外の必須 rule 15 件中 14 件は pass。merge の後は check-health・test-affected とも exit 0（「検査」）。
 - 人は 2026-11-17 に下の「人が承認する policy の差分の要約」と「ADR との違い」3 点を含めて差分を承認し、operator が既存の D6.4 の経路（policy だけの branch の hand merge）で main に入れた（「人の承認と operator の merge」）。この WorkUnit は自分で承認していない。
 - ADR から 3 点を変えて実装した（「ADR との違い」）。ADR への付記は closeout か人の判断に回す（「提案」）。
+- merge の後、WU の check（「`policy.changed` 以外の必須 rule が pass」の式）は、差分が doc_only になって deps 等の必須 rule が `not_applicable` になるため不合格になった。成果では直せないので、check の式を直すよう計画の問題として申告した（「merge の後の WU の check の不合格」）。
 
 ## WU の check の不合格（retry の run で確かめた）
 - 前の run の後、WU の check `celeris:repo-health/1`（期待 exit 0）は `health:policy.changed:<指紋>`（evidence は本体 3 file）で不合格になった。
@@ -29,6 +30,12 @@ completed: 2026-11-17
 - この run は WorkUnit の branch を main の merge の commit まで fast-forward し（tree は merge の前と同じ）、その上にこの進捗の更新だけを commit した。`git merge-base HEAD main` との差分はこの進捗 file だけで、check-health の base（`--base auto`）からは policy の file の差分が消える。結果は「検査」の「merge の後」。
 - WU の check `celeris:repo-health/1` の前の不合格（`policy.changed`）は、policy の file と試験・進捗を同じ branch で変えたこの branch では想定どおりで、修復の対象ではなかった（人の答え）。
 - ADR への付記（違い 1〜3）は closeout で決める。後の unit（replay・metrics）は main に入った新しい検査器で測る。
+
+## merge の後の WU の check の不合格（計画の問題として申告した）
+- merge の後の run が done を返した後、WU の check（check-health の report で「`policy.changed` 以外の必須 rule の status が `pass`」を求める式、期待 exit 0）は exit 1 で不合格になった。出力は `deps.violation:not_applicable`・`deps.cycle:not_applicable`・`size.responsibility-growth:not_applicable`・`source-size:not_applicable`。
+- 原因: merge の後は `git merge-base HEAD main` が main の merge の commit になり、check-health（`--base auto`）の差分はこの進捗 file だけになる。repo-health は差分が profile の doc_only の path だけのとき、この 4 件の必須 rule を `not_applicable`（理由「doc_only: 変更は profile の doc_only.paths だけ」）にする。check-health 自身は exit 0（verdict pass、`policy.changed` も pass）。check の式は `not_applicable` も不合格に数えるので、この branch に policy の差分が main に入った後は、成果をどう直しても通らない（通すには範囲の外の source を変えるしかない）。
+- 同じ式を merge の前の base で当てると通る: `bash scripts/dev/check-health.sh --base 2c473865 --out <json>`（WU の開始時の base。この run の HEAD で実行）は exit 1（`policy.changed` だけが fail、findings 698、new 1）で、report に同じ式を当てると `required rules not pass besides policy.changed: []`、exit 0。deps.violation・deps.cycle・size.responsibility-growth・source-size を含む `policy.changed` 以外の必須 rule 14 件が pass。
+- 申告した直し方: check の式で `not_applicable` も合格に数える（`x["status"] not in ("pass","not_applicable")`）。merge の前（policy の差分がある）でも後（doc_only）でも意味が保たれる。代わりに、merge の後は `bash scripts/dev/check-health.sh` の exit 0 を求めてもよい。
 
 ## 実装前 brief（7 項目）
 ADR の brief（1〜7）をそのまま使う。実装で足した点だけ書く。

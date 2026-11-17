@@ -33,7 +33,8 @@ LoC 削減 v3 E（01M7J3NKVAH9NG53C5FEFNQJYK）は daemon が呼ばない notify
   1. path が `policy_allowlists` のどれかに当たる。
   2. base と head の両方の tree に file がある（追加・削除は数える）。
   3. 両方の内容が UTF-8 として読める（strict に decode する。読めなければ数える）。
-  4. head の内容の行の集合が、base の内容の行の集合に含まれる。内容の行は、内容を `'\n'` で分けた行のうち、`strip()` して空になる行と、列 0 が `#` の行を除いたもの。行は改行以外を変えずに比べる（行末の空白・`'\r'` も比べる）。
+  4. head の内容の行の集合が、base の内容の行の集合に含まれる。内容の行は、内容を `'\n'` で分けた行のうち、`strip()` して空になる行と、列 0 が `#` の行を除いたもの。行は改行以外を変えずに比べる（行末の空白も比べる）。
+  5. 両方の内容に `'\n'` 以外の改行の文字（`str.splitlines` が行の区切りにする文字）が無い（付記 A1）。
   report の `policy.changed` は数えた file が 1 つでもあれば true。rule `policy.changed` の finding の evidence は数えた file だけにする。`policy.files` には今までどおり policy の file の全部と両側の blob を書く（形は変えない。数えなかった file も base と head の blob が違う行として残る）。
 - D3. Celeris の profile: `policy_allowlists = ['^scripts/dev/(adr-allowed-duplicates\.txt|human-text-lint\.allow)$']`。検査器のコード（`health/`・`rules/`・`repo_health.py`）には repo 固有の path を注釈も含めて書かない。
 - D4. dispatcher（Rust）は変えない。`policy_mixed`（D6.1、`crates/task-dispatch/src/health_review/verdict.rs`）と D6.4 の関門（`policy_review.rs` の `policy_review_gate`）は report の `policy.changed` が true のときだけ働き、検査器の判定を写すだけで自分では判定しない。`check-health.sh` の D6.2（`engine.policy_review_files`）も report の `policy.changed` を読む。`HealthPolicyState.files`（`input.rs`）は blob の違う policy の file の一覧なので、数えなかった許可の一覧もそこに載る。reviewer の prompt（`task-worker` の `change_rules/review.rs`）には `changed=false` と並んでその file が出るが、`changed=false` の repo では D6.3 の `health.policy` を求めず、D6.1・D6.4 も働かない。
@@ -44,7 +45,7 @@ LoC 削減 v3 E（01M7J3NKVAH9NG53C5FEFNQJYK）は daemon が呼ばない notify
 
 | 読み手 | 読み方 | `#`・空行 |
 |---|---|---|
-| `scripts/dev/check-human-text.py` の `allow_list` | 1 行を `rule<TAB>snippet<TAB>理由` に分け、`(rule, snippet)` を集合に入れる。形が違う行は exit。finding が集合に無ければ fail、集合のうち使われない許可は `no longer found` で fail | `not raw.strip()` と `raw.startswith("#")` の行を飛ばす |
+| `scripts/dev/check-human-text.py` の `allow_list` | text mode（universal newlines）で開くので、`'\n'`・`'\r\n'`・単独の `'\r'` を行の区切りにする（付記 A1）。1 行を `rule<TAB>snippet<TAB>理由` に分け、`(rule, snippet)` を集合に入れる。形が違う行は exit。finding が集合に無ければ fail、集合のうち使われない許可は `no longer found` で fail | `not raw.strip()` と `raw.startswith("#")` の行を飛ばす |
 | `scripts/dev/check-adr-numbers.sh` | `sed -e 's/#.*//' -e 's/[[:space:]]//g'` の後の空でない行を、許可する ADR の file 名の一覧にする。同じ番号の ADR が全部一覧にあるときだけ重複を許す | `#` から行末を消し、空になった行を捨てる |
 | `crates/task-dispatch/src/auto_resolve/classify.rs` の `allowed_adr_duplicates` | 1 行ごとに `#` より前を `trim()` し、空でないものを集合に入れる（統合の番号重複 resolver が使う） | 同上 |
 
@@ -56,3 +57,10 @@ LoC 削減 v3 E（01M7J3NKVAH9NG53C5FEFNQJYK）は daemon が呼ばない notify
 - head の profile の `policy_allowlists` で判定する案。候補が任意の policy の file（例 profile 自身・baseline）を許可の一覧として登録し、同じ branch で行を消して検査を緩められる。契約 D2 と同じく base 側で判定する。
 - 行の多重集合（同じ行の数）で比べる案。どの読み手も同じ行の重複を 1 つの許可として読むので、集合で足りる。
 - 許可の一覧の形（`rule<TAB>snippet<TAB>理由` など）を検査器が解釈する案。読み手ごとの形を検査器が持つと、repo 固有の解釈が検査器に入る。行の集合の包含は形を問わず、どの読み手でも許可を増やさない。
+
+## 付記 A1（2026-11-17）: `'\n'` 以外の改行の文字を含む内容は比べずに数える
+- 指摘（reviewer 01M7KJH9BREHTYP8GWC2M2ZWJW）: D2 の内容の行は `'\n'` だけで分けていた。`check-human-text.py` の `allow_list` は text mode で開き、単独の `'\r'` も行の区切りにする。`human-text-lint.allow` に `#note<CR>slop_vocabulary<TAB>NEW<TAB>理由` の 1 行を足すと、D2 では列 0 が `#` の注釈の 1 行になり `policy.changed=false`、`check-human-text.py` では注釈の行と新しい許可の行の 2 行になる。許可を足す変更が `policy.changed` から外れ、D6.1・D6.4 が働かなかった。上の読み手の表の「列 0 の `#` の行はどの読み手も許可として読まない」は、この内容では `check-human-text.py` について成り立たなかった。
+- 決定: D2 に条件 5 を足す。base か head の内容に `'\n'` 以外の改行の文字（`'\r'`・`'\x0b'`・`'\x0c'`・`'\x1c'`・`'\x1d'`・`'\x1e'`・`'\x85'`・`'\u2028'`・`'\u2029'`。Python の `str.splitlines` が行の区切りにする文字のうち `'\n'` 以外の全部）が 1 つでもあれば、UTF-8 で読めない内容と同じく比べずに数える。これらの文字が無い内容は、`'\n'` だけで分ける読み手（`sed`、Rust の `str::lines`）、universal newlines の読み手（Python の text mode）、`str.splitlines` の読み手のどれでも同じ行に分かれる。D2 の「内容の行の集合の包含」はその行の上で成り立つので、どの読み手でも許可の集合を増やさない。
+- 影響: 改行が CRLF の許可の一覧は、行を消すだけでも数える（人の承認に回る）。2026-11-17 の時点で Celeris の 2 つの許可の一覧は、どちらもこれらの文字を含まない。
+- 採らなかった案: (1) universal newlines で分けて比べる案。`'\n'` だけで分ける読み手と行が食い違う（`a<CR>b` は `sed` では 1 行、Python では 2 行）。(2) 読み手ごとの分け方の全部で包含を確かめる案。読み手の一覧と分け方を検査器が持つことになり、repo 固有の解釈が入る（D3）。
+- 試験: `scripts/tests/test_repo_health_allowlist_shrink.py` の `test_allowlist_shrink_other_line_breaks_are_policy_change`（注釈の行に上の各文字を挟んで許可を 1 行足す → 数える）と `test_allowlist_shrink_crlf_content_is_policy_change`（CRLF の一覧から行を消す → 数える）。

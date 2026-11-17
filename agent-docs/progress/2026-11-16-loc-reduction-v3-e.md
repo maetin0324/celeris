@@ -93,6 +93,7 @@ completed: 2026-11-17
 - lease・restart・replan・stale-result の反例試験は変えていない（下の「証拠」で名指しで通した）。名指しの件数が 288 → 287 になったのは、消した D7 の試験 `content_failure_escalates_one_step_then_requests_replan` が `test(replan)` に当たっていたため。
 
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
+- 試行 3（doc・運用手順・進捗だけの変更）の commit の後に、下の 4 つを再実行した。結果は試行 2 と同じ: fmt・clippy exit 0、test-affected exit 0（health `verdict=pass … new=0 worsened=0`、`human-text pass`・`policy.changed pass`、nextest `3925 tests run: 3925 passed (7 slow), 11 skipped`）、反例試験の名指し `287 tests run: 287 passed`、size check exit 0（production unit 1,753・固定 7,012、own unit 4,229・固定 9,901）。
 - `cargo fmt --all -- --check` → exit 0。
 - `cargo clippy --workspace -- -D warnings` → exit 0。
 - `bash scripts/dev/test-affected.sh` → exit 0。health の gate は `repo-health: verdict=pass … new=0 worsened=0`（試行 1 の review が挙げた new の link.unlinked 4 件のうち、celeris の 3 件は消し、task-core の 1 件は「未解決」に書いた。task-core の 1 件が new に出なくなったのは、この進捗に名前を書いたため（link.unlinked は追跡 file 全体の出現回数を数える）で、関数は呼び手が無いまま残る。`policy.changed pass required findings=0`。main に入った 01M7KATBGC の規則で、許可の一覧から行を消すだけの変更は数えない）、`repo_health_gate: all checks passed`。nextest `3925 tests run: 3925 passed (7 slow), 11 skipped`（対象 crate: celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch）。

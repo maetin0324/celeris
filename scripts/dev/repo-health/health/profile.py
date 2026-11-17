@@ -11,6 +11,9 @@ profile の項目（未知の項目は読み込みエラー。破壊的変更の
     description = "..."                # 任意
     policy_paths = ["<regex>", ...]    # policy とみなす path。既定 ["^scripts/dev/repo-health/"]
     exclude_paths = ["<regex>", ...]   # 解析しない path（vendor など）。diff の判定・rule の対象から外す
+    policy_allowlists = ["<regex>", ...]  # 任意。既定は空。policy の file のうち許可の一覧（1 行 1 許可）とみなす path。
+                                       # 行を消すだけの変更は policy.changed に数えない（判定は engine の
+                                       # policy_changed_files。ADR 2026-11-16-health-policy-allowlist-shrink）
     [doc_only] paths = ["<regex>"]     # 変更が全部当たれば doc-only。既定 ['\\.md$', '^docs/', '^agent-docs/']
     [adapters] enabled = [...]         # 使う言語 adapter（既定は全部）。外した言語は adapter 無し扱い
                ignore_languages = [...]  # adapter の無い言語でも unsupported にしない言語（理由は profile のコメント）
@@ -79,8 +82,8 @@ BUILTIN_GENERIC: dict = {
     "rules": {"policy.changed": {"required": True}},
 }
 
-_TOP_KEYS = {"version", "extends", "description", "policy_paths", "exclude_paths", "doc_only", "adapters",
-             "classes", "arch_map", "metrics", "rules", "review"}
+_TOP_KEYS = {"version", "extends", "description", "policy_paths", "exclude_paths", "policy_allowlists", "doc_only",
+             "adapters", "classes", "arch_map", "metrics", "rules", "review"}
 _REVIEW_KEYS = {"owner_map", "high_risk", "invariants"}
 _RULE_ID = re.compile(
     r"^(deps\.violation|deps\.cycle|size\.responsibility-growth|dup\.contract|dup\.state|dup\.public-surface|"
@@ -142,6 +145,10 @@ class Profile:
     @property
     def exclude_paths(self) -> list[re.Pattern]:
         return [re.compile(p) for p in self.list_of("exclude_paths", [])]
+
+    @property
+    def policy_allowlists(self) -> list[re.Pattern]:
+        return [re.compile(p) for p in self.list_of("policy_allowlists", [])]
 
     @property
     def doc_only_paths(self) -> list[re.Pattern]:
@@ -216,7 +223,7 @@ def validate(data: dict, where: str) -> None:
         raise _err(where, f"未知の項目 {unknown}")
     if "version" in data and not isinstance(data["version"], (str, int)):
         raise _err(where, "version は文字列")
-    for key in ("policy_paths", "exclude_paths"):
+    for key in ("policy_paths", "exclude_paths", "policy_allowlists"):
         if key in data:
             _check_regexes(f"{where}:{key}", data[key])
     if "doc_only" in data:

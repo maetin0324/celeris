@@ -58,6 +58,7 @@ class Context:
     changed: list[str]
     changed_lines: dict[str, list[tuple[int, int]]]
     policy_files: list[dict]
+    policy_changed: list[dict]  # policy_files のうち policy.changed に数えるもの（policy_changed_files）
     classifier: Classifier
     mode: str
 
@@ -273,6 +274,42 @@ def _policy_files(snap: Snapshot, profile: Profile) -> list[dict]:
     return out
 
 
+def _content_lines(data: bytes | None) -> set[str] | None:
+    """許可の一覧の内容の行の集合。UTF-8 で読めなければ None。
+
+    '\n' で分けた行のうち、strip して空の行と列 0 が # の行を除く。行は改行以外を変えない。
+    """
+    if data is None:
+        return None
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    return {line for line in text.split("\n") if line.strip() and not line.startswith("#")}
+
+
+def _only_removes_lines(snap: Snapshot, path: str) -> bool:
+    """base と head の両方にあり、head の内容の行が全部 base にある（行を消すだけの）変更か。"""
+    base, head = snap.base_tree, snap.head_tree
+    if base is None or not base.has(path) or not head.has(path):
+        return False
+    base_lines = _content_lines(base.read_bytes(path))
+    head_lines = _content_lines(head.read_bytes(path))
+    return base_lines is not None and head_lines is not None and head_lines <= base_lines
+
+
+def policy_changed_files(snap: Snapshot, profile: Profile, policy_files: list[dict]) -> list[dict]:
+    """policy.changed に数える policy の file（ADR 2026-11-16-health-policy-allowlist-shrink D2）。
+
+    base と head の blob が違う file を数える。ただし policy の側（base、初回は bootstrap）の profile の
+    policy_allowlists に当たり、行を消すだけの変更（_only_removes_lines）は数えない。report の policy.changed と
+    rule policy.changed の finding はこの結果だけを使う（validate_report.py の S8）。
+    """
+    allowlists = profile.policy_allowlists
+    return [f for f in policy_files if f["base_blob"] != f["head_blob"]
+            and not (any(r.search(f["path"]) for r in allowlists) and _only_removes_lines(snap, f["path"]))]
+
+
 def _mode(changed: list[str], profile: Profile) -> str:
     if changed and all(any(r.search(p) for r in profile.doc_only_paths) for p in changed):
         return "doc-only"
@@ -388,12 +425,13 @@ def build_report(snap: Snapshot, profile: Profile | None, policy_version: str, r
         changed = [p for p in snap.changed if not any(r.search(p) for r in profile.exclude_paths)]
         mode = _mode(changed, profile)
         policy_files = _policy_files(snap, profile)
+        policy_changed = policy_changed_files(snap, profile, policy_files)
         classifier = Classifier(profile.classes)
         changed_lines = {p: r for p, r in snap.changed_lines.items() if p in set(changed)}
         policy = {
             "version": profile.version,
             "source": profile.policy_source,
-            "changed": any(f["base_blob"] != f["head_blob"] for f in policy_files),
+            "changed": bool(policy_changed),
             "files": policy_files,
         }
         if profile.has_expiring_exceptions:
@@ -406,11 +444,12 @@ def build_report(snap: Snapshot, profile: Profile | None, policy_version: str, r
                 rules_out.append(_rule_entry(rid, required, "unsupported",
                                              f"rule_missing:{rid}: profile にあるが rules/ に実装が無い", None))
                 continue
-            ctx = Context(snap, profile, cfg, changed, changed_lines, policy_files, classifier, mode)
+            ctx = Context(snap, profile, cfg, changed, changed_lines, policy_files, policy_changed, classifier, mode)
             status, reason, fs = evaluate_rule(rule, ctx)
             rules_out.append(_rule_entry(rid, required, status, reason, rule))
             findings.extend(fs)
-        metrics = _metrics(snap, Context(snap, profile, {}, changed, changed_lines, policy_files, classifier, mode))
+        metrics = _metrics(snap, Context(snap, profile, {}, changed, changed_lines, policy_files, policy_changed,
+                                         classifier, mode))
         if profile.metrics:
             metrics["structural"] = _structural(snap, profile)
     findings.sort(key=lambda f: f["fingerprint"])

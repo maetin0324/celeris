@@ -58,7 +58,7 @@ fn leaf(dir: &std::path::Path) -> Task {
     t
 }
 
-/// CoS の対話用タスク（`POST /console/instruct` が作るものと同じ印: 対話 + 担当が秘書）。
+/// CoS の対話用タスク（`POST /org/cos/messages` が作るものと同じ印: 対話 + 担当が秘書）。
 fn cos_chat(dir: &std::path::Path) -> Task {
     let mut t = leaf(dir);
     t.assignee = Some("cos".into());

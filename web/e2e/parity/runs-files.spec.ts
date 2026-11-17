@@ -77,6 +77,51 @@ test.describe("P3-12", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test("parity: /tasks/:id/runs/:runId 360px で長い 1 行がページを広げない", async ({ page }) => {
+    // 本文（stdout.jsonl）に 2000 文字以上の 1 行を返し、折り返しの有無と原文の表示でページ幅を見る。
+    const dir = makeTmpDir("celeris-web-run-log-long-");
+    const tokenFile = path.join(dir, "token");
+    writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);
+    const long = "x".repeat(2400);
+    const toolResult = JSON.stringify({
+      type: "user",
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: long }] },
+    });
+    const daemon = createFakeDaemon({
+      token: FIXTURE_TOKEN,
+      fixtures: { ...defaultFixtures, "/api/v1/tasks/T1": () => runDetail(true) },
+      files: {
+        "/api/v1/tasks/T1/runs/R1/stdout": {
+          body: `${line(long)}\n${toolResult}\n${long}\n`,
+          type: "text/plain; charset=utf-8",
+        },
+      },
+    });
+    const gateway = await startGateway({ daemonUrl: await daemon.start(), daemonTokenFile: tokenFile });
+    try {
+      await page.setViewportSize({ width: 360, height: 740 });
+      await page.goto(`${gateway.base}/tasks/T1/runs/R1`);
+      await expect(page.getByRole("heading", { level: 1, name: "run ログ T1 / R1" })).toBeVisible();
+      await expect(page.getByTestId("run-log-line-count")).toHaveAttribute("data-count", "3");
+      const fits = () => page.evaluate(() => document.documentElement.scrollWidth);
+      expect(await fits()).toBeLessThanOrEqual(360);
+      // 折り返しを切っても、横 scroll は面の内側だけ。
+      const wrapToggle = page.getByRole("button", { name: "長い行を折り返す" });
+      await wrapToggle.click();
+      await expect(wrapToggle).toHaveAttribute("aria-pressed", "false");
+      for (const summary of await page.locator("[data-testid=run-log] summary").all()) await summary.click();
+      expect(await fits()).toBeLessThanOrEqual(360);
+      // 原文（LogSurface）でも同じ。
+      await page.getByRole("button", { name: /原文/ }).click();
+      await expect(page.getByRole("region", { name: "run ログ本文（原文）" })).toBeVisible();
+      expect(await fits()).toBeLessThanOrEqual(360);
+    } finally {
+      await gateway.close();
+      await daemon.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 test.describe("P3-11", () => {

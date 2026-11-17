@@ -21,7 +21,7 @@ it("fake daemon ignores empty, foreign and incomplete requests before a real API
     for (const raw of [
       "",
       "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n",
-      "POST /api/v1/console/messages HTTP/1.1\r\nContent-Length: 8\r\n\r\nx",
+      "POST /api/v1/tasks HTTP/1.1\r\nContent-Length: 8\r\n\r\nx",
     ]) {
       await exchange(base, raw);
     }

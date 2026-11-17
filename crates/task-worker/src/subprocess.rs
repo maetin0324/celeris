@@ -346,7 +346,7 @@ pub async fn run_subprocess(
                             });
                         }
                         // ADR-0072 D7/D9（Phase E1）: 外部ハーネスが直接プロトコルで yield /
-                        // 予算切れを申告する経路（claude-code / codex / acp / aider は自前で終端を
+                        // 予算切れを申告する経路（claude-code / codex / acp は自前で終端を
                         // 合成するのでこの経路は通らない）。
                         WorkerMessage::Yielded { checkpoint, usage } => {
                             terminal_raw = Some(trimmed.to_string());

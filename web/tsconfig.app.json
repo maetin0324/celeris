@@ -9,7 +9,6 @@
     "api/**/*",
     "lib/**/*",
     "e2e/parity/realtime.spec.ts",
-    "e2e/parity/console.spec.ts",
     "e2e/parity/latency-gate.spec.ts",
     "e2e/support/gateway.ts",
     "e2e/support/latency-results.ts",

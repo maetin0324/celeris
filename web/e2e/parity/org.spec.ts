@@ -54,12 +54,6 @@ test.afterAll(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-test("parity: /org/secretary → /org/cos", async ({ page }) => {
-  await page.goto(`${gateway.base}/org/secretary`);
-  await expect(page).toHaveURL(/\/org\/cos$/);
-  await expect(page.getByRole("heading", { level: 1, name: "組織の人 cos" })).toBeVisible();
-});
-
 test("parity: /org 木・選択・作成・変更・削除・skill", async ({ page }) => {
   const actions: Array<{ method: string; url: string; body: unknown }> = [];
   await page.route("**/api/org**", async (route) => {

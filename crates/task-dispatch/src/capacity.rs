@@ -12,8 +12,7 @@ pub const DEFAULT_MAX_COS_RUNS: usize = 2;
 
 /// ADR-0089 規則 1: CoS の対話 run か。**人が話しかけた対話用タスク**（`Task.conversation` あり。
 /// 途中目標レビューの対話〈`milestone_id` あり、裏方〉は除く）で、担当が組織の秘書（`OrgKind::Secretary`
-/// = CoS、ADR-0046 D6）であるもの。`POST /console/instruct` の既定の宛先・`POST /org/cos/messages`
-/// が作るタスクがこれに当たる。判定は決定的（ストアの `org` を引くだけ）。
+/// = CoS、ADR-0046 D6）であるもの。`POST /org/cos/messages` が作るタスクがこれに当たる。判定は決定的（ストアの `org` を引くだけ）。
 pub fn is_cos_run(task: &Task, org: &[OrgNode]) -> bool {
     is_cos_conversation(
         task_core::is_conversation(task),

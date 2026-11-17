@@ -70,7 +70,7 @@ confidence: high
 **同じ 1 つの関数** `task_core::knowledge::place` を通してから `_inbox/`（または KB）に書く。
 落ちた候補は書かず、理由（正しい置き場の書き方つき）を返す: `record` は終了コード 1 と文面、
 `knowledge_propose` は `-32002 rejected` の `message`、`apply_candidates` は `dropped` の理由
-（Console の「破棄」とタイムラインに出る）。
+（タスクのタイムラインに出る）。
 
 | 規則 | 中身 |
 |---|---|
@@ -304,7 +304,7 @@ Codex / ACP。枯渇・未ログインのプールは飛ばす）を決定的に
 - tier `cheap` の汎用の供給元が 1 つも無ければ、従来どおり dispatch されずに `ready` のまま残る
   （供給が戻れば次の tick で拾われる）
 - 適用（`apply_candidates`）は経路に関係なく同じ。`knowledge_runs.via` と `summary_json.via` に
-  `"langmem"` か `"fallback:<adapter>"` が残り、Console のブロックとタスクのタイムラインに
+  `"langmem"` か `"fallback:<adapter>"` が残り、タスクのタイムラインに
   **「cheap のハーネスで抽出」**が出る
 
 ### (3) 失敗した run は一度だけやり直す（D3）
@@ -322,7 +322,7 @@ celerisctl knowledge rerun <元のタスクの id> [--db ~/.local/celeris/celeri
 `knowledge_runs` の 1 行を `state = failed` / `retried_at = NULL` に戻すだけ（`applied_at` /
 `summary_json` / `via` は消える）。**新しい run を作るのはデーモンの次の tick**なので、デーモンを
 止める必要も再起動も要らない。`<元のタスクの id>` は知識整理 run 自身の id ではなく、その run の
-**元になった仕事**の id（Console の `knowledge` ブロックや `/tasks/<id>` のタイムラインから引く）。
+**元になった仕事**の id（`/tasks/<id>` のタイムラインから引く）。
 
 > `knowledge` のサブコマンドで **DB を開くのはこの `rerun` だけ**（`org migrate-v2` と同じ管理系。
 > celerisctl は HTTP の口を持たず、他のサブコマンドは DB を開かないままなのでコンテナの中でも動く）。

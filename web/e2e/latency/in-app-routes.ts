@@ -6,9 +6,8 @@ import { fixtureFor } from "../support/fake-daemon.mjs";
 // S1 で nav にリンクの無い経路（ADR-0081 付記「リンクの無い経路」）を、アプリ内の遷移で測るための表。
 // 親画面を開き、起動の完了を待ってから、その画面の実リンク（main 内の a[href=fixture]）を click する。
 // fixtures は親画面にリンクを描かせるための偽 daemon の応答（e2e/support/screens.ts は変えない）。
-// 表に無い経路は、どの画面にも SPA のリンクが無い（/org/cos の「話す」は文書の再読み込みになる
-// 素の a、files・changes は ?tab= のリンクだけ）ので、起動完了の後に history.pushState と
-// popstate でアプリ内遷移させる。
+// 表に無い経路は、どの画面にも SPA のリンクが無い（files・changes は ?tab= のリンクだけ）ので、
+// 起動完了の後に history.pushState と popstate でアプリ内遷移させる。
 
 const schema = JSON.parse(
   readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../api/generated/schema.json"), "utf8"),

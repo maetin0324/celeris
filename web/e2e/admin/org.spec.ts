@@ -9,7 +9,7 @@ import { makeTmpDir } from "../support/tmp-dir";
 // beforeAll の一時 dir・server をこの file の試験で共有するので、file 内は 1 worker で順に流す（2026-10-04 の並列化と同じ扱い）。
 test.describe.configure({ mode: "default" });
 
-// /org と /org/cos を 360px で開き、横 scroll が出ないこと（ページ全体が clientWidth に収まること）を見る。
+// /org を 360px で開き、横 scroll が出ないこと（ページ全体が clientWidth に収まること）を見る。
 // 長い名前・ID・深い木を置き、折り返しと字下げの上限が効いているかを確かめる。
 const dir = makeTmpDir("celeris-admin-org-");
 const tokenFile = path.join(dir, "token");
@@ -113,23 +113,10 @@ test.describe("width: 360", () => {
     await expectNoHorizontalScroll(page);
   });
 
-  test("/org/secretary が横 scroll なく読める", async ({ page }) => {
-    await page.goto(`${gateway.base}/org/secretary`);
-    await expect(page).toHaveURL(/\/org\/cos$/);
-    await expect(page.getByRole("heading", { level: 1, name: "組織の人 cos" })).toBeVisible();
-    await expectNoHorizontalScroll(page);
-  });
-
   test("/org の skill 欄と確認ダイアログが横 scroll なく読める", async ({ page }) => {
     await page.goto(`${gateway.base}/org?selected=ui-ux`);
     await page.getByRole("button", { name: "frontend-design を外す" }).click();
     await expect(page.getByRole("alertdialog")).toBeVisible();
-    await expectNoHorizontalScroll(page);
-  });
-
-  test("/org/cos が横 scroll なく読める", async ({ page }) => {
-    await page.goto(`${gateway.base}/org/cos`);
-    await expect(page.getByRole("heading", { level: 1, name: "組織の人 cos" })).toBeVisible();
     await expectNoHorizontalScroll(page);
   });
 });

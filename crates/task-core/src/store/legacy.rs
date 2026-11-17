@@ -1,5 +1,5 @@
 //! The CoS node's `messages` rows on the CoS chat (`POST /org/cos/messages` and the delivery
-//! notice). The Console readers were removed (ADR 2026-11-17-console-deprecated-api-aider-removal).
+//! notice). The Console readers were removed (ADR 2026-11-17（Console・旧 API・aider の撤去）).
 //!
 //! ADR 2026-10-22-cos-fixed-threads D2': Console input to the CoS is queued on the fixed
 //! general or project CoS thread (never on a legacy thread). The one-time projection of the
@@ -37,7 +37,7 @@ struct OldMessage {
 }
 
 impl SqliteStore {
-    /// ADR 2026-11-17-console-deprecated-api-aider-removal D2: project the CoS node's `messages`
+    /// ADR 2026-11-17（Console・旧 API・aider の撤去） D2: project the CoS node's `messages`
     /// rows (the delivery notice for the human) onto the fixed CoS thread right away, with the same
     /// projection the writable open runs. A row already projected is never projected again.
     pub fn cos_messages_project(&self) -> Result<(), StoreError> {

@@ -951,20 +951,13 @@ fn advance(
                 .any(|m| m.id == id)
             {
                 let title = store.get(d.task_id)?.map(|t| t.title).unwrap_or_default();
-                let label = if d.state == State::Ready && d.release.is_none() {
-                    "取り込み完了"
-                } else if d.state == State::Ready {
-                    "デプロイ準備完了"
-                } else {
-                    "取り込み・リリース準備の確認が必要"
-                };
+                let label = notice_label(&d);
                 let release = d
                     .release
                     .as_ref()
                     .map(|s| format!("\n[リリース {s} を確認してデプロイ](/releases#release-{s})"))
                     .unwrap_or_default();
-                // ADR-0051 Phase 106追記: origin へのpush状況を1行足す。push=falseで一度も
-                // 試みていなければ何も足さない。
+                // ADR-0051 Phase 106追記: origin への push 状況を 1 行足す（push=false で試みていなければ足さない）。
                 let push_line = if let Some(head) = d.pushed_at.is_some().then(|| d.head.clone()) {
                     format!("\norigin へ push 済み: {head}")
                 } else if let Some(err) = d.push_error.as_deref().map(push_error_display) {
@@ -973,17 +966,25 @@ fn advance(
                     String::new()
                 };
                 store.message_append(&Message { id, node_id: node.id, project_id: Some(d.project_id), role: MessageRole::Node, text: format!("【{label}・自動引き渡し結果】{title}\n{}\n[タスクと部署レビュー](/tasks/{}?tab=changes){}{}", d.detail, d.task_id, release, push_line), run_id: None, task_id: Some(d.task_id), metadata: None, created_at: now })?;
-                // ADR 2026-11-17-console-deprecated-api-aider-removal D2: 人に向けた通知は書いた時点で
-                // CoS チャットの固定スレッドへ写す（daemon の起動を待たない）。
-                if needs_user {
-                    store.cos_messages_project()?;
-                }
+                needs_user
+                    .then(|| store.cos_messages_project())
+                    .transpose()?;
             }
             d.notification = Some(id);
             store.delivery_save(Some(old), &d)?;
         }
     }
     Ok(())
+}
+/// 自動引き渡しの通知の見出し。
+fn notice_label(d: &Delivery) -> &'static str {
+    if d.state == State::Ready && d.release.is_none() {
+        "取り込み完了"
+    } else if d.state == State::Ready {
+        "デプロイ準備完了"
+    } else {
+        "取り込み・リリース準備の確認が必要"
+    }
 }
 fn read_json(path: &Path) -> Option<serde_json::Value> {
     serde_json::from_slice(&std::fs::read(path).ok()?).ok()

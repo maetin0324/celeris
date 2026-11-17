@@ -845,7 +845,7 @@ fn non_self_repo_is_merged_without_release_or_push() {
     let messages = store.message_list("cos", Some(d.project_id), 10).unwrap();
     assert!(messages.iter().any(|m| m.text.contains("取り込み完了")));
     assert!(messages.iter().all(|m| !m.text.contains("/releases")));
-    // ADR 2026-11-17-console-deprecated-api-aider-removal D2: 同じ tick で案件の CoS スレッドにも写る
+    // ADR 2026-11-17（Console・旧 API・aider の撤去） D2: 同じ tick で案件の CoS スレッドにも写る
     // （daemon の起動時の写しを待たない）。
     let project = d.project_id.to_string();
     let threads = store

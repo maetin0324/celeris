@@ -4,7 +4,7 @@
 //! - `GET /reports/{id}` — 1 件（`sources` の中身も展開する）。
 //!
 //! 既読と通知は受信箱（`GET /api/v1/notifications` と `POST /notifications/read-all`）が扱う。旧い
-//! `POST /reports/read`・`POST /reports/notified` は ADR 2026-11-17-console-deprecated-api-aider-removal D3 で消した。
+//! `POST /reports/read`・`POST /reports/notified` は ADR 2026-11-17（Console・旧 API・aider の撤去） D3 で消した。
 
 use axum::extract::{RawQuery, State};
 use axum::http::StatusCode;

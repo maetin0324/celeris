@@ -1,5 +1,5 @@
 //! ADR-0048 D2: `GET /tasks/{id}/runs/{run_id}/events`（run のログ画面が開く、その run の全行）。
-//! Console の入口は ADR 2026-11-17-console-deprecated-api-aider-removal D1 で消した。
+//! Console の入口は ADR 2026-11-17（Console・旧 API・aider の撤去） D1 で消した。
 
 use axum::extract::{RawQuery, State};
 use axum::http::StatusCode;

@@ -8,12 +8,12 @@ completed: 2026-11-17
 
 # checker（WorkUnit）
 
-完了日: 2026-11-17（この WorkUnit の実装と検査まで。policy の差分の人の承認と operator の main への merge は未了）
+完了日: 2026-11-17（実装と検査、policy の差分の人の承認と operator の main への merge まで）
 
 ## 結論と人がすること
 - [ADR 2026-11-17 repo-health-scc-edges-logical-modules](../../adr/2026-11-17-repo-health-scc-edges-logical-modules.md) の D1〜D4 を既存の検査器 3 file の修正で実装し、D6 の試験 8 件を足した。新しい rule・検査器の file・config 欄・切替 flag は足していない。
-- この branch は policy の file（`scripts/dev/repo-health/**`）を変えるので、`policy.changed` が fail になり、check-health・test-affected・WU の check `celeris:repo-health/1` は exit 1 になる（想定どおり。修復しない）。`policy.changed` 以外の必須 rule 15 件中 14 件は pass。
-- 人がすること: 下の「人が承認する policy の差分の要約」を読み、差分を承認するか決める。承認したら operator が既存の D6.4 の経路（policy だけの branch の hand merge）で main に入れる。この WorkUnit は自分で承認していない。
+- merge の前は、この branch が policy の file（`scripts/dev/repo-health/**`）を変えるので、`policy.changed` が fail になり、check-health・test-affected・WU の check `celeris:repo-health/1` は exit 1 だった（想定どおり。修復しない）。`policy.changed` 以外の必須 rule 15 件中 14 件は pass。merge の後は check-health・test-affected とも exit 0（「検査」）。
+- 人は 2026-11-17 に下の「人が承認する policy の差分の要約」と「ADR との違い」3 点を含めて差分を承認し、operator が既存の D6.4 の経路（policy だけの branch の hand merge）で main に入れた（「人の承認と operator の merge」）。この WorkUnit は自分で承認していない。
 - ADR から 3 点を変えて実装した（「ADR との違い」）。ADR への付記は closeout か人の判断に回す（「提案」）。
 
 ## WU の check の不合格（retry の run で確かめた）
@@ -21,6 +21,14 @@ completed: 2026-11-17
 - retry の run で check-health を回し直し、fail 級の finding は `policy.changed` の 1 件だけ（指紋は前の run の check と同じ値）、`policy.changed` 以外の必須 rule 14 件は pass と確かめた。
 - この check は、成果をどう直しても通らない。検査器の dispatch 側（`health_review/gate.rs` の PolicyOnly）は、変更 path が全部 policy の file のときだけ合格にする。この WorkUnit の受け入れ条件は policy の file でない試験 `scripts/tests/test_repo_health_scc_edges.py` とこの進捗 file を求める。objective のとおり修復しない。
 - retry の run では policy の file を変えていない（変えたのはこの進捗 file だけ）。同じ指紋が残るので、次の check は ADR health-enforcement-loop D4.3 の往復の判定で task を Blocked にし、木の root の受信箱に 1 件上げる。人はそこで下の差分を読み、承認するか決める。
+
+## 人の承認と operator の merge（2026-11-17）
+- 人の決定（運用 session の問いへの人の答え）を operator が task のコメントで中継した。人は、この WorkUnit の policy の差分（`health/lang_deps.py` の論理 module の表と `super::` の解決、`rules/deps.py` の循環の内部の新しい組の finding、`rules/size_growth.py` の論理 module の単位、試験 `scripts/tests/test_repo_health_scc_edges.py`）を、この進捗の「人が承認する policy の差分の要約」と「ADR との違い」3 点を含めて承認した。
+- operator は、前例 01M76BYGKY・01M7KATBGC と同じく、この WorkUnit の branch を main に no-ff で merge した。merge の件名は「integrate 01M7MZTKAZ checker: deps.cycle の循環の内部の新しい組を finding にし、Rust の単位を論理 module（#[path]・super::）にする（policy の branch、人の承認と operator の hand merge）」。task の branch も main まで fast-forward した。push はしていない。
+- main に入った commit（件名）: 「arch-v4 B checker: deps.cycle の循環の内部の新しい組を finding にし、Rust の単位を論理 module（#[path]・super::）にする」「arch-v4 B checker: WU 進捗（policy の差分の要約・判定を外した確認・旧新の比較・検査）」「arch-v4 B checker: WU の check の不合格（policy.changed だけ）の確認と、旧新の比較の再実行・循環の件数の誤記を進捗に書く」。
+- この run は WorkUnit の branch を main の merge の commit まで fast-forward し（tree は merge の前と同じ）、その上にこの進捗の更新だけを commit した。`git merge-base HEAD main` との差分はこの進捗 file だけで、check-health の base（`--base auto`）からは policy の file の差分が消える。結果は「検査」の「merge の後」。
+- WU の check `celeris:repo-health/1` の前の不合格（`policy.changed`）は、policy の file と試験・進捗を同じ branch で変えたこの branch では想定どおりで、修復の対象ではなかった（人の答え）。
+- ADR への付記（違い 1〜3）は closeout で決める。後の unit（replay・metrics）は main に入った新しい検査器で測る。
 
 ## 実装前 brief（7 項目）
 ADR の brief（1〜7）をそのまま使う。実装で足した点だけ書く。
@@ -103,11 +111,19 @@ ADR の brief（1〜7）をそのまま使う。実装で足した点だけ書�
 | type_methods `crates/task-dispatch/src/dispatcher::Dispatcher` | 352 | 377 | 同じ 8 file の `impl Dispatcher` の method |
 | fn_lines `run_registered`（517 行） | 鍵 `crates/task-worker/src/browser_launcher_run::run_registered` | 鍵 `crates/task-worker/src/browser::run_registered` | `browser_launcher_run.rs` の論理 module が browser。base と head を同じ版で数えるので existing のまま |
 
-## 検査（提出時の HEAD で実行）
+## 検査
+merge の後（この run、提出時の HEAD で実行。`git merge-base HEAD main` との差分はこの進捗 file だけ）:
+- `python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health_scc_edges.py' -v`: 8 件 OK。`python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health*.py'`: 119 件 OK（約 86 s）。
+- `bash scripts/dev/check-health.sh`: exit 0（verdict pass、findings 140、new 0・worsened 0、`policy.changed` は pass）。変更が doc_only の path だけなので deps.cycle・size などは not_applicable。
+- `python3 -I scripts/dev/repo-health/repo_health.py --repo . --base main --head HEAD --policy-version 1 --rules deps.cycle,size.responsibility-growth`: exit 0。main に入った新しい検査器で deps.cycle 17 件・size.responsibility-growth 94 件がすべて existing、`cycle-edge:` の finding は 0 件。
+- `bash scripts/dev/test-affected.sh`: exit 0（約 14 s）。最初の check-health が pass し、「試験対象の変更なし」で終わった。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。`sh scripts/dev/progress-index.sh --check --base $(git merge-base HEAD main)`: exit 0。
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` は上の 4 file とこの進捗 file だけ。
+
+merge の前（前の run と retry の run）:
 - `bash scripts/dev/test-affected.sh`: exit 1（前の run 約 96 s、retry の run 約 84 s）。最初の check-health で `policy.changed` だけが fail（findings 698、new 1 = policy.changed、worsened 0）になり、試験の前に止まった（想定どおり）。
 - check-health の report を読んで、`policy.changed` 以外の必須 rule は 14 件すべて pass（deps.cycle 17 件・size 94 件はすべて existing）。
 - `cargo fmt --all -- --check`: exit 0。`cargo clippy --workspace -- -D warnings`: exit 0（Rust は変えていない）。
-- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` と `git diff --name-only $CELERIS_WU_BASE HEAD` は上の 4 file と、この進捗 file だけ。
 
 ## 再現コマンド
 - 新しい試験: `python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health_scc_edges.py' -v`
@@ -115,11 +131,10 @@ ADR の brief（1〜7）をそのまま使う。実装で足した点だけ書�
 - 旧新の比較: 上の「旧と新の検査器の比較」のコマンド。
 
 ## リリースゲートと回帰条件
-- release gate: 未実施（policy の差分の承認と merge の後の release で走る）。本番への昇格はしていない。
+- release gate: 未実施（main に入った policy の差分を含む release の gate はまだ走っていない）。本番への昇格はしていない。
 - 回帰条件: 上の 8 件と既存の `test_repo_health*`（119 件）が通ること。この repo の HEAD で deps.cycle の `cycle-edge:` の finding が 0 件で、deps.cycle・size.responsibility-growth が pass のまま。
 
 ## 未解決
-- policy の差分の人の承認と operator の main への merge（ADR health-review-integration D6.4）。責任者は人と operator。
 - `docs/architecture-map.md:67` の `#[path]` の記載（8 file 中 5 file）は H が直すか決める（task の記憶のとおり。この WorkUnit の範囲の外）。
 - 新しい循環（task-dispatch の 2 件、task-worker の併合）は existing の負債として見えるようになっただけで、解消は B の範囲の外。
 

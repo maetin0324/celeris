@@ -11,31 +11,23 @@ completed: 2026-11-17
 完了日: 2026-11-17（実装と検査、policy の差分の人の承認と operator の main への merge まで）
 
 ## 結論と人がすること
-- [ADR 2026-11-17 repo-health-scc-edges-logical-modules](../../adr/2026-11-17-repo-health-scc-edges-logical-modules.md) の D1〜D4 を既存の検査器 3 file の修正で実装し、D6 の試験 8 件を足した。新しい rule・検査器の file・config 欄・切替 flag は足していない。
-- merge の前は、この branch が policy の file（`scripts/dev/repo-health/**`）を変えるので、`policy.changed` が fail になり、check-health・test-affected・WU の check `celeris:repo-health/1` は exit 1 だった（想定どおり。修復しない）。`policy.changed` 以外の必須 rule 15 件中 14 件は pass。merge の後は check-health・test-affected とも exit 0（「検査」）。
-- 人は 2026-11-17 に下の「人が承認する policy の差分の要約」と「ADR との違い」3 点を含めて差分を承認し、operator が既存の D6.4 の経路（policy だけの branch の hand merge）で main に入れた（「人の承認と operator の merge」）。この WorkUnit は自分で承認していない。
-- ADR から 3 点を変えて実装した（「ADR との違い」）。ADR への付記は closeout か人の判断に回す（「提案」）。
-- merge の後、WU の check（「`policy.changed` 以外の必須 rule が pass」の式）は、差分が doc_only になって deps 等の必須 rule が `not_applicable` になるため不合格になった。成果では直せないので、check の式を直すよう計画の問題として申告した（「merge の後の WU の check の不合格」）。
+- 人がすることは無い。ADR への付記（違い 1〜3）は closeout が書く。
+- [ADR 2026-11-17 repo-health-scc-edges-logical-modules](../../adr/2026-11-17-repo-health-scc-edges-logical-modules.md) の D1〜D4 を既存の検査器 3 file の修正で実装し、D6 の試験 8 件を足した。新しい rule・検査器の file・config 欄・切替 flag は足していない。ADR から 3 点を変えて実装した（「ADR との違い」）。
+- 人は 2026-11-17 に、下の「人が承認する policy の差分の要約」と「ADR との違い」1〜3 を含めて policy の差分を承認した。operator は既存の D6.4 の経路（policy だけの branch の hand merge）で、件名「integrate 01M7MZTKAZ checker: deps.cycle の循環の内部の新しい組を finding にし、Rust の単位を論理 module（#[path]・super::）にする（policy の branch、人の承認と operator の hand merge）」の merge で main に入れた。この WorkUnit は自分で承認していない。
+- merge の前の WU の check `celeris:repo-health/1` の `policy.changed` の fail は、policy の branch では想定どおりで、修復の対象ではなかった（人の答え）。
+- merge の後、計画の check（v1 の check 3）は差分が doc だけになって deps.* などが `not_applicable` になり通らなかった。計画がこの式を「`policy.changed` 以外の必須 rule が pass か not_applicable」に直した。提出時の HEAD で直した式は exit 0（「検査」）。
 
-## WU の check の不合格（retry の run で確かめた）
-- 前の run の後、WU の check `celeris:repo-health/1`（期待 exit 0）は `health:policy.changed:<指紋>`（evidence は本体 3 file）で不合格になった。
-- retry の run で check-health を回し直し、fail 級の finding は `policy.changed` の 1 件だけ（指紋は前の run の check と同じ値）、`policy.changed` 以外の必須 rule 14 件は pass と確かめた。
-- この check は、成果をどう直しても通らない。検査器の dispatch 側（`health_review/gate.rs` の PolicyOnly）は、変更 path が全部 policy の file のときだけ合格にする。この WorkUnit の受け入れ条件は policy の file でない試験 `scripts/tests/test_repo_health_scc_edges.py` とこの進捗 file を求める。objective のとおり修復しない。
-- retry の run では policy の file を変えていない（変えたのはこの進捗 file だけ）。同じ指紋が残るので、次の check は ADR health-enforcement-loop D4.3 の往復の判定で task を Blocked にし、木の root の受信箱に 1 件上げる。人はそこで下の差分を読み、承認するか決める。
+## WU の check の不合格（経緯。今は解消）
+1. merge の前: WU の check `celeris:repo-health/1`（期待 exit 0）は `policy.changed` の fail 級の finding 1 件で不合格になった（evidence は本体 3 file）。この branch は policy の file（`scripts/dev/repo-health/**`）と、policy の file でない試験・進捗を同じ branch で変えるので、成果をどう直しても通らない。`policy.changed` 以外の必須 rule 14 件は pass だった。check は同じ指紋の往復で task を Blocked にし、人に上げた。人はこの fail を「policy の branch では想定どおりで修復の対象ではない」と答えた。
+2. merge の後: `git merge-base HEAD main` が main の merge の commit になり、check-health（`--base auto`）の差分はこの進捗 file だけになった。repo-health は差分が profile の doc_only の path だけのとき `deps.violation`・`deps.cycle`・`size.responsibility-growth`・`source-size` を `not_applicable` にするので、「`policy.changed` 以外の必須 rule が pass」を求めた v1 の check 3 は exit 1 になった（check-health 自身は exit 0）。この WorkUnit は計画の問題として申告し、計画が式を「pass か not_applicable」に直した。
+3. 実質の条件の確認: merge の前の base（WU の開始時の base `2c473865`。main の祖先）で `bash scripts/dev/check-health.sh --base 2c473865` を回すと exit 1 で、fail は `policy.changed` だけ（findings 698、new 1）。`policy.changed` 以外の必須 rule 14 件（deps.violation・deps.cycle・size.responsibility-growth・source-size を含む）は pass だった。
 
 ## 人の承認と operator の merge（2026-11-17）
 - 人の決定（運用 session の問いへの人の答え）を operator が task のコメントで中継した。人は、この WorkUnit の policy の差分（`health/lang_deps.py` の論理 module の表と `super::` の解決、`rules/deps.py` の循環の内部の新しい組の finding、`rules/size_growth.py` の論理 module の単位、試験 `scripts/tests/test_repo_health_scc_edges.py`）を、この進捗の「人が承認する policy の差分の要約」と「ADR との違い」3 点を含めて承認した。
 - operator は、前例 01M76BYGKY・01M7KATBGC と同じく、この WorkUnit の branch を main に no-ff で merge した。merge の件名は「integrate 01M7MZTKAZ checker: deps.cycle の循環の内部の新しい組を finding にし、Rust の単位を論理 module（#[path]・super::）にする（policy の branch、人の承認と operator の hand merge）」。task の branch も main まで fast-forward した。push はしていない。
 - main に入った commit（件名）: 「arch-v4 B checker: deps.cycle の循環の内部の新しい組を finding にし、Rust の単位を論理 module（#[path]・super::）にする」「arch-v4 B checker: WU 進捗（policy の差分の要約・判定を外した確認・旧新の比較・検査）」「arch-v4 B checker: WU の check の不合格（policy.changed だけ）の確認と、旧新の比較の再実行・循環の件数の誤記を進捗に書く」。
-- この run は WorkUnit の branch を main の merge の commit まで fast-forward し（tree は merge の前と同じ）、その上にこの進捗の更新だけを commit した。`git merge-base HEAD main` との差分はこの進捗 file だけで、check-health の base（`--base auto`）からは policy の file の差分が消える。結果は「検査」の「merge の後」。
-- WU の check `celeris:repo-health/1` の前の不合格（`policy.changed`）は、policy の file と試験・進捗を同じ branch で変えたこの branch では想定どおりで、修復の対象ではなかった（人の答え）。
-- ADR への付記（違い 1〜3）は closeout で決める。後の unit（replay・metrics）は main に入った新しい検査器で測る。
-
-## merge の後の WU の check の不合格（計画の問題として申告した）
-- merge の後の run が done を返した後、WU の check（check-health の report で「`policy.changed` 以外の必須 rule の status が `pass`」を求める式、期待 exit 0）は exit 1 で不合格になった。出力は `deps.violation:not_applicable`・`deps.cycle:not_applicable`・`size.responsibility-growth:not_applicable`・`source-size:not_applicable`。
-- 原因: merge の後は `git merge-base HEAD main` が main の merge の commit になり、check-health（`--base auto`）の差分はこの進捗 file だけになる。repo-health は差分が profile の doc_only の path だけのとき、この 4 件の必須 rule を `not_applicable`（理由「doc_only: 変更は profile の doc_only.paths だけ」）にする。check-health 自身は exit 0（verdict pass、`policy.changed` も pass）。check の式は `not_applicable` も不合格に数えるので、この branch に policy の差分が main に入った後は、成果をどう直しても通らない（通すには範囲の外の source を変えるしかない）。
-- 同じ式を merge の前の base で当てると通る: `bash scripts/dev/check-health.sh --base 2c473865 --out <json>`（WU の開始時の base。この run の HEAD で実行）は exit 1（`policy.changed` だけが fail、findings 698、new 1）で、report に同じ式を当てると `required rules not pass besides policy.changed: []`、exit 0。deps.violation・deps.cycle・size.responsibility-growth・source-size を含む `policy.changed` 以外の必須 rule 14 件が pass。
-- 申告した直し方: check の式で `not_applicable` も合格に数える（`x["status"] not in ("pass","not_applicable")`）。merge の前（policy の差分がある）でも後（doc_only）でも意味が保たれる。代わりに、merge の後は `bash scripts/dev/check-health.sh` の exit 0 を求めてもよい。
+- merge の後、この WorkUnit の branch は main の merge の commit を含み、その上にこの進捗の更新だけを持つ。`git merge-base HEAD main` との差分はこの進捗 file だけ。
+- ADR への付記（違い 1〜3）は closeout が書く。後の unit（replay・metrics）は main に入った新しい検査器で測る。
 
 ## 実装前 brief（7 項目）
 ADR の brief（1〜7）をそのまま使う。実装で足した点だけ書く。
@@ -119,17 +111,18 @@ ADR の brief（1〜7）をそのまま使う。実装で足した点だけ書�
 | fn_lines `run_registered`（517 行） | 鍵 `crates/task-worker/src/browser_launcher_run::run_registered` | 鍵 `crates/task-worker/src/browser::run_registered` | `browser_launcher_run.rs` の論理 module が browser。base と head を同じ版で数えるので existing のまま |
 
 ## 検査
-merge の後（この run、提出時の HEAD で実行。`git merge-base HEAD main` との差分はこの進捗 file だけ）:
-- `python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health_scc_edges.py' -v`: 8 件 OK。`python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health*.py'`: 119 件 OK（約 86 s）。
-- `bash scripts/dev/check-health.sh`: exit 0（verdict pass、findings 140、new 0・worsened 0、`policy.changed` は pass）。変更が doc_only の path だけなので deps.cycle・size などは not_applicable。
-- `python3 -I scripts/dev/repo-health/repo_health.py --repo . --base main --head HEAD --policy-version 1 --rules deps.cycle,size.responsibility-growth`: exit 0。main に入った新しい検査器で deps.cycle 17 件・size.responsibility-growth 94 件がすべて existing、`cycle-edge:` の finding は 0 件。
-- `bash scripts/dev/test-affected.sh`: exit 0（約 14 s）。最初の check-health が pass し、「試験対象の変更なし」で終わった。
-- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。`sh scripts/dev/progress-index.sh --check --base $(git merge-base HEAD main)`: exit 0。
-- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` は上の 4 file とこの進捗 file だけ。
+merge の後（2026-11-17、この run の提出時の HEAD で実行。`git merge-base HEAD main` との差分はこの進捗 file だけ）:
+- 試験: `python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health_scc_edges.py' -v` は 8 件 OK（約 1.7 s）。`python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health*.py'` は 119 件 OK（約 49 s）。
+- 計画の check（直した式）: `bash scripts/dev/check-health.sh --out <json>` は exit 0（verdict pass、findings 140、new 0・worsened 0、`policy.changed` は pass）。report に「`policy.changed` 以外の必須 rule が pass か not_applicable」の式を当てると不合格 0 件で exit 0。`not_applicable` は doc_only の 4 件（deps.violation・deps.cycle・size.responsibility-growth・source-size）。
+- hand merge の差: merge の commit とその第 1 親の差は 9 file（ADR 3・進捗 2・本体 3・試験 1）。`crates/`・`web/`・profile（`scripts/dev/repo-health/profiles/`）・共有 fixture（`scripts/tests/repo_health_fixtures.py`）は 0 件、`scripts/dev/repo-health/` に足した file は 0 件。
+- branch の差: task の branch は main と同じ commit（差 0）。この WorkUnit の branch と main の差は `agent-docs/progress/2026-11-17-arch-v4-b/checker.md` だけ。
+- `bash scripts/dev/test-affected.sh`: exit 0（約 18 s）。最初の check-health が pass し、「試験対象の変更なし（docs のみ等）」で終わった。
+- `cargo fmt --all -- --check`: exit 0。`cargo clippy --workspace -- -D warnings`: exit 0。`sh scripts/dev/progress-index.sh --check --base $(git merge-base HEAD main)`: exit 0。
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` は本体 3 file・試験 1 file（どちらも merge 済み）とこの進捗 file だけ。
 
 merge の前（前の run と retry の run）:
-- `bash scripts/dev/test-affected.sh`: exit 1（前の run 約 96 s、retry の run 約 84 s）。最初の check-health で `policy.changed` だけが fail（findings 698、new 1 = policy.changed、worsened 0）になり、試験の前に止まった（想定どおり）。
-- check-health の report を読んで、`policy.changed` 以外の必須 rule は 14 件すべて pass（deps.cycle 17 件・size 94 件はすべて existing）。
+- `bash scripts/dev/test-affected.sh`: exit 1（約 84〜96 s）。最初の check-health で `policy.changed` だけが fail（findings 698、new 1 = policy.changed、worsened 0）になり、試験の前に止まった（想定どおり）。
+- check-health の report では、`policy.changed` 以外の必須 rule 14 件がすべて pass（deps.cycle 17 件・size 94 件はすべて existing）。
 - `cargo fmt --all -- --check`: exit 0。`cargo clippy --workspace -- -D warnings`: exit 0（Rust は変えていない）。
 
 ## 再現コマンド
@@ -142,9 +135,12 @@ merge の前（前の run と retry の run）:
 - 回帰条件: 上の 8 件と既存の `test_repo_health*`（119 件）が通ること。この repo の HEAD で deps.cycle の `cycle-edge:` の finding が 0 件で、deps.cycle・size.responsibility-growth が pass のまま。
 
 ## 未解決
-- `docs/architecture-map.md:67` の `#[path]` の記載（8 file 中 5 file）は H が直すか決める（task の記憶のとおり。この WorkUnit の範囲の外）。
-- 新しい循環（task-dispatch の 2 件、task-worker の併合）は existing の負債として見えるようになっただけで、解消は B の範囲の外。
+- ADR repo-health-scc-edges-logical-modules への付記（違い 1〜3）は未記入。closeout が書く。
+- policy の差分を含む release の gate は未実施。本番への昇格はしていない（人だけが行う）。
+- `docs/architecture-map.md:67` の `#[path]` の記載（8 file 中 5 file）は H が直すか決める（この WorkUnit の範囲の外）。
+- 新しく見えるようになった循環（task-dispatch の 2 件、task-worker の併合）は existing の負債で、解消は B の範囲の外。
 
 ## 提案
-- ADR repo-health-scc-edges-logical-modules に付記を足す: D1 の組の finding は循環の finding が existing のときだけ出す（違い 1）、D3 は inline の `mod` block の深さを数える（違い 2）、表は検査の対象の Rust の file 全部に作る（違い 3）。closeout か人が決める。
+- closeout は ADR repo-health-scc-edges-logical-modules に付記を書く: D1 の組の finding は循環の finding が existing のときだけ出す（違い 1）、D3 は inline の `mod` block の深さを数える（違い 2）、表は検査の対象の Rust の file 全部に作る（違い 3）。
 - `metrics` は (1) の循環の組を旧新の両方で出す（上の表の値が新の値になる）。
+- policy の branch の WU の check は、hand merge の後に差分が doc だけになることを前提に、必須 rule の `not_applicable` を合格に数える式にする（今回の v1 の check 3 の教訓）。

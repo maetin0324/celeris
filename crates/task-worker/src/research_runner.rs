@@ -143,7 +143,8 @@ pub(crate) async fn stream_child(
     })
 }
 
-/// 空白を 1 つに畳んでから文字数で切る（`artifacts/result.json` の `summary` に使う）。
+/// `artifacts/result.json` の `summary`: 改行・連続空白を単一の空白にたたみ（single-line-safe）、
+/// 文字数で上限まで切り詰める（ランナー側でも行うが、二重に安全側へ倒す）。
 pub(crate) fn single_line_summary(text: &str, max_chars: usize) -> String {
     let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
     truncate_chars(&collapsed, max_chars)

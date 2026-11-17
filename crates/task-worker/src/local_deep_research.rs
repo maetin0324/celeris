@@ -761,9 +761,6 @@ async fn terminal_from_summary(req: &RunRequest, start: Instant, summary: &str) 
     }
 }
 
-/// `artifacts/result.json` の `summary`: 改行・連続空白を単一の空白にたたみ（single-line-safe）、
-/// 文字数で上限まで切り詰める（ランナー側でも行うが、二重に安全側へ倒す）。
-
 /// `sources.json`（`report_path` の隣。ランナーが書く）から `primary: true` の件数と、そのうち
 /// `cited: true` の件数を数える（ADR-0063 Phase 109b B1/B4: 必読の一次情報が実際に report に
 /// 反映されたか）。読めない・壊れていれば `(0, 0)`（この節は補足情報であって、失敗しても run は

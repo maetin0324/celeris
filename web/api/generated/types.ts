@@ -4383,13 +4383,9 @@ export type NotifyTestResult = {
 
 export type NotifyView = {
   "configured": boolean;
-  "digest_interval_secs": number;
   "digest_last_sent_at"?: string | null;
-  "digest_max_lines": number;
   "fingerprint"?: string | null;
-  "inbox_batch_secs": number;
   "inbox_new_last_sent_at"?: string | null;
-  "inbox_reminder_secs": number;
   "recent": Array<NotifyRecent>;
   "secret_id": string;
   "web_base_url"?: string | null;

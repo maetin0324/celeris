@@ -262,15 +262,8 @@ async fn get_notify_reports_not_configured_without_a_secret() {
 }
 
 #[tokio::test]
-async fn get_notify_status_exposes_route_settings_and_last_successful_sends() {
-    let options = EnvOptions {
-        notify_inbox_batch_secs: 17,
-        notify_inbox_reminder_secs: 1234,
-        notify_digest_interval_secs: 987,
-        notify_digest_max_lines: 6,
-        ..EnvOptions::default()
-    };
-    let env = TestEnv::with(options);
+async fn get_notify_status_exposes_the_last_successful_sends() {
+    let env = TestEnv::with(EnvOptions::default());
     let sent_inbox = OffsetDateTime::parse(
         "2026-10-02T10:11:12Z",
         &time::format_description::well_known::Rfc3339,
@@ -313,10 +306,15 @@ async fn get_notify_status_exposes_route_settings_and_last_successful_sends() {
     let resp = send(&env.router(), get("/api/v1/notify")).await;
     assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
     let body = resp.json();
-    assert_eq!(body["inbox_batch_secs"], 17);
-    assert_eq!(body["inbox_reminder_secs"], 1234);
-    assert_eq!(body["digest_interval_secs"], 987);
-    assert_eq!(body["digest_max_lines"], 6);
+    // ADR-0133 D6 の旧い経路の 4 値（2026-11-17 に撤去）は返さない。
+    for removed in [
+        "inbox_batch_secs",
+        "inbox_reminder_secs",
+        "digest_interval_secs",
+        "digest_max_lines",
+    ] {
+        assert!(body.get(removed).is_none(), "{removed}");
+    }
     assert_eq!(body["inbox_new_last_sent_at"], "2026-10-02T10:11:12Z");
     assert_eq!(body["digest_last_sent_at"], "2026-10-02T11:12:13Z");
 

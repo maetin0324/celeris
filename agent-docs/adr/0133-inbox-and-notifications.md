@@ -529,3 +529,11 @@ smoke と同じ台本）を手元で再現し、修正後の debug build で煙�
 - task-core の `notification_scan_at`・`notification_scan_mark`（migration 0019 の `notification_scan_state`）は
   呼び手が消えた `schedule` だけだった。task-core を write set に持つ後続の task が消す（表を migration で
   消すかは同じ task が決める）。
+
+## 付記: D6 の 4 設定値の撤去（2026-11-17、task 01M7J3NKVC2KQ4NGJ4GESHJV0B）
+
+- 上の付記の撤去の条件のとおり、`GET /api/v1/notify` の 4 値（task-api の `NotifyView` と `ApiSettings` の
+  `notify_*` の 4 欄）を消し、同じ変更で celeris の `NotifyConfig` の 4 欄・既定値の関数・`daemon/api.rs` の受け渡しを
+  消した。`[notify]` に 4 欄を書くと読み込みエラーになる（`deny_unknown_fields`。試験 `config/tests.rs` の
+  `[notify]` の節）。経路ごとの最終送信時刻（`inbox_new_last_sent_at`・`digest_last_sent_at`）は残る（試験
+  `get_notify_status_exposes_the_last_successful_sends`。旧名 `get_notify_status_exposes_route_settings_and_last_successful_sends`）。

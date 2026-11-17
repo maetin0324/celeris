@@ -2570,18 +2570,16 @@ fn notify_defaults_are_used_when_the_section_is_absent() {
     assert_eq!(cfg.notify.interval_secs, 60);
     assert_eq!(cfg.notify.base_url(), Some("http://192.168.1.103:7720"));
 
-    let cfg: Config = toml::from_str(
-        "[notify]\ninbox_batch_secs = 15\ninbox_reminder_secs = 7200\n\
-         digest_interval_secs = 1800\ndigest_max_lines = 5\n",
-    )
-    .unwrap();
-    assert_eq!(cfg.notify.inbox_batch_secs, 15);
-    assert_eq!(cfg.notify.inbox_reminder_secs, 7200);
-    assert_eq!(cfg.notify.digest_interval_secs, 1800);
-    assert_eq!(cfg.notify.digest_max_lines, 5);
-
-    // 未知キーは拒否。
+    // 未知キーは拒否。ADR-0133 D6 の旧い経路の 4 欄（2026-11-17 に撤去）も読み込みエラーにする。
     assert!(toml::from_str::<Config>("[notify]\nbogus = 1\n").is_err());
+    for removed in [
+        "inbox_batch_secs = 15",
+        "inbox_reminder_secs = 7200",
+        "digest_interval_secs = 1800",
+        "digest_max_lines = 5",
+    ] {
+        assert!(toml::from_str::<Config>(&format!("[notify]\n{removed}\n")).is_err());
+    }
 }
 
 // ---- ADR-0030: [secrets] / env_from_secrets ----

@@ -40,11 +40,6 @@ pub struct NotifyView {
     pub web_base_url: Option<String>,
     /// 直近の送信（新しい順、最大 10 件）。
     pub recent: Vec<NotifyRecent>,
-    /// `[notify]` outbound route configuration (ADR-0133 D6).
-    pub inbox_batch_secs: u64,
-    pub inbox_reminder_secs: u64,
-    pub digest_interval_secs: u64,
-    pub digest_max_lines: usize,
     /// Last successful send for each outbound route; absent history is `null`.
     pub inbox_new_last_sent_at: Option<String>,
     pub digest_last_sent_at: Option<String>,
@@ -143,10 +138,6 @@ pub(crate) async fn view(State(state): State<ApiState>, RawQuery(raw): RawQuery)
             fingerprint,
             web_base_url: state.inner.notify_web_base_url.clone(),
             recent: recent.0,
-            inbox_batch_secs: state.inner.notify_inbox_batch_secs,
-            inbox_reminder_secs: state.inner.notify_inbox_reminder_secs,
-            digest_interval_secs: state.inner.notify_digest_interval_secs,
-            digest_max_lines: state.inner.notify_digest_max_lines,
             inbox_new_last_sent_at: recent.1,
             digest_last_sent_at: recent.2,
         },

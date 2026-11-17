@@ -118,10 +118,6 @@ pub(crate) struct Inner {
     pub(crate) notify_secret_id: String,
     /// ADR-0037 D3: `[notify] web_base_url`。
     pub(crate) notify_web_base_url: Option<String>,
-    pub(crate) notify_inbox_batch_secs: u64,
-    pub(crate) notify_inbox_reminder_secs: u64,
-    pub(crate) notify_digest_interval_secs: u64,
-    pub(crate) notify_digest_max_lines: usize,
     /// ADR-0040 D6（Phase 48）: `[selfdeploy] releases_dir` を読む係（celeris が渡す）。`None` なら
     /// `GET /releases` は空、`POST /releases/{sha12}/promote` は 409。
     pub(crate) releases: Option<crate::releases::SharedReleaseSource>,
@@ -211,10 +207,6 @@ impl ApiState {
             memory_dir: settings.memory_dir,
             notify_secret_id: settings.notify_secret_id,
             notify_web_base_url: settings.notify_web_base_url,
-            notify_inbox_batch_secs: settings.notify_inbox_batch_secs,
-            notify_inbox_reminder_secs: settings.notify_inbox_reminder_secs,
-            notify_digest_interval_secs: settings.notify_digest_interval_secs,
-            notify_digest_max_lines: settings.notify_digest_max_lines,
             releases: settings.releases,
             integration_releases_dir: settings.integration_releases_dir,
             release: settings.release,

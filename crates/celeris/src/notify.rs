@@ -30,7 +30,7 @@ const WEBHOOK_USERNAME: &str = "Celeris";
 /// `Retry-After` が読めないときに待つ既定の秒数（ADR-0037 D3。実機 2026-09-18: 8 件一斉送信で 429）。
 pub const DEFAULT_RETRY_AFTER_SECS: u64 = 5;
 
-/// `[notify]`（ADR-0037 D2 / D3）。末尾の 4 欄は ADR-0133 D6 の旧い経路の設定で、`GET /api/v1/notify` だけが読む（ADR-0133 の付記 2026-11-17）。
+/// `[notify]`（ADR-0037 D2 / D3）。
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct NotifyConfig {
@@ -43,31 +43,6 @@ pub struct NotifyConfig {
     /// 例: `"http://192.168.1.103:7720"`。無ければ文面にリンクを入れない。
     #[serde(default)]
     pub web_base_url: Option<String>,
-    /// 旧い受信箱の新着の経路の束ねる猶予（送り出しには効かない）。
-    #[serde(default = "default_inbox_batch_secs")]
-    pub inbox_batch_secs: u64,
-    /// 旧い再通知の経路の秒数（送り出しには効かない）。
-    #[serde(default = "default_inbox_reminder_secs")]
-    pub inbox_reminder_secs: u64,
-    /// 旧い要約の経路の間隔（送り出しには効かない）。
-    #[serde(default = "default_digest_interval_secs")]
-    pub digest_interval_secs: u64,
-    /// 旧い要約の経路の最大行数（送り出しには効かない）。
-    #[serde(default = "default_digest_max_lines")]
-    pub digest_max_lines: usize,
-}
-
-fn default_inbox_batch_secs() -> u64 {
-    60
-}
-fn default_inbox_reminder_secs() -> u64 {
-    86_400
-}
-fn default_digest_interval_secs() -> u64 {
-    3_600
-}
-fn default_digest_max_lines() -> usize {
-    10
 }
 
 fn default_webhook_secret() -> String {
@@ -84,10 +59,6 @@ impl Default for NotifyConfig {
             discord_webhook_secret: default_webhook_secret(),
             interval_secs: default_interval_secs(),
             web_base_url: None,
-            inbox_batch_secs: default_inbox_batch_secs(),
-            inbox_reminder_secs: default_inbox_reminder_secs(),
-            digest_interval_secs: default_digest_interval_secs(),
-            digest_max_lines: default_digest_max_lines(),
         }
     }
 }

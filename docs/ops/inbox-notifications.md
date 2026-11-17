@@ -15,7 +15,7 @@ Discord への送り出しを設定する人向けの手順。2026-10-05 から�
 | `interval_secs` | `30` | 送り出しを行う間隔（秒） |
 | `web_base_url` | なし | 文面に入れる GUI のリンクの根（例: `http://192.168.1.103:7720`） |
 
-`inbox_batch_secs`・`inbox_reminder_secs`・`digest_interval_secs`・`digest_max_lines` は ADR-0133 D6 の受信箱の新着と通知の要約の 2 経路の設定だった。この 2 経路は 2026-10-05 に CoS へ置き換わり、どの送り出しもこの 4 欄を読まない。設定しない。設定の読み込みは今もこの 4 欄を受け付け、`GET /api/v1/notify` が値を返すが、送り出しには効かない。撤去は task 01M7J3NKVC2KQ4NGJ4GESHJV0B（task-api の `GET /api/v1/notify` の 4 値を消す変更）が行い、同じ変更でこの 4 欄は読み込みエラーになる。
+`inbox_batch_secs`・`inbox_reminder_secs`・`digest_interval_secs`・`digest_max_lines` は ADR-0133 D6 の受信箱の新着と通知の要約の 2 経路の設定だった。この 2 経路は 2026-10-05 に CoS へ置き換わり、2026-11-17 に 4 欄を消した（task 01M7J3NKVC2KQ4NGJ4GESHJV0B）。`[notify]` にこの 4 欄を書くと設定の読み込みエラーになる。`GET /api/v1/notify` もこの 4 値を返さない。
 
 Discord の webhook 秘密は TOML に書かず、既存手順どおり `discord-webhook` の secret として登録する。既存の `[notify]` がある場合は同じ節に値を加え、節を重複して作らない。
 

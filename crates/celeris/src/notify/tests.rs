@@ -27,10 +27,6 @@ fn defaults_match_the_adr() {
     let config = NotifyConfig::default();
     assert_eq!(config.discord_webhook_secret, "discord-webhook");
     assert_eq!(config.interval_secs, 30);
-    assert_eq!(config.inbox_batch_secs, 60);
-    assert_eq!(config.inbox_reminder_secs, 86_400);
-    assert_eq!(config.digest_interval_secs, 3_600);
-    assert_eq!(config.digest_max_lines, 10);
     assert!(config.web_base_url.is_none());
 }
 

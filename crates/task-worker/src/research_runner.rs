@@ -18,6 +18,33 @@ use crate::adapter::{AdapterError, EventSink, RunLimits, Terminal};
 use crate::child_stream::{next_line, open_child_streams};
 use crate::subprocess::{LineOutcome, kill_now, read_tail, reap_after_terminal};
 
+/// `artifacts/result.json` の `summary` の上限（研究系 adapter で同じ規則。ADR-0027 D3・ADR-0029 D1）。
+pub(crate) const SUMMARY_MAX_CHARS: usize = 1500;
+/// ランナーの `progress:` 行を `progress` に転送するときの 1 行あたりの上限。
+pub(crate) const PROGRESS_LINE_MAX_CHARS: usize = 500;
+/// ランナーの進捗行の目印。
+pub(crate) const PROGRESS_PREFIX: &str = "progress:";
+/// ランナーの最終行の目印（ADR-0029 D1。langmem・local-deep-research）。
+pub(crate) const RESULT_PREFIX: &str = "CELERIS_RESULT ";
+
+/// langmem・local-deep-research のランナーの 1 行: `progress: <text>`（ADR-0029 D1 手順 3）は進捗に写し、
+/// `CELERIS_RESULT <json>` は `result` に入れる。他の行は読み捨てる（`stdout.log` には残る）。
+pub(crate) fn progress_or_result(
+    line: &str,
+    sink: &dyn EventSink,
+    run_id: &str,
+    result: &mut Option<serde_json::Value>,
+) {
+    if let Some(rest) = line.strip_prefix(PROGRESS_PREFIX) {
+        crate::progress::emit_status(sink, &truncate_chars(rest.trim(), PROGRESS_LINE_MAX_CHARS));
+    } else if let Some(rest) = line.strip_prefix(RESULT_PREFIX) {
+        match serde_json::from_str::<serde_json::Value>(rest) {
+            Ok(value) => *result = Some(value),
+            Err(e) => warn!("run {run_id}: could not parse CELERIS_RESULT line: {e}"),
+        }
+    }
+}
+
 /// ランナー（`script`）と入力（`input`、整形した JSON と末尾の改行）を `run_dir` に書き、両方の path を返す。
 pub(crate) async fn write_runner_files(
     run_dir: &Path,

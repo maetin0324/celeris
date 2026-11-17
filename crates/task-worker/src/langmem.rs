@@ -30,11 +30,11 @@ use crate::adapter::{
     AdapterError, AdapterSetting, AdapterSettings, Configured, EventSink, RunLimits, RunOutcome,
     Terminal, WorkerAdapter,
 };
-use crate::progress;
 use crate::protocol::RunRequest;
 use crate::provider::classify_provider_failure;
 use crate::research_runner::{
-    runner_command, single_line_summary, stream_child, truncate_chars, write_runner_files,
+    SUMMARY_MAX_CHARS, progress_or_result, runner_command, single_line_summary, stream_child,
+    write_runner_files,
 };
 use crate::result_report::{ResultFileRead, interpret_result_text, read_result_file};
 use crate::subprocess::finish_run;
@@ -42,14 +42,6 @@ use crate::subprocess::finish_run;
 /// run ごとに `runs/<run_id>/langmem_run.py` として書き出すランナー（ADR-0047 D4）。
 const RUNNER_SCRIPT: &str = include_str!("langmem_run.py");
 
-/// `artifacts/result.json` の `summary` の上限（他の python アダプタと同じ規則）。
-const SUMMARY_MAX_CHARS: usize = 1500;
-/// `progress:` 行を `progress` に転送するときの 1 行あたりの上限。
-const PROGRESS_LINE_MAX_CHARS: usize = 500;
-/// ランナーの最終行の目印。
-const RESULT_PREFIX: &str = "CELERIS_RESULT ";
-/// `progress:` 行の目印。
-const PROGRESS_PREFIX: &str = "progress:";
 /// `langmem` が import できないときにランナーが stderr に出す目印（ADR-0047 D4「clear error」）。
 /// これが出ていれば `retryable = false`（venv のセットアップが要る。再試行しても直らない）。
 pub const LANGMEM_MISSING_MARKER: &str = "CELERIS_LANGMEM_MISSING";
@@ -289,16 +281,7 @@ async fn run_langmem(
         run_id,
         sink,
         "langmem runner",
-        |line| {
-            if let Some(rest) = line.strip_prefix(PROGRESS_PREFIX) {
-                progress::emit_status(sink, &truncate_chars(rest.trim(), PROGRESS_LINE_MAX_CHARS));
-            } else if let Some(rest) = line.strip_prefix(RESULT_PREFIX) {
-                match serde_json::from_str::<serde_json::Value>(rest) {
-                    Ok(value) => task_result = Some(value),
-                    Err(e) => warn!("run {run_id}: could not parse CELERIS_RESULT line: {e}"),
-                }
-            }
-        },
+        |line| progress_or_result(line, sink, run_id, &mut task_result),
     )
     .await?;
     let exit_status = streamed.exit;

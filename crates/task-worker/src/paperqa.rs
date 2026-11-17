@@ -42,7 +42,8 @@ use crate::progress;
 use crate::protocol::{Answer, RunContext, RunRequest};
 use crate::provider::classify_provider_failure;
 use crate::research_runner::{
-    runner_command, single_line_summary, stream_child, truncate_chars, write_runner_files,
+    PROGRESS_LINE_MAX_CHARS, PROGRESS_PREFIX, SUMMARY_MAX_CHARS, runner_command,
+    single_line_summary, stream_child, truncate_chars, write_runner_files,
 };
 use crate::result_report::{ResultFileRead, interpret_result_text, read_result_file};
 use crate::subprocess::finish_run;
@@ -55,8 +56,6 @@ use render::*;
 const ACQUIRE_SCRIPT: &str = include_str!("paperqa_acquire.py");
 /// 取得ランナーの最終行の目印（ADR-0035 D1）。
 const ACQUIRE_RESULT_PREFIX: &str = "CELERIS_ACQUIRE ";
-/// 取得ランナーの進捗行の目印。
-const PROGRESS_PREFIX: &str = "progress:";
 /// run ごとに `runs/<run_id>/paperqa_ask.py` として書き出す、PaperQA の Python API を呼ぶランナー
 /// （ADR-0063 Phase 109d C1。`pqa ask` CLI の置き換え）。
 const ASK_SCRIPT: &str = include_str!("paperqa_ask.py");
@@ -66,10 +65,6 @@ const ASK_EXIT_PAPERQA_NOT_IMPORTABLE: i32 = 3;
 /// 見つからなかったときの exit code（ADR-0063 Phase 109e）。どちらも設定の誤りで再試行しても
 /// 直らないので `retryable: false` にする。
 const ASK_EXIT_BAD_USAGE_OR_SETTINGS_NOT_FOUND: i32 = 2;
-/// `artifacts/result.json` の `summary` の上限（ADR-0027 D3）。
-const SUMMARY_MAX_CHARS: usize = 1500;
-/// `progress` に転送する 1 行あたりの上限（他アダプタと同じ規則。ADR-0026 の `truncate` を踏襲）。
-const PROGRESS_LINE_MAX_CHARS: usize = 500;
 /// 案件（`project_id`）が無いタスクの corpus / 索引の名前（ADR-0035 D1）。
 const SHARED_PROJECT_KEY: &str = "_shared";
 /// `objective` から作る検索語の本数の上限（ADR-0035 D1: 「2〜4 本」）。

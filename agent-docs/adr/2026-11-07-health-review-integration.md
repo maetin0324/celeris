@@ -456,3 +456,6 @@ task 01M74X0XAN0MCFJ4KZ3VVFT2QA（G4-R1: review 方針の無い汎用 repo の�
 - 付記「policy の関門の fail closed」の `Absent` の項の読み替え: `Absent` の repo の policy の状態は `HealthReviewInputBuilt.input.policy` に残る。関門（`policy_review_gate`）の判定は変わらない。
 - 変えないもの: D4.1 の型、`Event` の種類と欄、I5・I7・I8、`Unavailable`・report の故障・`policy_only`・reviewer の合格の再利用の扱い、D3.3 の risk の判定（`Absent` は `none`）。
 - 状態: この付記の時点では決定だけ。実装と試験は同じ task の後続 unit が行い、状態の記録は新しい ADR に書く。
+
+## 付記（2026-11-17、#[path] の file の行の数え先）
+task 01M7MZTKAZQY72EX2R4RQ1WVWF（アーキ v4 B）。付記（2026-11-08、dispatch の実装）の「file は `health_review/` にあるので、行は `health_review` の module に数えられる」は、[ADR 2026-11-17 repo-health-scc-edges-logical-modules](2026-11-17-repo-health-scc-edges-logical-modules.md) D2・D4 で改める。`#[path]` で読む file は宣言した file の論理 module に属す。`design_gate.rs`・`design_verdict.rs` と `plan_adoption.rs`・`policy_review.rs`・`worker_profile.rs`・`inventory.rs`・`check_item.rs`・`review_limits.rs` の行と依存の辺は `dispatcher` の module に数えられる。置き場所（`crates/task-dispatch/src/health_review/`）は変えない。状態: 2026-11-17 の時点では決定だけ。検査器の変更が main に入るまでは、検査器は今までどおり `health_review` に数える。

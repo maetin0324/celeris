@@ -38,17 +38,15 @@ async fn ask<T>(
     let Some(admin_tx) = state.inner.admin_tx.clone() else {
         return Err(ApiProblem::internal("daemon administration is unavailable"));
     };
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    if admin_tx.send(build(reply_tx)).await.is_err() {
-        return Err(ApiProblem::internal(
-            "celeris is not accepting admin requests",
-        ));
-    }
-    match tokio::time::timeout(std::time::Duration::from_secs(10), reply_rx).await {
-        Ok(Ok(result)) => result.map_err(problem),
-        Ok(Err(_)) => Err(ApiProblem::internal("celeris dropped the config request")),
-        Err(_) => Err(ApiProblem::internal("config request timed out")),
-    }
+    crate::admin::call(
+        &admin_tx,
+        build,
+        10,
+        "celeris dropped the config request",
+        "config request timed out",
+    )
+    .await??
+    .map_err(problem)
 }
 
 /// `GET /config/fields`。

@@ -436,28 +436,17 @@ pub(super) async fn start_cluster_connect(
             "celeris is not accepting admin requests",
         ));
     };
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    if admin_tx
-        .send(AdminRequest::ClusterConnectStart {
+    let outcome = crate::admin::call(
+        &admin_tx,
+        |reply| AdminRequest::ClusterConnectStart {
             id: id.clone(),
-            reply: reply_tx,
-        })
-        .await
-        .is_err()
-    {
-        return Err(ApiProblem::internal(
-            "celeris is not accepting admin requests",
-        ));
-    }
-    let outcome = match tokio::time::timeout(std::time::Duration::from_secs(40), reply_rx).await {
-        Ok(Ok(result)) => result,
-        Ok(Err(_)) => {
-            return Err(ApiProblem::internal(
-                "celeris dropped the cluster connect request",
-            ));
-        }
-        Err(_) => return Err(ApiProblem::internal("cluster connect timed out")),
-    };
+            reply,
+        },
+        40,
+        "celeris dropped the cluster connect request",
+        "cluster connect timed out",
+    )
+    .await??;
     match outcome {
         Ok(started) => {
             // D4/D5: プロンプト文字列はログに出さない（ユーザ名・ホスト名が入るため）。
@@ -504,29 +493,18 @@ pub(super) async fn submit_cluster_connect_code(
             "celeris is not accepting admin requests",
         ));
     };
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    if admin_tx
-        .send(AdminRequest::ClusterConnectCode {
+    let outcome = crate::admin::call(
+        &admin_tx,
+        |reply| AdminRequest::ClusterConnectCode {
             id: id.clone(),
             code,
-            reply: reply_tx,
-        })
-        .await
-        .is_err()
-    {
-        return Err(ApiProblem::internal(
-            "celeris is not accepting admin requests",
-        ));
-    }
-    let outcome = match tokio::time::timeout(std::time::Duration::from_secs(40), reply_rx).await {
-        Ok(Ok(result)) => result,
-        Ok(Err(_)) => {
-            return Err(ApiProblem::internal(
-                "celeris dropped the cluster connect code request",
-            ));
-        }
-        Err(_) => return Err(ApiProblem::internal("cluster connect code timed out")),
-    };
+            reply,
+        },
+        40,
+        "celeris dropped the cluster connect code request",
+        "cluster connect code timed out",
+    )
+    .await??;
     match outcome {
         Ok(result) => {
             tracing::info!(who = "admin", op = "cluster_connect_code", cluster = %id, ok = result.ok, "admin: cluster connect code submitted");
@@ -558,28 +536,22 @@ pub(super) async fn cancel_cluster_connect(
             "celeris is not accepting admin requests",
         ));
     };
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    if admin_tx
-        .send(AdminRequest::ClusterConnectCancel {
+    match crate::admin::call(
+        &admin_tx,
+        |reply| AdminRequest::ClusterConnectCancel {
             id: id.clone(),
-            reply: reply_tx,
-        })
-        .await
-        .is_err()
+            reply,
+        },
+        10,
+        "celeris dropped the cluster disconnect request",
+        "cluster disconnect timed out",
+    )
+    .await??
     {
-        return Err(ApiProblem::internal(
-            "celeris is not accepting admin requests",
-        ));
-    }
-    match tokio::time::timeout(std::time::Duration::from_secs(10), reply_rx).await {
-        Ok(Ok(Ok(()))) => {
+        Ok(()) => {
             tracing::info!(who = "admin", op = "cluster_disconnect", cluster = %id, "admin: cluster connect cancelled");
             Ok(json_response(StatusCode::OK, &serde_json::json!({})))
         }
-        Ok(Ok(Err(e))) => Err(cluster_admin_error(&id, e)),
-        Ok(Err(_)) => Err(ApiProblem::internal(
-            "celeris dropped the cluster disconnect request",
-        )),
-        Err(_) => Err(ApiProblem::internal("cluster disconnect timed out")),
+        Err(e) => Err(cluster_admin_error(&id, e)),
     }
 }

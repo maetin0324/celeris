@@ -565,14 +565,17 @@ struct Fiemap {
     fm_extents: [FiemapExtent; FIEMAP_BATCH],
 }
 
-/// FIEMAP（`filefrag` と同じ情報）で、ファイルの extent が 1 つ以上あり全て `FIEMAP_EXTENT_SHARED` か。
-/// FIEMAP に対応しない filesystem（tmpfs など）はエラー。
-pub fn fiemap_all_shared(path: &Path) -> io::Result<bool> {
+/// FIEMAP の extent を論理順に `visit` へ渡す。`first_flags` は最初の ioctl だけに付ける。`visit` が `Some` を
+/// 返したらその値で止まり、最後の extent（`FIEMAP_EXTENT_LAST`）か extent が尽きたら `None`。
+fn fiemap_walk<T>(
+    path: &Path,
+    first_flags: u32,
+    mut visit: impl FnMut(&FiemapExtent) -> Option<T>,
+) -> io::Result<Option<T>> {
     use std::os::fd::AsRawFd;
     let file = std::fs::File::open(path)?;
     let mut start = 0u64;
-    let mut seen = 0usize;
-    let mut flags = FIEMAP_FLAG_SYNC;
+    let mut flags = first_flags;
     loop {
         let mut fm = Fiemap {
             fm_start: start,
@@ -593,59 +596,39 @@ pub fn fiemap_all_shared(path: &Path) -> io::Result<bool> {
         flags = 0;
         let n = (fm.fm_mapped_extents as usize).min(FIEMAP_BATCH);
         if n == 0 {
-            return Ok(seen > 0);
+            return Ok(None);
         }
         for ext in &fm.fm_extents[..n] {
-            seen += 1;
-            if ext.fe_flags & FIEMAP_EXTENT_SHARED == 0 {
-                return Ok(false);
+            if let Some(v) = visit(ext) {
+                return Ok(Some(v));
             }
             if ext.fe_flags & FIEMAP_EXTENT_LAST != 0 {
-                return Ok(true);
+                return Ok(None);
             }
             start = ext.fe_logical.saturating_add(ext.fe_length);
         }
     }
 }
 
+/// FIEMAP（`filefrag` と同じ情報）で、ファイルの extent が 1 つ以上あり全て `FIEMAP_EXTENT_SHARED` か。
+/// FIEMAP に対応しない filesystem（tmpfs など）はエラー。
+pub fn fiemap_all_shared(path: &Path) -> io::Result<bool> {
+    let mut seen = 0usize;
+    let unshared = fiemap_walk(path, FIEMAP_FLAG_SYNC, |ext| {
+        seen += 1;
+        (ext.fe_flags & FIEMAP_EXTENT_SHARED == 0).then_some(())
+    })?;
+    Ok(unshared.is_none() && seen > 0)
+}
+
 /// Return physical FIEMAP extents. Callers use this for pool-wide accounting; errors mean the
 /// filesystem cannot provide a trustworthy physical mapping and must use the blocks fallback.
 pub fn fiemap_extents(path: &Path) -> io::Result<Vec<(u64, u64, u32)>> {
-    use std::os::fd::AsRawFd;
-    let file = std::fs::File::open(path)?;
-    let mut start = 0u64;
     let mut result = Vec::new();
-    let mut flags = 0;
-    loop {
-        let mut fm = Fiemap {
-            fm_start: start,
-            fm_length: u64::MAX - start,
-            fm_flags: flags,
-            fm_mapped_extents: 0,
-            fm_extent_count: FIEMAP_BATCH as u32,
-            fm_reserved: 0,
-            fm_extents: [FiemapExtent::default(); FIEMAP_BATCH],
-        };
-        // SAFETY: fm follows linux/fiemap.h layout and fd is open.
-        let rc = unsafe {
-            nix::libc::ioctl(file.as_raw_fd(), FS_IOC_FIEMAP as _, &mut fm as *mut Fiemap)
-        };
-        if rc != 0 {
-            return Err(io::Error::last_os_error());
-        }
-        flags = 0;
-        let n = (fm.fm_mapped_extents as usize).min(FIEMAP_BATCH);
-        if n == 0 {
-            break;
-        }
-        for ext in &fm.fm_extents[..n] {
-            result.push((ext.fe_physical, ext.fe_length, ext.fe_flags));
-            if ext.fe_flags & FIEMAP_EXTENT_LAST != 0 {
-                return Ok(result);
-            }
-            start = ext.fe_logical.saturating_add(ext.fe_length);
-        }
-    }
+    fiemap_walk(path, 0, |ext| {
+        result.push((ext.fe_physical, ext.fe_length, ext.fe_flags));
+        None::<()>
+    })?;
     Ok(result)
 }
 

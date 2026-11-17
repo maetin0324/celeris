@@ -6,6 +6,30 @@
 use task_core::{AccountAdapter, AccountCheckResult};
 use tokio::sync::oneshot;
 
+use crate::problem::ApiProblem;
+
+/// celeris の admin channel に `request(reply)` を送り、`secs` 秒まで答えを待つ。送れなければ内側の `Err`
+/// （何も起きていない）、落とされた（`dropped`）・時間切れ（`timed_out`）は外側の `Err`（結果が分からない）。
+pub(crate) async fn call<T>(
+    admin_tx: &tokio::sync::mpsc::Sender<AdminRequest>,
+    request: impl FnOnce(oneshot::Sender<T>) -> AdminRequest,
+    secs: u64,
+    dropped: &'static str,
+    timed_out: &'static str,
+) -> Result<Result<T, ApiProblem>, ApiProblem> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+    if admin_tx.send(request(reply_tx)).await.is_err() {
+        return Ok(Err(ApiProblem::internal(
+            "celeris is not accepting admin requests",
+        )));
+    }
+    match tokio::time::timeout(std::time::Duration::from_secs(secs), reply_rx).await {
+        Ok(Ok(reply)) => Ok(Ok(reply)),
+        Ok(Err(_)) => Err(ApiProblem::internal(dropped)),
+        Err(_) => Err(ApiProblem::internal(timed_out)),
+    }
+}
+
 /// task-api → celeris（`ApiSettings.admin_tx` 経由）。稼働中の `Dispatcher`・ワーカーの起動が要る操作だけを運ぶ。
 pub enum AdminRequest {
     /// 設定ファイルを読み直し、稼働中の source・harness の選定と実行アダプタ一式を差し替える。

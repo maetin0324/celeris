@@ -174,24 +174,17 @@ pub(crate) async fn test_effect(
             "celeris is not accepting admin requests, so the test cannot be sent",
         )));
     };
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    if admin_tx
-        .send(AdminRequest::NotifyTest { reply: reply_tx })
-        .await
-        .is_err()
+    let outcome = match crate::admin::call(
+        &admin_tx,
+        |reply| AdminRequest::NotifyTest { reply },
+        30,
+        "celeris dropped the notify test request",
+        "the notify test timed out",
+    )
+    .await?
     {
-        return Ok(Err(ApiProblem::internal(
-            "celeris is not accepting admin requests",
-        )));
-    }
-    let outcome = match tokio::time::timeout(std::time::Duration::from_secs(30), reply_rx).await {
-        Ok(Ok(result)) => result,
-        Ok(Err(_)) => {
-            return Err(ApiProblem::internal(
-                "celeris dropped the notify test request",
-            ));
-        }
-        Err(_) => return Err(ApiProblem::internal("the notify test timed out")),
+        Ok(v) => v,
+        Err(problem) => return Ok(Err(problem)),
     };
     match outcome {
         Ok(outcome) => {

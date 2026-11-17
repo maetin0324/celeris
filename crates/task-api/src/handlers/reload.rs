@@ -32,22 +32,19 @@ pub(crate) async fn reload_effect(state: &ApiState) -> Effect<ReloadResult> {
             "daemon administration is unavailable",
         )));
     };
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    if admin_tx
-        .send(crate::admin::AdminRequest::Reload { reply: reply_tx })
-        .await
-        .is_err()
+    match crate::admin::call(
+        &admin_tx,
+        |reply| crate::admin::AdminRequest::Reload { reply },
+        10,
+        "celeris dropped the reload request",
+        "reload timed out",
+    )
+    .await?
     {
-        return Ok(Err(ApiProblem::internal(
-            "celeris is not accepting admin requests",
-        )));
-    }
-    match tokio::time::timeout(std::time::Duration::from_secs(10), reply_rx).await {
-        Ok(Ok(Ok(()))) => Ok(Ok(ReloadResult { reloaded: true })),
-        Ok(Ok(Err(message))) => Ok(Err(ApiProblem::bad_request(format!(
+        Ok(Ok(())) => Ok(Ok(ReloadResult { reloaded: true })),
+        Ok(Err(message)) => Ok(Err(ApiProblem::bad_request(format!(
             "invalid config: {message}"
         )))),
-        Ok(Err(_)) => Err(ApiProblem::internal("celeris dropped the reload request")),
-        Err(_) => Err(ApiProblem::internal("reload timed out")),
+        Err(problem) => Ok(Err(problem)),
     }
 }

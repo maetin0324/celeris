@@ -99,19 +99,28 @@ pub fn classify_outcome(outcome: &str, end: Option<&task_core::RunEnd>) -> RunOu
     }
 }
 
+/// `state` の cursor の続きから最新の event まで `apply` に渡す（集計の 2 つの状態が共有する）。
+fn catch_up<S>(
+    state: &mut S,
+    store: &SqliteStore,
+    cursor: fn(&S) -> u64,
+    apply: fn(&mut S, &EventRow),
+) -> Result<(), StoreError> {
+    loop {
+        let rows = store.events_since(cursor(state), STATS_BATCH)?;
+        for row in &rows {
+            apply(state, row);
+        }
+        if rows.len() < STATS_BATCH {
+            return Ok(());
+        }
+    }
+}
+
 impl StatsState {
     /// 前回の続きから最新まで読む。
     pub(crate) fn catch_up(&mut self, store: &SqliteStore) -> Result<(), StoreError> {
-        loop {
-            let rows = store.events_since(self.cursor, STATS_BATCH)?;
-            let count = rows.len();
-            for row in &rows {
-                self.apply(row);
-            }
-            if count < STATS_BATCH {
-                return Ok(());
-            }
-        }
+        catch_up(self, store, |s| s.cursor, Self::apply)
     }
 
     pub(crate) fn apply(&mut self, row: &EventRow) {
@@ -242,16 +251,7 @@ struct AccountTotals {
 
 impl AccountStatsState {
     pub(crate) fn catch_up(&mut self, store: &SqliteStore) -> Result<(), StoreError> {
-        loop {
-            let rows = store.events_since(self.cursor, STATS_BATCH)?;
-            let count = rows.len();
-            for row in &rows {
-                self.apply(row);
-            }
-            if count < STATS_BATCH {
-                return Ok(());
-            }
-        }
+        catch_up(self, store, |s| s.cursor, Self::apply)
     }
 
     pub(crate) fn apply(&mut self, row: &EventRow) {

@@ -387,30 +387,23 @@ pub(crate) async fn set_account_limit_effect(
         Ok(v) => v,
         Err(problem) => return Ok(Err(problem)),
     };
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    if admin_tx
-        .send(AdminRequest::AccountLimitSet {
+    match crate::admin::call(
+        &admin_tx,
+        |reply| AdminRequest::AccountLimitSet {
             adapter: adapter.to_string(),
             id: id.to_string(),
             max_runs,
-            reply: reply_tx,
-        })
-        .await
-        .is_err()
+            reply,
+        },
+        10,
+        "celeris dropped the account limit request",
+        "account limit update timed out",
+    )
+    .await?
     {
-        return Ok(Err(ApiProblem::internal(
-            "celeris is not accepting admin requests",
-        )));
-    }
-    match tokio::time::timeout(std::time::Duration::from_secs(10), reply_rx).await {
-        Ok(Ok(Ok(()))) => {}
-        Ok(Ok(Err(e))) => return Ok(Err(account_admin_error(id, e))),
-        Ok(Err(_)) => {
-            return Err(ApiProblem::internal(
-                "celeris dropped the account limit request",
-            ));
-        }
-        Err(_) => return Err(ApiProblem::internal("account limit update timed out")),
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return Ok(Err(account_admin_error(id, e))),
+        Err(problem) => return Ok(Err(problem)),
     }
     tracing::info!(who = "admin", op = "account_limit_set", account_id = %id, %adapter, ?max_runs, "admin: account limit updated");
     let items = account_items(state).await?;
@@ -541,22 +534,17 @@ pub(crate) fn create_account_op(
 pub(crate) async fn clear_stale_limit(state: &ApiState, adapter: &str, id: &str) {
     let result = match state.inner.admin_tx.clone() {
         Some(admin_tx) => {
-            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-            let sent = admin_tx
-                .send(AdminRequest::AccountLimitSet {
-                    adapter: adapter.to_string(),
-                    id: id.to_string(),
-                    max_runs: None,
-                    reply: reply_tx,
-                })
-                .await;
-            match (
-                sent,
-                tokio::time::timeout(std::time::Duration::from_secs(10), reply_rx).await,
-            ) {
-                (Ok(()), Ok(Ok(Ok(())))) => Ok(()),
-                (_, Ok(Ok(Err(e)))) => Err(format!("{e:?}")),
-                _ => Err("celeris did not answer".to_string()),
+            let request = |reply| AdminRequest::AccountLimitSet {
+                adapter: adapter.to_string(),
+                id: id.to_string(),
+                max_runs: None,
+                reply,
+            };
+            let silent = "celeris did not answer";
+            match crate::admin::call(&admin_tx, request, 10, silent, silent).await {
+                Ok(Ok(Ok(()))) => Ok(()),
+                Ok(Ok(Err(e))) => Err(format!("{e:?}")),
+                _ => Err(silent.to_string()),
             }
         }
         None => {
@@ -608,30 +596,25 @@ pub(crate) async fn delete_account_effect(
     let Some(admin_tx) = state.inner.admin_tx.clone() else {
         return Ok(Err(ApiProblem::accounts_unavailable()));
     };
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    if admin_tx
-        .send(AdminRequest::AccountRemove {
+    match crate::admin::call(
+        &admin_tx,
+        |reply| AdminRequest::AccountRemove {
             adapter,
             id: id.to_string(),
-            reply: reply_tx,
-        })
-        .await
-        .is_err()
+            reply,
+        },
+        10,
+        "celeris dropped the account remove request",
+        "account remove timed out",
+    )
+    .await?
     {
-        return Ok(Err(ApiProblem::internal(
-            "celeris is not accepting admin requests",
-        )));
-    }
-    match tokio::time::timeout(std::time::Duration::from_secs(10), reply_rx).await {
-        Ok(Ok(Ok(()))) => {
+        Ok(Ok(())) => {
             tracing::info!(who = "admin", op = "account_delete", account_id = %id, %adapter, "admin: account removed");
             Ok(Ok(()))
         }
-        Ok(Ok(Err(e))) => Ok(Err(account_admin_error(id, e))),
-        Ok(Err(_)) => Err(ApiProblem::internal(
-            "celeris dropped the account remove request",
-        )),
-        Err(_) => Err(ApiProblem::internal("account remove timed out")),
+        Ok(Err(e)) => Ok(Err(account_admin_error(id, e))),
+        Err(problem) => Ok(Err(problem)),
     }
 }
 
@@ -678,24 +661,21 @@ pub(crate) async fn check_account_effect(
     let Some(admin_tx) = state.inner.admin_tx.clone() else {
         return Ok(Err(ApiProblem::accounts_unavailable()));
     };
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    if admin_tx
-        .send(AdminRequest::AccountCheck {
+    let outcome = match crate::admin::call(
+        &admin_tx,
+        |reply| AdminRequest::AccountCheck {
             adapter,
             id: id.to_string(),
-            reply: reply_tx,
-        })
-        .await
-        .is_err()
+            reply,
+        },
+        70,
+        "celeris dropped the check request",
+        "check timed out",
+    )
+    .await?
     {
-        return Ok(Err(ApiProblem::internal(
-            "celeris is not accepting admin requests",
-        )));
-    }
-    let outcome = match tokio::time::timeout(std::time::Duration::from_secs(70), reply_rx).await {
-        Ok(Ok(result)) => result,
-        Ok(Err(_)) => return Err(ApiProblem::internal("celeris dropped the check request")),
-        Err(_) => return Err(ApiProblem::internal("check timed out")),
+        Ok(v) => v,
+        Err(problem) => return Ok(Err(problem)),
     };
     match outcome {
         Ok(outcome) => {
@@ -732,25 +712,18 @@ pub(super) async fn start_account_login(
     let Some(admin_tx) = state.inner.admin_tx.clone() else {
         return Err(ApiProblem::accounts_unavailable());
     };
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    if admin_tx
-        .send(AdminRequest::AccountLoginStart {
+    let outcome = crate::admin::call(
+        &admin_tx,
+        |reply| AdminRequest::AccountLoginStart {
             adapter,
             id: id.clone(),
-            reply: reply_tx,
-        })
-        .await
-        .is_err()
-    {
-        return Err(ApiProblem::internal(
-            "celeris is not accepting admin requests",
-        ));
-    }
-    let outcome = match tokio::time::timeout(std::time::Duration::from_secs(20), reply_rx).await {
-        Ok(Ok(result)) => result,
-        Ok(Err(_)) => return Err(ApiProblem::internal("celeris dropped the login request")),
-        Err(_) => return Err(ApiProblem::internal("login start timed out")),
-    };
+            reply,
+        },
+        20,
+        "celeris dropped the login request",
+        "login start timed out",
+    )
+    .await??;
     match outcome {
         Ok(started) => {
             // D5: URL・認可コードはログに出さない。
@@ -804,29 +777,18 @@ pub(super) async fn submit_account_login_code(
     let Some(admin_tx) = state.inner.admin_tx.clone() else {
         return Err(ApiProblem::accounts_unavailable());
     };
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    if admin_tx
-        .send(AdminRequest::AccountLoginCode {
+    let outcome = crate::admin::call(
+        &admin_tx,
+        |reply| AdminRequest::AccountLoginCode {
             id: id.clone(),
             code,
-            reply: reply_tx,
-        })
-        .await
-        .is_err()
-    {
-        return Err(ApiProblem::internal(
-            "celeris is not accepting admin requests",
-        ));
-    }
-    let outcome = match tokio::time::timeout(std::time::Duration::from_secs(40), reply_rx).await {
-        Ok(Ok(result)) => result,
-        Ok(Err(_)) => {
-            return Err(ApiProblem::internal(
-                "celeris dropped the login code request",
-            ));
-        }
-        Err(_) => return Err(ApiProblem::internal("login code timed out")),
-    };
+            reply,
+        },
+        40,
+        "celeris dropped the login code request",
+        "login code timed out",
+    )
+    .await??;
     match outcome {
         Ok(result) => {
             tracing::info!(who = "admin", op = "account_login_code", account_id = %id, ok = result.ok, "admin: account login code submitted");
@@ -860,29 +822,23 @@ pub(super) async fn cancel_account_login(
     let Some(admin_tx) = state.inner.admin_tx.clone() else {
         return Err(ApiProblem::accounts_unavailable());
     };
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    if admin_tx
-        .send(AdminRequest::AccountLoginCancel {
+    match crate::admin::call(
+        &admin_tx,
+        |reply| AdminRequest::AccountLoginCancel {
             adapter,
             id: id.clone(),
-            reply: reply_tx,
-        })
-        .await
-        .is_err()
+            reply,
+        },
+        10,
+        "celeris dropped the login cancel request",
+        "login cancel timed out",
+    )
+    .await??
     {
-        return Err(ApiProblem::internal(
-            "celeris is not accepting admin requests",
-        ));
-    }
-    match tokio::time::timeout(std::time::Duration::from_secs(10), reply_rx).await {
-        Ok(Ok(Ok(()))) => {
+        Ok(()) => {
             tracing::info!(who = "admin", op = "account_login_cancel", account_id = %id, %adapter, "admin: account login cancelled");
             Ok(json_response(StatusCode::OK, &serde_json::json!({})))
         }
-        Ok(Ok(Err(e))) => Err(account_admin_error(&id, e)),
-        Ok(Err(_)) => Err(ApiProblem::internal(
-            "celeris dropped the login cancel request",
-        )),
-        Err(_) => Err(ApiProblem::internal("login cancel timed out")),
+        Err(e) => Err(account_admin_error(&id, e)),
     }
 }

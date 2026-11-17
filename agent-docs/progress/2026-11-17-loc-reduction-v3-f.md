@@ -53,6 +53,20 @@ completed: 2026-11-17
 - 振る舞いの違う写し: `task_actions` の `approve`・`reject`（共通の関数にすると型の引数で行数が増えた。+55/−23 で取り消した）、`execution.rs` の phase-gate と plan-gate の拒否（文言が違う）、`decisions.rs` の `answer_op`・`withdraw_op`・`revise_op`（既に `resolve_op` の薄い包みで、本文の型が違う）、harness の監視 loop の残り（行の意味が harness ごとに違う）。
 - C10・C11: 試行 1 の「残りの候補」に書いた理由のまま。
 
+## 測定（試行 2、提出時の HEAD で実行）
+- 受け入れの size check（開始時 main の `scripts/dev/source-size-report.py`・`source-size-report.toml` を `git show` で取り出し、`--exclusive-classes` で 3 点を測る。閾値 `2500 1 - - -`）→ exit 0、`OK []`。
+  - production 全言語: unit 純減 4,151（379,326 → 375,175）、固定純減 11,163
+  - production Rust: unit 2,727、固定 9,739（全言語との差 1,424 行は web の TS・JS の削除）
+  - own_total_with_tests: unit 7,687、固定 17,588
+  - unit の class ごとの純減: production 4,151、external_test 3,450、inline_test 86、generated 1,070、schema 847、docs −61（進捗と ADR の付記で増えた）。試験・生成物への付け替えは無い（external_test・generated・schema も減った）。
+- C・D・E・F の unit の合計: 2,701 + 2,558 + 1,753 + 4,151 = 11,163 行 = 固定の 11,163 行（差 0 行）。
+- 試行 2 の 3 回目の run（承認なしの残りの候補）の分は unit 3,952 → 4,151 の 199 行。
+
+## 検査（試行 2、提出時の HEAD で実行。基準は `git merge-base HEAD main`）
+- `bash scripts/dev/test-affected.sh` → exit 0。repo-health `verdict=pass`（new=0・worsened=0）、nextest `8446 tests run: 8446 passed, 22 skipped`（celeris・celeris-campaign・celeris-credentiald・celeris-mcp・celeris-script・celerisctl・e2e・llm-proxy・routing-eval・task-api・task-core・task-dispatch・task-ops・task-worker）、web の型検査と unit（vitest `705 passed`、gateway の node --test `110 pass`）、`test-ts-verify: 20 passed`。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。`sh scripts/dev/progress-index.sh --check` → `ok`。
+- 試行 2 の途中で、task-api の `cos_ops_registry_matches_adr_domain_assignment_and_exclusions` が 1 件落ちた（ADR 2026-10-09-cos-operations-all-mutations の表に撤去した 3 経路の行が残っていた）。表から行を消し、付記を足して直した。
+
 ## 試行 2 の設計 brief
 1. 根本原因: ホームが CoS チャットに移った後も、Console 互換の 3 経路と画面、deprecated の報告 API、本番で使われない aider adapter が残っていた。task-api・task-worker には、同じ入出力の手順（admin channel への送信と待ち、SSE の応答、FIEMAP の loop、研究ランナーの行の扱い）が site ごとに写されていた。
 2. 責務 owner: 通知の行き先は `delivery.rs`（`messages` を書く所）。admin channel の約束は `task-api/src/admin.rs`（`AdminRequest` を定義する所）。SSE は `sse.rs`。FIEMAP は `scratch/reflink.rs`。研究ランナーの約束は `research_runner.rs`。

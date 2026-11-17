@@ -1,6 +1,5 @@
 //! Discord への送り出し。通常の送信は CoS escalation / unavailable fallback のみ
-//! （旧 `scan` / `schedule` / `schedule_routes` / `select_batch` の直の走査は消した。
-//! 判定は CoS resolve / fallback が source revision ごとの outbox を作る）。
+//! （判定は CoS resolve / fallback が source revision ごとの outbox を作る）。
 //!
 //! 送信（`spawn_send` / `post_webhook`）— CoS の pending のみ Discord の webhook へ POST する。
 //! tick をブロックしないよう `tokio::spawn` で送り、**結果は次の tick で** `notification_mark` する
@@ -26,10 +25,6 @@ pub const DEFAULT_INTERVAL_SECS: u64 = 30;
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// Discord の 1 通の上限（2000 字）より少し手前で切る。
 pub const CONTENT_MAX_CHARS: usize = 1900;
-/// 文面に載せる質問・見出しの字数（ADR-0037 D1「先頭 120 字」）。
-pub const EXCERPT_CHARS: usize = 120;
-/// `milestone_ready` に載せる秘書のまとめの字数（ADR-0038 D4「先頭 300 字」）。
-pub const REVIEW_EXCERPT_CHARS: usize = 300;
 /// 送信の本文に付ける名前（ADR-0037 D3）。
 const WEBHOOK_USERNAME: &str = "Celeris";
 /// `Retry-After` が読めないときに待つ既定の秒数（ADR-0037 D3。実機 2026-09-18: 8 件一斉送信で 429）。
@@ -147,10 +142,7 @@ fn clamp_content(text: &str) -> String {
     text.chars().take(CONTENT_MAX_CHARS).collect()
 }
 
-// ---- 判定（ADR-0037 D1 の 5 種。決定的）----
-
-/// ADR-0079 D7（Phase R3a）: 未回答の決定の要求が 24 時間たったら 1 回だけ再通知する。
-pub const DECISION_REMINDER_AFTER: time::Duration = time::Duration::hours(24);
+// ---- 送り先の選択（CoS の outbox と root の完了の要約だけ）----
 
 /// Only the two CoS outbox kinds and the root-done summary may reach the webhook.
 pub fn select_routes_batch(pending: &[Notification]) -> Option<SendBatch> {

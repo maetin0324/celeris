@@ -261,7 +261,6 @@ fn infra_failures_wait_and_never_escalate_while_content_escalates_once() {
     };
     {
         let class = FailureClass::TransientInfra;
-        assert_eq!(class, FailureClass::TransientInfra);
         for retries in 0..limits.max_infra_retries {
             assert_eq!(
                 escalation_decision(class, &at(Tier::Cheap, 0, retries), &limits),

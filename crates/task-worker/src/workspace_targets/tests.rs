@@ -70,7 +70,9 @@ fn workspace_targets_only_finished_tasks_past_the_grace_are_listed() {
     for id in [done_old, cancelled_old, failed_old, done_fresh, running] {
         make_target(&tmp.path().join(id.to_string()), "agent-platform", true);
     }
-    let found = finished_task_targets(&store, &roots(tmp.path()), now, 6 * 3600).unwrap();
+    let found = scan_finished_task_targets(&store, &roots(tmp.path()), now, 6 * 3600)
+        .unwrap()
+        .found;
     let mut ids: Vec<TaskId> = found.iter().map(|f| f.task_id).collect();
     ids.sort_by_key(|i| i.to_string());
     let mut expected = vec![done_old, cancelled_old, failed_old];

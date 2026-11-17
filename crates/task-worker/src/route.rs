@@ -11,13 +11,11 @@ use std::sync::Arc;
 use task_core::llm_route::HarnessId;
 
 use crate::adapter::{AdapterSetting, AdapterSettings, LlmEndpoint, WorkerAdapter};
-use crate::protocol::{CredentialReference, RunRequest, SelectedLlmRoute};
+use crate::protocol::{CredentialReference, SelectedLlmRoute};
 
 /// Why a selected route cannot be launched. Every case fails closed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RouteError {
-    #[error("run request carries no llm_route")]
-    Missing,
     #[error("harness {0} is not declared")]
     UnknownHarness(String),
     #[error("harness {harness} cannot take the account environment of account {account}")]
@@ -85,16 +83,6 @@ pub fn route_adapter(
         });
     }
     Ok(adapter)
-}
-
-/// [`route_adapter`] for the route carried by `req`.
-pub fn request_adapter(
-    adapters: &HashMap<HarnessId, Arc<dyn WorkerAdapter>>,
-    req: &RunRequest,
-    resolve_secret: &dyn Fn(&str) -> Option<String>,
-) -> Result<Arc<dyn WorkerAdapter>, RouteError> {
-    let route = req.llm_route.as_ref().ok_or(RouteError::Missing)?;
-    route_adapter(adapters, route, resolve_secret)
 }
 
 #[cfg(test)]

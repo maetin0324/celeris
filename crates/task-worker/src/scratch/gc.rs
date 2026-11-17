@@ -598,38 +598,6 @@ pub fn measure_tree(path: &Path) -> io::Result<(u64, SystemTime)> {
     Ok((total, latest))
 }
 
-/// A tiny injectable extent accounting primitive. The caller shares `seen` across owners in a
-/// pool, so reflinked physical ranges are charged once. FIEMAP failure is deliberately
-/// conservative: charge the owner's allocated blocks and do not add guessed ranges.
-pub fn account_shared_extents(
-    extents: io::Result<Vec<(u64, u64)>>,
-    allocated_blocks: u64,
-    seen: &mut BTreeMap<u64, u64>,
-) -> (u64, bool) {
-    let Ok(extents) = extents else {
-        return (allocated_blocks, false);
-    };
-    let mut added = 0u64;
-    for (physical, length) in extents {
-        let end = physical.saturating_add(length);
-        let overlaps: u64 = seen
-            .iter()
-            .filter_map(|(start, old_len)| {
-                let old_end = start.saturating_add(*old_len);
-                let lo = physical.max(*start);
-                let hi = end.min(old_end);
-                (hi > lo).then_some(hi - lo)
-            })
-            .sum();
-        let unique = length.saturating_sub(overlaps);
-        added = added.saturating_add(unique);
-        seen.entry(physical)
-            .and_modify(|old| *old = (*old).max(length))
-            .or_insert(length);
-    }
-    (added, true)
-}
-
 /// Pool-wide physical extent index. Each owner replaces its previous contribution on refresh.
 #[derive(Debug, Default, Clone)]
 pub struct SharedExtentIndex {

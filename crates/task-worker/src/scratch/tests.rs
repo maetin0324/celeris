@@ -1,5 +1,5 @@
 use super::*;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::os::unix::fs::MetadataExt;
 
 const T0: u64 = 1_700_000_000;
@@ -809,19 +809,6 @@ fn measure_tree_counts_blocks_and_latest_mtime() {
 
 #[test]
 fn scratch_shared_extent_is_counted_once_and_fiemap_failure_falls_back() {
-    let mut seen = BTreeMap::new();
-    let first = super::gc::account_shared_extents(Ok(vec![(4096, 8192)]), 8192, &mut seen);
-    let second = super::gc::account_shared_extents(Ok(vec![(4096, 8192)]), 8192, &mut seen);
-    assert_eq!(first, (8192, true));
-    assert_eq!(second, (0, true));
-
-    let fallback = super::gc::account_shared_extents(
-        Err(std::io::Error::from(std::io::ErrorKind::Unsupported)),
-        4096,
-        &mut seen,
-    );
-    assert_eq!(fallback, (4096, false));
-
     let mut index = super::gc::SharedExtentIndex::default();
     index.replace_measurement("owner-a".into(), vec![(100, 40)], 0);
     index.replace_measurement("owner-b".into(), vec![(100, 40)], 0);

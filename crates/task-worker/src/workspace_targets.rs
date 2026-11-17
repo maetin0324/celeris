@@ -242,17 +242,6 @@ pub fn scan_finished_task_targets(
     Ok(out)
 }
 
-/// 終端（done・cancelled・failed）の task とその子孫が全て終端になり、最後の終端から `after_secs` 以上経った
-/// task の作業場所に残る cargo の target（task id の順）。終端でない task は見ない。
-pub fn finished_task_targets(
-    store: &SqliteStore,
-    roots: &WorkspaceRoots,
-    now: OffsetDateTime,
-    after_secs: u64,
-) -> Result<Vec<FinishedTaskTargets>, StoreError> {
-    Ok(scan_finished_task_targets(store, roots, now, after_secs)?.found)
-}
-
 /// [`remove_target`] の結果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RemoveTarget {

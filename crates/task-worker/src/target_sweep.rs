@@ -202,20 +202,6 @@ fn item_key(s: &str) -> Option<&str> {
     valid.then_some(s)
 }
 
-/// `deps/` の file 名を key ごとに束ねる。key の出ない file は落とす。
-pub fn group_deps_by_key<'a, I>(file_names: I) -> BTreeMap<String, Vec<&'a str>>
-where
-    I: IntoIterator<Item = &'a str>,
-{
-    let mut groups: BTreeMap<String, Vec<&'a str>> = BTreeMap::new();
-    for name in file_names {
-        if let Some(key) = deps_key(name) {
-            groups.entry(key).or_default().push(name);
-        }
-    }
-    groups
-}
-
 /// `..` を含まず `root` の下にある（`root` そのものは含まない）。
 fn strictly_inside(path: &Path, root: &Path) -> bool {
     !path.components().any(|c| matches!(c, Component::ParentDir))

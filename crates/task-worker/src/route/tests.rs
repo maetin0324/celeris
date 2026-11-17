@@ -2,7 +2,7 @@ use super::*;
 use crate::adapter::{
     AdapterError, Configured, EventSink, NullSink, RunLimits, RunOutcome, Terminal,
 };
-use crate::protocol::{LlmEndpointReference, PROTOCOL_VERSION, RunContext};
+use crate::protocol::{LlmEndpointReference, PROTOCOL_VERSION, RunContext, RunRequest};
 use crate::{PiAdapter, PiConfig};
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
@@ -138,7 +138,8 @@ async fn worker_route_runs_the_given_harness_with_the_given_model() {
     let log = Arc::new(Mutex::new(Vec::new()));
     let dir = tempfile::tempdir().unwrap();
     let req = request(dir.path(), Some(route("pi", "qwen/qwen3-coder")));
-    let adapter = request_adapter(&adapters(&log), &req, &no_secret).unwrap();
+    let adapter =
+        route_adapter(&adapters(&log), req.llm_route.as_ref().unwrap(), &no_secret).unwrap();
     let _ = adapter.run(req, "r1", limits(), &NullSink).await;
     assert_eq!(
         log.lock().unwrap().as_slice(),
@@ -155,7 +156,8 @@ async fn opencode_model_id_uses_declared_namespace() {
     let log = Arc::new(Mutex::new(Vec::new()));
     let dir = tempfile::tempdir().unwrap();
     let req = request(dir.path(), Some(route("opencode", "qwen3.8-27b")));
-    let adapter = request_adapter(&adapters(&log), &req, &no_secret).unwrap();
+    let adapter =
+        route_adapter(&adapters(&log), req.llm_route.as_ref().unwrap(), &no_secret).unwrap();
     let _ = adapter.run(req, "r-opencode", limits(), &NullSink).await;
     assert_eq!(
         log.lock().unwrap()[0].model.as_deref(),
@@ -181,7 +183,7 @@ async fn opencode_without_namespace_keeps_route_model() {
     );
     let dir = tempfile::tempdir().unwrap();
     let req = request(dir.path(), Some(route("opencode", "qwen3.8-27b")));
-    let adapter = request_adapter(&map, &req, &no_secret).unwrap();
+    let adapter = route_adapter(&map, req.llm_route.as_ref().unwrap(), &no_secret).unwrap();
     let _ = adapter
         .run(req, "r-opencode-unqualified", limits(), &NullSink)
         .await;
@@ -193,7 +195,8 @@ async fn non_opencode_model_id_remains_route_model() {
     let log = Arc::new(Mutex::new(Vec::new()));
     let dir = tempfile::tempdir().unwrap();
     let req = request(dir.path(), Some(route("pi", "qwen3.8-27b")));
-    let adapter = request_adapter(&adapters(&log), &req, &no_secret).unwrap();
+    let adapter =
+        route_adapter(&adapters(&log), req.llm_route.as_ref().unwrap(), &no_secret).unwrap();
     let _ = adapter.run(req, "r-pi", limits(), &NullSink).await;
     assert_eq!(log.lock().unwrap()[0].model.as_deref(), Some("qwen3.8-27b"));
 }
@@ -203,14 +206,6 @@ fn worker_route_unknown_harness_fails_closed() {
     let log = Arc::new(Mutex::new(Vec::new()));
     let err = route_adapter(&adapters(&log), &route("aider", "m"), &no_secret).err();
     assert_eq!(err, Some(RouteError::UnknownHarness("aider".into())));
-}
-
-#[test]
-fn worker_route_without_a_route_fails_closed() {
-    let log = Arc::new(Mutex::new(Vec::new()));
-    let dir = tempfile::tempdir().unwrap();
-    let err = request_adapter(&adapters(&log), &request(dir.path(), None), &no_secret).err();
-    assert_eq!(err, Some(RouteError::Missing));
 }
 
 /// An OAuth account's login directory reaches the harness through the env the route names.
@@ -377,7 +372,7 @@ printf '%s\n' '{"type":"agent_end","messages":[]}'
         dir.path(),
         Some(route("pi_declared", "opencode-go/deepseek-v4-pro")),
     );
-    let adapter = request_adapter(&table, &req, &no_secret).unwrap();
+    let adapter = route_adapter(&table, req.llm_route.as_ref().unwrap(), &no_secret).unwrap();
     let result = adapter
         .run(req, "route", limits(), &NullSink)
         .await

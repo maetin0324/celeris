@@ -266,35 +266,13 @@ async fn a_removed_worktree_is_recreated_on_the_same_branch() {
     let wt = worktree_for(repo.path(), root.path(), "01TASK");
     wt.ensure().await.expect("first");
     let committed = commit(&wt.dir, "done.txt");
-    assert_eq!(wt.remove_if_clean(), CleanupOutcome::Removed);
+    let dir = wt.dir.to_string_lossy().into_owned();
+    assert!(git(repo.path(), &["worktree", "remove", &dir]).is_some_and(|o| o.ok));
     assert!(!wt.dir.exists());
     wt.ensure().await.expect("again");
     // ブランチの先端（前の run のコミット）から再開する。base には戻らない。
     assert_eq!(rev_parse(&wt.dir, "HEAD").expect("head"), committed);
     assert!(wt.dir.join("done.txt").is_file());
-}
-
-/// 終端の後片付け: クリーンなら消す、汚れていれば残す。ブランチは消さない。
-#[tokio::test]
-async fn cleanup_removes_a_clean_worktree_and_keeps_a_dirty_one() {
-    let repo = tempfile::tempdir().expect("tempdir");
-    init_repo(repo.path());
-    let root = tempfile::tempdir().expect("tempdir");
-    let dirty = worktree_for(repo.path(), root.path(), "01DIRTY");
-    dirty.ensure().await.expect("ensure");
-    std::fs::write(dirty.dir.join("untracked"), b"x").expect("write");
-    assert_eq!(dirty.remove_if_clean(), CleanupOutcome::Dirty);
-    assert!(dirty.dir.join("untracked").is_file());
-
-    let clean = worktree_for(repo.path(), root.path(), "01CLEAN");
-    clean.ensure().await.expect("ensure");
-    assert_eq!(clean.remove_if_clean(), CleanupOutcome::Removed);
-    assert!(!clean.dir.exists());
-    assert!(
-        branch_exists(repo.path(), &clean.branch),
-        "ブランチは消さない"
-    );
-    assert_eq!(clean.remove_if_clean(), CleanupOutcome::AlreadyGone);
 }
 
 /// `current/manifest.json` の `sha` を読む（`releases_dir` の**親**にある。ADR-0040 D6）。

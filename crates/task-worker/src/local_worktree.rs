@@ -146,25 +146,6 @@ impl LocalWorktree {
         }
     }
 
-    /// 終端での後片付け（ADR-0041 D1）。`git status --porcelain` が空なら worktree を消す
-    /// （**ブランチは消さない**。コミットはリポジトリに残る）。空でなければ残して `Err(dir)` を返す
-    /// （呼び出し側が `WorkerProgress` を 1 行積む）。
-    pub fn remove_if_clean(&self) -> CleanupOutcome {
-        if !self.dir.exists() {
-            return CleanupOutcome::AlreadyGone;
-        }
-        match status_is_clean(&self.dir) {
-            None => CleanupOutcome::Unknown,
-            Some(false) => CleanupOutcome::Dirty,
-            Some(true) => {
-                let dir = self.dir.to_string_lossy().into_owned();
-                match git(&self.repo, &["worktree", "remove", &dir]) {
-                    Some(o) if o.ok => CleanupOutcome::Removed,
-                    _ => CleanupOutcome::Unknown,
-                }
-            }
-        }
-    }
     /// ADR-0043 D2 の**中止（cancel）**の後片付け: 未コミットの変更があっても worktree を消し、
     /// **ブランチも消す**（`git branch -D`）。人が「このタスクは中止」と決めたときだけ呼ぶ。
     /// 終端（`done` / `failed`）では呼ばない（差分を見るために残す）。
@@ -312,7 +293,7 @@ fn first_error_line(stderr: &str) -> String {
         .to_string()
 }
 
-/// `remove_if_clean` の結果。
+/// worktree の後片付け（`LocalWorktree::remove_with_branch`・`task_repos` の後片付け）の結果。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CleanupOutcome {
     /// 消した（クリーンだった）。

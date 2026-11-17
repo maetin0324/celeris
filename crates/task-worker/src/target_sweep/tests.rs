@@ -293,17 +293,6 @@ fn target_sweep_groups_deps_by_key() {
     assert_eq!(deps_key("foo-nothex.d"), None);
     assert_eq!(dir_key("serde-0123abcd").as_deref(), Some("serde-0123abcd"));
 
-    let groups = group_deps_by_key([
-        "libserde-0123abcd.rlib",
-        "libserde-0123abcd.rmeta",
-        "serde-0123abcd.d",
-        "foo-1a2b",
-        "stray",
-    ]);
-    assert_eq!(groups.len(), 2);
-    assert_eq!(groups["serde-0123abcd"].len(), 3);
-    assert_eq!(groups["foo-1a2b"], vec!["foo-1a2b"]);
-
     // deps・.fingerprint・build は使用時刻の最大で 1 単位として一緒に消える（片方が新しければ全部残る）。
     let snap = vec![
         item(

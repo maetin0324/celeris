@@ -61,8 +61,8 @@ fn cfg_test_attributes(src: &str, name: &str) -> usize {
 }
 
 /// 不変条件（D6）: `Dispatcher` の `#[cfg(test)]` の field は `test_hooks`（`TestHooks`）の 1 個だけで、試験用の
-/// 時計・遅延・停止点・研究 ablation はすべて `TestHooks` か `EffectAblation` に置く。
-/// 既存の試験で検出できない理由: 試験は field の振る舞い（時計を進める、ablation で off にする）だけを見るので、
+/// 時計・遅延・停止点はすべて `TestHooks` に置く。
+/// 既存の試験で検出できない理由: 試験は field の振る舞い（時計を進める）だけを見るので、
 /// `Dispatcher` に `#[cfg(test)]` の field を 1 個足しても、名前が `test_` で始まらなくても、すべて通る。
 #[test]
 fn structure_guard_dispatcher_has_one_test_field() {
@@ -71,7 +71,7 @@ fn structure_guard_dispatcher_has_one_test_field() {
     assert!(
         count <= 1,
         "Dispatcher has {count} #[cfg(test)] fields; put test switches in tests::hooks::TestHooks \
-         or phase_effect_ab::EffectAblation (ADR 2026-11-11 dispatcher-state-ownership D6)"
+         (ADR 2026-11-11 dispatcher-state-ownership D6)"
     );
 }
 

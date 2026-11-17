@@ -512,3 +512,15 @@ D7 の表の行ごとに、反例を固定した試験の名を書く。試験�
 
 D1 の表の `ProbePorts` の 3 行の field 列は、change-map の名 `now_unix_fn`・`knowledge_probe`・`eval_version_probe` から、実装の名
 `now_unix`・`knowledge`・`eval_version` に直した（owner と unit は変えていない）。
+
+## 付記 2026-11-16: 研究 ablation（EffectAblation）の撤去（loc-reduction-v3 E）
+
+- 人の決定（task 01M7J3NKVAH9NG53C5FEFNQJYK の問いへの答え、候補 C12）で、試験用の ablation の分岐を消した。`EffectAblation`
+  （`skip_pre_review_sync`・`sync_conflict_as_review_fail`・`disable_write_set_gate`・`disable_stale_priority`）と `TestHooks.ablation`、
+  本体の読み口 `write_set_gate_disabled`・`stale_priority_disabled`・`pre_review_sync_enabled`、引数 `gate_disabled`
+  （`ExecutionCoordination::admit_write_set`）・`priority_disabled`（`enter_review_sync_queue`・`order_review_sync_queue`）が無い。
+- `phase_effect_ab` の review_sync・stale_priority・write_set は on（今の仕組み）だけを走らせ、on の値（run 数・衝突 0・repair 0・
+  stale の待ち 0・attempts 0）を確かめる。off（旧経路）を再現する試験は契約（研究の A/B 比較）ごと廃止した。
+- D1 の表の `TestHooks` の行と field の表の `test_disable_stale_priority`・`test_disable_write_set_gate`・`test_skip_pre_review_sync`・
+  `test_sync_conflict_as_review_fail` の行、上の付記「own-hooks の実装」の `EffectAblation` の記述は当時の記録で、現行の実装ではない。
+  D6 の規則（試験用の切替は `TestHooks` の 1 field に置く）は変えない。

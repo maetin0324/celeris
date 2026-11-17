@@ -1,10 +1,7 @@
 //! ADR 2026-10-02-parallel-integration-auto-resolve D1c: 生成物の衝突は target 側を採用してから設定のコマンドで再生成する。
 //! コマンドは shell を介さず argv で実行し、対象外の変更・失敗・timeout は人に回す。
 
-use super::{
-    ClassifiedPath, ConflictKind, ResolutionAction, ResolveAttempt,
-    ResolveContext, git,
-};
+use super::{ClassifiedPath, ConflictKind, ResolutionAction, ResolveAttempt, ResolveContext, git};
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, BTreeSet};

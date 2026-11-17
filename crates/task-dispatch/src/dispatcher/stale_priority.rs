@@ -79,20 +79,14 @@ impl Dispatcher {
     }
 
     /// ADR-0130 D5: the order in which `recover_reviews` offers the waiting tasks to the
-    /// pre-review sync. `priority_disabled` is the test ablation read by the entry
-    /// (`stale_priority_disabled`, ADR 2026-11-11 D6); production passes `false`.
+    /// pre-review sync.
     pub(super) fn order_review_sync_queue(
         &mut self,
         candidates: Vec<Task>,
-        priority_disabled: bool,
     ) -> Result<Vec<Task>, DispatchError> {
         // The queue (wait order, skipped ticks) and whether to reorder are owned by
-        // `ExecutionCoordination` (ADR 2026-11-11 D1). With the ablation off
-        // (phase_effect_ab::stale_priority) the candidates keep the store order.
-        if !self
-            .coord
-            .enter_review_sync_queue(&candidates, priority_disabled)
-        {
+        // `ExecutionCoordination` (ADR 2026-11-11 D1).
+        if !self.coord.enter_review_sync_queue(&candidates) {
             return Ok(candidates);
         }
         let now = self.now_utc();
@@ -112,16 +106,5 @@ impl Dispatcher {
         }
         keyed.sort_by(|(a, _), (b, _)| stale_priority_cmp(a, b));
         Ok(keyed.into_iter().map(|(_, t)| t).collect())
-    }
-
-    /// stale 優先を切っているか（ADR 2026-11-11 D6: 入口が `TestHooks` から読み、
-    /// `ExecutionCoordination::enter_review_sync_queue` に引数で渡す）。本番では常に `false`（効かせる）。試験だけが切れる
-    /// （`test_hooks.ablation.disable_stale_priority`、phase_effect_ab::stale_priority の off）。
-    pub(super) fn stale_priority_disabled(&self) -> bool {
-        #[cfg(test)]
-        if self.test_hooks.ablation.disable_stale_priority {
-            return true;
-        }
-        false
     }
 }

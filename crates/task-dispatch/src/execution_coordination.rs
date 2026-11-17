@@ -310,19 +310,14 @@ impl<S, C> ExecutionCoordination<S, C> {
     // ---- write set の予約（ADR-0130 D3） ----
 
     /// write-set gate: `reservation` が、実行中の run（`running`。`RunSupervisor::run_keys`）の予約か、先に待ち始めて
-    /// 先取りを持つ待機と強く重なれば、見送りを記録して `Hold` を返す。`gate_disabled` は試験の ablation
-    /// （phase_effect_ab::write_set の off。本番の入口は常に `false` を渡す）で、`true` なら照合も予約もしない。
+    /// 先取りを持つ待機と強く重なれば、見送りを記録して `Hold` を返す。
     pub(crate) fn admit_write_set<'a>(
         &mut self,
         key: &RunKey,
         reservation: Option<WriteReservation>,
         running_keys: impl IntoIterator<Item = &'a RunKey>,
         tick: u64,
-        gate_disabled: bool,
     ) -> WriteSetAdmission {
-        if gate_disabled {
-            return WriteSetAdmission::Admit(None);
-        }
         let Some(reservation) = reservation else {
             return WriteSetAdmission::Admit(None);
         };
@@ -464,13 +459,8 @@ impl<S, C> ExecutionCoordination<S, C> {
     // ---- review 前 sync の待ち行列（ADR-0130 D5）と再同期の上限（ADR 2026-10-27） ----
 
     /// `candidates` の待ちだけを残し、新しく待ち始めた task に次の待機開始順を振る（`candidates` の順）。
-    /// 返す値は stale 優先で並べ替えるか: 候補が 2 件以上で、`priority_disabled`（試験の ablation。
-    /// phase_effect_ab::stale_priority の off。本番の入口は常に `false` を渡す。ADR 2026-11-11 D6）でないとき。
-    pub(crate) fn enter_review_sync_queue(
-        &mut self,
-        candidates: &[Task],
-        priority_disabled: bool,
-    ) -> bool {
+    /// 返す値は stale 優先で並べ替えるか（候補が 2 件以上のとき）。
+    pub(crate) fn enter_review_sync_queue(&mut self, candidates: &[Task]) -> bool {
         self.review_sync_queue
             .retain(|id, _| candidates.iter().any(|t| t.id == *id));
         for task in candidates {
@@ -486,7 +476,7 @@ impl<S, C> ExecutionCoordination<S, C> {
                 );
             }
         }
-        !priority_disabled && candidates.len() >= 2
+        candidates.len() >= 2
     }
 
     /// task の待ち（行列に無ければ最後尾の扱い）。
@@ -1033,25 +1023,20 @@ mod tests {
         c.reserve_write_set(key(a), Some(res.clone()));
         // a の予約はあるが、a は実行中の run に無い: b を止めない。
         assert_eq!(
-            c.admit_write_set(&key(b), Some(res.clone()), [].iter(), 1, false),
+            c.admit_write_set(&key(b), Some(res.clone()), [].iter(), 1),
             WriteSetAdmission::Admit(Some(res.clone()))
         );
         // a が実行中なら b を止め、見送りを記録する。
         let running = [key(a)];
         assert_eq!(
-            c.admit_write_set(&key(b), Some(res.clone()), running.iter(), 1, false),
+            c.admit_write_set(&key(b), Some(res.clone()), running.iter(), 1),
             WriteSetAdmission::Hold { blocker: key(a) }
         );
         assert_eq!(c.write_set_waits()[&key(b)].consecutive, 1);
-        // ablation で切ると照合も予約もしない。
-        assert_eq!(
-            c.admit_write_set(&key(b), Some(res.clone()), running.iter(), 1, true),
-            WriteSetAdmission::Admit(None)
-        );
         // 実行中の run に無い予約は刈り込みで消える。
         c.prune_write_set_state([].iter(), 1);
         assert_eq!(
-            c.admit_write_set(&key(b), Some(res.clone()), running.iter(), 2, false),
+            c.admit_write_set(&key(b), Some(res.clone()), running.iter(), 2),
             WriteSetAdmission::Admit(Some(res))
         );
     }

@@ -182,16 +182,6 @@ fn pending_integration_repair(
 }
 
 impl Dispatcher {
-    /// review 前の target 同期（ADR-0118）を行うか。本番では常に行う。試験だけが切れる
-    /// （`test_hooks.ablation.skip_pre_review_sync`、phase_effect_ab::review_sync の off）。
-    fn pre_review_sync_enabled(&self) -> bool {
-        #[cfg(test)]
-        if self.test_hooks.ablation.skip_pre_review_sync {
-            return false;
-        }
-        true
-    }
-
     /// ADR-0074「F5-fix8 実装時の明確化」: `ready` の Task の、仕事の残っていない計画を最終レビューに出す
     /// （`Trigger::PlanComplete`。run は起こさない）。レビューの主題は完了した WU の要約（`finish_phase_integration`
     /// と同じ）の前に、今の版の計画の `rationale`（replan で何も足さなかった理由など）を置く。
@@ -482,7 +472,6 @@ impl Dispatcher {
         // Legacy projectless worktrees have no RepoId for the durable candidate event;
         // keep their existing review/integration semantics until they are registered.
         if !remote_workspace
-            && self.pre_review_sync_enabled()
             && !task.repos.is_empty()
             && let Some(workspaces) = self.task_workspaces_for(&task)
         {
@@ -562,19 +551,6 @@ impl Dispatcher {
                                         .into(),
                                 )
                             })?;
-                        #[cfg(test)]
-                        if self.test_hooks.ablation.sync_conflict_as_review_fail {
-                            // Phase 2 以前の旧経路: 衝突を review の不合格として worker に戻す（attempts を使う）。
-                            self.store.apply_transition(
-                                task_id,
-                                Trigger::ReviewFail,
-                                Some(Event::worker_progress(
-                                    run_id.clone(),
-                                    format!("review target sync conflict: {}", files.join(", ")),
-                                )),
-                            )?;
-                            return Ok(true);
-                        }
                         if self.try_integration_repair(
                             &task,
                             reference.repo_id,

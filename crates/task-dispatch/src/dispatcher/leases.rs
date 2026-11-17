@@ -625,8 +625,7 @@ impl Dispatcher {
             })
             .collect();
         // ADR-0130 D5: 長く stale な task から review 前 sync に渡す。
-        let priority_disabled = self.stale_priority_disabled();
-        for task in self.order_review_sync_queue(candidates, priority_disabled)? {
+        for task in self.order_review_sync_queue(candidates)? {
             let events = self.store.events_for(task.id)?;
             let run_id = last_run_id(&events).unwrap_or_default();
             // 前 tick で見送った場合はメモリ上の done 内容、再起動後は runs/<run_id>/result.json から復元。

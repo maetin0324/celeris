@@ -2,10 +2,8 @@
 //! 共有の作業ディレクトリ）で同じ `README.md` を書く 2 task A/B に、強く重なる expected write-set
 //! （`README.md`）を付けて同時に ready にする。
 //!
-//! - off（`ablation.disable_write_set_gate = true`）: A と B が同じ tick に起き、両方が同じ版の `README.md` を
-//!   読んで編集する。先に書き終えた方の後で、もう片方は読んだ版と今の版が食い違う（同時編集の衝突）ので
-//!   書かずに終わり、受け入れ検査に落ちてやり直しの run（repair）が 1 本足される。
-//! - on（既定）: B は A の run が終わるまで ready のまま待ち、A の結果の上で編集するので衝突も repair もない。
+//! B は A の run が終わるまで ready のまま待ち、A の結果の上で編集するので衝突も repair もない（gate が無ければ
+//! A と B が同じ版を読んで編集し、片方が衝突して repair の run が 1 本足される）。
 //!
 //! 偽アダプタは run の開始時に `README.md` を読み、注入した試験時計（`SimClock`、`watch` で配る秒）が
 //! run の長さだけ進むのを待ってから、読んだ版のままなら 1 行足して書く。試験は dispatcher が走っている run を
@@ -41,9 +39,6 @@ struct EditAdapter {
     runs_by_title: StdMutex<HashMap<String, u64>>,
     /// 走っている run の終わる時刻（試験時計の秒）。
     ends: StdMutex<HashMap<String, u64>>,
-    /// 試験専用の遅延 hook: この title の run は `README.md` を読む前に実時間でこれだけ待つ
-    /// （dispatcher の `running` 登録と adapter の開始登録の間の窓を決定的に広げる）。
-    start_delay: Option<(&'static str, Duration)>,
 }
 
 impl EditAdapter {
@@ -56,7 +51,6 @@ impl EditAdapter {
             repairs: AtomicU64::new(0),
             runs_by_title: StdMutex::new(HashMap::new()),
             ends: StdMutex::new(HashMap::new()),
-            start_delay: None,
         }
     }
 
@@ -94,11 +88,6 @@ impl WorkerAdapter for EditAdapter {
         _limits: RunLimits,
         _sink: &dyn EventSink,
     ) -> Result<RunOutcome, AdapterError> {
-        if let Some((title, delay)) = self.start_delay
-            && req.task.title == title
-        {
-            tokio::time::sleep(delay).await;
-        }
         let readme = self.dir.join("README.md");
         let read = std::fs::read_to_string(&readme).unwrap();
         let secs = if req.task.title == "task A" {
@@ -159,24 +148,14 @@ fn edit_task(store: &Arc<SqliteStore>, dir: &std::path::Path, title: &str, prior
     task
 }
 
-async fn run_variant(variant: Variant) -> (AbMetric, u64, u64) {
-    run_variant_with(variant, None).await
-}
-
-async fn run_variant_with(
-    variant: Variant,
-    start_delay: Option<(&'static str, Duration)>,
-) -> (AbMetric, u64, u64) {
+async fn run_on() -> (AbMetric, u64, u64) {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("README.md"), BASE).unwrap();
     let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let a = edit_task(&store, dir.path(), "task A", 1);
     let b = edit_task(&store, dir.path(), "task B", 0);
-    let mut adapter = EditAdapter::new(dir.path().to_path_buf());
-    adapter.start_delay = start_delay;
-    let adapter = Arc::new(adapter);
+    let adapter = Arc::new(EditAdapter::new(dir.path().to_path_buf()));
     let mut d = dispatcher(store.clone(), adapter.clone(), 2);
-    d.test_hooks.ablation.disable_write_set_gate = variant == Variant::Off;
 
     let done = |id: TaskId| store.get(id).unwrap().unwrap().status == Status::Done;
     let mut first_tick = true;
@@ -184,21 +163,12 @@ async fn run_variant_with(
         d.tick().unwrap();
         if first_tick {
             first_tick = false;
-            match variant {
-                Variant::Off => assert_eq!(
-                    d.supervisor.runs().len(),
-                    2,
-                    "off: both edits start together"
-                ),
-                Variant::On => {
-                    assert_eq!(
-                        d.supervisor.runs().len(),
-                        1,
-                        "on: the overlapping edit waits"
-                    );
-                    assert_eq!(d.coord.write_set_waits().len(), 1);
-                }
-            }
+            assert_eq!(
+                d.supervisor.runs().len(),
+                1,
+                "on: the overlapping edit waits"
+            );
+            assert_eq!(d.coord.write_set_waits().len(), 1);
         }
         if done(a.id) && done(b.id) {
             break;
@@ -249,35 +219,17 @@ async fn run_variant_with(
     let repairs = adapter.repairs.load(Ordering::SeqCst);
     print_ab_metric_with(
         SCENARIO,
-        variant,
+        Variant::On,
         &metric,
         &[("conflicts", conflicts), ("repairs", repairs)],
     );
     (metric, conflicts, repairs)
 }
 
-/// off は重なる 2 run が同じ版を編集して 1 本が衝突し、やり直しの run が足される。on は片方を待たせるので
-/// 衝突も repair もなく、run が 1 本少ない。
+/// gate は重なる 2 run の片方を待たせるので、衝突も repair もなく run は 2 本。
 #[tokio::test]
 async fn phase_effect_ab_write_set_gate_avoids_conflict_and_repair() {
-    let (off, off_conflicts, off_repairs) = run_variant(Variant::Off).await;
-    let (on, on_conflicts, on_repairs) = run_variant(Variant::On).await;
-    assert_eq!((off_conflicts, off_repairs, off.runs), (1, 1, 3), "{off:?}");
+    let (on, on_conflicts, on_repairs) = run_on().await;
     assert_eq!((on_conflicts, on_repairs, on.runs), (0, 0, 2), "{on:?}");
-    assert!(on_conflicts < off_conflicts && on_repairs < off_repairs);
-    assert!(on.runs < off.runs, "off={off:?} on={on:?}");
-    assert!(on.input_tokens < off.input_tokens, "off={off:?} on={on:?}");
-    assert_eq!(off.wall_secs, RUN_SECS_B + RUN_SECS_B, "{off:?}");
     assert_eq!(on.wall_secs, RUN_SECS_A + RUN_SECS_B, "{on:?}");
-    assert!(on.wall_secs < off.wall_secs, "off={off:?} on={on:?}");
-}
-
-/// 回帰: off で B の run の開始（README を読んで終わりを登録する）が遅れても、試験時計は B の登録を待ってから
-/// 進むので、B は A と同じ版を読んで衝突する。待たずに進めると A が書いた後で B が読み、(0, 0, 2) になる。
-#[tokio::test]
-async fn phase_effect_ab_write_set_waits_for_late_run_start() {
-    let (off, conflicts, repairs) =
-        run_variant_with(Variant::Off, Some(("task B", Duration::from_millis(50)))).await;
-    assert_eq!((conflicts, repairs, off.runs), (1, 1, 3), "{off:?}");
-    assert_eq!(off.wall_secs, RUN_SECS_B + RUN_SECS_B, "{off:?}");
 }

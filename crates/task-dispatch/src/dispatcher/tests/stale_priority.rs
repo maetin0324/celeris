@@ -209,7 +209,7 @@ async fn behind_target_stale_priority_counts_unselected_ticks() {
     let (a, b) = two_reviewing_tasks(repo.path(), &store);
     let mut d = worktree_dispatcher(store.clone(), checks_adapter(), ws.path(), None);
     let ordered = d
-        .order_review_sync_queue(vec![a.clone(), b.clone()], false)
+        .order_review_sync_queue(vec![a.clone(), b.clone()])
         .unwrap();
     assert_eq!(
         ordered.iter().map(|t| t.id).collect::<Vec<_>>(),
@@ -228,7 +228,7 @@ async fn behind_target_stale_priority_counts_unselected_ticks() {
     );
     // b is now in the FIFO relief slot, ahead of a.
     let ordered = d
-        .order_review_sync_queue(vec![a.clone(), b.clone()], false)
+        .order_review_sync_queue(vec![a.clone(), b.clone()])
         .unwrap();
     assert_eq!(
         ordered.iter().map(|t| t.id).collect::<Vec<_>>(),
@@ -237,6 +237,6 @@ async fn behind_target_stale_priority_counts_unselected_ticks() {
     // Selection leaves the queue; a task that left `reviewing` is dropped.
     d.coord.note_review_sync_offer(b.id, true);
     assert!(!d.coord.review_sync_queue().contains_key(&b.id));
-    d.order_review_sync_queue(vec![], false).unwrap();
+    d.order_review_sync_queue(vec![]).unwrap();
     assert!(d.coord.review_sync_queue().is_empty());
 }

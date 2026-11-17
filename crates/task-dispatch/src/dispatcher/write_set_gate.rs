@@ -32,7 +32,7 @@ use crate::execution_coordination::{WriteReservation, WriteSetAdmission};
 
 impl Dispatcher {
     /// `dispatch_one` の write-set gate の入口。候補の予約を store の hint から作り（planner run は予約しない）、
-    /// 試験の ablation（D6）と実行中の run の鍵を引数にして `ExecutionCoordination::admit_write_set` に判定させる。
+    /// 実行中の run の鍵を引数にして `ExecutionCoordination::admit_write_set` に判定させる。
     /// `Hold` なら task の待ち（`TaskWait::WriteSet`）を記録してから返す。呼び元は `Hold` で `Ok(false)` を返すだけ。
     pub(super) fn admit_write_set(
         &mut self,
@@ -46,15 +46,10 @@ impl Dispatcher {
         } else {
             self.write_reservation_for(task, wu)?
         };
-        let gate_disabled = self.write_set_gate_disabled();
         let running = self.supervisor.run_keys();
-        let admission = self.coord.admit_write_set(
-            run_key,
-            candidate,
-            running,
-            self.coord.ticks(),
-            gate_disabled,
-        );
+        let admission = self
+            .coord
+            .admit_write_set(run_key, candidate, running, self.coord.ticks());
         if let WriteSetAdmission::Hold { blocker } = &admission {
             let blocking_task_ids = vec![blocker.task];
             self.note_dispatch_wait(task.id, task_core::TaskWait::WriteSet { blocking_task_ids });
@@ -100,17 +95,6 @@ impl Dispatcher {
             paths,
             inherited_from_task,
         )))
-    }
-
-    /// write-set gate を切っているか（ADR 2026-11-11 D6: 入口が `TestHooks` から読み、
-    /// `ExecutionCoordination::admit_write_set` に引数で渡す）。本番では常に `false`（効かせる）。試験だけが切れる
-    /// （`test_hooks.ablation.disable_write_set_gate`、phase_effect_ab::write_set の off）。
-    pub(super) fn write_set_gate_disabled(&self) -> bool {
-        #[cfg(test)]
-        if self.test_hooks.ablation.disable_write_set_gate {
-            return true;
-        }
-        false
     }
 }
 

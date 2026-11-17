@@ -4,9 +4,8 @@
 //! - fresh: store の一覧（= 待ち行列の到着順）で先頭。main に追いついている（behind 0）。
 //! - stale: 一覧で 2 番目。main より 2 commits 遅れ、遅れを 10 分前から観測している。
 //!
-//! - off（`ablation.disable_stale_priority = true`）: 到着順のまま fresh が先に同期・review され、stale は
-//!   review 1 本ぶん待つ。
-//! - on（既定）: 長く stale な task が先に同期・review され、待ちは 0。
+//! 長く stale な task が先に同期・review され、待ちは 0（stale 優先が無ければ到着順で fresh が先になり、
+//! stale は review 1 本ぶん待つ）。
 //!
 //! 偽アダプタの reviewer run は合格の `review.json` を書き、試験時計（`SimClock`）を `REVIEW_RUN_SECS` 進める。
 //! stale の待ちは、stale の reviewer run が始まった時刻（試験時計）で測る。
@@ -108,7 +107,7 @@ fn synced_at(store: &Arc<SqliteStore>, task: &Task) -> u64 {
         .unwrap_or_else(|| panic!("{} was not synced", task.id))
 }
 
-async fn run_variant(variant: Variant) -> (AbMetric, u64) {
+async fn run_on() -> (AbMetric, u64) {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
@@ -125,7 +124,6 @@ async fn run_variant(variant: Variant) -> (AbMetric, u64) {
     });
     // max_concurrency = 1: reviewer run は 1 本ずつ。
     let mut d = worktree_dispatcher(store.clone(), adapter.clone(), ws.path(), None);
-    d.test_hooks.ablation.disable_stale_priority = variant == Variant::Off;
     let now = OffsetDateTime::parse("2026-10-03T12:00:00Z", &Rfc3339).unwrap();
     d.test_hooks.now = Some(Arc::new(std::sync::Mutex::new(now)));
 
@@ -160,16 +158,10 @@ async fn run_variant(variant: Variant) -> (AbMetric, u64) {
         assert_eq!(t.status, Status::Done);
         assert_eq!(t.attempts, 0);
     }
-    match variant {
-        Variant::Off => assert!(
-            synced_at(&store, &fresh) < synced_at(&store, &stale),
-            "off: arrival order"
-        ),
-        Variant::On => assert!(
-            synced_at(&store, &stale) < synced_at(&store, &fresh),
-            "on: the long-stale task is synced first"
-        ),
-    }
+    assert!(
+        synced_at(&store, &stale) < synced_at(&store, &fresh),
+        "on: the long-stale task is synced first"
+    );
     let metric = *adapter.metric.lock().unwrap();
     let stale_wait = adapter
         .stale_started_at
@@ -178,24 +170,20 @@ async fn run_variant(variant: Variant) -> (AbMetric, u64) {
         .expect("stale task was reviewed");
     print_ab_metric_with(
         SCENARIO,
-        variant,
+        Variant::On,
         &metric,
         &[("stale_wait_secs", stale_wait)],
     );
     (metric, stale_wait)
 }
 
-/// off は到着順で fresh が先に review され、長く stale な task は reviewer run 1 本ぶん待つ。on は stale を
-/// 先に同期・review するので待ちが 0 になる（run 数・合計時間は同じ）。
+/// stale を先に同期・review するので、長く stale な task の待ちは 0（到着順なら reviewer run 1 本ぶん）。
 /// 不変条件: 長く stale な task を先に同期して review 待ちを減らす。
 /// 変更理由: ADR R1・R6 により Absent でも材料が届くため、偽 reviewer にも health 判定が要る。
 #[tokio::test]
 async fn phase_effect_ab_stale_priority_syncs_the_long_stale_task_first() {
-    let (off, off_wait) = run_variant(Variant::Off).await;
-    let (on, on_wait) = run_variant(Variant::On).await;
-    assert_eq!(off_wait, REVIEW_RUN_SECS, "{off:?}");
+    let (on, on_wait) = run_on().await;
     assert_eq!(on_wait, 0, "{on:?}");
-    assert!(on_wait < off_wait);
-    assert_eq!(on.runs, off.runs);
-    assert_eq!(on.wall_secs, off.wall_secs);
+    assert_eq!(on.runs, 2, "{on:?}");
+    assert_eq!(on.wall_secs, 2 * REVIEW_RUN_SECS, "{on:?}");
 }

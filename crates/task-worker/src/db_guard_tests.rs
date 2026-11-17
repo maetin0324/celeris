@@ -501,7 +501,10 @@ fn every_worker_spawn_site_goes_through_launch() {
     ];
     for (name, src, commands) in research {
         assert_eq!(src.matches("runner_command(").count(), commands, "{name}");
-        assert!(!src.contains("Command::new("), "{name} builds its own Command");
+        assert!(
+            !src.contains("Command::new("),
+            "{name} builds its own Command"
+        );
         assert!(!src.contains("crate::db_guard::launch("), "{name}");
         assert!(!src.contains("crate::container::wrap("), "{name}");
     }

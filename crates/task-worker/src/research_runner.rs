@@ -14,7 +14,8 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, Command};
 use tracing::warn;
 
-use crate::adapter::{AdapterError, EventSink, RunLimits, Terminal, next_line, open_child_streams};
+use crate::adapter::{AdapterError, EventSink, RunLimits, Terminal};
+use crate::child_stream::{next_line, open_child_streams};
 use crate::subprocess::{LineOutcome, kill_now, read_tail, reap_after_terminal};
 
 /// ランナー（`script`）と入力（`input`、整形した JSON と末尾の改行）を `run_dir` に書き、両方の path を返す。

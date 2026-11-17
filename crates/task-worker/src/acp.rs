@@ -42,8 +42,9 @@ use task_core::ProgressKind;
 
 use crate::adapter::{
     AdapterError, AdapterSetting, AdapterSettings, Configured, EventSink, RunLimits, RunOutcome,
-    Terminal, WorkerAdapter, deadline_terminal, open_child_streams,
+    Terminal, WorkerAdapter, deadline_terminal,
 };
+use crate::child_stream::open_child_streams;
 use crate::claude_code::build_prompt_with_skill_list;
 use crate::cos_chat::capabilities::{
     Continuation, HarnessCapabilities, ImageDelivery, MissingCapability, capability_reason,

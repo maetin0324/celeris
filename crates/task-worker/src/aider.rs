@@ -29,8 +29,9 @@ use tracing::warn;
 
 use crate::adapter::{
     AdapterError, AdapterSetting, AdapterSettings, Configured, EventSink, RunLimits, RunOutcome,
-    Terminal, WorkerAdapter, next_line, open_child_streams, with_estimated_cost,
+    Terminal, WorkerAdapter, with_estimated_cost,
 };
+use crate::child_stream::{next_line, open_child_streams};
 use crate::claude_code::build_prompt;
 use crate::delegate_file::forward_delegate_file;
 use crate::protocol::RunRequest;

@@ -113,7 +113,7 @@ fn result_contract_lenient_evidence() {
 
 /// 不変条件: JSON でない本文・欄の型が違う本文は `Error{retryable: true, usage: None}` で、文言は
 /// `<rel>/result.json is not valid JSON: …`。既存の `invalid_result_file_json_is_retryable_error` は
-/// claude_code・codex の写しで、pi・acp・aider には無かった。
+/// claude_code・codex の写しで、pi・acp には無かった。
 #[test]
 fn result_contract_invalid_json_is_retryable_error() {
     for text in [
@@ -202,7 +202,7 @@ fn request(workspace: &std::path::Path, context: RunContext) -> RunRequest {
 }
 
 /// 不変条件: `read_result_file` は結果ファイルを要る run だけ誤配置の回収を通し（複数の候補は `Misplaced`、
-/// 1 つなら置き場に写して読む）、無ければ `Missing`、あれば本文を返す（ADR 2026-11-10 D1）。pi・acp・aider は
+/// 1 つなら置き場に写して読む）、無ければ `Missing`、あれば本文を返す（ADR 2026-11-10 D1）。pi・acp は
 /// これまで adapter で誤配置を見ていなかったので、adapter の試験では検出できない。
 #[tokio::test]
 async fn read_result_file_recovers_strays_only_for_runs_that_require_the_file() {

@@ -1,4 +1,4 @@
-//! harness（claude_code・codex・pi・aider・acp）と研究ランナーの監視 loop が共有する、子プロセスの stdout・stderr
+//! harness（claude_code・codex・pi・acp）と研究ランナーの監視 loop が共有する、子プロセスの stdout・stderr
 //! の用意と締め切り付きの 1 行読み。`adapter`（終端・締め切りの規則）と `subprocess`（行の読み取り）を使う側に置き、
 //! どちらからも参照しない（module の循環を作らない）。
 

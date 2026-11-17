@@ -910,7 +910,6 @@ CoS の `/cos/operations` 経由では、coding または objective・acceptance
 `worker_progress` は `{run_id, msg}` に加えて
 `kind`（`tool_use` / `tool_result` / `text` / `thinking` / `status`）/ `tool` / `summary` / `detail`（4 KiB まで）/
 `truncated` / `error` を**あれば**持つ（**追加のみ**。付けないワーカー・導入前のイベントには無い。ADR-0048 D2）。
-Console（§3.98）はこの形だけを見る。
 
 `worker_policy_violation` は `{run_id, kind, tool, matched, command}`（ADR 2026-10-07-worker-no-subagents-no-llm-cli D5）: worker が
 subagent の道具（`kind = subagent_tool`）・別の LLM CLI（`llm_cli`）・LLM API（`llm_api`）を起動しようとした決定的な検出。警告で
@@ -1535,7 +1534,7 @@ celeris では、他の全要求と同じくトークンが要る）。
 の継続セッション（`node_sessions`、`kind = "lead"`）が**あるノードだけ**、`node_id` で
 対応づけて渡す（無いノードは配列に出ない。空なら `lead_sessions` 自体を省略。ADR-0054 D1/D3）。組織画面はこれで
 「継続中のセッション: turns / tokens / 最終使用」を部門長ノードに出す。CoS の対話セッションはここには
-出ない（Console のチャット欄自身が状態を見せるため）。
+出ない（CoS チャットの画面が状態を見せるため）。
 
 - `effective_profiles[]` は `items[]` と**同じ並び**で、`node_id` で対応づく（空なら省略）。`chain` は根から葉までの
   ノード id（GUI の「どこから継いだか」）。
@@ -1806,11 +1805,10 @@ GET /api/v1/reports?project=<ULID>&node=<org id>&level=<n>&unread=true&limit=50
 `DaemonSnapshot.reports`（`ReportsLive`。未読数を読めなければ `null`）:
 
 ```
-reports: { unread_secretary: u32, unread_bad_news: u32, last_notified_at?: String, notify_now: bool }
+reports: { unread_secretary: u32, unread_bad_news: u32 }
 ```
 
-`notify_now` は決定的に決まる: **`bad_news` の未読があれば即 true**、無ければ「未読があり、まだ通知していないか前回の通知から 2 時間以上経った」とき true。
-この 1 フィールドだけはディスパッチャではなく**API が応答を組むときに埋める**（`last_notified_at` が API 側にあるため）。
+このフィールドはディスパッチャではなく**API が応答を組むときに DB から数えて埋める**。`last_notified_at`・`notify_now` は 2026-11-17 に消した（ADR 2026-11-17-console-deprecated-api-aider-removal D3）。
 
 #### 3.54〜3.55 対話（ADR-0033 D4）
 
@@ -3471,7 +3469,7 @@ config の route 宣言で行う。
 
 MCP の console_instruct は 2026-10-08 の人の決定で legacy facade から独立した。
 通常の human スレッドに queue し、thread_id を返す（引数・返信は [MCP ガイド §5](../../../docs/guides/mcp.md)）。
-REST の旧 Console エンドポイントは既定 legacy スレッドを使う従来の契約を維持する。
+REST の旧 Console エンドポイントは 2026-11-17 に消した（ADR 2026-11-17-console-deprecated-api-aider-removal D1）。
 
 | 事項 | 決め |
 |---|---|
@@ -3995,7 +3993,7 @@ CoS chat の `usage` は worker の Terminal Usage を保存したもので、`i
 
 `skill_reads` は stream の `tool_use` で観測した `Skill` 呼び出しと `.claude/skills/**/SKILL.md` の `Read` の合計（再試行を含む）。tool_result や通常ファイルの Read は数えない。これは観測回数であり、harness 内部の暗黙の読み込みは不明。`first_output_at` は最初の空でない本文差分の時刻で、thinking/status/tool は含めない。`latency_ms` は保存した `started_at` → `finished_at`、`time_to_first_output_ms` は `started_at` → `first_output_at` のミリ秒差。本文差分がなければ first output の指標を省略する。これらは dispatcher の時計で計測する。prompt・skill 配送・session 選択・rollover の条件は変えない。
 
-run の詳細（`tool` の大きな出力など）は `GET /chat/threads/{t}/runs/{r}/events` で必要なときだけ読む。Console の `since` cursor と差分 reply の仕組みと、このチャット stream の cursor は混ぜない。
+run の詳細（`tool` の大きな出力など）は `GET /chat/threads/{t}/runs/{r}/events` で必要なときだけ読む。
 
 クライアント（BFF）の規約: `task.event` を受けたら該当画面のデータを**再取得**する（イベント本体から状態を組み立てない。真実は DB）。`celerisctl` による書き込みも同じ経路で流れる（in-process 通知は使わない。ADR-0013 D6）。
 

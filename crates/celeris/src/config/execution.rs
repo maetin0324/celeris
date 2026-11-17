@@ -46,7 +46,7 @@ pub struct ExecutionTomlConfig {
     /// ADR-0074 D1.3/§4（Phase F2b）: Task ごとの同時 WU 数の上限（既定 3、1..=6）。
     #[serde(default = "default_max_parallel_work_units")]
     pub max_parallel_work_units: usize,
-    /// ADR-0089（Phase R6-5）: CoS の対話 run（Console の一言）の同時数の絶対上限（既定 2、0..=8）。
+    /// ADR-0089（Phase R6-5）: CoS の対話 run（CoS チャットの一言）の同時数の絶対上限（既定 2、0..=8）。
     /// CoS の対話 run は `max_concurrency` とアカウントプールのプロバイダの `concurrency` に数えず、
     /// この上限だけで待つ。`0` で例外を無効にする（通常の run と同じ規則に戻る）。
     #[serde(default = "default_max_cos_runs")]

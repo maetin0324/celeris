@@ -4,7 +4,7 @@
 //!   repo 固有の必須規則（作業場所の `CLAUDE.md`。`crate::required_rules`）とは互いに写さない（D1.5）。
 //! - 組み立て口は `claude_code::prompt` の `prompt_header` だけ（D1.2）。全 run kind（execute・plan・replan・
 //!   execution plan・review）がそこを通るので、汎用規約はどの harness の prompt にも 1 回だけ入る。adapter
-//!   （codex・pi・acp・aider・claude_code）と CoS chat（`build_cos_chat_parts`）では足さない（D1.3）。
+//!   （codex・pi・acp・claude_code）と CoS chat（`build_cos_chat_parts`）では足さない（D1.3）。
 //! - repo 固有の規約（`repo_section`）は `RunContext.workspace` の review 方針（付記 B1・B4。dispatcher が worker と
 //!   planner の run にだけ base 側から読んで入れる）から、汎用規約の直後に出す。無ければ何も出さない。
 //! - `design_brief_section` は /3 の planner に設計 brief（`ExecutionPlanSpec.design_brief`）の書き方を示す（D3.4）。

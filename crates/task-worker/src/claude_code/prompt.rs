@@ -526,7 +526,7 @@ fn result_json_instructions(artifacts: &str) -> String {
 
 /// ADR-0072 D10（Phase E1）: 予算の予告と rolling checkpoint の指示。coding 系の execute run
 /// （対話は除く。D10）にだけ足す。claude-code は `--max-turns` で turn の上限を実際に強制するが、
-/// codex/acp/aider は強制しない（目安として出す。§7 U1 と同じ「分類できなければ安全側」の考え方）。
+/// codex/acp は強制しない（目安として出す。§7 U1 と同じ「分類できなければ安全側」の考え方）。
 /// **決定的**（壁時計の現在時刻は埋め込まない。ADR-0001 D2 原則 1 / 同じ入力から同じプロンプトを保つため。
 /// 「開始時刻」は `WorkerStarted` イベントに残るので、ここに書かなくても run の記録からは追える）。
 fn budget_preamble(task: &Task, artifacts: &str) -> String {
@@ -715,7 +715,7 @@ fn build_execute_prompt(
     out
 }
 
-/// ADR-0124 D4: planner を挟まない直行経路の節（文面はここ 1 箇所。codex・acp・aider も
+/// ADR-0124 D4: planner を挟まない直行経路の節（文面はここ 1 箇所。codex・acp も
 /// `build_prompt` を共有するので同じ節が出る）。`context.direct_route` が `None` なら空文字列。
 pub(crate) fn direct_route_section(context: &RunContext) -> String {
     let Some(route) = &context.direct_route else {

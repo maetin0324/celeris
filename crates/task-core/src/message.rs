@@ -100,11 +100,11 @@ pub struct Message {
 }
 
 /// `Message.metadata`（ADR-0048 D3。Phase 60b）: CoS の対話 run が結果ファイルで宣言した `actions`
-/// を taskd が決定的に実行した結果。Console の `reply` ブロックが `actions_result` として表示する。
+/// を taskd が決定的に実行した結果。
 ///
 /// ADR-0056 D2（Phase 78）: **`author`** を足した。MCP 経由で発せられた `role = user` の発言は
 /// `mcp:<client_id>` を持つ（新しい列は増やさない。既存の `metadata_json` を再利用する。人の発言・
-/// 導入前の行は `None`）。GUI の Console はこれを見て「外部（<client name>）」の帯を出す。
+/// 導入前の行は `None`）。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct MessageMetadata {
     /// 実行できた action（「→ タスクを作りました: …」のような 1 行と、作った物の id）。
@@ -114,7 +114,7 @@ pub struct MessageMetadata {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions_failed: Vec<MessageActionFailure>,
     /// ADR-0056 D2（Phase 78）: この発言（`role = user`）を発した外部 MCP クライアント
-    /// （`mcp:<client_id>`）。人が Console から言った発言・導入前の行には無い。
+    /// （`mcp:<client_id>`）。人の発言・導入前の行には無い。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub author: Option<String>,
 }

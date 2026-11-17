@@ -68,7 +68,7 @@ fn run_common_deadline_idle_is_retryable_error() {
     assert!(wait <= Duration::from_secs(2), "{wait:?}");
 }
 
-/// 不変条件: harness が報告した実測の cost（aider の `Cost:` 行）は上書きしない。cost が無く model が単価表に
+/// 不変条件: harness が報告した実測の cost（`Usage.cost_usd`）は上書きしない。cost が無く model が単価表に
 /// あれば埋め、model が無い・単価表に無いなら `None` のまま（不明を推測で埋めない）。claude_code・codex は
 /// これまで常に上書きしていたので、実測を優先する規則はどの adapter の試験にも無かった。
 #[test]

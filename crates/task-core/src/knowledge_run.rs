@@ -46,7 +46,7 @@ impl KnowledgeRunState {
     }
 }
 
-/// `applied_at` が付いたときの `summary_json`（GUI の Console ブロック・タイムラインが読む）。
+/// `applied_at` が付いたときの `summary_json`（タイムラインが読む）。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct KnowledgeRunSummary {
     /// 候補の総数（`artifacts/knowledge-candidates.json` の件数）。
@@ -118,7 +118,7 @@ pub fn via_fallback(adapter: &str) -> String {
     format!("fallback:{adapter}")
 }
 
-/// ADR-0052 D2: `via` が「フォールバックで抽出した」ことを表しているか（Console・タイムラインの表示）。
+/// ADR-0052 D2: `via` が「フォールバックで抽出した」ことを表しているか（タイムラインの表示）。
 pub fn via_is_fallback(via: &str) -> bool {
     via.starts_with("fallback:")
 }
@@ -280,7 +280,7 @@ impl SqliteStore {
     pub fn knowledge_run_exists(&self, task_id: TaskId) -> Result<bool, StoreError> {
         Ok(self.knowledge_run_get(task_id)?.is_some())
     }
-    /// `applied_at`（無ければ `created_at`）の新しい順、最大 `limit` 件。Console の一覧に使う。
+    /// `applied_at`（無ければ `created_at`）の新しい順、最大 `limit` 件。日次の知識整理（celeris の `knowledge_maint`）が使う。
     pub fn knowledge_run_recent(&self, limit: usize) -> Result<Vec<KnowledgeRun>, StoreError> {
         let limit = limit.clamp(1, 1_000);
         let sql = format!(

@@ -42,9 +42,8 @@ pub struct DaemonSnapshot {
     /// の元。再開（rereview・target が静かになった自動再開）で消える。
     #[serde(default)]
     pub review_resync_halted: Vec<SnapshotReviewResyncHalted>,
-    /// ADR-0033 D3（Phase 25）: 秘書レベルの未読の報告と通知の判定。**API が応答を組むときに埋める**
-    /// 唯一のフィールド（`last_notified_at` は `POST /reports/notified` が進める API プロセスの観測値で、
-    /// ディスパッチャは知らない）。ディスパッチャが送るスナップショットでは常に `None`。
+    /// ADR-0033 D3（Phase 25）: 秘書レベルの未読の報告の件数。**API が応答を組むときに埋める**
+    /// （API が応答のたびに DB から数える）。ディスパッチャが送るスナップショットでは常に `None`。
     #[serde(default)]
     pub reports: Option<task_core::ReportsLive>,
     /// ADR-0033 D5（Phase 26）: 未決定の認可（`approvals.decision IS NULL`）の件数。`reports` と同じ理由で

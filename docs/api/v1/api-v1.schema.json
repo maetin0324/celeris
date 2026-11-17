@@ -7996,7 +7996,7 @@
             }
           ],
           "default": null,
-          "description": "ADR-0033 D3（Phase 25）: 秘書レベルの未読の報告と通知の判定。**API が応答を組むときに埋める**\n唯一のフィールド（`last_notified_at` は `POST /reports/notified` が進める API プロセスの観測値で、\nディスパッチャは知らない）。ディスパッチャが送るスナップショットでは常に `None`。"
+          "description": "ADR-0033 D3（Phase 25）: 秘書レベルの未読の報告の件数。**API が応答を組むときに埋める**\n（API が応答のたびに DB から数える）。ディスパッチャが送るスナップショットでは常に `None`。"
         },
         "review_resync_halted": {
           "default": [],
@@ -19549,7 +19549,7 @@
       "type": "object"
     },
     "MessageMetadata": {
-      "description": "`Message.metadata`（ADR-0048 D3。Phase 60b）: CoS の対話 run が結果ファイルで宣言した `actions`\nを taskd が決定的に実行した結果。Console の `reply` ブロックが `actions_result` として表示する。\n\nADR-0056 D2（Phase 78）: **`author`** を足した。MCP 経由で発せられた `role = user` の発言は\n`mcp:<client_id>` を持つ（新しい列は増やさない。既存の `metadata_json` を再利用する。人の発言・\n導入前の行は `None`）。GUI の Console はこれを見て「外部（<client name>）」の帯を出す。",
+      "description": "`Message.metadata`（ADR-0048 D3。Phase 60b）: CoS の対話 run が結果ファイルで宣言した `actions`\nを taskd が決定的に実行した結果。\n\nADR-0056 D2（Phase 78）: **`author`** を足した。MCP 経由で発せられた `role = user` の発言は\n`mcp:<client_id>` を持つ（新しい列は増やさない。既存の `metadata_json` を再利用する。人の発言・\n導入前の行は `None`）。",
       "properties": {
         "actions_executed": {
           "description": "実行できた action（「→ タスクを作りました: …」のような 1 行と、作った物の id）。",
@@ -19566,7 +19566,7 @@
           "type": "array"
         },
         "author": {
-          "description": "ADR-0056 D2（Phase 78）: この発言（`role = user`）を発した外部 MCP クライアント\n（`mcp:<client_id>`）。人が Console から言った発言・導入前の行には無い。",
+          "description": "ADR-0056 D2（Phase 78）: この発言（`role = user`）を発した外部 MCP クライアント\n（`mcp:<client_id>`）。人の発言・導入前の行には無い。",
           "type": [
             "string",
             "null"
@@ -22769,7 +22769,7 @@
       "type": "string"
     },
     "ProgressKind": {
-      "description": "ADR-0048 D2（Phase 60a）: ワーカーの進行の種別。アダプタごとの差はアダプタ側で吸収し、\nConsole（ADR-0048 D1）はこの 5 種だけを知る。`comment` はプロトコルの別 type（ADR-0044 D2）の\nままなのでここには無い。",
+      "description": "ADR-0048 D2（Phase 60a）: ワーカーの進行の種別。アダプタごとの差はアダプタ側で吸収し、読む側は\nこの 5 種だけを知る。`comment` はプロトコルの別 type（ADR-0044 D2）のままなのでここには無い。",
       "oneOf": [
         {
           "const": "tool_use",
@@ -32909,7 +32909,7 @@
       "oneOf": [
         {
           "const": "human",
-          "description": "人が明示した（API / CLI、または Console で人の発言に `tier:<lane>` があった）。policy より強い。",
+          "description": "人が明示した（API / CLI、または人の発言に `tier:<lane>` があった）。policy より強い。",
           "type": "string"
         },
         {

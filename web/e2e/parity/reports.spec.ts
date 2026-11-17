@@ -30,12 +30,11 @@ const daemon = createFakeDaemon({
   fixtures: {
     ...defaultFixtures,
     "/api/v1/reports": { items: [report] },
-    "/api/v1/reports/read": { updated: 1 },
     "/api/v1/notify/test": { sent: true },
     "/api/v1/reports/R1": { report, sources_expanded: [source] },
     "/api/v1/daemon": {
       ...(defaultFixtures["/api/v1/daemon"] as object),
-      reports: { notify_now: false, unread_bad_news: 0, unread_secretary: 1 },
+      reports: { unread_bad_news: 0, unread_secretary: 1 },
     },
   },
 });
@@ -59,7 +58,7 @@ test("parity: /reports 絞り込み・既読・通知試験・展開", async ({ 
   await page.getByRole("button", { name: "展開" }).click();
   await expect(page.getByText("元の報告").last()).toBeVisible();
   expect(daemon.requests.some((request) => request.path === "/api/v1/reports/R1")).toBe(true);
-  // 報告の画面では既読にしない（旧 POST /reports/read を呼ぶ操作が無い）。
+  // 報告の画面では既読にしない（POST /reports/read は 2026-11-17 に消した。呼ぶ操作が無い）。
   await expect(page.getByRole("button", { name: /既読にする/ })).toHaveCount(0);
   await page.getByRole("link", { name: "通知で報告の知らせを見る" }).click();
   await expect(page).toHaveURL(/\/notifications\?kind=report/);

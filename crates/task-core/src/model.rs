@@ -587,7 +587,7 @@ pub struct BrowserRequirements {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TierSource {
-    /// 人が明示した（API / CLI、または Console で人の発言に `tier:<lane>` があった）。policy より強い。
+    /// 人が明示した（API / CLI、または人の発言に `tier:<lane>` があった）。policy より強い。
     Human,
     /// celeris のコードが固定した（計画 run の frontier など）。policy は触らない。
     System,
@@ -910,9 +910,8 @@ impl ToolPolicyKind {
     }
 }
 
-/// ADR-0048 D2（Phase 60a）: ワーカーの進行の種別。アダプタごとの差はアダプタ側で吸収し、
-/// Console（ADR-0048 D1）はこの 5 種だけを知る。`comment` はプロトコルの別 type（ADR-0044 D2）の
-/// ままなのでここには無い。
+/// ADR-0048 D2（Phase 60a）: ワーカーの進行の種別。アダプタごとの差はアダプタ側で吸収し、読む側は
+/// この 5 種だけを知る。`comment` はプロトコルの別 type（ADR-0044 D2）のままなのでここには無い。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ProgressKind {

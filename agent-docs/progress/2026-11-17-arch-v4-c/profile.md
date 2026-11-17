@@ -13,12 +13,18 @@ policy の file を変える唯一の leaf。人の差分承認と operator の 
 1. 下の「policy の差分の要約」を承認するか。
 2. **merge の順**: この差分を main に入れると、main の Rust の試験 `health_review_scenario_real_cli`（task-dispatch、
    `crates/task-dispatch/src/health_review/scenario_tests.rs:581`）が 1 件落ちる。daemon は新しい JSON を読める（下の「Rust の読み込み」）。
-   result.json の決定 `profile-merge-order` で次のどれかを選ぶ:
-   - `two-step`（推奨）: この branch から class ごとの `invariants` の 13 行を外して今 merge する（class・path・`[review.invariants]` の 4 名・検査器・schema は残す）。
-     class ごとの `invariants` は、`PathClass.invariants` を足す Rust の leaf が main に入った後に、別の policy の leaf で足す。main の試験は落ちない。
-   - `merge-now`: この差分のまま今 merge する。task の Rust の leaf が main に入るまで、main で上の試験が落ちる（task-dispatch を変える他の task の test-affected と release gate が落ちる）。
-   - `rust-first`: replan する。`PathClass.invariants`（`#[serde(default, skip_serializing_if = "Vec::is_empty")]`）と 9 file・12 か所の literal を直す Rust の leaf を先に main に入れ、その後にこの branch を merge する。
-     並行の `risk-rule`・`prompts` と同じ file（`design_review.rs`・`change_rules` の試験ほか）を変えるので、衝突の整理が要る。
+   並行の leaf `risk-rule` の branch は `PathClass.invariants`（`#[serde(default, skip_serializing_if = "Vec::is_empty")]`）を足してあり、
+   その branch とこの branch を合わせた木では同じ試験が通る（下の「Rust の読み込み」の 2 回目の run の実測）。task の質問で次のどれかを選ぶ:
+   - `rust-first`（推奨）: `risk-rule` の `PathClass.invariants` の欄の追加（欄・試験の literal・生成 schema。risk の規則の変更は含めない）だけを
+     小さな task で先に main に入れ、その後に operator がこの branch を merge する。main の試験は落ちない。C は小さな task が main に入るまで待つ。
+     C の branch の main 同期で `risk-rule` と同じ変更が衝突したら、`risk-rule` の側を残す。
+   - `merge-now`: この差分のまま今 merge する。C が main に入るまで、main で上の試験が落ちる（task-dispatch とその依存を変える他の task の
+     test-affected と release gate が落ちる）。
+   - `two-step`: この branch から class ごとの `invariants` の 13 行を外して今 merge する（class・path・`[review.invariants]` の 4 名・検査器・schema は残す）。
+     class ごとの `invariants` は C が main に入った後に別の policy の task で足す。main の試験は落ちないが、C の実 profile では risk の理由
+     （`invariant:<class>:<名前>`）と prompt に不変条件が出ない。
+   1 回目の run は `rust-first` を推奨せず `two-step` を推奨した。2 回目の run で `risk-rule` の branch と合わせた木で試験が通ることを確かめ、
+   `two-step` では C の受け入れ条件 0（判定の記録に不変条件を出す）を実 profile で示せないため、推奨を `rust-first` に変えた。
 
 ## 実装前 brief
 1. 根本原因: profile の 7 class に、監査で見つかった境界の file（`task-api/src/knowledge.rs`・`cos/operations.rs`・`dispatcher/worker_finish.rs`・
@@ -60,6 +66,10 @@ policy の file でない変更: 試験 `scripts/tests/test_repo_health_review_b
   （:581。読んだ値を書き直すと `invariants` が消える）。その前の `load_review_policy` は `Present` を返した（:577 の panic は起きない）。
   `definition_sha256` の比較も通った。
 - 結論: 現行の daemon は新しい JSON を読める（方針は `Present`）。ただしこの差分だけを main に入れると上の試験が落ちる（「人が決めること」2）。
+- 2 回目の run の実測（同じコマンド）: この branch の HEAD では 32 件中 31 件 pass（落ちたのは同じ :581 の比較）。
+  `risk-rule` の branch の head にこの branch を merge した使い捨ての worktree（`$TMPDIR`、commit しない）では 32 件すべて pass。
+  注意: 同じ `CARGO_TARGET_DIR` で別の worktree の木を build すると、元の worktree の試験の binary が古い木の path（`CARGO_MANIFEST_DIR`）のまま
+  新しいと判定される（使い捨ての worktree を消した後に `copy_checker` が `NotFound` で落ちた）。`git ls-files -z crates | xargs -0 touch` で作り直した。
 
 ## 検査（提出時の HEAD で実行）
 - `python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health_review_*.py'` → 26 件 OK（新しい 7 件と既存の review policy の 19 件。
@@ -72,11 +82,14 @@ policy の file でない変更: 試験 `scripts/tests/test_repo_health_review_b
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
 
 ## 人の承認と merge
-未（人の差分承認と operator の hand merge を待つ）。
+未（人の差分承認と operator の hand merge を待つ）。1 回目の run が result.json に書いた決定 `profile-merge-order` は人に届いていない
+（WU の run の `decisions` は check が通ったときだけ読まれる。`run_settlement/work_unit.rs` の `reads_worker_decisions`）。2 回目の run は task の質問で聞いた。
 
 ## 未解決
 - merge の順（「人が決めること」2）。決まるまで merge しない。
 
 ## 提案
+- WU の run が `decisions` を書き、check が落ちたときも決定の要求を記録する（今は `reads_worker_decisions` が reason `completed` だけを読み、
+  決定が黙って捨てられる）。policy の leaf のように check が人の操作の前に必ず落ちる leaf では、決定が人に届かない。
 - Rust の `PathClass.invariants` を足す leaf（ADR D6 の最後の項。`prompts` か `risk-rule`）は、`health_review_scenario_real_cli` の往復の比較が
   `invariants` を含めて通ることを受け入れ条件に入れる。

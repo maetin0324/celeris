@@ -12,14 +12,20 @@ deps.violation: profile が宣言する層と許可の向きに反する辺。
   層が 1 つも無ければ not_applicable（no_layers_declared）。どの層にも当たらない path の辺は見ない。
   fingerprint は（元の層→先の層、元の file、先の単位）。同じ組の辺は 1 件にまとめ、evidence に全部の行を並べる。
 
-deps.cycle: 単位（Rust は package の src 直下の module、Python・TypeScript は file、Cargo は package）の
-強連結成分（大きさ 2 以上）。Rust の use は同じ package の中の辺だけ、package をまたぐ循環は Cargo の辺で見る。
+deps.cycle: 単位（Rust は論理 module の第 1 要素（health/lang_deps.py）、Python・TypeScript は file、Cargo は
+package）の強連結成分（大きさ 2 以上）。Rust の use は同じ package の中の辺だけ、package をまたぐ循環は Cargo の辺で見る。
     [rules."deps.cycle"]
     include_dev = false                 # Cargo の dev-dependencies の辺を数えるか
     include_type_only = false           # TypeScript の import type を数えるか
     max_evidence = 40                   # 1 件の finding に載せる辺の上限
-  base の循環との突き合わせ: head の循環は、節点を最も多く共有する base の循環と同じ fingerprint にする
-  （共有が無ければ新規）。値は節点の数で、base より増えれば worsened。循環が縮んだ・分かれただけなら existing。
+  finding は 2 種類（ADR 2026-11-17 repo-health-scc-edges-logical-modules D1）:
+  - 循環（鍵 `cycle:<節点>`）: head の循環は、節点を最も多く共有する base の循環と同じ fingerprint にする
+    （共有が無ければ新規）。値は節点の数で、base より増えれば worsened。循環が縮んだ・分かれただけなら existing。
+  - 循環の内部の新しい組（鍵 `cycle-edge:<元の単位>-><先の単位>`、値はその組の辺の行の数）: base の循環と突き合い、
+    節点の数が base を超えない head の循環（循環の finding が existing）の内部の組 src→dst（両端が同じ head の
+    循環に属し、head にその向きの辺がある）のうち、base で同じ循環の内部に無かった組。base では出さないので
+    delta は new。節点が増えた・新しい循環は循環の finding が new・worsened になるので組の finding は出さない。
+    既存の組に行を足す・組を消す・循環の外の単位への辺は finding にしない。
 """
 
 from __future__ import annotations
@@ -144,13 +150,42 @@ def _key(nodes) -> str:
     return "cycle:" + "|".join(sorted(nodes))
 
 
+def _inner_pairs(comps, edges) -> set[tuple[str, str]]:
+    """両端が同じ循環に属す辺の組 (src_unit, dst_unit)。"""
+    member = {n: i for i, comp in enumerate(comps) for n in comp}
+    return {(e.src_unit, e.dst_unit) for e in edges
+            if e.src_unit in member and member.get(e.dst_unit) == member[e.src_unit]}
+
+
+def _edge_hits(tree, comps, edges, base_pairs, max_ev) -> list[Hit]:
+    """base の循環と突き合った head の循環 comps の内部の、base_pairs に無い組ごとの finding。"""
+    hits = []
+    for comp in comps:
+        nodes = set(comp)
+        by_pair: dict[tuple[str, str], list] = {}
+        for e in edges:
+            if e.src_unit in nodes and e.dst_unit in nodes and (e.src_unit, e.dst_unit) not in base_pairs:
+                by_pair.setdefault((e.src_unit, e.dst_unit), []).append(e)
+        for (src, dst), found in sorted(by_pair.items()):
+            evidence = [{"path": e.src, "line": e.line, "ref": tree.side, "symbol": f"{src} -> {dst}",
+                         "excerpt": e.excerpt} for e in found[:max_ev]]
+            scope_kind = "crate" if {e.kind for e in found} <= {"cargo", "cargo-dev"} else "module"
+            hits.append(Hit(
+                evidence=evidence, scope=(scope_kind, src), key=f"cycle-edge:{src}->{dst}", value=float(len(found)),
+                rationale=(f"head の {len(nodes)} 単位の循環の内部に新しい組 {src} -> {dst}（行 {len(found)} 本）。"
+                           "base ではこの組は循環の内部に無かった。節点の数が変わらなくても循環の内部の依存が増えた。")))
+    return hits
+
+
 def cycle(ctx, tree):
     _check_keys(ctx.config, {"include_dev", "include_type_only", "max_evidence"}, "deps.cycle")
     max_ev = int(ctx.config.get("max_evidence", 40))
     comps, edges = _components(ctx, tree)
     base_comps: list[list[str]] = []
+    base_pairs: set[tuple[str, str]] = set()
     if tree.side == "head" and ctx.snapshot.base_tree is not None:
-        base_comps = _components(ctx, ctx.snapshot.base_tree)[0]
+        base_comps, base_edges = _components(ctx, ctx.snapshot.base_tree)
+        base_pairs = _inner_pairs(base_comps, base_edges)
     groups: dict[str, dict] = {}
     for comp in comps:
         key, matched = _key(comp), None
@@ -158,9 +193,13 @@ def cycle(ctx, tree):
             shared = sorted(((-len(set(comp) & set(b)), _key(b), b) for b in base_comps if set(comp) & set(b)))
             if shared:  # 節点を最も多く共有する base の循環（同数なら鍵の順で先）
                 key, matched = shared[0][1], shared[0][2]
-        g = groups.setdefault(key, {"nodes": set(), "base": matched})
+        g = groups.setdefault(key, {"nodes": set(), "base": matched, "comps": []})
         g["nodes"].update(comp)
+        g["comps"].append(comp)
     hits = []
+    for g in groups.values():
+        if g["base"] is not None and len(g["nodes"]) <= len(g["base"]):
+            hits.extend(_edge_hits(tree, g["comps"], edges, base_pairs, max_ev))
     for key, g in sorted(groups.items()):
         nodes = g["nodes"]
         inner = [e for e in edges if e.src_unit in nodes and e.dst_unit in nodes]

@@ -5,14 +5,16 @@
 
 指標（値が閾値を超えたら finding。閾値は profile の rule 設定、0 でその指標を数えない）:
     file_lines    = 2000   # file の本体の行（Rust は #[cfg(test)] の範囲を除く）。既定は source-size の production 閾値
-    module_lines  = 8000   # Rust の module（package の src 直下の第 1 要素）の本体の行の合計。空行・注釈・
-                           # use・mod 宣言は数えない（分割で増える宣言を悪化と数えない）
+    module_lines  = 8000   # Rust の module（論理 module の第 1 要素。health/lang_deps.py）の本体の行の合計。
+                           # 空行・注釈・use・mod 宣言は数えない（分割で増える宣言を悪化と数えない）
     type_methods  = 60     # 型の method の数（Rust は同じ module の impl block 全部、Python は class の def）
     type_fields   = 40     # 型の field の数（Rust の struct、Python の class 本体の代入・注釈）
     fn_lines      = 200    # 関数 1 つの行
 - file 分割・行の付け替えだけでは減らない: module・型・関数の鍵は file の path でなく module（Rust は
-  `<pkg>/src/<module>`、Python は dir）と名前で作る。`foo.rs` を `foo/a.rs`・`foo/b.rs` に分けても module foo の
-  合計と型の method 数は変わらず、base と同じ finding（existing）のまま残る。
+  `<pkg>/src/<論理 module の第 1 要素>`、Python は dir）と名前で作る。`foo.rs` を `foo/a.rs`・`foo/b.rs` に分けても、
+  `#[path]` で別の dir の file に移しても module foo の合計と型の method 数は変わらず、base と同じ finding
+  （existing）のまま残る（Rust の単位は lang_deps の論理 module の表を引く。ADR 2026-11-17
+  repo-health-scc-edges-logical-modules D4）。
 - 対象: adapters の種類が product で、source-size-report.py の分類（health/source_size.py）でも手書きの本体の
   Rust・Python・TypeScript（TypeScript は file_lines だけ）。Rust の本体の行・試験の範囲・block の終わりは
   source-size-report.py の関数で数える（rustfmt の書式が前提）。
@@ -211,7 +213,7 @@ def evaluate(ctx, tree):
     th = _thresholds(ctx.config)
     acc = _Acc()
     enabled = ctx.profile.enabled_adapters
-    pkg_dirs = None
+    graph = None
     for info in ctx.target_files(tree, languages=("rust", "python", "typescript"), classes=("product",)):
         if info.language not in enabled or not source_size.is_product_source(info.path):
             continue
@@ -219,9 +221,9 @@ def evaluate(ctx, tree):
         if text is None:
             continue
         if info.language == "rust":
-            if pkg_dirs is None:
-                pkg_dirs = sorted(lang_deps.build(ctx, tree).packages.values())
-            loc = lang_deps.rust_module_of(info.path, pkg_dirs)
+            if graph is None:
+                graph = lang_deps.build(ctx, tree)
+            loc = lang_deps.rust_module_of(graph, info.path)
             unit = (f"{loc[0] or '.'}/src/{loc[1]}" if loc[1] else (loc[0] or ".")) if loc else posixpath.dirname(info.path)
             prod, logic = _rust(acc, info.path, text, unit, th)
             if loc and loc[1] and th["module_lines"]:

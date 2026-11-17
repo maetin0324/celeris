@@ -53,7 +53,7 @@ ADR: [2026-11-17-boundary-change-risk-review.md](../../adr/2026-11-17-boundary-c
 - `python3 scripts/dev/repo-health/repo_health.py --repo . --base $CELERIS_WU_BASE --head worktree --policy-version 1`: verdict=pass exit=0、new=0・worsened=0
   （`size.responsibility-growth` pass。`design_review.rs` は既存の単位の超過に入らない）。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
-- `bash scripts/dev/test-affected.sh`: 下の「test-affected」。
+- `bash scripts/dev/test-affected.sh`: exit 0（14 分 52 秒）。nextest 8,436 passed・22 skipped、web の tsc -b と vitest 101 file・705 passed、test-ts-verify 20 passed。
 
 ## LoC（`git diff --numstat $CELERIS_WU_BASE HEAD`）
 - production Rust: +72 −43（純増 29。ADR の目安 400 行以内）。試験: +151 −59（純増 92）。生成 schema: +16 −9。文書（worker-protocol.md）: +3 −2。

@@ -274,16 +274,23 @@ def _policy_files(snap: Snapshot, profile: Profile) -> list[dict]:
     return out
 
 
+# str.splitlines が行の区切りにする '\n' 以外の文字。含む内容は読み手によって行の分け方が変わる（付記 A1）
+_OTHER_LINE_BREAKS = frozenset("\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029")
+
+
 def _content_lines(data: bytes | None) -> set[str] | None:
-    """許可の一覧の内容の行の集合。UTF-8 で読めなければ None。
+    """許可の一覧の内容の行の集合。UTF-8 で読めない、または '\n' 以外の改行の文字を含めば None。
 
     '\n' で分けた行のうち、strip して空の行と列 0 が # の行を除く。行は改行以外を変えない。
+    '\n' 以外の改行の文字が無い内容は、'\n' だけ・universal newlines・str.splitlines のどの分け方でも同じ行になる。
     """
     if data is None:
         return None
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError:
+        return None
+    if not _OTHER_LINE_BREAKS.isdisjoint(text):
         return None
     return {line for line in text.split("\n") if line.strip() and not line.startswith("#")}
 

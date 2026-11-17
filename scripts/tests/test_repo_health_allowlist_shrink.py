@@ -160,6 +160,29 @@ class AllowlistShrinkTests(unittest.TestCase):
         rc, rep = self.report()
         self.assert_counted(rep, rc, [ALLOW])
 
+    def test_allowlist_shrink_other_line_breaks_are_policy_change(self):
+        # 付記 A1: Python の text mode（universal newlines）で読む読み手は単独の CR も行の区切りにする。
+        # '#note<CR>許可' は '\n' だけで分けると列 0 が # の注釈の 1 行だが、その読み手には新しい許可の行が入る。
+        # str.splitlines が区切る '\n' 以外の文字を 1 つでも含む内容は比べずに数える
+        line = "delta\tD\tr4"
+        for ch in ["\r", "\x0b", "\x0c", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"]:
+            with self.subTest(ch=repr(ch)):
+                self.write(ALLOW, BASE_ALLOW + "#note" + ch + line + "\n")
+                rc, rep = self.report()
+                self.assert_counted(rep, rc, [ALLOW])
+        # 再現の前提: text mode で読むと CR の後ろが許可の行になる（check-human-text.py の allow_list の読み方）
+        self.write(ALLOW, BASE_ALLOW + "#note\r" + line + "\n")
+        with open(self.repo / ALLOW, encoding="utf-8") as f:
+            self.assertIn(line + "\n", list(f))
+
+    def test_allowlist_shrink_crlf_content_is_policy_change(self):
+        # 改行が CRLF の一覧は、行を消すだけでも比べずに数える（読み手によって行末の CR の扱いが違う）
+        self.write(ALLOW, BASE_ALLOW.replace("\n", "\r\n"))
+        self.base = self.commit("crlf base")
+        self.write(ALLOW, "alpha\tA\tr1\r\n")
+        rc, rep = self.report()
+        self.assert_counted(rep, rc, [ALLOW])
+
     def test_allowlist_shrink_profile_rejects_invalid_regex(self):
         self.write(PROFILE, BASE_PROFILE.replace("policy_allowlists = ['^lists/allow\\.txt$']",
                                                  "policy_allowlists = ['(']"))

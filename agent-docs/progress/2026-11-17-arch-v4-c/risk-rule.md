@@ -114,7 +114,9 @@ ADR: [2026-11-17-boundary-change-risk-review.md](../../adr/2026-11-17-boundary-c
   adr.numbers・progress.index・human-text・source-size・policy.changed）がすべて pass。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
 - `git merge-tree --write-tree --name-only HEAD main` と `HEAD $CELERIS_WU_TARGET`: どちらも exit 0（衝突 0）。
-- `bash scripts/dev/test-affected.sh`: （この run の最後に 1 回だけ回す。結果は次の commit で書く）
+- `bash scripts/dev/test-affected.sh`: exit 0（822 秒。進捗の commit の後の HEAD で 1 回だけ実行）。nextest 8,438 passed・22 skipped（9 slow）、
+  web の tsc -b と vitest 101 file・705 passed、test-ts-verify 20 passed。末尾に scratch の `.trash-*` の `rm: Permission denied` が 3 行出たが、
+  後片付けの表示で exit には効かない。この後の commit はこの行を書くだけ（code の変更なし）。
 
 ## 受け入れ条件との対応
 - 0（class に合う write path は `new_*` が無くても High、理由に class・path）: `health_review_risk_class_path_is_high_without_new_declarations`・

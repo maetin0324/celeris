@@ -312,19 +312,32 @@ D3・D4 の記述と食い違うところは、この付記が優先する。
   正規表現を読めない方針は `assess_risk` が `Unknown`。材料作りの task が落ちた（`JoinError`）ときも `Unknown` の `diff_design`。方針が `Absent` の repo は何もしない。
 
 ### 規模
-- production の Rust の純増は +662 行（risk-rule +29、review-wire +94、review-gate +370、prompts +181、前提の task +3、cases の修正ほか。A の §7 C12 の
-  `source-size-report.py --exclusive-classes` を before と HEAD に当てた値。[metrics](../progress/2026-11-17-arch-v4-c/metrics.md) §6）。
-  「規模の目安」の 400 行を 262 行超えた。新しい module・trait・framework・reviewer の run の種類・verdict の型・event kind は足していない。
+- production の Rust の純増は +664 行（review-gate +359、prompts +181、review-wire +94、risk-rule +29 と −1、前提の task +3、cases +2、前提の task と
+  risk-rule が同じ欄を別々に足し merge で 1 つになった分 −3）。production 全言語も +664 行、own_total_with_tests は +2,896 行（試験 +2,129・tooling +103）。
+  A の §7 C12 の `source-size-report.py --exclusive-classes`（before の commit から取り出した script と分類規則）を before（件名「ADR: PathClass に任意の欄
+  invariants を先に足す決定…」の commit の第 1 親）と提出時の HEAD（件名「integrate wu/closeout (phase close)」）に当てた値
+  （375,099 → 375,763・330,408 → 331,072・1,026,070 → 1,028,966。[metrics](../progress/2026-11-17-arch-v4-c/metrics.md) §6）。
+  「規模の目安」の 400 行を 264 行超えた。新しい module・trait・framework・reviewer の run の種類・verdict の型・event kind は足していない。
   受け入れるか縮めるかは人が決める（進捗の「未解決」）。
+- 訂正（2026-11-18、WorkUnit `loc-fix`）: この節の前の版は +662 行・262 行超過と書いた。これは件名「integrate wu/prompts (phase impl)」の commit の値で、cases の commit
+  （production +2 行・試験 +792 行）が入っていなかった。
 
 ### 既知の限界
 - D1・D3・D4 は、この変更を含む release が昇格した後の daemon と worker でだけ効く（昇格は人だけ）。この task 自身の final review は今の daemon で走る。
 - 人の計画（`PlanOrigin::Human`）は採用前の risk の判定を通らない（leaf `risk-rule` が呼び出し元を確かめた。D1 の未確認）。その変更は D3 が final review で覆う。
 - 同期の無い repo（`NOT_SYNCED`）と remote workspace の repo は差分が無いので risk を当てない（health の材料も今までどおり無い）。
 - 複数 repo の計画の task は、差分の設計の判定を毎回求められる（上の「覆う範囲」）。
-- `docs/architecture-map.md` に、新しい class の file の多く（`task-api/src/middleware.rs`・`principal.rs`・`handlers/authority.rs`・`task-core/src/authority.rs`・
-  `cos/operations.rs`・`task-ops/src/lifecycle.rs`・`task-core/src/transition.rs`・`task-worker/src/browser_policy.rs`・`dispatcher/worker_finish.rs`・
-  `celeris/src/instance.rs`）の path も親 dir も無い。設計 review の prompt の地図の行はそれらの path で「この path の行は無い」になる。
+- `docs/architecture-map.md` に行の無い高 risk の file がある。設計 review の prompt の地図の行はそれらの path で「この path の行は無い」になる。
+  判定は、`[review].high_risk` の正規表現に合う提出時の HEAD の追跡 file（337 件）ごとに `input::owner_rows` と同じ規則（表の行の `…` の中の path、`{a,b}` の展開、
+  `covers` = 同じ path・親 dir・`foo.rs` の module dir）で地図の行を探した結果（行なし 233 件。手順と script は
+  [loc-fix](../progress/2026-11-17-arch-v4-c/loc-fix.md)）。行の無い production の file は、境界の class では `task-api/src/middleware.rs`・`principal.rs`・
+  `task-core/src/authority.rs`（authz）、`task-ops/src/lifecycle.rs`（transaction）、`task-api/src/browser_credentials.rs`・`task-worker/src/browser_launcher_run.rs`
+  （browser）、`task-core/src/instance.rs`（lease）、`task-api/src/releases.rs`（selfdeploy）。既存の class では `celeris-credentiald/src/` の 5 file・
+  `credential_resume.rs`・`store/credential_wait.rs`（credential）、`pricing.rs`・`project_budget.rs`（budget）、`subprocess.rs`（sandbox）、
+  `task-core/src/store/` の 40 file（store）。一覧は [進捗](../progress/2026-11-17-arch-v4-c.md) の「未解決」。
+  訂正: 前の版は `cos/operations.rs`・`task-core/src/transition.rs`・`browser_policy.rs`・`celeris/src/instance.rs`・`dispatcher/worker_finish.rs`・`handlers/authority.rs`
+  も行なしに挙げたが誤り。前の 4 件は path そのものの行がある。`worker_finish.rs`・`handlers/authority.rs` は `dispatcher.rs`・`handlers.rs` の module dir の規則で
+  facade の行（「Dispatcher facade」「router」）に当たり、owner の行ではない。`task-api/src/knowledge.rs` も path そのものの行がある。
 - `owner_rows` は行ごとに最初に当たった変更 path を持つ。差分の設計の節で理由の path が別の path の行に覆われると、理由の行に「この path の行は無い」と出る
   （行は health の節の一覧にある）。採用前の計画では理由の path を先に渡すので起きない。
 - 設計 review の回数は増える。replay（2026-10-28T00:00Z 以降の main の first-parent の非 merge 499 commit）で class に合う commit は 80 → 94。

@@ -14,7 +14,11 @@ A の baseline（A の run の artifacts の `baseline.md`）§6・§7 のコマ
 - before: main の commit `48b700ed`（件名「integrate wu/closeout (phase closeout)」。B の closeout）。件名「ADR: PathClass に任意の欄 invariants を先に足す決定
   （アーキv4 C の D2・D6 の一部）を記録する」の commit の第 1 親で、C の変更が main に入り始める直前の main。`git merge-base HEAD main` は task branch を
   main へ fast-forward した後の commit（件名「integrate 01M7MZTKB2 profile: …」）なので、profile の差分を落とす。使わない。
-- after: 提出時の HEAD（件名「integrate wu/prompts (phase impl)」）。並行の WorkUnit `cases`（6 ケースの試験）の変更はまだ入っていない。
+- after: 提出時の HEAD（件名「integrate wu/closeout (phase close)」。cases・metrics・closeout を含む）。
+  - 訂正（2026-11-18、WorkUnit `loc-fix`）: 前の版は after を件名「integrate wu/prompts (phase impl)」の commit にしていた。そこには並行の WorkUnit `cases`
+    （6 ケースの試験と `review_item.rs` の修正）が入っていない。(6) は提出時の HEAD で測り直した（§6）。
+  - (1)〜(5) は件名「integrate wu/prompts (phase impl)」の commit で測った値のまま（測り直していない）。その commit から提出時の HEAD までの production の差は
+    `crates/task-dispatch/src/health_review/review_item.rs` の 1 file・+2 行（`take()` を `take_if` にした修正。`use` の行は変わらない）だけで、残りは試験と文書。
 - 除いた commit: 0 件。before..HEAD の 30 commit は、C の WorkUnit（adr・profile・risk-rule・review-wire・review-gate・prompts）の commit と統合の merge、
   前提の task 01M7NZW0BS の 4 commit（件名「ADR: PathClass に任意の欄 invariants …」「PathClass に任意の欄 invariants を足し、往復試験と schema を更新する」
   「repair: PathClass.invariants の進捗に …」2 件）、operator の hand merge（件名「integrate 01M7MZTKB2 profile: …」）だけ。objective の定義どおり前提の task と
@@ -24,17 +28,19 @@ A の baseline（A の run の artifacts の `baseline.md`）§6・§7 のコマ
 
 - (1)(2)(3) は before と HEAD で同じ値。C は構造（import・循環・SQLite の参照・公開面）を変えていない。循環は 17 件・単位 198・組 756・行 1,827 で、B の後の値と同じ
   （A の値は 17 件・192・742・1,731。差は B の数え方の変化）。
-- (4) C の差分の production は 17 file・8 module・3 crate（task-core・task-dispatch・task-worker）。
+- (4) C の差分の production は 17 file・8 module・3 crate（task-core・task-dispatch・task-worker）。提出時の HEAD では cases の `review_item.rs` が加わり 18 file
+  （module は health_review、crate は task-dispatch で、8 module・3 crate は変わらない）。
 - (5) risk の replay: 2026-10-28T00:00Z 以降の main の first-parent の非 merge 499 commit のうち、class に合う commit は before 80 → after 94（+14）。
   web/・docs/ だけの 10 commit と agent-docs/ だけの 213 commit は before・after とも 0 件。増える設計 review は +14〜+94 回／20.9 日で、A の reviewer run の中央値で
   見積もると $28.66〜$192.42・4.4〜29.7 時間（wall）／20.9 日。
 - (5) health の時間は B の後より S1 +2.21 s（+2.4%）・S2 +4.99 s（+5.6%）長かったが、C は deps・size の rule を変えておらず、同じ時刻の対照を取れなかった（理由は §5.4）。
   原因は未確認で「要判断」。
-- (6) LoC: production 全言語 +662、production Rust +662、own_total_with_tests +2,102。**production Rust の純増 +662 行は ADR の目安「400 行以内」を超えた**
-  （内訳は §6。review-gate +370、prompts +181、review-wire +94）。
+- (6) LoC（提出時の HEAD）: production 全言語 +664、production Rust +664、own_total_with_tests +2,896（試験 +2,129・tooling +103）。
+  **production Rust の純増 +664 行は ADR の目安「400 行以内」を 264 行超えた**（内訳は §6。review-gate +359、prompts +181、review-wire +94）。
+  訂正: 前の版の +662・+662・+2,102 は cases の commit が入る前の値で、試験の 794 行（`boundary_cases.rs` +789 ほか）と production の 2 行が入っていなかった。
 - 未達/要判断: test-affected・cargo の build の時間、reviewer run の費用の after、final review の設計の節の費用、health の時間の差の原因（§5.5）。
-- 人が決めること: (a) production Rust +662 行（目安 400 行の超過）を受け入れるか、closeout か H で削るか。(b) 設計 review の増加（上限の見積もり $192／20.9 日）を
-  受け入れるか。決めるのは closeout（人への報告）で、この WorkUnit では直していない。
+- 人が決めること: (a) production Rust +664 行（目安 400 行を 264 行超過）を受け入れるか、H か別の task で削るか。(b) 設計 review の増加（上限の見積もり $192／20.9 日）を
+  受け入れるか。決めるのは人で、metrics・closeout・loc-fix の WorkUnit は縮めていない。
 
 ## 1. import・依存・循環の内部の辺（A の §7 C1・C2）
 
@@ -187,32 +193,51 @@ scenario の各 file の末尾に `SCENARIO_PROBE_<k>` の const を足し（毎
 
 ## 6. LoC（A の §7 C12。分類規則は base に固定）
 
-`scripts/dev/source-size-report.py` と `source-size-report.toml` は before の commit から `git show` で取り出した（`bc665168` の版と `cmp` で同じ）。
-`python3 -I $TMPDIR/ssr.py --root . --config $TMPDIR/ssr.toml --exclusive-classes --rev <rev> --format json`（`raw/ssr-{bef,head}.json`）:
+訂正（2026-11-18、WorkUnit `loc-fix`）: 前の版のこの節は after を件名「integrate wu/prompts (phase impl)」の commit で測っていた（375,761・331,070・1,028,172、
+差 +662・+662・+2,102）。cases の commit（件名「arch-v4 C cases: 6 ケースの試験 boundary_case_1_〜6_ と、…」）が入っておらず、提出した差分の値ではない。
+下は提出時の HEAD（件名「integrate wu/closeout (phase close)」）で測り直した値。
 
-| | A（`bc665168`） | before | HEAD | 差（HEAD − before） |
-|---|---|---|---|---|
-| production 全言語（`views.product_only.lines`） | 375,099 | 375,099 | 375,761 | +662 |
-| production Rust（`views.product_only.rust_lines`） | 330,408 | 330,408 | 331,070 | +662 |
-| own_total_with_tests（`views.own_total_with_tests.lines`） | 1,025,677 | 1,026,070 | 1,028,172 | +2,102 |
-| own_total_with_tests の Rust | 879,344 | 879,344 | 881,097 | +1,753 |
-| 試験（external_test + inline_test） | 455,363 + 21,408 | 455,595 + 21,408 | 456,921 + 21,419 | +1,326 + 11 |
-| tooling | 25,253 | 25,414 | 25,517 | +103 |
+`scripts/dev/source-size-report.py` と `source-size-report.toml` は before の commit から `git show` で取り出した（before..HEAD でこの 2 file は変わっていない。
+`bc665168` の版と `cmp` で同じ）。`python3 -I $TMPDIR/ssr.py --root . --config $TMPDIR/ssr.toml --exclusive-classes --rev <rev> --format json`
+（file ごとの内訳は同じコマンドに `--files`）。docs の class は own_total_with_tests に入らない。
 
-production の差（numstat の +673 から inline test の 11 行を引くと +662）の commit ごとの内訳（`raw/prod-by-commit.txt`）:
+| | A（`bc665168`） | before | prompts の統合（前の版の after） | 提出時の HEAD | 差（HEAD − before） |
+|---|---|---|---|---|---|
+| production 全言語（`views.product_only.lines`） | 375,099 | 375,099 | 375,761 | 375,763 | +664 |
+| production Rust（`views.product_only.rust_lines`） | 330,408 | 330,408 | 331,070 | 331,072 | +664 |
+| own_total_with_tests（`views.own_total_with_tests.lines`） | 1,025,677 | 1,026,070 | 1,028,172 | 1,028,966 | +2,896 |
+| own_total_with_tests の Rust | 879,344 | 879,344 | 881,097 | 881,891 | +2,547 |
+| 試験（external_test + inline_test） | 455,363 + 21,408 | 455,595 + 21,408 | 456,921 + 21,419 | 457,713 + 21,419 | +2,118 + 11 |
+| tooling | 25,253 | 25,414 | 25,517 | 25,517 | +103 |
+
+own_total_with_tests の差 +2,896 = production +664 + inline_test +11 + external_test +2,118 + tooling +103（evaluation_infra・migration は 0）。
+
+production の差の commit ごとの内訳（各 commit とその第 1 親に同じコマンドを当てた差。cases の commit を含む）:
 
 | commit（件名） | production の純増 |
 |---|---|
-| arch-v4 C review-gate: final review の差分に base 側の方針で risk を当て、… | +370（うち `health_review/input.rs` が大部分） |
+| arch-v4 C review-gate: final review の差分に base 側の方針で risk を当て、… | +359（ほかに inline test +11。うち `health_review/input.rs` が大部分） |
 | arch-v4 C prompts: reviewer・worker・planner の prompt に risk の根拠 … | +181（`change_rules/review.rs` ほか） |
 | arch-v4 C review-wire: final review の設計の節を ReviewRequest.diff_design で渡し … | +94 |
-| arch-v4 C risk-rule: 高 risk の class に合う write path を new_* の宣言によらず High … | +29（ほかに PathClass の欄を main に合わせた commit −1） |
+| arch-v4 C risk-rule: 高 risk の class に合う write path を new_* の宣言によらず High … | +29 |
+| arch-v4 C risk-rule: PathClass.invariants の欄・literal・往復試験の文面を main と同じにし、… | −1 |
 | PathClass に任意の欄 invariants を足し、往復試験と schema を更新する（前提の task） | +3 |
+| arch-v4 C cases: 6 ケースの試験 boundary_case_1_〜6_ と、評価済みの health の項目を落とす evaluate_all の不具合の修正 | +2（`health_review/review_item.rs`） |
+| 統合の merge（前提の task と risk-rule が同じ欄 `PathClass.invariants` を別々に足し、merge で 1 つになった分） | −3 |
+| 計 | +664 |
 
-- ADR の「規模の目安」は production の Rust の純増 400 行以内。実測 +662 行で 262 行超えた。leaf `review-gate`・`prompts` の進捗も超過を書き、
+- file ごとの production の差（before → HEAD）: `health_review/input.rs` +335、`change_rules/review.rs` +161、`health_review/verdict.rs` +41、`design_review.rs` +27、
+  `health_review/gate.rs` +23、`change_rules.rs` +19、`task-dispatch/src/review.rs` +15、`health_review/policy.rs` +13、`protocol/health.rs` +11、
+  `protocol/design_review.rs` +10、`protocol.rs` +8、`claude_code/prompt.rs` +5、`health_review/review_item.rs` +2、`execution_plan/design_brief.rs` +1、
+  `health_review/design_gate.rs` −7。
+- ADR の「規模の目安」は production の Rust の純増 400 行以内。実測 +664 行で 264 行超えた。leaf `review-gate`・`prompts` の進捗も超過を書き、
   「closeout か H が受け入れるか縮めるかを判断する」と提案している（replan は申告していない）。削るかどうかは人が決める（§「結論と人が決めること」の (a)）。
-- 試験の純増 +1,337 行のうち、`health_review/input/tests/risk_tests.rs` +519、`change_rules/review/tests.rs` +353、`design_review/tests.rs` +111、
-  `scripts/tests/test_repo_health_review_boundary.py` +246。
+- 試験の純増 +2,129 行（external_test +2,118・inline_test +11）の内訳: `dispatcher/tests/boundary_cases.rs` +789（cases）、`health_review/input/tests/risk_tests.rs` +519、
+  `change_rules/review/tests.rs` +353、`scripts/tests/test_repo_health_review_boundary.py` +246、`design_review/tests.rs` +111、`task-dispatch/src/review/tests.rs` +32、
+  `dispatcher/tests/health_review_design_gate.rs` +24、`health_review/entry_tests.rs` +20、`health_review/input.rs` の inline test +11、ほか 9 file 計 +24
+  （`dispatcher/tests/mod.rs` +3〈cases〉ほか）。前の版の +1,337 との差 +792 は cases の commit の分（`boundary_cases.rs` +789・`dispatcher/tests/mod.rs` +3）。
+- before..HEAD の commit: C の WorkUnit（adr・profile・risk-rule・review-wire・review-gate・prompts・cases・metrics・closeout）の commit と統合の merge、前提の task
+  01M7NZW0BS の 4 commit、operator の hand merge（件名「integrate 01M7MZTKB2 profile: …」）だけ。C 以外の task の commit は無い（`git log --no-merges` で 30 件を確認）。
 
 ## 再現コマンド（repo の root で）
 
@@ -234,7 +259,7 @@ python3 -I raw/c7b.py $CKH <$BEF|$H> S1:crates/task-api/src/handlers,crates/task
 python3 -I raw/replay_c.py . $BEF HEAD 2026-10-28T00:00:00Z <$BEF|main>
 python3 -I raw/health_section_size.py raw/health-time-head-S1-1.json raw/health-time-head-S2-1.json
 bash raw/health_time.sh $CKH head 3
-# (6) LoC
+# (6) LoC（commit ごとの内訳は <commit> と <commit>^1 に、file ごとの内訳は --files を付けて当てる）
 python3 -I $TMPDIR/ssr.py --root . --config $TMPDIR/ssr.toml --exclusive-classes --rev <$BEF|$H> --format json --out $TMPDIR/ssr.json
 ```
 

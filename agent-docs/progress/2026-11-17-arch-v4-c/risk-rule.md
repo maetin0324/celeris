@@ -47,13 +47,13 @@ ADR: [2026-11-17-boundary-change-risk-review.md](../../adr/2026-11-17-boundary-c
 - planner の計画は class に合えば brief が必須（`require_design_brief`）なので、`design_gate` で brief 無し ∧ class 一致は起きない。
   `brief_absent_human_plan` の理由は D1 のとおり `High` の補足として残した。
 
-## 検査（提出時の HEAD で実行）
-- `cargo nextest run -p task-core -E 'test(/health_review_risk|design_brief/)'`: 16 passed。
-- `cargo nextest run -p task-worker -p task-dispatch -p task-api -E 'test(/change_rules|design_review|health_review_design|health_review_policy|health_review_risk|schema|protocol::health/)'`: 94 passed。
-- `python3 scripts/dev/repo-health/repo_health.py --repo . --base $CELERIS_WU_BASE --head worktree --policy-version 1`: verdict=pass exit=0、new=0・worsened=0
-  （`size.responsibility-growth` pass。`design_review.rs` は既存の単位の超過に入らない）。
+## 検査（提出時の HEAD で実行。run 01M7P8MW0SECD83HRSEPWFPWQ4 で main と文面を揃えた後）
+- `cargo nextest run -p task-core -E 'test(/health_review_risk|path_class/)'`: 11 passed。
+- `bash scripts/dev/test-affected.sh`: exit 0（1,085 秒）。nextest 8,438 passed・22 skipped、web の tsc -b と vitest 101 file・705 passed、test-ts-verify 20 passed。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
-- `bash scripts/dev/test-affected.sh`: exit 0（14 分 52 秒）。nextest 8,436 passed・22 skipped、web の tsc -b と vitest 101 file・705 passed、test-ts-verify 20 passed。
+- `git merge-tree --write-tree --name-only HEAD main`: exit 0（衝突 0）。
+- 範囲の check（計画の式そのまま）: exit 1。範囲外は下の節の 5 file。許可の式に 5 file の式を足すと出力は空（exit 0 相当）。
+- 前回の run の `repo_health.py --base $CELERIS_WU_BASE --head worktree`: verdict=pass（new=0・worsened=0）。この run の変更は試験と文面だけなので再実行していない。
 
 ## LoC（`git diff --numstat $CELERIS_WU_BASE HEAD`）
 - production Rust: +72 −43（純増 29。ADR の目安 400 行以内）。試験: +151 −59（純増 92）。生成 schema: +16 −9。文書（worker-protocol.md）: +3 −2。

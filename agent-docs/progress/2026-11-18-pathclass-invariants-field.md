@@ -53,9 +53,9 @@ updated: 2026-11-18
 - `cargo nextest run -p task-dispatch -E 'test(/health_review_scenario_real_cli|health_review_policy|health_enforce_g2_review_policy/)'`: exit 0、32 tests run: 32 passed, 1865 skipped。
 - `cargo clippy --workspace -- -D warnings`: exit 0。
 - `cargo fmt --all -- --check`: exit 0、出力なし。
-- `bash scripts/dev/test-affected.sh`（`CELERIS_WU_BASE` はこの repair run の開始時点の snapshot の commit。差分はこの進捗ファイルだけ）: 結果は報告に書く。
-- `CELERIS_WU_BASE=$(git merge-base HEAD main) bash scripts/dev/test-affected.sh`（task 全体の差分。対象は `--list` で celeris・celeris-campaign・celeris-credentiald・celeris-mcp・celeris-script・celerisctl・e2e・llm-proxy・routing-eval・task-api・task-core・task-dispatch・task-ops・task-worker と web の typecheck+unit、ts-verify）: 結果は報告に書く。
-- `sh scripts/dev/progress-index.sh --check`: 結果は報告に書く。
+- `bash scripts/dev/test-affected.sh`（`CELERIS_WU_BASE` はこの repair run の開始時点の snapshot の commit。差分はこの進捗ファイルだけ）: exit 0（repo_health_gate: all checks passed、「試験対象の変更なし（docs のみ等）」）。
+- `CELERIS_WU_BASE=$(git merge-base HEAD main) bash scripts/dev/test-affected.sh`（task 全体の差分。対象は `--list` で celeris・celeris-campaign・celeris-credentiald・celeris-mcp・celeris-script・celerisctl・e2e・llm-proxy・routing-eval・task-api・task-core・task-dispatch・task-ops・task-worker と web の typecheck+unit、ts-verify）: exit 0。nextest 8438 tests run: 8438 passed (10 slow), 22 skipped。web の unit 101 files・705 tests passed。
+- `sh scripts/dev/progress-index.sh --check`: exit 0（ok）。
 
 ## 未解決事項
 無し。

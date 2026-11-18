@@ -513,3 +513,28 @@ fn path_class_without_invariants_round_trips_without_field() {
     assert_eq!(out, src);
     assert!(out.get("invariants").is_none());
 }
+
+/// 書く側（`assess_risk`）と読む側（`parse_risk_reason`）の対応: 出力を読み戻すと class・path・名前が一致する。
+#[test]
+fn health_review_risk_reason_round_trips() {
+    let path = "crates/task-api/src/middleware.rs";
+    let risk = assess_risk(&policy(), &paths(&[path]), Some(&brief()));
+    let read: Vec<_> = risk.reasons.iter().map(|r| parse_risk_reason(r)).collect();
+    assert_eq!(
+        read,
+        vec![
+            Some(RiskReason::PathClass {
+                class: "authz",
+                path
+            }),
+            Some(RiskReason::Invariant {
+                class: "authz",
+                name: "api-principal-from-token"
+            }),
+        ]
+    );
+    let prefixed = format!("repo:{}", risk.reasons[0]);
+    assert_eq!(parse_risk_reason(&prefixed), read[0]);
+    assert_eq!(parse_risk_reason("declared:new_fallback"), None);
+    assert_eq!(parse_risk_reason("brief_absent_human_plan"), None);
+}

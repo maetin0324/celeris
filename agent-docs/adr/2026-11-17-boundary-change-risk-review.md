@@ -347,3 +347,14 @@ D3・D4 の記述と食い違うところは、この付記が優先する。
 
 ### 状態
 - 実装・実証・計測は済んだ（2026-11-18。task の branch）。main への取り込みは task の final review の後。release の gate と本番への昇格は人・運用者が行う。
+
+### 付記（2026-11-18）: 理由の語の読みを task-core に 1 つにする
+
+アーキv4 C の final review の申し送り（理由の語の読みの重複）を消す設計判断。書式・risk の判定・prompt の文字列は変えない。
+
+- 読む関数は `crates/task-core/src/design_review.rs`（`assess_risk` と同じ module）に `pub fn parse_risk_reason(reason: &str) -> Option<RiskReason<'_>>` として 1 つ置く。
+  `RiskReason` は `PathClass { class, path }` と `Invariant { class, name }` の列挙型（借用）。どちらでもない語は `None`。`<repo>:` が前に付いた複数 repo の理由も読む（`reason_detail` の既存の挙動）。
+  新しい module・trait・crate は足さない。
+- 置き換える読み: `health_review/input.rs` の `path_pair` と `uncovered` の `strip_prefix("invariant:")`、`change_rules/review.rs` の `reason_detail` の中の読み。
+- 消す写し: `input.rs` の `build_health_input`・`build_health_input_with`（production の入口は `build_final_review_material`。試験だけが呼ぶ写し）。試験は `build_final_review_material(...).health` を呼ぶ。
+- 試験: `design_review/tests.rs` に、`assess_risk` の出力を読み戻して class・path・名前が一致する往復の試験を足す。書く側と読む側の対応は既存の試験では検出できない。

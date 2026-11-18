@@ -68,7 +68,15 @@ commit は件名で挙げる: `arch-v4 C review-gate: final review の差分に 
 | `review_risk_finding_symbol_from_real_checker` | 本物の `repo_health.py` を `python3 -I -B` で一時 git repo（a→b→c→a に a→c を足す head）に当て、`summarize_report` が `symbol = "./src/a -> ./src/c"`、`rationale` に「新しい組」 |
 
 ## 検査（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
-（下の節を提出時の HEAD の結果で埋める）
+- 範囲の check（`sh "$CELERIS_WU_SCOPE_PATHS"`）: exit 0。変更 path は上の「変更」の file・試験・生成 schema・文書・この進捗の 15 件だけ。
+- `git diff --name-only $CELERIS_WU_BASE HEAD -- scripts/dev/repo-health/`: 0 件（受け入れ条件 4。event 種別・reviewer run の種類も足していない）。
+- `bash scripts/dev/check-health.sh --out $TMPDIR/health.json`: exit 0（142 秒）。verdict pass、new 0・worsened 0・existing 697。必須 rule は全部 `pass` か
+  `not_applicable`（`policy.changed` を含む。policy の file は変えていない）。size.responsibility-growth の new・worsened も 0。
+- `cargo nextest run -p task-dispatch -E 'test(/review_risk_|health_review_input|health_limits|verdict|policy_review/)'`: 115 passed（`fn review_risk_` は 9 件）。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+- `bash scripts/dev/test-affected.sh`: exit 0（729 秒）。対象 crate は celeris・celeris-campaign・celerisctl・llm-proxy・task-api・task-dispatch・task-worker（`--list`）。
+  nextest 6,093 passed・21 skipped、doc test は ok、script bundle の SKIP 0 件。web の型検査・unit 試験は対象外（web/・docs/api/・task-api の通常依存の変更が無い）。
+- 全体の試験と release gate は走らせていない（release gate だけで走る。`agent-docs/adr/2026-10-20-full-tests-at-release-only.md`）。
 
 ## LoC（`git diff --numstat $CELERIS_WU_BASE HEAD`）
 - production Rust: +447 −77（純増 370）。内訳 `health_review/input.rs` +369 −65、`review.rs` +22 −11、`health_review/verdict.rs` +41、`protocol/health.rs` +11、

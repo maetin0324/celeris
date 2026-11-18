@@ -403,9 +403,9 @@ token_file = "api.token"
 | 38b | POST | `/terminals/{id}/close` | web 端末の終了の記録（主体 `human:web` だけ） | 204 | `terminal_session_events` |
 | 39 | DELETE | `/clusters/{id}/connect` | 進行中の接続を取り消す、または張った接続を切る（**管理系**） | 200 `{}` | celeris（子プロセスの終了） |
 | 40 | GET | `/org` | 組織（一つ、役割の木）の全ノード（ADR-0033 D1、Phase 23） | `OrgList` | store `org_list` |
-| 41 | POST | `/org` | 役職を足す（**管理系**） | 201 `OrgNode`（`Location`） | store `org_upsert` |
-| 42 | PATCH | `/org/{id}` | 役職を変える・付け替える（**管理系**） | 200 `OrgNode` | store `org_upsert` |
-| 43 | DELETE | `/org/{id}` | 役職を消す。仕事を抱えていたら 409（**管理系**） | 204 | store `org_delete` |
+| 41 | POST | `/org` | 役職を足す（**管理系**） | 201 `OrgNode`（`Location`） | `org_write` の plan → `SqliteStore::write_tx` の中の `org_write::apply`（store `org_upsert_tx`） |
+| 42 | PATCH | `/org/{id}` | 役職を変える・付け替える（**管理系**） | 200 `OrgNode` | `org_write` の plan → `SqliteStore::write_tx` の中の `org_write::apply`（store `org_upsert_tx`） |
+| 43 | DELETE | `/org/{id}` | 役職を消す。仕事を抱えていたら 409（**管理系**） | 204 | `org_write` の plan → `SqliteStore::write_tx` の中の `org_write::apply`（store `org_delete_tx`） |
 | 44 | GET | `/projects` | 案件の一覧（新しい順。ADR-0033 D2）。各項目に状態の要約・task の状態別件数・最終活動時刻・人待ちの件数と最古の時刻（ADR 2026-10-27-project-brief D4） | `ProjectList` | store `project_list` + `project_briefs` + 受信箱 |
 | 45 | POST | `/projects` | 案件を投げる（`status = proposed`。直後に秘書の run が起きるので**管理系**。Phase 27） | 201 `Project`（`Location`） | store `project_create` |
 | 46 | GET | `/projects/{id}` | 案件 + 途中目標 + 仕事の木 | `ProjectDetail` | store（`project_id` で絞った `tasks`） |

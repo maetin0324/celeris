@@ -1,12 +1,14 @@
 ---
 title: アーキ v4 E — WU 領域（write_set_gate・write_set_record・behind_target・auto_leaf を store・設定に触らない関数にする）
 tasks: [01M7Q5ZABN9NFQCH6QBTTP3EZ8]
-status: running
+status: done
 updated: 2026-11-18
+completed: 2026-11-18
 ---
 # アーキ v4 E — WU 領域: write_set_gate・write_set_record・behind_target・auto_leaf
 
-WorkUnit write-set（write_set_gate・write_set_record）の記録の後に、WorkUnit target-leaf（behind_target・auto_leaf）の節がある。
+WorkUnit write-set（write_set_gate・write_set_record）の記録の後に、WorkUnit target-leaf（behind_target・auto_leaf）の節、
+最後に WorkUnit guard（`store_access_guard_*` の試験と、WU 領域全体の before/after の仕上げ）の節がある。
 
 設計は [ADR 2026-11-18 dispatcher-store-access-pilot](../../adr/2026-11-18-dispatcher-store-access-pilot.md) の「第 1 領域: WU」の表の
 `write_set_gate.rs`・`write_set_record.rs` の行。計測コマンドは [measure-commands.md](measure-commands.md) の C3・E3。
@@ -194,3 +196,152 @@ module `crates/task-dispatch/src/dispatcher` の本体の行の合計 32360（ba
 ## 提案（target-leaf）
 
 - ADR の「第 1 領域: WU」の表の work_units.rs の行に、「閾値 2000 を超えていて行を増やせない。module の合計（32338）も増やせないので、入口を足すなら同じ量を詰める」と付記する（close の段）。
+
+# WorkUnit guard: store_access_guard_* と WU 領域の before/after
+
+ADR の「証明」3 の試験を `crates/task-dispatch/src/dispatcher/tests/structure_guard.rs` の末尾に足し、WU 領域全体（write-set と target-leaf）の
+before/after を [measure-commands.md](measure-commands.md) の C3・E1・E2・E3・C12 で測った。before は `git merge-base HEAD main`（件名
+`integrate wu/loc-fix (phase fix)` の commit。C3・E1・E2 の値は bc665168 と同じ）、after は提出時の HEAD。この WorkUnit は dispatcher/ の非試験の
+file を変えていない（変えたのは structure_guard.rs とこの file だけ）。
+
+## 結論（guard）
+
+- WU 領域の 4 file（behind_target・auto_leaf・write_set_gate・write_set_record）は E3 の 7 token が 0 で、`store_access_guard_work_units` が通る。
+- dispatcher/ の self.store を書く file は 44 → 40（−4）、self.config は 35 → 33（−2）。crate 全体も 53 → 49・40 → 38 で同じ数だけ減った。
+  SqliteStore を書く file（scope 27・論理 29・crate 50）、非試験 file（scope 69・論理 76・crate 138）、`#[path]` 94 は変わらない。ADR の WU 領域の見込み（store −4・config −2）どおり。
+- dispatcher/ の非試験の行は +32（C12 の `views.product_only.lines` 375763 → 375795）。WorkUnit の閾値 +40 の中、ADR の 2 領域の目安 +80 の中。
+
+## 試験（structure_guard.rs の末尾に足したもの）
+
+- `shared_state_access(src: &str) -> Vec<&'static str>`: `//` から行末（doc comment を含む）を除き、空白を詰めた source に
+  `self.store`・`self.config`・`SqliteStore`・`Dispatcher`・`CosChatLaunch`（`CosChatLaunchConfig` を含む）・`DispatchConfig`・`usesuper::*` が
+  現れるかを、この順の名の列で返す。識別子の文字に挟まれた空白だけは 1 個残す（`impl Dispatcher` を語として見る）。rustfmt が割った
+  `self\n    .config` は `self.config` になる。`Dispatcher`・`SqliteStore`・`DispatchConfig`・`self.store`・`self.config` は前後が語の境目のときだけ拾うので、
+  `DispatchError`・`self.store_path`・`self.configured` は拾わない。token の一覧は const `SHARED_STATE_TOKENS`。
+- `store_access_guard_work_units`: `include_str!` で読んだ 4 file に違反が 0。不変条件は「WU 領域の判断の file は共有の状態に触る経路を持たない（ADR D1）」。
+  既存の試験で検出できない理由は「振る舞いの試験（`write_set_gate_*`・`write_set_record_*`・`target_sync`・`tree_decisions`・`cex_*`）はどの file が
+  store に触るかを見ないので、対象 file に `impl Dispatcher` と `self.store` を戻しても全部通る」（doc comment に書いた）。
+- `store_access_guard_detects_each_violation`（負の試験）: ADR の 8 つの違反（`self.store.task_get(id)`、`self\n    .config.max_wall_secs`、
+  `fn f(s: &SqliteStore)`、`fn f(d: &mut Dispatcher)`、`impl Dispatcher {`、`use super::*;`、`let s = &self.store;`、`fn f(l: &mut CosChatLaunch)`）と、
+  残りの token の `fn f(c: &DispatchConfig)`・`fn f(c: CosChatLaunchConfig)` を 1 つずつ通し、各々がその token 1 つだけを返すこと。
+  `//!`・`///`・行末の `//` の中の語、`DispatchError`、`let store_path`・`self.store_path`、`config.max_wall_secs`（self の無い局所変数）、
+  `self.configured`、`use super::rfc3339;` を含む source が空を返すこと。既存の試験で検出できない理由は「検査関数が壊れて常に空を返すと、
+  `store_access_guard_work_units` は何も検出せずに通る」。
+- 検出の確認: `behind_target.rs` の末尾に `const _GUARD_PROBE: &str = "self.store";` を一時的に足して
+  `cargo nextest run -p task-dispatch -E 'test(store_access_guard)'` を走らせると、`store_access_guard_work_units` が
+  `dispatcher/behind_target.rs reaches shared state through ["self.store"]` で落ちた（1 passed, 1 failed）。file は元に戻した（commit していない）。
+
+## C3・E1・E2 の before/after（基準 `git merge-base HEAD main` → 提出時の HEAD）
+
+| 計測 | 範囲 | before（file / 出現） | after（file / 出現） | file の差 |
+|---|---|---|---|---|
+| C3 self.store | scope 69 file | 44 / 633 | 40 / 633 | −4 |
+| C3 self.config | scope 69 file | 35 / 218 | 33 / 220 | −2 |
+| C3 self.store | 論理 76 file | 48 / 661 | 44 / 661 | −4 |
+| C3 self.config | 論理 76 file | 39 / 224 | 37 / 226 | −2 |
+| E1 self.store（改行込み） | scope | 46 / 759 | 42 / 759 | −4 |
+| E1 self.config（改行込み） | scope | 35 / 227 | 33 / 227 | −2 |
+| E1 self.store（改行込み） | 論理 | 50 / 791 | 46 / 791 | −4 |
+| E1 self.config（改行込み） | 論理 | 39 / 233 | 37 / 233 | −2 |
+| E2 SqliteStore を書く file | scope・論理 | 27・29 | 27・29 | 0 |
+| E2 crate self.store | crate 非試験 138 file | 53 / 683 | 49 / 683 | −4 |
+| E2 crate self.config | crate | 40 / 238 | 38 / 240 | −2 |
+| E2 crate SqliteStore | crate | 50 / 195 | 50 / 195 | 0 |
+| 非試験 file 数 | scope・論理・crate | 69・76・138 | 69・76・138 | 0 |
+| `#[path]` の行 | crates/task-dispatch/src | 94 | 94 | 0 |
+
+## E3（対象 4 file。列は self.store self.config SqliteStore Dispatcher CosChatLaunch(Config) DispatchConfig `use super::*`）
+
+| file | before | after |
+|---|---|---|
+| `dispatcher/behind_target.rs` | `2 1 0 2 0 0 0`（計 5） | `0 0 0 0 0 0 0`（計 0） |
+| `dispatcher/auto_leaf.rs` | `1 1 0 1 0 0 1`（計 4） | `0 0 0 0 0 0 0`（計 0） |
+| `dispatcher/write_set_gate.rs` | `2 0 0 1 0 0 1`（計 4） | `0 0 0 0 0 0 0`（計 0） |
+| `dispatcher/write_set_record.rs` | `2 0 0 2 0 0 1`（計 5） | `0 0 0 0 0 0 0`（計 0） |
+
+cos_chat の 2 file（relay_rejudge 14、slot_wait 13）はこの task の範囲の外で、値は変わらない。
+
+## 出現数が増えた理由
+
+file ごとの C3（1 行）と E1（改行込み）の出現数（before → after）:
+
+| file | 行数 | C3 store | C3 config | E1 store | E1 config |
+|---|---|---|---|---|---|
+| `dispatch_run.rs`（入口） | 1683 → 1749 | 30 → 34 | 25 → 25 | 36 → 40 | 25 → 25 |
+| `review_spawn.rs`（入口） | 1564 → 1626 | 47 → 49 | 14 → 15 | 53 → 55 | 14 → 15 |
+| `work_units.rs`（入口） | 2060 → 2056 | 57 → 58 | 11 → 14 | 64 → 65 | 14 → 15 |
+| 対象 4 file の計 | 632 → 540 | 7 → 0 | 2 → 0 | 7 → 0 | 2 → 0 |
+
+- self.store の出現は 633 → 633: 対象 4 file から消えた 7 が入口 3 file に 7 移った（読み書きの回数は同じ）。
+- self.config の出現は C3 で 218 → 220（+2）、E1 で 227 → 227（0）: 対象 2 file から消えた 2 が入口 2 file に 1 ずつ移った。
+  C3 の +2 は、`work_units.rs` で rustfmt が `self\n.config` に割っていた 2 か所（検査の lease の ttl）を 1 行に書き直したため（E1 では同じ数）。
+  参照の数そのものは増えていない。
+
+## 移した操作の一覧（WU 領域全体）
+
+詳細（旧い場所 → 新しい場所、振る舞いを変えていない点）は上の write-set と target-leaf の「移した操作」の表。
+
+| 対象 file | 消したもの | 対象 file に残した関数（store・設定に触らない） | 入口（`Dispatcher` の method、名・引数は同じ） |
+|---|---|---|---|
+| `write_set_gate.rs` | `impl Dispatcher { admit_write_set, write_reservation_for }`、`use super::*;` | `reservation`・`write_set_repo_keys` | `dispatch_run.rs` の `admit_write_set`（hint の読み出し・`ExecutionCoordination::admit_write_set`・`note_dispatch_wait`） |
+| `write_set_record.rs` | `impl Dispatcher { capture_run_write_bases, record_run_write_sets, record_work_unit_write_sets }`、`use super::*;` | `run_write_bases`・`run_records`・`work_unit_records`・`git_sites`・`write_set_record` | `dispatch_run.rs` の `record_run_write_sets`（`record_run_write_set`・`record_work_unit_write_set`）と `dispatch_one` の `put_run_write_bases` |
+| `behind_target.rs` | `impl Dispatcher { observe_behind_target, review_target_ref, review_sync_targets }` | `review_target`・`sync_sites` | `review_spawn.rs` の 3 method（`task_ops::behind_target::observe_behind_target`・`repo_get`・`worktree_branch_prefix`） |
+| `auto_leaf.rs` | `impl Dispatcher { auto_leaf_decision }`、`use super::*;` | `decision_request`（`AutoLeafWatch`・`AutoLeafCounts`・`counts` は変えていない） | `work_units.rs` の `auto_leaf_decision`（`execution.limits.tree`・`task_ops::tree::decision_path`） |
+
+`worker_finish.rs`・`health_review/`・`execution_coordination.rs`・dispatcher/tests/（structure_guard.rs を除く）は merge-base から差分なし。
+新しい trait・Manager・Facade・Port・Service は無い（Task の受け入れ条件 4 の grep が exit 0）。
+
+## dispatcher/ の非試験の行の増減
+
+- C12（`source-size-report.py --exclusive-classes`、script と toml は base から取り出した）: `views.product_only.lines` 375763 → 375795（+32）、
+  `rust_lines` 331072 → 331104（+32）、`own_total_with_tests` 1028966 → 1029107（+141）、`class_totals.external_test` 457713 → 457822（+109。structure_guard.rs）、
+  `inline_test` 21419 → 21419。merge-base と HEAD の間で production の変更は dispatcher/ だけなので、+32 が dispatcher/ の非試験の行の増減。
+- `git diff --numstat <merge-base> HEAD`（非試験）: dispatch_run.rs +69/−3、review_spawn.rs +62/−0、work_units.rs +34/−38、behind_target.rs +34/−83、
+  auto_leaf.rs +47/−48、write_set_gate.rs +34/−67、write_set_record.rs +102/−111（計 +382/−350 = +32）。
+- WorkUnit の閾値: +32 は +40 以下（理由の記述は要らない）、replan の閾値 +200 の下。ADR の目安 +80 は 2 領域の合計で、WU 領域で 32 を使った。
+
+## check の出力の要点（提出時の HEAD で実行。基準は git merge-base HEAD main、WorkUnit は `$CELERIS_WU_BASE`）
+
+- Task の受け入れ条件 0 の snippet → `files 69->69 store 44->40 occ 633->633 config 35->33 occ 218->220 crate-store 53->49 crate-config 40->38 SqliteStore-files 50->50`、exit 0。
+- Task の受け入れ条件 4 の grep（新しい trait・Manager・Facade・Port・Service）→ exit 0（該当なし）。
+- `cargo nextest run -p task-dispatch -E 'test(store_access_guard) | test(structure_guard)'` → `13 tests run: 13 passed`
+  （`store_access_guard_work_units`・`store_access_guard_detects_each_violation` と既存の structure_guard_* 11 本）。
+- `bash scripts/dev/test-affected.sh` → exit 0（`repo-health: verdict=pass exit=0 … fail_grade=0 new=0 worsened=0`、対象 crate: celeris celeris-campaign celerisctl llm-proxy task-dispatch、
+  `3935 tests run: 3935 passed (11 slow), 11 skipped`、doc test は ok、script bundle SKIP 0 件、13 分 48 秒）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- `bash scripts/dev/check-doc-links.sh` → `check-doc-links: ok`。`bash scripts/dev/check-adr-numbers.sh` → `check-adr-numbers: ok (458 files)`。
+  `sh scripts/dev/progress-index.sh --check` → `progress-index --check: ok`（この file を書いた後の HEAD で実行）。
+- `git diff --stat $CELERIS_WU_BASE HEAD` → structure_guard.rs（+109）とこの file だけ。
+
+## commit（件名）
+
+- `arch-v4 E wu-region write-set: write_set_gate・write_set_record を store・設定に触らない関数にし、admit_write_set・record_run_write_sets の入口を dispatch_run.rs に置く`
+- `arch-v4 E wu-region write-set: 人の決定（record_run_write_sets は dispatch_run.rs のまま）を進捗に書き、提出時の HEAD の検査の結果と dispatch_run.rs の行数の余りを足す`
+- `arch-v4 E wu-region target-leaf: behind_target・auto_leaf を store・設定に触らない関数にし、入口を review_spawn.rs・work_units.rs に置く（…）`
+- `arch-v4 E wu-region guard: structure_guard.rs に shared_state_access と store_access_guard_work_units・store_access_guard_detects_each_violation を足す`
+- `arch-v4 E wu-region guard: wu-region.md に WU 領域の before/after と check の要点を書き done にする`
+
+## cos-region・measure への申し送り
+
+- helper は `crates/task-dispatch/src/dispatcher/tests/structure_guard.rs` の `shared_state_access(src: &str) -> Vec<&'static str>`（同じ file の private の fn）。
+  同じ helper を 2 つ書かない。ADR の「置き方」のとおり、`store_access_guard_cos_chat` は impl の統合の後に measure が同じ file の末尾に足す。使い方:
+
+  ```rust
+  for (file, src) in [
+      ("cos_chat/relay_rejudge.rs", include_str!("../cos_chat/relay_rejudge.rs")),
+      ("cos_chat/slot_wait.rs", include_str!("../cos_chat/slot_wait.rs")),
+  ] {
+      let found = shared_state_access(src);
+      assert!(found.is_empty(), "dispatcher/{file} reaches shared state through {found:?}");
+  }
+  ```
+
+- 検出の範囲: `//` の comment は除くが、`/* */` の comment と文字列 literal の中の語は拾う（安全側に倒れる）。`//` は文字列の中（例 `"https://…"`）でも
+  行末までを除く。`CosChatLaunch` は後ろの境目を見ないので `CosChatLaunchConfig` も拾い、`&task_core::SqliteStore` は `SqliteStore` で拾う。
+- cos_chat の 2 file の今の E3 は relay_rejudge 14・slot_wait 13（上の E3 の節）。cos-region は ADR のとおり measure-commands.md の E3 を check にする。
+
+## 未解決（guard）
+
+- 上の write-set・target-leaf の「未解決」の `store_access_guard_*` の試験はこの WorkUnit で足した。
+- `record_run_write_sets` の置き場所と work_units.rs の圧縮の ADR への付記は close の段が書く（この WorkUnit は ADR を変えていない）。
+  人の決定 `work-units-size-trim` の答えは、この WorkUnit では確かめていない（未確認）。

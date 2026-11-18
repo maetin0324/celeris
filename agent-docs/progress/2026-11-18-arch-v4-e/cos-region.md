@@ -323,3 +323,14 @@ file ごとの行数と C3（1 行）・E1（改行込み）の出現数（befor
 - Task の受け入れ条件 0 の snippet → `files 69->69 store 44->38 occ 633->633 config 35->31 occ 218->220 crate-store 53->47 crate-config 40->36 SqliteStore-files 50->49`、exit 0。
 - Task の受け入れ条件 4 の grep（新しい trait・Manager・Facade・Port・Service）→ exit 0（該当なし）。
 - `git diff <merge-base> HEAD -- crates/task-dispatch/src/health_review crates/task-dispatch/src/dispatcher/worker_finish.rs crates/task-dispatch/src/execution_coordination.rs crates/task-dispatch/src/project_orchestration.rs` → 差分なし。
+- `cargo nextest run -p task-dispatch -E 'test(store_access_guard)'` → `3 tests run: 3 passed`（`store_access_guard_work_units`・`store_access_guard_cos_chat`・
+  `store_access_guard_detects_each_violation`）。
+- `cargo fmt --all -- --check` → exit 0。`cargo clippy --workspace -- -D warnings` → exit 0。`sh scripts/dev/progress-index.sh --check` → `ok`。
+- `bash scripts/dev/test-affected.sh` → exit 0（`repo-health: verdict=pass exit=0 … fail_grade=0 new=0 worsened=0`、`doc.links` pass、
+  対象 crate: celeris celeris-campaign celerisctl llm-proxy task-dispatch、`3936 tests run: 3936 passed (9 slow), 11 skipped`、doc test は失敗 0、
+  script bundle SKIP 0 件、約 12 分）。末尾の `rm: cannot remove …/own-eval: Permission denied` は scratch の後片付けの出力で、exit code に影響していない。
+
+### 未解決・次の候補（guard）
+
+- `docs/architecture-map.md` の WU・cos_chat の行の入口の記述と、`dispatcher.rs` の module map の該当行の説明は close の段で直す（ADR の撤去対象）。
+- 目安に対する余裕は store・config とも 1 file。次に file を減らす候補は ADR の「入れないもの」の節の通り（`review_verdict.rs` は risk に対して 1 file しか減らない）。

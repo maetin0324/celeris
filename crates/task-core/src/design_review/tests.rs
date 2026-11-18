@@ -523,14 +523,8 @@ fn health_review_risk_reason_round_trips() {
     assert_eq!(
         read,
         vec![
-            Some(RiskReason::PathClass {
-                class: "authz",
-                path
-            }),
-            Some(RiskReason::Invariant {
-                class: "authz",
-                name: "api-principal-from-token"
-            }),
+            Some(("path_class", "authz", path)),
+            Some(("invariant", "authz", "api-principal-from-token")),
         ]
     );
     let prefixed = format!("repo:{}", risk.reasons[0]);

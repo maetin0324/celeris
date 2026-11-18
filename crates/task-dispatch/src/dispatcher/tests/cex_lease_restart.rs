@@ -1165,7 +1165,8 @@ async fn cex_lease_renew_after_expired_snapshot_keeps_the_holder() {
             .unwrap()
     );
     let events_before = events_of(&reclaim_store, id).len();
-    let renewed: Arc<StdMutex<Option<(bool, Option<task_core::Lease>)>>> = Arc::default();
+    type Renewed = Option<(bool, Option<task_core::Lease>)>;
+    let renewed: Arc<StdMutex<Renewed>> = Arc::default();
     let (slot, hs, a) = (renewed.clone(), holder_store.clone(), run_a.clone());
     let mut reclaimer = dispatcher(reclaim_store.clone(), slow_adapter(), 1);
     reclaimer.test_hooks.after_reclaim_decision = Some(Box::new(move |task_id| {

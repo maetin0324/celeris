@@ -222,7 +222,7 @@ async fn work_unit_checks_pass_and_fail_like_command_criteria() {
 async fn work_unit_checks_time_out() {
     let dir = tempfile::tempdir().unwrap();
     let ws = LocalWorkspace::new(dir.path());
-    let checks = vec![task_core::WorkUnitCheck {
+    let checks = [task_core::WorkUnitCheck {
         cmd: "sleep 30".into(),
         expect_exit: 0,
         scope: false,

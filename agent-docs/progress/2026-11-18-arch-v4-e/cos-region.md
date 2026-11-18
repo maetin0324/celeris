@@ -95,7 +95,9 @@ config 1（`self.config.clone()`）がそのまま `launch.rs` へ移った。
   `cos_chat_triage_relay_for_a_closed_wait_builds_the_inbox_once`（scoped / full の加算と判定済みの組）・
   `cos_chat_triage_answered_decision_rejudges_the_escalated_plan_approval_once` を含む。
 - `cargo fmt --all -- --check` → exit 0。`cargo clippy --workspace -- -D warnings` → exit 0。
-- `bash scripts/dev/test-affected.sh` → 下の「test-affected」に書く。
+- `bash scripts/dev/test-affected.sh` → exit 0（`repo-health: verdict=pass exit=0 … fail_grade=0 new=0 worsened=0`、
+  対象 crate: celeris celeris-campaign celerisctl llm-proxy task-dispatch、nextest 3935 passed・11 skipped、doc test は失敗 0）。
+  末尾の `rm: cannot remove …/own-eval: Permission denied` は scratch の後片付けの出力で、exit code に影響していない。
 - `git diff $CELERIS_WU_BASE -- crates/task-dispatch/src/dispatcher/tests crates/task-dispatch/src/dispatcher/worker_finish.rs crates/task-dispatch/src/health_review crates/task-dispatch/src/execution_coordination.rs` → 差分なし。
 - 試験は足していない・弱めていない（method の名と引数を変えないので、既存の振る舞いの試験がそのまま新しい経路を通る）。
 

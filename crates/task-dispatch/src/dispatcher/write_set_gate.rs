@@ -7,9 +7,10 @@
 //! - **予約の置き場所**: `crate::execution_coordination::ExecutionCoordination` のメモリ上の側表（`RunKey` → repo 鍵と
 //!   正規化 prefix）に、run を起こした時点の hint で置く（ADR 2026-11-11 dispatcher-state-ownership D1）。照合は
 //!   実行中の run の鍵（`RunSupervisor::run_keys`）に残る run の予約だけを見るので、run の終了・lease
-//!   回収・中止で実行中の run の表から外れた時点で予約も効かなくなる。この file は予約を store の hint から作る
-//!   入口と、試験の ablation を読む入口だけを持つ。task の lease は 1 つの daemon だけが
-//!   持つ（ADR-0040）ので、この Phase では store の予約表は作らない。
+//!   回収・中止で実行中の run の表から外れた時点で予約も効かなくなる。この file は hint から予約を作る
+//!   純粋関数（`reservation`）だけを持ち、hint の読み出しと判定の呼び出しは dispatch の入口
+//!   （`dispatch_run.rs` の `admit_write_set`。ADR 2026-11-18 dispatcher-store-access-pilot）が行う。task の lease は
+//!   1 つの daemon だけが持つ（ADR-0040）ので、この Phase では store の予約表は作らない。
 //! - **照合の位置**: `dispatch_one` の retry / infra backoff の後、クラスタ解決・作業場所の用意・
 //!   lease・`Trigger::Dispatch` より前。見送りは `Ok(false)` を返すだけ。
 //! - **対象の run**: implementation の run（atomic task の run と WU の run）。planner run と CoS の
@@ -27,75 +28,41 @@
 //!   止める（先に待った方が先に走る）。兄弟 WU の走査は待たされた WU を飛ばして後ろを試す。
 //! - **actual の併用**: 走行中の run の既知の actual はこの Phase では照合に使わない（expected だけ）。
 
-use super::*;
-use crate::execution_coordination::{WriteReservation, WriteSetAdmission};
+use task_core::{Task, WorkspaceSpec};
 
-impl Dispatcher {
-    /// `dispatch_one` の write-set gate の入口。候補の予約を store の hint から作り（planner run は予約しない）、
-    /// 実行中の run の鍵を引数にして `ExecutionCoordination::admit_write_set` に判定させる。
-    /// `Hold` なら task の待ち（`TaskWait::WriteSet`）を記録してから返す。呼び元は `Hold` で `Ok(false)` を返すだけ。
-    pub(super) fn admit_write_set(
-        &mut self,
-        task: &Task,
-        run_key: &RunKey,
-        wu: Option<&task_core::WorkUnitRow>,
-        is_planner_dispatch: bool,
-    ) -> Result<WriteSetAdmission, DispatchError> {
-        let candidate = if is_planner_dispatch {
-            None
-        } else {
-            self.write_reservation_for(task, wu)?
-        };
-        let running = self.supervisor.run_keys();
-        let admission = self
-            .coord
-            .admit_write_set(run_key, candidate, running, self.coord.ticks());
-        if let WriteSetAdmission::Hold { blocker } = &admission {
-            let blocking_task_ids = vec![blocker.task];
-            self.note_dispatch_wait(task.id, task_core::TaskWait::WriteSet { blocking_task_ids });
-        }
-        Ok(admission)
-    }
+use crate::execution_coordination::WriteReservation;
 
-    /// 候補の run の予約。hint なし・planner run・CoS の対話 run は `None`（gate に掛けない）。
-    pub(super) fn write_reservation_for(
-        &self,
-        task: &Task,
-        wu: Option<&task_core::WorkUnitRow>,
-    ) -> Result<Option<WriteReservation>, DispatchError> {
-        if task_core::is_conversation(task) {
-            return Ok(None);
+/// 候補の run の予約（`ExecutionCoordination::admit_write_set` に渡す）。hint なし・hint が空・読めない hint・
+/// repo 鍵なしは `None`（gate に掛けない）。planner run と CoS の対話 run は、入口が hint を読まずに `None` にする。
+///
+/// `task_hint` は task の有効 hint、`wu_hint` は WU の run なら `Some(WU の expected hint)`、WU の無い run は `None`。
+/// WU の hint が task の有効 hint と同じなら「task の hint を継いだ」予約にする（同じ task の WU 同士を照合しない）。
+pub(super) fn reservation(
+    task: &Task,
+    task_hint: Option<Vec<String>>,
+    wu_hint: Option<Option<Vec<String>>>,
+) -> Option<WriteReservation> {
+    let (paths, inherited_from_task) = match wu_hint {
+        Some(hint) => {
+            let inherited = hint.is_some() && hint == task_hint;
+            (hint, inherited)
         }
-        let task_hint = self.store.effective_task_write_paths(task.id)?;
-        let (paths, inherited_from_task) = match wu {
-            Some(wu) => {
-                let hint = self.store.work_unit_expected_write_paths(&wu.id)?;
-                let inherited = hint.is_some() && hint == task_hint;
-                (hint, inherited)
-            }
-            None => (task_hint, false),
-        };
-        let Some(paths) = paths.filter(|p| !p.is_empty()) else {
-            return Ok(None);
-        };
-        let paths = match task_core::write_set::normalize_write_paths(&paths) {
-            Ok(paths) => paths,
-            Err(e) => {
-                // 保存時に検証済みのはず。読めない hint は従来互換で「hint なし」に倒す。
-                tracing::warn!(task_id = %task.id, error = %e, "invalid expected_write_paths; ignoring the hint (ADR-0130 D1)");
-                return Ok(None);
-            }
-        };
-        let repos = write_set_repo_keys(task);
-        if repos.is_empty() {
-            return Ok(None);
+        None => (task_hint, false),
+    };
+    let paths = paths.filter(|p| !p.is_empty())?;
+    let paths = match task_core::write_set::normalize_write_paths(&paths) {
+        Ok(paths) => paths,
+        Err(e) => {
+            // 保存時に検証済みのはず。読めない hint は従来互換で「hint なし」に倒す。
+            tracing::warn!(task_id = %task.id, error = %e, "invalid expected_write_paths; ignoring the hint (ADR-0130 D1)");
+            return None;
         }
-        Ok(Some(WriteReservation::new(
-            repos,
-            paths,
-            inherited_from_task,
-        )))
+    };
+    let repos = write_set_repo_keys(task);
+    if repos.is_empty() {
+        return None;
     }
+    Some(WriteReservation::new(repos, paths, inherited_from_task))
 }
 
 /// task の repo 鍵（ADR-0130 付記）。子 task は親の `repos` を継ぐので同じ鍵になる。

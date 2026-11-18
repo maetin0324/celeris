@@ -1,7 +1,8 @@
 ---
 title: アーキ v4 C risk-rule — 高 risk の class に合う write path を new_* の宣言によらず High にする（ADR D1）
 tasks: [01M7MZTKB29VF5TX7FCQ15XEMW]
-status: blocked
+status: done
+completed: 2026-11-18
 updated: 2026-11-18
 ---
 # risk-rule（WorkUnit）
@@ -47,7 +48,7 @@ ADR: [2026-11-17-boundary-change-risk-review.md](../../adr/2026-11-17-boundary-c
 - planner の計画は class に合えば brief が必須（`require_design_brief`）なので、`design_gate` で brief 無し ∧ class 一致は起きない。
   `brief_absent_human_plan` の理由は D1 のとおり `High` の補足として残した。
 
-## 検査（提出時の HEAD で実行。run 01M7P8MW0SECD83HRSEPWFPWQ4 で main と文面を揃えた後）
+## 検査（前の run 01M7P8MW0SECD83HRSEPWFPWQ4 の記録。main と文面を揃えた後。提出時の HEAD の結果は下の「提出時の HEAD での検査」）
 - `cargo nextest run -p task-core -E 'test(/health_review_risk|path_class/)'`: 11 passed。
 - `bash scripts/dev/test-affected.sh`: exit 0（1,085 秒）。nextest 8,438 passed・22 skipped、web の tsc -b と vitest 101 file・705 passed、test-ts-verify 20 passed。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
@@ -92,9 +93,40 @@ ADR: [2026-11-17-boundary-change-risk-review.md](../../adr/2026-11-17-boundary-c
 - main をこの branch に merge はしていない。範囲の check の基点は開始時の snapshot に固定で、main の profile の file
   （`profiles/celeris.toml`・`scripts/dev/repo-health/` など）が範囲外に出るため。統合は integrate-impl の merge に任せる。
 
+## replan の経緯（範囲の check の許可の式）
+- 計画 v1 の範囲の check は、許可の式に `crates/task-worker/src/protocol/` の試験 2 file と、doc comment から生成される schema 3 file
+  （`docs/api/v1/api-v1.schema.json`・`docs/api/v1/event.schema.json`・`web/api/generated/schema.json`）を含めていなかった。
+  D1・D6 の実装からこの 5 file の変更は避けられないので、check は成果をどう直しても exit 1 になった（上の「範囲の check の不合格」）。
+- 1 回目の申告（run 01M7NW71ACNKFG51NQGJNHNFFX）は replan に届かず、retry で同じ check が 2 回落ちた。run 01M7P8MW0SECD83HRSEPWFPWQ4 が
+  `yield.plan_issue` で申告し直し、planner が計画 v3（2026-11-18 03:54Z）で許可の式に次の 3 つを足した。
+  - `crates/task-worker/src/protocol/(design_review|health)/tests\.rs$`
+  - `docs/(protocol|api/v1)/`（v1 の `docs/protocol/` を広げた）
+  - `web/api/generated/schema\.json$`
+- v3 の check は v1 と同じく開始時の snapshot（`$CELERIS_WU_SCOPE_PATHS`）からの変更 path を見る。この run はコードを変えていない。
+
+## 提出時の HEAD での検査（run 01M7PCN0HDN4PY3DHHXRT6R3GS）
+基準は `$CELERIS_WU_BASE`（範囲は開始時の snapshot）。main と統合先 `$CELERIS_WU_TARGET` はこの run の間に動いていない
+（どちらも件名「integrate 01M7MZTKB2 profile: …」の commit）。この run はコードを変えず、この進捗だけを書き換えた。
+- 範囲の check（計画 v3 の式そのまま）: exit 0。`sh "$CELERIS_WU_SCOPE_PATHS"` の変更 path は 21 file で、すべて許可の式に入る。
+- `cargo nextest run -p task-core -E 'test(/design_review|health_review_risk|path_class/)'`: exit 0、11 passed・1,357 skipped。
+- health（`bash scripts/dev/check-health.sh --out …` の必須 rule のうち `policy.changed` 以外が pass か not_applicable）: exit 0。
+  check-health.sh は exit 0（147 秒）。必須 rule 15 件（deps.violation・deps.cycle・size.responsibility-growth・arch-map の 6 件・doc.links・
+  adr.numbers・progress.index・human-text・source-size・policy.changed）がすべて pass。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+- `git merge-tree --write-tree --name-only HEAD main` と `HEAD $CELERIS_WU_TARGET`: どちらも exit 0（衝突 0）。
+- `bash scripts/dev/test-affected.sh`: （この run の最後に 1 回だけ回す。結果は次の commit で書く）
+
+## 受け入れ条件との対応
+- 0（class に合う write path は `new_*` が無くても High、理由に class・path）: `health_review_risk_class_path_is_high_without_new_declarations`・
+  `health_review_risk_plan_without_brief_on_class_path_is_high`（上の nextest の 11 件に入る）。
+- 1（class 外の同等の変更は Low）: `health_review_risk_equivalent_change_outside_classes_is_low`。
+- 2（旧い規則の試験・説明が残らない）: `git grep -nE 'path_class:[a-z_{}<>-]*\+'`（ADR 2 件と進捗を除く）が 0 件（exit 1）。code・`docs/`・prompt に旧い語と旧い規則の説明が無いことを確かめた。
+  残るのは ADR 2026-11-07 の D3.3 の本文（履歴の記録。ADR C が付記先に挙げ、closeout が付記を足す）と過去の進捗 file だけ。
+- 3（範囲の check・health・test-affected・clippy・fmt が exit 0）: 上の節。
+- 4（提出時の HEAD の検査結果と replan の経緯）: この file。
+
 ## 未解決
-- 範囲の check の修正（上の節。replan 待ち）。前回の run の申告は replan に届かず、同じ check がもう一度落ちた。この run は
-  result.json に `yield.plan_issue` だけを書く。
+- 無し（範囲の check は計画 v3 で直った）。
 
 ## 提案
 - `execution_plan::assess_plan_risk` は試験だけが使う。D3 の後も production の呼び出しが無ければ、closeout か H で消すかを決める。

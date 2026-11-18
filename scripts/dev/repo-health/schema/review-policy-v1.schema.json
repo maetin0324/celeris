@@ -30,6 +30,12 @@
             "type": "array",
             "minItems": 1,
             "items": { "type": "string", "minLength": 1, "description": "repo の path に当てる正規表現（Python re.search）" }
+          },
+          "invariants": {
+            "type": "array",
+            "minItems": 1,
+            "description": "この class の path を変えるときに守る不変条件の名前（任意。profile に書いた class だけに出る）。名前は重複せず、invariants（top）の key に限る（検査は health/profile.py。ADR 2026-11-17-boundary-change-risk-review D2）",
+            "items": { "type": "string", "minLength": 1 }
           }
         }
       }

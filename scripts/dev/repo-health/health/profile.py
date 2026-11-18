@@ -43,6 +43,9 @@ profile の項目（未知の項目は読み込みエラー。破壊的変更の
         [[review.high_risk]]           # 高 risk の path class。class は空でない文字列で重複不可
         class = "<name>"
         paths = ["<regex>", ...]       # 1 件以上
+        invariants = ["<name>", ...]   # 任意。この class の path を変えるときに守る不変条件の名前（1 件以上・重複不可）。
+                                       # 名前は extends を解決した後の [review.invariants] の key に限る（未知の名前は
+                                       # 読み込みエラー。ADR 2026-11-17-boundary-change-risk-review D2）
         [review.invariants]            # 保護する不変条件の名前 → 根拠の file（repo path）
         <name> = "<repo path>"
         # 下位項目はこの 3 つだけ（未知の項目は読み込みエラー）。extends では節を丸ごと置き換えず、
@@ -197,10 +200,18 @@ class Profile:
             "schema": REVIEW_POLICY_SCHEMA,
             "source": "absent" if rv is None else self.policy_source,
             "owner_map": None if rv is None else rv.get("owner_map"),
-            "high_risk": [{"class": c["class"], "paths": list(c["paths"])} for c in (rv or {}).get("high_risk", [])],
+            "high_risk": [_review_class_out(c) for c in (rv or {}).get("high_risk", [])],
             "invariants": dict(sorted((rv or {}).get("invariants", {}).items())),
             "definition_sha256": self.definition_sha256(),
         }
+
+
+def _review_class_out(c: dict) -> dict:
+    """high_risk の 1 項目。invariants は profile に書いた class だけに出す（書かない repo の出力は変えない）。"""
+    out = {"class": c["class"], "paths": list(c["paths"])}
+    if "invariants" in c:
+        out["invariants"] = list(c["invariants"])
+    return out
 
 
 def _err(where: str, msg: str) -> UsageError:
@@ -299,8 +310,8 @@ def _validate_review(rv, where: str) -> None:
         for i, c in enumerate(hr):
             if not isinstance(c, dict):
                 raise _err(where, f"review.high_risk[{i}] は表")
-            if set(c) - {"class", "paths"}:
-                raise _err(where, f"review.high_risk[{i}] は class・paths だけ")
+            if set(c) - {"class", "paths", "invariants"}:
+                raise _err(where, f"review.high_risk[{i}] は class・paths だけ（invariants は任意）")
             cls = c.get("class")
             if not isinstance(cls, str) or not cls.strip():
                 raise _err(where, f"review.high_risk[{i}].class は空でない文字列")
@@ -310,11 +321,27 @@ def _validate_review(rv, where: str) -> None:
             if not c.get("paths"):
                 raise _err(where, f"review.high_risk[{i}].paths は 1 件以上")
             _check_regexes(f"{where}:review.high_risk[{i}].paths", c["paths"])
+            if "invariants" in c:
+                names = c["invariants"]
+                if not isinstance(names, list) or not names or \
+                        not all(isinstance(n, str) and n.strip() for n in names) or len(set(names)) != len(names):
+                    raise _err(where, f"review.high_risk[{i}].invariants は不変条件の名前（空でない文字列）の"
+                                      f"重複の無い配列（1 件以上）")
     if "invariants" in rv:
         inv = rv["invariants"]
         if not isinstance(inv, dict) or not all(isinstance(v, str) and v.strip() for v in inv.values()) or \
                 not all(str(k).strip() for k in inv):
             raise _err(where, "review.invariants は名前 → 根拠の file（空でない文字列）の表")
+
+
+def _check_review_invariant_names(rv: dict, where: str) -> None:
+    """high_risk の invariants の名前が [review.invariants] の key にあること（extends を解決した後の値で見る）。"""
+    known = rv.get("invariants", {})
+    for i, c in enumerate(rv.get("high_risk", [])):
+        unknown = [n for n in c.get("invariants", []) if n not in known]
+        if unknown:
+            raise _err(where, f"review.high_risk[{i}]（class {c['class']!r}）の invariants に [review.invariants] に"
+                              f"無い名前 {unknown}")
 
 
 def _parse(text: str, where: str) -> dict:
@@ -453,4 +480,6 @@ def _resolve(root: str, src: _Source, requested: str | None) -> Profile:
         data = _merge(pdata, data)
     if "version" not in data:
         raise _err(path, "version が無い")
+    if "review" in data:
+        _check_review_invariant_names(data["review"], path)
     return Profile(name, requested, source, policy_source, data, sorted(set(files)), exceptions, definition)

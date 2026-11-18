@@ -170,7 +170,7 @@ commands = [
 
 # ---------------------------------------------------------------- 設計 review の方針
 # ADR 2026-11-07-health-review-integration (2)。dispatcher は base 側のこの節を読み、変更 path の risk・owner 行・
-# 保護する不変条件を reviewer に渡す。path は docs/architecture-map.md の行と B0 の capability-map.json の
+# 保護する不変条件を reviewer に渡す。class ごとの invariants は ADR 2026-11-17-boundary-change-risk-review D2。path は docs/architecture-map.md の行と B0 の capability-map.json の
 # owners から決めた（どれも実在する file か dir の先頭一致）。
 
 [review]
@@ -186,6 +186,7 @@ paths = [
     '^crates/task-dispatch/src/credential_resume',
     '^crates/task-api/src/handlers/secrets\.rs$',
 ]
+invariants = ["credential-stays-in-broker"]
 
 # worker の子 process の隔離・DB の読み取り専用・道具の検出（capability sandbox-db-guard。ADR-0095）
 [[review.high_risk]]
@@ -195,6 +196,7 @@ paths = [
     '^crates/task-worker/src/subprocess',
     '^crates/task-worker/src/tool_policy\.rs$',
 ]
+invariants = ["worker-db-read-only", "worker-no-subagents"]
 
 # 状態の正本（SQLite）の store と migration（CLAUDE.md「禁止」、地図の task-core::store 行）
 [[review.high_risk]]
@@ -203,6 +205,7 @@ paths = [
     '^crates/task-core/src/store/',
     '^crates/task-core/migrations/',
 ]
+invariants = ["task-state-in-sqlite", "no-data-loss"]
 
 # 追記専用の events の型と書き込み（地図の Event 行・task-core::model 行。ADR-0001）
 [[review.high_risk]]
@@ -211,6 +214,7 @@ paths = [
     '^crates/task-core/src/model/events\.rs$',
     '^crates/task-core/src/store/events\.rs$',
 ]
+invariants = ["events-append-only"]
 
 # run の lease・孤児の回収・daemon の active の引き継ぎ（capability run-claim-lease・orphan-takeover）
 [[review.high_risk]]
@@ -226,6 +230,7 @@ paths = [
     # 移動先を 1 行にまとめ、旧い dispatcher/leases.rs も選択肢に入れる。旧い path を撤去するときにこの選択肢も外す
     '^crates/task-dispatch/src/(run_supervisor(\.rs$|/)|run_settlement(\.rs$|/)|dispatcher/leases\.rs$)',
 ]
+invariants = ["lease-single-holder"]
 
 # 予算・単価・quota（capability budget-pricing・accounts-quota。ADR 2026-11-06-budget-usd-caps）
 [[review.high_risk]]
@@ -240,6 +245,7 @@ paths = [
     # lease の class と同じ理由で、移動先を 1 行にまとめ、旧い dispatcher/quota_book.rs も選択肢に入れる。撤去のときに外す
     '^crates/task-dispatch/src/(routing_runtime/quota(\.rs$|/)|routing_runtime/quota_estimate(\.rs$|/)|run_settlement(\.rs$|/)|dispatch_admission(\.rs$|/)|dispatcher/quota_book\.rs$)',
 ]
+invariants = ["budget-unknown-cost-stops"]
 
 # release の作成・昇格・rollback（capability release-selfdeploy-wiring、地図の self-deploy 行。docs/ops/selfdeploy.md）
 [[review.high_risk]]
@@ -249,9 +255,73 @@ paths = [
     '^crates/celeris/src/releases',
     '^crates/celeris/src/config/selfdeploy\.rs$',
     '^crates/task-api/src/releases\.rs$',
+    # active の引き継ぎ（地図の self-deploy 行の entry point）。lease の class にも入る（ADR 2026-11-17-boundary-change-risk-review D2）
+    '^crates/celeris/src/instance\.rs$',
 ]
+invariants = ["unpromoted-release-no-takeover"]
 
-# 保護する不変条件の名前 → 根拠の file。
+# 以下の 6 class は ADR 2026-11-17-boundary-change-risk-review D2（監査で class に合わなかった境界の file）。
+
+# 主体の決定・全要求の認証と管理操作の拒否・人の許可範囲・CoS の業務操作の認可と監査（ADR 2026-10-27-api-principals）
+[[review.high_risk]]
+class = "authz"
+paths = [
+    '^crates/task-api/src/principal\.rs$',
+    '^crates/task-api/src/middleware\.rs$',
+    '^crates/task-api/src/handlers/authority\.rs$',
+    '^crates/task-core/src/authority\.rs$',
+    '^crates/task-api/src/cos/operations\.rs$',
+]
+invariants = ["api-principal-from-token", "cos-audit-same-tx"]
+
+# store の外で SQLite の接続と transaction を持つ file（store の中の write_tx は store の class が覆う）
+[[review.high_risk]]
+class = "transaction"
+paths = [
+    '^crates/task-api/src/knowledge\.rs$',
+    '^crates/task-ops/src/lifecycle\.rs$',
+]
+invariants = ["task-state-in-sqlite", "lifecycle-human-epoch-same-tx"]
+
+# 状態機械の遷移と events からの再構成（追記と行の遷移は events・store の class が覆う）
+[[review.high_risk]]
+class = "event-apply"
+paths = [
+    '^crates/task-core/src/transition\.rs$',
+    '^crates/task-ops/src/replay\.rs$',
+]
+invariants = ["events-append-only", "task-state-in-sqlite"]
+
+# Browser の grant と policy・supervisor だけの credential の区画・launcher の受け渡し・保存した credential の API（ADR-0080）
+[[review.high_risk]]
+class = "browser"
+paths = [
+    '^crates/task-worker/src/browser_policy\.rs$',
+    '^crates/task-worker/src/browser_credential\.rs$',
+    '^crates/task-worker/src/browser_cdp_credential_ipc\.rs$',
+    '^crates/task-worker/src/browser_launcher_run\.rs$',
+    '^crates/task-api/src/browser_credentials\.rs$',
+]
+invariants = ["credential-stays-in-broker"]
+
+# worker run の終了処理（同じ transaction の組と quota の解放。run の終わりの判断は lease・budget の class が覆う）
+[[review.high_risk]]
+class = "worker-finish"
+paths = [
+    '^crates/task-dispatch/src/dispatcher/worker_finish\.rs$',
+]
+invariants = ["completion-not-self-reported", "lease-single-holder", "budget-unknown-cost-stops"]
+
+# risk の判定・設計 review・policy の関門・health の入口（判定の条件そのもの。自分の判定を弱める変更を設計 review に回す）
+[[review.high_risk]]
+class = "review-gate"
+paths = [
+    '^crates/task-core/src/design_review\.rs$',
+    '^crates/task-dispatch/src/health_review/(design|design_gate|design_verdict|policy|policy_review|gate)\.rs$',
+]
+invariants = ["completion-not-self-reported", "policy-change-needs-human", "no-llm-in-dispatcher"]
+
+# 保護する不変条件の名前 → 根拠の file。[[review.high_risk]] の invariants はこの表の key だけを使える。
 [review.invariants]
 task-state-in-sqlite = "CLAUDE.md"
 events-append-only = "CLAUDE.md"
@@ -266,3 +336,7 @@ lease-single-holder = "agent-docs/adr/2026-10-03-ownerless-running-runs.md"
 budget-unknown-cost-stops = "agent-docs/adr/2026-11-06-budget-usd-caps.md"
 unpromoted-release-no-takeover = "docs/ops/selfdeploy.md"
 worker-no-subagents = "agent-docs/adr/2026-10-07-worker-no-subagents-no-llm-cli.md"
+api-principal-from-token = "agent-docs/adr/2026-10-27-api-principals.md"
+cos-audit-same-tx = "agent-docs/adr/2026-10-09-cos-operations-all-mutations.md"
+lifecycle-human-epoch-same-tx = "agent-docs/adr/2026-11-04-project-controller.md"
+policy-change-needs-human = "agent-docs/adr/2026-11-07-health-review-integration.md"

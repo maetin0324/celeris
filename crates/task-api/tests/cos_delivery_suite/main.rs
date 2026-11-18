@@ -4,4 +4,5 @@ mod common;
 mod cos_operations_domains;
 mod cos_ops_admin_config;
 mod cos_ops_projects_cron;
+mod org_write_contract;
 mod repo_auto_integrate;

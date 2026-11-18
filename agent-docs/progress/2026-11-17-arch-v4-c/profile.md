@@ -109,6 +109,12 @@ policy の file でない変更: 試験 `scripts/tests/test_repo_health_review_b
   （class ごとの `invariants`）が main で通る。使い捨ての worktree は消し、この worktree の `crates` を touch した（上の注意と同じ理由）。
 - clippy・fmt・test-affected・progress-index（提出時の HEAD）: 下の「提出時の検査」。
 
+## 提出時の検査（提出時の HEAD で実行。2026-11-18。この run に main との同期は無い）
+- `bash scripts/dev/test-affected.sh` → exit 0（repo-health: verdict=pass、`policy.changed` pass、「試験対象の変更なし（docs のみ等）」）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0、出力なし。
+- `sh scripts/dev/progress-index.sh --check` → exit 0（ok）。
+- `sh "$CELERIS_WU_SCOPE_PATHS"` → 5 path（`profile.md`・policy の file 3 つ・新しい試験）。objective の範囲の外は無い。
+
 ## 未解決
 - 無し（merge の順は人が `rust-first` に決め、main に入った）。
 

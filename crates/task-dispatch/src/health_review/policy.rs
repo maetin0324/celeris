@@ -75,6 +75,19 @@ pub fn load_review_policy(
     }
 }
 
+/// 採用前の計画の判定（`dispatcher::design_gate`）が repo の base（dir と target）から方針を読む口（bundled の検査器と
+/// [`REVIEW_POLICY_TIMEOUT`] で [`load_review_policy`] を呼ぶ）。
+pub(crate) fn base_review_policy(
+    (repo, target): (std::path::PathBuf, String),
+) -> ReviewPolicyState {
+    load_review_policy(
+        &repo,
+        &target,
+        gate::bundled_checker(),
+        REVIEW_POLICY_TIMEOUT,
+    )
+}
+
 /// `--print-review-policy` の stdout を [`ReviewPolicyState`] に写す。
 pub fn parse_review_policy(stdout: &str) -> ReviewPolicyState {
     let unavailable = |why: String| ReviewPolicyState::Unavailable(why);

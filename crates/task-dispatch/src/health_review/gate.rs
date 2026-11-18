@@ -128,6 +128,9 @@ pub struct RepoHealthFinding {
 pub struct RepoHealthEvidence {
     #[serde(default)]
     pub path: Option<String>,
+    /// report の evidence の `symbol`（module・関数・組の名前）。
+    #[serde(default)]
+    pub symbol: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -468,6 +471,9 @@ pub struct HealthFailure {
     pub fingerprint: String,
     /// finding の evidence の path（重複なし・sort 済み）。
     pub paths: Vec<String>,
+    /// finding の evidence の `symbol`（重複なし・sort 済み。`deps.cycle` の循環の内部の新しい組なら `<src> -> <dst>`）。
+    /// 修復の run は [`health_repairs`] の reason（`prior_review`）でこれを読む（ADR 2026-11-17-boundary-change-risk-review D4）。
+    pub symbols: Vec<String>,
 }
 
 /// 経路が health の項目をどう扱うか（D3.1〜D3.4）。
@@ -524,10 +530,20 @@ pub fn health_repairs(failures: &[HealthFailure]) -> Vec<HealthRepair> {
                 .collect::<std::collections::BTreeSet<_>>()
                 .into_iter()
                 .collect();
-            let reason = if paths.is_empty() {
-                items.join(",")
-            } else {
-                format!("{}（evidence: {}）", items.join(","), paths.join(", "))
+            let symbols: std::collections::BTreeSet<&str> = found
+                .iter()
+                .flat_map(|f| f.symbols.iter().map(String::as_str))
+                .collect();
+            let mut notes = Vec::new();
+            if !paths.is_empty() {
+                notes.push(format!("evidence: {}", paths.join(", ")));
+            }
+            if !symbols.is_empty() {
+                notes.push(format!("symbol: {}", Vec::from_iter(symbols).join(", ")));
+            }
+            let reason = match notes.is_empty() {
+                true => items.join(","),
+                false => format!("{}（{}）", items.join(","), notes.join("、")),
             };
             HealthRepair {
                 rule_id: rule_id.to_string(),
@@ -1005,6 +1021,13 @@ fn failures(report: &RepoHealthReport, blocking: &[String]) -> Result<Vec<Health
                     .evidence
                     .iter()
                     .filter_map(|e| e.path.clone())
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .into_iter()
+                    .collect(),
+                symbols: f
+                    .evidence
+                    .iter()
+                    .filter_map(|e| e.symbol.clone())
                     .collect::<std::collections::BTreeSet<_>>()
                     .into_iter()
                     .collect(),

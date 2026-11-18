@@ -1528,7 +1528,7 @@ impl Dispatcher {
                 session,
                 session_diff,
                 token_budget,
-                health: None,
+                material: Default::default(),
             },
             pick,
         })

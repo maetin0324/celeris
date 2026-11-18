@@ -788,7 +788,7 @@ fn reviewer_run(adapter: Arc<dyn WorkerAdapter>) -> ReviewerRun {
         session: None,
         session_diff: Vec::new(),
         token_budget: None,
-        health: None,
+        material: Default::default(),
     }
 }
 
@@ -904,7 +904,7 @@ async fn reviewer_provider_failure_is_reported_instead_of_failing_criteria() {
         session: None,
         session_diff: Vec::new(),
         token_budget: None,
-        health: None,
+        material: Default::default(),
     };
     let out = review_task(
         &task,
@@ -1935,4 +1935,36 @@ async fn zero_or_a_stale_misplaced_review_json_keeps_the_not_found_failure() {
         "{verdicts:?}"
     );
     assert!(!dir.path().join("artifacts").join(REVIEW_FILE_NAME).exists());
+}
+
+/// ADR 2026-11-17-boundary-change-risk-review D3・付記 (i): final review の request は覆われない組の要求を `diff_design`
+/// にだけ載せ、`design`（採用前の計画の設計 review の run の欄）は付けない。既存の試験は `diff_design` を常に `None` で
+/// 組むので、材料の要求が request に届くこと・`design` に紛れないことを検出できない。
+#[test]
+fn review_risk_final_review_sets_diff_design_not_design() {
+    use task_core::design_review::{RiskAssessment, RiskLevel};
+    let asked = Box::new(task_worker::protocol::DesignReviewRequest {
+        owner_rows: Vec::new(),
+        brief: None,
+        plan_summary: "repo r: a..b: 1 file（+1 −1）\n".into(),
+        risk: RiskAssessment {
+            level: RiskLevel::High,
+            reasons: vec!["path_class:authz:crates/task-api/src/middleware.rs".into()],
+        },
+        review_policy: None,
+    });
+    let context = ReviewHumanContext {
+        decisions: Vec::new(),
+        answers: Vec::new(),
+        checks: Vec::new(),
+        policy_violations: Vec::new(),
+    };
+    let material = FinalReviewMaterial {
+        health: None,
+        diff_design: Some(asked.clone()),
+    };
+    let request = context.into_request(&ReviewSubject::default(), &[0], material);
+    assert!(request.design.is_none());
+    assert_eq!(request.diff_design, Some(asked));
+    assert_eq!(request.criteria, vec![0]);
 }

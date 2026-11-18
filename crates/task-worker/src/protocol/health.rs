@@ -42,6 +42,11 @@ pub struct HealthRepoInput {
     /// base 側の review 方針の不変条件（名前 → 根拠の file）。
     #[serde(default)]
     pub invariants: BTreeMap<String, String>,
+    /// ADR 2026-11-17-boundary-change-risk-review D3: base 側の方針で差分の全 path（`diff` の `--no-renames`。rename の
+    /// 両側・消した path）に当てた risk（`task_core::design_review::assess_risk`。brief は渡さない）。覆われない
+    /// (class, path) の組は dispatcher が `ReviewRequest.diff_design` で求める。これの無い記録は再利用しない。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub risk: Option<task_core::design_review::RiskAssessment>,
 }
 
 /// D4.1: `target_sha..reviewed_sha` の差分の統計。
@@ -115,6 +120,12 @@ pub struct HealthReportFinding {
     /// 最初の evidence の path（repo 全体の finding では無い）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// 最初の evidence の `symbol`（`deps.cycle` の循環の内部の新しい組なら `<src> -> <dst>`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+    /// report の finding の `rationale`（判定の根拠の文）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rationale: Option<String>,
 }
 
 /// report の `policy` の要約（ADR repo-health-contract D2）。

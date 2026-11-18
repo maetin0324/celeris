@@ -423,6 +423,8 @@ fn health_enforce_llm_finding_report_fingerprint_blocks_only_in_matching_repo() 
         severity: "error".into(),
         delta: "new".into(),
         path: Some("crates/x/src/lib.rs".into()),
+        symbol: None,
+        rationale: None,
     });
     let run = |i: &HealthReviewInput| {
         finding_verdict(i, Some("crates/x/src/lib.rs"), "see deps.violation:abcdef")

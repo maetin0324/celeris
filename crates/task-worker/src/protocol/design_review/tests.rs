@@ -34,11 +34,12 @@ fn brief() -> DesignBrief {
 
 fn request() -> DesignReviewRequest {
     DesignReviewRequest {
+        owner_rows: Vec::new(),
         brief: Some(brief()),
         plan_summary: "units: store-move (crates/task-core/src/store/)".into(),
         risk: RiskAssessment {
             level: RiskLevel::High,
-            reasons: vec!["path_class:store+new_state".into()],
+            reasons: vec!["path_class:store:crates/task-core/src/store/tasks.rs".into()],
         },
         review_policy: Some(ReviewPolicy {
             owner_map: Some("docs/architecture-map.md".into()),
@@ -74,6 +75,7 @@ fn health_review_design_protocol_request_round_trips() {
 
     // brief と方針の無い `unknown` の依頼は 2 欄を出さない。
     let unknown = DesignReviewRequest {
+        owner_rows: Vec::new(),
         brief: None,
         plan_summary: "s".into(),
         risk: RiskAssessment {

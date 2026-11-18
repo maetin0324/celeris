@@ -5,11 +5,19 @@ use serde_json::json;
 use super::*;
 use crate::execution_plan::{ExecutionPlanSpec, assess_plan_risk, plan_sha256, plan_write_paths};
 
-/// celeris.toml の `[review]` と同じ形の方針（events・store の 2 class）。
+/// celeris.toml の `[review]` と同じ形の方針（authz・store・events の 3 class。authz だけが不変条件を持つ）。
 fn policy() -> ReviewPolicyState {
     ReviewPolicyState::Present(ReviewPolicy {
         owner_map: Some("docs/architecture-map.md".into()),
         high_risk: vec![
+            PathClass {
+                class: "authz".into(),
+                paths: vec![
+                    "^crates/task-api/src/middleware\\.rs$".into(),
+                    "^crates/task-api/src/principal\\.rs$".into(),
+                ],
+                invariants: vec!["api-principal-from-token".into()],
+            },
             PathClass {
                 class: "store".into(),
                 paths: vec![
@@ -24,7 +32,13 @@ fn policy() -> ReviewPolicyState {
                 invariants: vec![],
             },
         ],
-        invariants: BTreeMap::from([("events-append-only".into(), "CLAUDE.md".into())]),
+        invariants: BTreeMap::from([
+            ("events-append-only".into(), "CLAUDE.md".into()),
+            (
+                "api-principal-from-token".into(),
+                "agent-docs/adr/2026-10-27-api-principals.md".into(),
+            ),
+        ]),
         definition_sha256: "d".repeat(64),
     })
 }
@@ -127,14 +141,40 @@ fn health_review_risk_unavailable_policy_is_unknown() {
     );
 }
 
-/// 高 risk の class に合う path と `new_state` などの宣言で `High`（class と欄の組ごとの理由）。
+/// ADR 2026-11-17-boundary-change-risk-review D1: 認可の条件を 1 行変える計画（brief は `new_*` を宣言しない）は、
+/// 高 risk の class に合うので `High`。理由は class と合った path の組と class の不変条件。
+/// 守る不変条件: 安全境界の file を変える計画は、新しい仕組みの宣言の有無によらず設計 review に回る。
+/// 既存の試験で検出できない理由: 旧い試験は「class ∧ `new_*` の宣言 → High」と「宣言の無い brief → Low」を固定して
+/// いて、宣言の無い境界の変更が `Low` になることを正しい挙動として通していた。
 #[test]
-fn health_review_risk_high_risk_path_with_new_state_is_high() {
-    let risk = assess_risk(
+fn health_review_risk_class_path_is_high_without_new_declarations() {
+    let one_line_authz = assess_risk(
+        &policy(),
+        &paths(&["crates/task-api/src/middleware.rs"]),
+        Some(&DesignBrief {
+            removals: vec!["require_admin の旧い条件".into()],
+            ..brief()
+        }),
+    );
+    assert_eq!(one_line_authz.level, RiskLevel::High);
+    assert_eq!(
+        one_line_authz.reasons,
+        vec![
+            "path_class:authz:crates/task-api/src/middleware.rs",
+            "invariant:authz:api-principal-from-token",
+        ]
+    );
+    assert!(one_line_authz.level.needs_design_review());
+
+    // class は方針の順、path は辞書順で重複なし。宣言した欄は `declared:<欄>` として後ろに足す（level は変えない）。
+    let many = assess_risk(
         &policy(),
         &paths(&[
             "crates/task-core/src/store/tasks.rs",
+            "crates/task-core/migrations/0100_x.sql",
             "crates/task-core/src/model/events.rs",
+            "crates/task-core/src/store/tasks.rs",
+            "crates/task-api/src/principal.rs",
             "web/src/app.ts",
         ]),
         Some(&DesignBrief {
@@ -143,16 +183,20 @@ fn health_review_risk_high_risk_path_with_new_state_is_high() {
             ..brief()
         }),
     );
-    assert_eq!(risk.level, RiskLevel::High);
+    assert_eq!(many.level, RiskLevel::High);
     assert_eq!(
-        risk.reasons,
+        many.reasons,
         vec![
-            "path_class:store+new_state",
-            "path_class:store+new_port",
-            "path_class:events+new_state",
-            "path_class:events+new_port",
+            "path_class:authz:crates/task-api/src/principal.rs",
+            "invariant:authz:api-principal-from-token",
+            "path_class:store:crates/task-core/migrations/0100_x.sql",
+            "path_class:store:crates/task-core/src/store/tasks.rs",
+            "path_class:events:crates/task-core/src/model/events.rs",
+            "declared:new_state",
+            "declared:new_port",
         ]
     );
+
     // `re.search` の意味: `^` が無い式は path のどこに合ってもよく、`$` は末尾に固定する。
     let unanchored = ReviewPolicyState::Present(ReviewPolicy {
         high_risk: vec![PathClass {
@@ -162,22 +206,54 @@ fn health_review_risk_high_risk_path_with_new_state_is_high() {
         }],
         ..ReviewPolicy::default()
     });
-    let declared = DesignBrief {
-        new_branch: vec!["b".into()],
-        ..brief()
-    };
     let hit = assess_risk(
         &unanchored,
         &paths(&["crates/task-dispatch/src/dispatcher/leases.rs"]),
-        Some(&declared),
+        Some(&brief()),
     );
-    assert_eq!(hit.reasons, vec!["path_class:lease+new_branch"]);
+    assert_eq!(
+        hit,
+        RiskAssessment::new(
+            RiskLevel::High,
+            vec!["path_class:lease:crates/task-dispatch/src/dispatcher/leases.rs".into()]
+        )
+    );
     let miss = assess_risk(
         &unanchored,
         &paths(&["crates/task-dispatch/src/dispatcher/leases.rs.bak"]),
-        Some(&declared),
+        Some(&brief()),
     );
-    assert_eq!(miss.level, RiskLevel::Low);
+    assert_eq!(miss, RiskAssessment::new(RiskLevel::Low, Vec::new()));
+}
+
+/// D1 の 4: 高 risk の class に合わない同じ大きさの変更（handler 1 file と画面 1 file）は理由なしの `Low`。
+/// `new_fallback` 以外の宣言も level を上げない。方針はあるが class が 1 つも無い repo も `Low`。
+/// 守る不変条件: 普通の変更は設計 review に回さない（過剰に止めない）。
+/// 既存の試験で検出できない理由: 旧い試験の `Low` は宣言の無さに由来し、規則を和に変えた後も class 外の path が
+/// `Low` に留まることを確かめる試験が無かった。
+#[test]
+fn health_review_risk_equivalent_change_outside_classes_is_low() {
+    let plain_brief = DesignBrief {
+        removals: vec!["旧い条件".into()],
+        ..brief()
+    };
+    let plain = paths(&["crates/task-api/src/handlers/tasks.rs", "web/src/app.ts"]);
+    let low = RiskAssessment::new(RiskLevel::Low, Vec::new());
+    assert_eq!(assess_risk(&policy(), &plain, Some(&plain_brief)), low);
+    assert_eq!(assess_risk(&policy(), &plain, None), low);
+    let declared = DesignBrief {
+        new_state: vec!["s".into()],
+        new_branch: vec!["b".into()],
+        new_port: vec!["p".into()],
+        ..brief()
+    };
+    assert_eq!(assess_risk(&policy(), &plain, Some(&declared)), low);
+    // 似た名前でも class の式に合わない path（`middleware.rs` の別の crate）は `Low`。
+    let lookalike = paths(&["crates/task-worker/src/middleware.rs"]);
+    assert_eq!(assess_risk(&policy(), &lookalike, Some(&plain_brief)), low);
+    let empty = ReviewPolicyState::Present(ReviewPolicy::default());
+    let risk = assess_risk(&empty, &paths(&["crates/task-api/src/middleware.rs"]), None);
+    assert_eq!(risk, low);
 }
 
 /// `new_fallback` の宣言は高 risk の path に触れなくても `High`。
@@ -193,7 +269,7 @@ fn health_review_risk_new_fallback_is_high_on_any_path() {
     );
     assert_eq!(risk.level, RiskLevel::High);
     assert_eq!(risk.reasons, vec!["new_fallback"]);
-    // 高 risk の path にも触れれば、class の理由と `new_fallback` の両方を残す。
+    // 高 risk の path にも触れれば、class の理由と宣言と `new_fallback` を残す。
     let both = assess_risk(
         &policy(),
         &paths(&["crates/task-core/migrations/0100_x.sql"]),
@@ -204,46 +280,35 @@ fn health_review_risk_new_fallback_is_high_on_any_path() {
     );
     assert_eq!(
         both.reasons,
-        vec!["path_class:store+new_fallback", "new_fallback"]
+        vec![
+            "path_class:store:crates/task-core/migrations/0100_x.sql",
+            "declared:new_fallback",
+            "new_fallback",
+        ]
     );
 }
 
-/// 高 risk の path に触れる人の計画に brief が無ければ `Low`（理由 `brief_absent_human_plan`）。
+/// D1: brief の無い計画（planner 以外の計画）が高 risk の class に触れれば `High` で、理由に
+/// `brief_absent_human_plan` を足す。
+/// 守る不変条件: brief を書かないことで設計 review を避けられない。
+/// 既存の試験で検出できない理由: 旧い試験はこの場合を `Low`（`brief_absent_human_plan`）として固定していた。
 #[test]
-fn health_review_risk_human_plan_without_brief_is_low_with_reason() {
+fn health_review_risk_plan_without_brief_on_class_path_is_high() {
     let risk = assess_risk(
         &policy(),
-        &paths(&["crates/task-core/src/model/events.rs"]),
+        &paths(&["crates/task-api/src/principal.rs"]),
         None,
     );
-    assert_eq!(risk.level, RiskLevel::Low);
-    assert_eq!(risk.reasons, vec!["brief_absent_human_plan"]);
-    assert!(!risk.level.needs_design_review());
-}
-
-/// それ以外は理由なしの `Low`: 高 risk の path に触れない計画、触れても新しい仕組みを宣言しない brief。
-#[test]
-fn health_review_risk_other_plans_are_low() {
-    let plain = assess_risk(&policy(), &paths(&["web/src/app.ts"]), None);
-    assert_eq!(plain, RiskAssessment::new(RiskLevel::Low, Vec::new()));
-    let no_new = assess_risk(
-        &policy(),
-        &paths(&["crates/task-core/src/store/tasks.rs"]),
-        Some(&DesignBrief {
-            removals: vec!["旧い列".into()],
-            ..brief()
-        }),
+    assert_eq!(risk.level, RiskLevel::High);
+    assert_eq!(
+        risk.reasons,
+        vec![
+            "path_class:authz:crates/task-api/src/principal.rs",
+            "invariant:authz:api-principal-from-token",
+            "brief_absent_human_plan",
+        ]
     );
-    assert_eq!(no_new, RiskAssessment::new(RiskLevel::Low, Vec::new()));
-    // 方針はあるが高 risk の class が 1 つも無い repo も `Low`。
-    let empty = ReviewPolicyState::Present(ReviewPolicy::default());
-    let risk = assess_risk(
-        &empty,
-        &paths(&["crates/task-core/src/store/tasks.rs"]),
-        None,
-    );
-    assert_eq!(risk.level, RiskLevel::Low);
-    assert!(risk.reasons.is_empty());
+    assert!(risk.level.needs_design_review());
 }
 
 /// 計画の write path は全 unit の `expected_write_paths` と leaf の `context.paths` の和（重複なし・昇順）。
@@ -272,10 +337,19 @@ fn health_review_risk_plan_write_paths_and_classes() {
     });
     let risk = assess_plan_risk(&policy(), &with_brief);
     assert_eq!(risk.level, RiskLevel::High);
-    assert_eq!(risk.reasons, vec!["path_class:store+new_state"]);
+    assert_eq!(
+        risk.reasons,
+        vec![
+            "path_class:store:crates/task-core/src/store/tasks.rs",
+            "declared:new_state",
+        ]
+    );
     assert_eq!(
         assess_plan_risk(&policy(), &spec).reasons,
-        vec!["brief_absent_human_plan"]
+        vec![
+            "path_class:store:crates/task-core/src/store/tasks.rs",
+            "brief_absent_human_plan",
+        ]
     );
 
     let v1: ExecutionPlanSpec = serde_json::from_value(json!({

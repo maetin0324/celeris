@@ -11,11 +11,11 @@
 //!   candidate の policy の状態だけを適用判定が選んだ検査器の report で決めて `HealthReviewInputSkipped` の `policy` に
 //!   残す（同じ candidate の既知の状態があれば repo health を走らせない）。health を当てない repo（適用判定が
 //!   `NotApplicable`）は何も残さない。
-//! - [`HealthInputJob::attach`]（review の非同期 task の中）: [`build_health_input`] を `spawn_blocking` で走らせ、
+//! - [`HealthInputJob::attach`]（review の非同期 task の中）: [`build_final_review_material`] を `spawn_blocking` で走らせ、
 //!   結果を `ReviewerRun.health`（reviewer の `ReviewRequest.health`）に入れる。reviewer run が無くても走らせる
 //!   （`policy_only`。review はその分だけ遅れる）。子 process は全体で [`HEALTH_INPUT_TIMEOUT`] の締め切りを共有する。
 //!   tick は止めない。
-//! - [`build_health_input`]: repo ごとに経路共通の検査器の選び方（`health_review::gate::with_applicable_checker`。ADR
+//! - [`build_final_review_material`]: repo ごとに経路共通の検査器の選び方（`health_review::gate::with_applicable_checker`。ADR
 //!   2026-11-08-health-enforcement-loop D1.1・D1.3: target の版の検査器、無ければ同梱の検査器）で review 方針を読み、
 //!   同じ `(repo_id, target_sha, reviewed_sha, definition_sha256)` の `Event::HealthReviewInputBuilt` があればその
 //!   `input` を使う（reviewer run の再試行・stale 再同期の後の再 review）。無ければ diff 統計・owner 地図の行・
@@ -34,26 +34,37 @@
 //!   diff を取れないときは `source =` [`POLICY_UNKNOWN`]（不明）にする（当てないのではなく合格にしない。J4）。不明の
 //!   材料は再利用しない（次の review で作り直す。D4.3）。
 //!
+//! - ADR 2026-11-17-boundary-change-risk-review D3・付記 (iii)・(v): 材料の差分の全 path（[`diff_stat`] の `--no-renames`。
+//!   rename の両側と消した path）に base 側の方針で `assess_risk` を当てて `HealthRepoInput.risk` に残す（新しい git の
+//!   経路は無い）。採用した計画の合格した設計 review の理由 `path_class:<class>:<path>` が覆わない (class, path) の組が
+//!   残れば `ReviewRequest.diff_design` で設計の判定を求める（[`diff_design`]）。方針を読めない・差分を取れない repo は
+//!   `Unknown` で全差分を覆われないものとする。reviewer run の無い review は health の項目を不合格にする
+//!   （[`fail_uncovered`]）。方針が `Absent` の repo は何もしない。
+//!
 //! WU の check・WU の review（`work_units`・`phase_integration` の検査）はここを通らない（D4.4）。LLM は呼ばない。
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use task_core::design_review::ReviewPolicyState;
-use task_core::{Event, SqliteStore, Task, TaskId};
+use task_core::design_review::{
+    ReviewPolicy, ReviewPolicyState, RiskAssessment, RiskLevel, assess_risk,
+};
+use task_core::required_checks::health::HEALTH_CHECK_ID;
+use task_core::{Event, ReviewRepairHint, SqliteStore, Task, TaskId};
 use task_ops::changes::git;
 use task_worker::protocol::{
-    DiffStat, HealthFindingsSummary, HealthPolicyState, HealthRepoInput, HealthReportFinding,
-    HealthReviewInput, OwnerRow, PathStat,
+    DesignReviewRequest, DiffStat, HealthFindingsSummary, HealthPolicyState, HealthRepoInput,
+    HealthReportFinding, HealthReviewInput, OwnerRow, PathStat,
 };
 
 use super::gate::{self, BundledChecker, CheckerChoice, HealthRun, RepoHealthReport};
 use super::policy::{BaseChecker, finished, left, parse_review_policy};
 use super::review_item;
+use super::verdict::SUBSTANTIVE_SCOPE;
 use crate::dispatcher::Dispatcher;
 use crate::dispatcher::review_spawn::ReviewSync;
-use crate::review::{RequiredRepoChecks, ReviewerRun};
+use crate::review::{FinalReviewMaterial, RepoHealth, RequiredRepoChecks, ReviewerRun};
 use task_core::RepoId;
 use task_core::required_checks::definition_digest;
 use task_core::required_checks::health::CheckerId;
@@ -79,6 +90,10 @@ pub const NO_REVIEWER: &str = "reviewer run の無い review（policy の状態�
 /// policy の状態を決められなかった（report を作れない・方針を読めない・diff を取れない）ことを表す
 /// `HealthPolicyState.source`。policy の関門は `policy.changed` と同じに扱う（I8。fail closed）。
 pub const POLICY_UNKNOWN: &str = "unavailable";
+/// reviewer run の無い review で覆われない (class, path) の組が残ったときの health の項目の不合格の理由の接頭辞
+/// （ADR 2026-11-17-boundary-change-risk-review 付記 (v)）。
+pub const UNCOVERED_WITHOUT_REVIEWER: &str =
+    "diff_design: 設計 review が覆わない境界の変更（reviewer run が無く判定できない）";
 
 /// 1 repo の候補（review 前の同期の結果）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,7 +105,7 @@ pub struct CandidateRepo {
     pub reviewed_sha: String,
 }
 
-/// [`build_health_input`] の入力（tick の中で集めた値だけ）。
+/// [`build_final_review_material`] の入力（tick の中で集めた値だけ）。
 pub struct HealthInputWork {
     pub store: Arc<SqliteStore>,
     pub task_id: TaskId,
@@ -118,34 +133,42 @@ pub struct HealthInputJob {
 }
 
 impl HealthInputJob {
-    /// 仕事があれば材料を作り（`policy_only` なら policy の状態だけを記録し）、reviewer run があれば
-    /// `run.health` に入れて返す。その後 `checks` の health の項目を評価する（health enforcement loop D1.2。
-    /// 材料が同じ候補で評価した結果を使う。`review_item::evaluate_all`）。
+    /// 仕事があれば材料を作り（`policy_only` なら policy の状態と差分の risk だけを決め）、reviewer run があれば
+    /// `run.material` に入れて返す。その後 `checks` の health の項目を評価する（health enforcement loop D1.2。
+    /// 材料が同じ候補で評価した結果を使う。`review_item::evaluate_all`）。reviewer run が無ければ覆われない組で
+    /// health の項目を不合格にする（[`fail_uncovered`]）。
     pub(crate) async fn attach(
         self,
         run: Option<ReviewerRun>,
         checks: &mut [RequiredRepoChecks],
         events: Vec<Event>,
     ) -> Option<ReviewerRun> {
-        let (health, runs) = match self.work {
+        let (material, runs) = match self.work {
             Some(work) => {
                 let task_id = work.task_id;
                 let built = tokio::task::spawn_blocking(move || {
-                    let health = build_health_input(&work);
+                    let material = build_final_review_material(&work, gate::bundled_checker());
                     let runs = work.evaluated.into_inner();
-                    (health, runs.unwrap_or_else(|e| e.into_inner()))
+                    (material, runs.unwrap_or_else(|e| e.into_inner()))
                 })
                 .await;
                 built.unwrap_or_else(|e| {
                     tracing::warn!(%task_id, error = %e, "health input builder failed; reviewing without health");
-                    (None, Vec::new())
+                    // D3 の fail-closed: 差分の risk を決められないので設計の判定を求める。
+                    let why = format!("材料を作れない: {e}");
+                    let risks = vec![RepoRisk::unknown(&task_id.to_string(), "-", "-", &why)];
+                    let diff_design = diff_design(risks, &[], None);
+                    (FinalReviewMaterial { health: None, diff_design }, Vec::new())
                 })
             }
-            None => (None, Vec::new()),
+            None => (FinalReviewMaterial::default(), Vec::new()),
         };
         review_item::evaluate_all(checks, runs, self.remote, gate::bundled_checker(), events).await;
-        let mut run = run?;
-        run.health = health;
+        let Some(mut run) = run else {
+            fail_uncovered(checks, material.diff_design.as_deref());
+            return None;
+        };
+        run.material = material;
         Some(run)
     }
 }
@@ -240,18 +263,29 @@ impl Dispatcher {
     }
 }
 
-/// D4: 材料を作る本体（blocking）。作れた repo が 1 つも無ければ `None`（`ReviewRequest.health` を持たない）。
-/// `policy_only` なら policy の状態を記録するだけで常に `None`。同梱の検査器は daemon が起動で設定したもの
-/// （`gate::bundled_checker()`）を渡す。
+/// 試験の入口: 材料の health だけ（作れた repo が 1 つも無い・`policy_only` なら `None`）。同梱の検査器は daemon が
+/// 起動で設定したもの（`gate::bundled_checker()`）を渡す。
+#[cfg(test)]
 pub fn build_health_input(work: &HealthInputWork) -> Option<HealthReviewInput> {
     build_health_input_with(work, gate::bundled_checker())
 }
 
-/// [`build_health_input`] の本体。`bundled` は base に検査器の無い repo に当てる同梱の検査器。
+/// 試験の入口: `bundled`（base に検査器の無い repo に当てる同梱の検査器）を選んで health だけを作る。
+#[cfg(test)]
 pub(crate) fn build_health_input_with(
     work: &HealthInputWork,
     bundled: Option<&BundledChecker>,
 ) -> Option<HealthReviewInput> {
+    build_final_review_material(work, bundled).health
+}
+
+/// D4: final review の材料を作る本体（blocking）。health は作れた repo が 1 つも無い・`policy_only` なら `None`
+/// （`ReviewRequest.health` を持たない）。D3 の `diff_design` は覆われない組があるときだけ。`bundled` は base に検査器の
+/// 無い repo に当てる同梱の検査器。
+pub(crate) fn build_final_review_material(
+    work: &HealthInputWork,
+    bundled: Option<&BundledChecker>,
+) -> FinalReviewMaterial {
     let deadline = Instant::now() + work.timeout;
     for (repo_id, reason) in &work.skipped {
         work.skip(repo_id, reason, None);
@@ -263,33 +297,247 @@ pub(crate) fn build_health_input_with(
             Vec::new()
         }
     };
-    if work.policy_only {
-        for candidate in &work.candidates {
-            work.record_policy_only(candidate, &recorded, bundled, deadline);
-        }
-        return None;
-    }
     let mut repos = Vec::new();
+    let mut risks = Vec::new();
     for candidate in &work.candidates {
+        if work.policy_only {
+            risks.extend(work.record_policy_only(candidate, &recorded, bundled, deadline));
+            continue;
+        }
         match work.repo_input(candidate, &recorded, bundled, deadline) {
-            Ok(input) => repos.push(input),
+            Ok((input, policy)) => {
+                risks.extend(RepoRisk::of_input(&input, policy));
+                repos.push(input);
+            }
             Err((reason, policy)) => {
+                // 方針を読めない・差分を取れない（policy の状態が不明）repo は全差分を覆われないものとする（D3）。
+                if policy.is_some() {
+                    let c = candidate;
+                    risks.push(RepoRisk::unknown(
+                        &c.repo_id,
+                        &c.target_sha,
+                        &c.reviewed_sha,
+                        &reason,
+                    ));
+                }
                 let policy = policy.map(|p| (candidate, p));
                 work.skip(&candidate.repo_id, &reason, policy);
             }
         }
     }
-    if repos.is_empty() {
-        return None;
-    }
-    let brief = match work.store.execution_plan_active(work.task_id) {
-        Ok(plan) => plan.and_then(|p| p.spec.design_brief).map(Box::new),
+    let plan = match work.store.execution_plan_active(work.task_id) {
+        Ok(plan) => plan.map(|p| p.spec),
         Err(e) => {
             tracing::warn!(task_id = %work.task_id, error = %e, "cannot read the adopted plan for the design brief");
             None
         }
     };
-    Some(HealthReviewInput { repos, brief })
+    let adopted = plan.as_ref().map(task_core::execution_plan::plan_sha256);
+    let covered = covered_pairs(&recorded, adopted.as_deref());
+    let brief = plan.and_then(|p| p.design_brief);
+    FinalReviewMaterial {
+        diff_design: diff_design(risks, &covered, brief.clone()),
+        health: (!repos.is_empty()).then(|| HealthReviewInput {
+            repos,
+            brief: brief.map(Box::new),
+        }),
+    }
+}
+
+/// D3: 1 repo の差分の risk と、設計の節に載せる差分の stat・base 側の方針。
+struct RepoRisk {
+    repo_id: String,
+    risk: RiskAssessment,
+    policy: Option<ReviewPolicy>,
+    stat: String,
+}
+
+impl RepoRisk {
+    /// 方針が `Absent`（`RiskLevel::None`）なら `None`。risk の無い材料は決められなかったものとする（fail-closed）。
+    fn of_input(input: &HealthRepoInput, policy: Option<ReviewPolicy>) -> Option<Self> {
+        let risk = input
+            .risk
+            .clone()
+            .unwrap_or_else(|| unknown_risk("材料に差分の risk が無い"));
+        let (repo, target, reviewed) = (&input.repo_id, &input.target_sha, &input.reviewed_sha);
+        (risk.level != RiskLevel::None).then(|| RepoRisk {
+            stat: stat_text(repo, target, reviewed, Some(&input.diff)),
+            repo_id: repo.clone(),
+            risk,
+            policy,
+        })
+    }
+
+    fn unknown(repo_id: &str, target: &str, reviewed: &str, why: &str) -> Self {
+        let risk = unknown_risk(why);
+        RepoRisk {
+            stat: stat_text(repo_id, target, reviewed, None),
+            repo_id: repo_id.to_string(),
+            risk,
+            policy: None,
+        }
+    }
+}
+
+fn unknown_risk(why: &str) -> RiskAssessment {
+    assess_risk(&ReviewPolicyState::Unavailable(why.to_string()), &[], None)
+}
+
+/// D3: 差分の path に base 側の方針を当てる（同じ `assess_risk`。brief は渡さないので、計画の brief の無いことを表す
+/// `brief_absent_human_plan` は外す）。
+fn diff_risk(state: &ReviewPolicyState, changed: &[String]) -> RiskAssessment {
+    let mut risk = assess_risk(state, changed, None);
+    risk.reasons.retain(|why| why != "brief_absent_human_plan");
+    risk
+}
+
+/// 設計の節の「差分の要約」: repo と範囲、file 数と行数（path は `health.diff` と risk の理由にある）。
+fn stat_text(repo: &str, target: &str, reviewed: &str, diff: Option<&DiffStat>) -> String {
+    let stat = diff.map_or_else(
+        || "差分の stat を取れない".to_string(),
+        |d| format!("{} file（+{} −{}）", d.files, d.insertions, d.deletions),
+    );
+    format!(
+        "repo {repo}: {}..{}: {stat}\n",
+        short(target),
+        short(reviewed)
+    )
+}
+
+/// 付記 (iii): 採用した計画（`plan_sha256` が `adopted`）の最後の `DesignReviewed` が合格なら、同じ `plan_sha256` の
+/// `DesignReviewRequested.risk` の理由 `path_class:<class>:<path>` の組。それ以外は空（覆った組は無い）。複数 repo の
+/// 計画の理由（`<repo>:path_class:…`）は組にしない（覆わない側に倒す）。
+pub(crate) fn covered_pairs(
+    events: &[(u64, Event)],
+    adopted: Option<&str>,
+) -> Vec<(String, String)> {
+    let Some(sha) = adopted else {
+        return Vec::new();
+    };
+    let passed = events.iter().rev().find_map(|(_, e)| match e {
+        Event::DesignReviewed {
+            plan_sha256, pass, ..
+        } if plan_sha256 == sha => Some(*pass),
+        _ => None,
+    });
+    if passed != Some(true) {
+        return Vec::new();
+    }
+    let risk = events.iter().rev().find_map(|(_, e)| match e {
+        Event::DesignReviewRequested {
+            plan_sha256, risk, ..
+        } if plan_sha256 == sha => Some(risk),
+        _ => None,
+    });
+    risk.map(|r| r.reasons.iter().filter_map(|why| path_pair(why)).collect())
+        .unwrap_or_default()
+}
+
+/// `path_class:<class>:<path>` の (class, path)。
+fn path_pair(why: &str) -> Option<(String, String)> {
+    let (class, path) = why.strip_prefix("path_class:")?.split_once(':')?;
+    Some((class.to_string(), path.to_string()))
+}
+
+/// 付記 (iii): 差分の risk の理由のうち覆われない残り。`Unknown` は全部、`High` は覆われない `path_class:<class>:<path>`
+/// と、残った class の `invariant:<class>:<名前>`。`Low`・`None` は空。組は同じ class で同じ path か、`/` で終わる dir の
+/// 接頭辞のとき覆う。
+pub(crate) fn uncovered(risk: &RiskAssessment, covered: &[(String, String)]) -> Vec<String> {
+    match risk.level {
+        RiskLevel::Unknown => return risk.reasons.clone(),
+        RiskLevel::High => {}
+        RiskLevel::Low | RiskLevel::None => return Vec::new(),
+    }
+    let is_covered = |class: &str, path: &str| {
+        covered.iter().any(|(c, p)| {
+            c == class && (p == path || (p.ends_with('/') && path.starts_with(p.as_str())))
+        })
+    };
+    let left: Vec<(String, String)> = risk
+        .reasons
+        .iter()
+        .filter_map(|why| path_pair(why))
+        .filter(|(class, path)| !is_covered(class, path))
+        .collect();
+    risk.reasons
+        .iter()
+        .filter(|why| match path_pair(why) {
+            Some(pair) => left.contains(&pair),
+            None => why
+                .strip_prefix("invariant:")
+                .and_then(|rest| rest.split_once(':'))
+                .is_some_and(|(class, _)| left.iter().any(|(c, _)| c == class)),
+        })
+        .cloned()
+        .collect()
+}
+
+/// D3: repo ごとの覆われない残りを 1 つの設計の要求にする（残りが無ければ `None`）。level は `Unknown` の repo が
+/// あれば `Unknown`、無ければ `High`。理由は repo が 2 つ以上なら `<repo>:` を前に付ける（`merge_risk` と同じ）。
+/// 方針は残りのある repo のうち最初に読めたもの、brief は採用した計画のもの。
+fn diff_design(
+    risks: Vec<RepoRisk>,
+    covered: &[(String, String)],
+    brief: Option<task_core::execution_plan::DesignBrief>,
+) -> Option<Box<DesignReviewRequest>> {
+    let multi = risks.len() > 1;
+    let mut level = RiskLevel::High;
+    let (mut reasons, mut summary, mut policy) = (Vec::new(), String::new(), None);
+    for repo in risks {
+        let left = uncovered(&repo.risk, covered);
+        if left.is_empty() {
+            continue;
+        }
+        if repo.risk.level == RiskLevel::Unknown {
+            level = RiskLevel::Unknown;
+        }
+        let prefix = |why: String| match multi {
+            true => format!("{}:{why}", repo.repo_id),
+            false => why,
+        };
+        reasons.extend(left.into_iter().map(prefix));
+        summary.push_str(&repo.stat);
+        policy = policy.or(repo.policy);
+    }
+    (!reasons.is_empty()).then(|| {
+        Box::new(DesignReviewRequest {
+            brief,
+            plan_summary: summary,
+            risk: RiskAssessment { level, reasons },
+            review_policy: policy,
+            owner_rows: Vec::new(),
+        })
+    })
+}
+
+/// 付記 (v): reviewer run の無い review で覆われない組が残れば、評価した health の合格の項目を不合格にする（理由に
+/// class・path。局所修復にしない）。不合格の項目（検査器が無い・report を作れない等）は元の理由と扱いのまま。
+fn fail_uncovered(checks: &mut [RequiredRepoChecks], design: Option<&DesignReviewRequest>) {
+    let Some(design) = design else {
+        return;
+    };
+    let why = format!(
+        "{UNCOVERED_WITHOUT_REVIEWER}: {}",
+        design.risk.reasons.join(", ")
+    );
+    for check in checks {
+        let Some(RepoHealth::Evaluated(item)) = check.health.as_mut() else {
+            continue;
+        };
+        let Some(result) = item
+            .result
+            .as_mut()
+            .filter(|r| r.cmd == HEALTH_CHECK_ID && r.pass)
+        else {
+            continue;
+        };
+        result.pass = false;
+        result.summary = format!("{}; {why}", result.summary);
+        item.repair_hint = Some(ReviewRepairHint {
+            scope: SUBSTANTIVE_SCOPE.to_string(),
+            class: "diff_design".to_string(),
+        });
+    }
 }
 
 /// reviewer に材料を渡さない repo の理由と、関門に使う candidate の policy の状態（検査器の無い repo は `None`）。
@@ -323,16 +571,16 @@ impl HealthInputWork {
         }
     }
 
-    /// 1 repo の材料（review 方針が `Present`・`Absent` で同じ手順。`Absent` は `owner_rows`・`invariants` が空）。
-    /// 作れなければ理由と policy の状態（skip）。適用判定が `Unavailable`・検査器を出せない・方針を読めない・diff を
-    /// 取れないときの policy の状態は不明（[`POLICY_UNKNOWN`]）。
+    /// 1 repo の材料（review 方針が `Present`・`Absent` で同じ手順。`Absent` は `owner_rows`・`invariants` が空）と、
+    /// 読めた base 側の方針。作れなければ理由と policy の状態（skip）。適用判定が `Unavailable`・検査器を出せない・
+    /// 方針を読めない・diff を取れないときの policy の状態は不明（[`POLICY_UNKNOWN`]）。
     fn repo_input(
         &self,
         candidate: &CandidateRepo,
         recorded: &[(u64, Event)],
         bundled: Option<&BundledChecker>,
         deadline: Instant,
-    ) -> Result<HealthRepoInput, Skip> {
+    ) -> Result<(HealthRepoInput, Option<ReviewPolicy>), Skip> {
         let c = candidate;
         let chosen = gate::with_applicable_checker(
             &c.dir,
@@ -341,20 +589,20 @@ impl HealthInputWork {
             bundled,
             deadline,
             |checker, id| {
-                let policy = match parse_review_policy(&checker.print_review_policy(&c.dir)?) {
-                    ReviewPolicyState::Present(policy) => Some(policy),
-                    ReviewPolicyState::Absent => None,
-                    ReviewPolicyState::Unavailable(why) => {
-                        return Err(format!("review 方針を読めない: {why}"));
-                    }
-                };
+                let state = parse_review_policy(&checker.print_review_policy(&c.dir)?);
+                if let ReviewPolicyState::Unavailable(why) = &state {
+                    return Err(format!("review 方針を読めない: {why}"));
+                }
+                let policy = state.policy().cloned();
                 // 鍵は選んだ検査器の版（R2）。方針は base の tree から読むので `target_sha` が束縛する。
                 let definition = definition_digest(&[], Some(id));
                 if let Some(input) = find_recorded(recorded, c, &definition) {
-                    return Ok(input);
+                    return Ok((input, policy));
                 }
                 let (diff, changed) = diff_stat(c, deadline)?;
+                let risk = Some(diff_risk(&state, &changed));
                 let (owner_map, invariants) = policy
+                    .clone()
                     .map(|p| (p.owner_map, p.invariants))
                     .unwrap_or_default();
                 let owner_rows = owner_map
@@ -375,11 +623,12 @@ impl HealthInputWork {
                     findings,
                     policy: policy_state,
                     invariants,
+                    risk,
                 };
                 // 走らせられなかった report（時間切れ・壊れた report）も policy の関門のために記録する（不明）。
                 // 再利用はしない（`find_recorded`）ので次の review でやり直す。
                 self.record(c, definition, &input);
-                Ok(input)
+                Ok((input, policy))
             },
         );
         match chosen {
@@ -395,27 +644,38 @@ impl HealthInputWork {
         }
     }
 
-    /// reviewer run の無い review の 1 candidate: 既知の policy の状態が記録済みなら何もしない（repo health は
+    /// reviewer run の無い review の 1 candidate: 既知の policy の状態が記録済みなら report は作らない（repo health は
     /// candidate ごとに 1 回）。無ければ適用判定が選んだ検査器の report で決めて記録する（`Unavailable`・作れなければ
-    /// 不明）。health を当てない repo は関門が無いので記録しない。方針（`--print-review-policy`）は reviewer の材料に
-    /// しか使わないので読まない。
+    /// 不明）。差分の risk（D3・付記 (v)）は毎回 base 側の方針で決めて返す。health を当てない repo は関門も risk も無い。
     fn record_policy_only(
         &self,
         c: &CandidateRepo,
         recorded: &[(u64, Event)],
         bundled: Option<&BundledChecker>,
         deadline: Instant,
-    ) {
-        if find_recorded_policy(recorded, c).is_some() {
-            return;
-        }
+    ) -> Option<RepoRisk> {
+        let known = find_recorded_policy(recorded, c).is_some();
+        let unknown_risk = |why: &str| {
+            Some(RepoRisk::unknown(
+                &c.repo_id,
+                &c.target_sha,
+                &c.reviewed_sha,
+                why,
+            ))
+        };
         let chosen = gate::with_applicable_checker(
             &c.dir,
             &c.target_sha,
             true,
             bundled,
             deadline,
-            |checker, id| Ok(self.run_report(checker, id, c, deadline)),
+            |checker, id| {
+                let risk = candidate_risk(checker, c, deadline);
+                Ok((
+                    risk,
+                    (!known).then(|| self.run_report(checker, id, c, deadline)),
+                ))
+            },
         );
         let unknown = |why: &dyn std::fmt::Display| {
             (
@@ -423,17 +683,22 @@ impl HealthInputWork {
                 unknown_policy(),
             )
         };
-        let (reason, policy) = match chosen {
-            CheckerChoice::NotApplicable(_) => return,
+        let (risk, report) = match chosen {
+            CheckerChoice::NotApplicable(_) => return None,
             CheckerChoice::Unavailable(reason) => {
-                unknown(&format!("{CHECKER_UNAVAILABLE}: {reason}"))
+                let why = format!("{CHECKER_UNAVAILABLE}: {reason}");
+                (unknown_risk(&why), (!known).then_some(Err(why)))
             }
-            CheckerChoice::Ran(Ok(Ok(report))) => {
-                (NO_REVIEWER.to_string(), summarize_report(report).1)
-            }
-            CheckerChoice::Ran(Ok(Err(why)) | Err(why)) => unknown(&why),
+            CheckerChoice::Ran(Ok(ran)) => ran,
+            CheckerChoice::Ran(Err(why)) => (unknown_risk(&why), (!known).then_some(Err(why))),
+        };
+        let (reason, policy) = match report {
+            None => return risk,
+            Some(Ok(report)) => (NO_REVIEWER.to_string(), summarize_report(report).1),
+            Some(Err(why)) => unknown(&why),
         };
         self.skip(&c.repo_id, &reason, Some((c, policy)));
+        risk
     }
 
     fn record(&self, c: &CandidateRepo, definition_sha256: String, input: &HealthRepoInput) {
@@ -494,6 +759,43 @@ impl HealthInputWork {
     }
 }
 
+/// D3・付記 (v): reviewer run の無い review の 1 candidate の差分の risk（base 側の方針。`Absent` なら `None`、方針を
+/// 読めない・差分を取れないなら `Unknown`）。
+fn candidate_risk(checker: &BaseChecker, c: &CandidateRepo, deadline: Instant) -> Option<RepoRisk> {
+    let unknown = |why: String| {
+        Some(RepoRisk::unknown(
+            &c.repo_id,
+            &c.target_sha,
+            &c.reviewed_sha,
+            &why,
+        ))
+    };
+    let state = match checker
+        .print_review_policy(&c.dir)
+        .map(|text| parse_review_policy(&text))
+    {
+        Ok(ReviewPolicyState::Absent) => return None,
+        Ok(ReviewPolicyState::Unavailable(why)) | Err(why) => {
+            return unknown(format!("review 方針を読めない: {why}"));
+        }
+        Ok(state) => state,
+    };
+    match diff_stat(c, deadline) {
+        Ok((diff, changed)) => {
+            let input = HealthRepoInput {
+                repo_id: c.repo_id.clone(),
+                target_sha: c.target_sha.clone(),
+                reviewed_sha: c.reviewed_sha.clone(),
+                diff,
+                risk: Some(diff_risk(&state, &changed)),
+                ..Default::default()
+            };
+            RepoRisk::of_input(&input, state.policy().cloned())
+        }
+        Err(why) => unknown(why),
+    }
+}
+
 /// reviewer の合格を再利用した candidate（`ReviewerPassReused`）なら、その合格の元の candidate の
 /// `(target_sha, reviewed_sha)`。policy の関門と `policy_only` の仕事が共有する（再利用の回は元の candidate を見る）。
 pub(crate) fn reused_from(
@@ -540,9 +842,10 @@ fn find_recorded(
             && *reviewed_sha == c.reviewed_sha
             && definition_sha256 == definition =>
         {
+            // D3: 差分の risk の無い記録（D3 より前の daemon が作った）は使わない（作り直す）。
             serde_json::from_value::<HealthRepoInput>(input.clone())
                 .ok()
-                .filter(|i| i.policy.source != POLICY_UNKNOWN)
+                .filter(|i| i.policy.source != POLICY_UNKNOWN && i.risk.is_some())
         }
         _ => None,
     })
@@ -623,6 +926,47 @@ fn read_numstat(stdout: &str) -> (DiffStat, Vec<String>) {
         all.push(path.to_string());
     }
     (stat, all)
+}
+
+/// ADR 2026-11-17-boundary-change-risk-review D4: 設計 review（採用前の計画）の方針と owner 地図の行。`bases`（repo の dir と
+/// target、その repo の計画の write path）のうち、base の方針の `definition_sha256` が `sha`（`DesignReviewRequested`
+/// の `policy_sha256`）と同じ最初の repo の方針と、その版の `owner_map` の行。行は risk の理由の path
+/// （`path_class:<class>:<path>`）を先に、write path を後に [`owner_rows`] へ渡して引く（行の `path` は理由の path を
+/// 優先する）。合う方針が無ければ `None` と空、地図が無い・読めなければ空。
+pub(crate) fn requested_policy(
+    mut bases: impl Iterator<Item = ((PathBuf, String), Vec<String>)>,
+    sha: Option<&str>,
+    reasons: &[String],
+) -> (Option<ReviewPolicy>, Vec<OwnerRow>) {
+    let found = bases.find_map(|((repo, target), write_paths)| {
+        let state = super::policy::base_review_policy((repo.clone(), target.clone()));
+        let policy = state
+            .policy()
+            .filter(|p| Some(p.definition_sha256.as_str()) == sha)?
+            .clone();
+        Some((repo, target, policy, write_paths))
+    });
+    let Some((repo, target, policy, write_paths)) = found else {
+        return (None, Vec::new());
+    };
+    let deadline = Instant::now() + super::policy::REVIEW_POLICY_TIMEOUT;
+    let text = policy
+        .owner_map
+        .as_deref()
+        .and_then(|map| show_at(&repo, &target, map, deadline));
+    let mut paths: Vec<String> = reasons
+        .iter()
+        .filter_map(|why| path_pair(why).map(|(_, p)| p))
+        .collect();
+    let rest: Vec<String> = write_paths
+        .into_iter()
+        .filter(|p| !paths.contains(p))
+        .collect();
+    paths.extend(rest);
+    let rows = text
+        .map(|text| owner_rows(&text, &paths))
+        .unwrap_or_default();
+    (Some(policy), rows)
 }
 
 /// `git show <rev>:<path>`（無い・読めなければ `None`）。
@@ -715,7 +1059,9 @@ pub fn summarize_report(report: RepoHealthReport) -> (HealthFindingsSummary, Hea
                 continue;
             }
             new.push(HealthReportFinding {
-                path: finding.evidence.into_iter().find_map(|e| e.path),
+                path: finding.evidence.iter().find_map(|e| e.path.clone()),
+                symbol: finding.evidence.into_iter().find_map(|e| e.symbol),
+                rationale: Some(finding.rationale).filter(|r| !r.is_empty()),
                 rule_id: finding.rule_id,
                 fingerprint: finding.fingerprint,
                 severity: finding.severity,

@@ -12,7 +12,7 @@
 //! （`execution_plan::assess_plan_risk`）は計画の側に置く。この module は計画の型を使わない（task-core の module の
 //! 循環に入れないため）。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use regex::Regex;
 use schemars::JsonSchema;
@@ -46,7 +46,8 @@ pub struct PathClass {
 }
 
 /// ADR 2026-11-07-health-review-integration D3.1: 実装前に短く整理する設計 brief。risk の判定
-/// （`design_review::assess_risk`）は `new_*` の宣言と write path から決まる（D3.3）。
+/// （`design_review::assess_risk`）は write path と `new_fallback` の宣言から決まり、ほかの `new_*` の宣言は level を
+/// 変えない（ADR 2026-11-17-boundary-change-risk-review D1）。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DesignBrief {
@@ -147,8 +148,8 @@ impl RiskLevel {
 }
 
 /// D3.3: risk の判定の結果。`reasons` は判定の根拠の機械向けの語（`review_policy_absent`・
-/// `review_policy_unavailable:<要約>`・`path_class:<class>+<欄>`・`new_fallback`・`brief_absent_human_plan`）。
-/// 高 risk の path に触れない `Low` は空。
+/// `review_policy_unavailable:<要約>`・`path_class:<class>:<path>`・`invariant:<class>:<名前>`・`declared:<欄>`・
+/// `brief_absent_human_plan`・`new_fallback`。ADR 2026-11-17-boundary-change-risk-review D1）。`Low` は空。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RiskAssessment {
     pub level: RiskLevel,
@@ -179,16 +180,16 @@ fn summarize(why: &str) -> String {
     line.chars().take(200).collect()
 }
 
-/// D3.3: write path のどれかに合う高 risk の class の名前（review 方針の順）。当て方は `profile.py` と同じ
-/// `re.search`（path のどこかに合えばよい。`^` で先頭に固定する）。Rust の `regex` で読めない正規表現が
-/// あれば、その class と式を返す（呼び出し側は方針を読めないものとして扱う）。
-pub fn high_risk_classes(
-    policy: &ReviewPolicy,
-    write_paths: &[String],
-) -> Result<Vec<String>, String> {
-    let mut classes = Vec::new();
+/// D3.3: 高 risk の class（review 方針の順）と、それに合った write path（辞書順・重複なし）。合わない class は
+/// 返さない。当て方は `profile.py` と同じ `re.search`（path のどこかに合えばよい。`^` で先頭に固定する）。Rust の
+/// `regex` で読めない正規表現があれば、その class と式を返す（呼び出し側は方針を読めないものとして扱う）。
+fn high_risk_matches<'a>(
+    policy: &'a ReviewPolicy,
+    write_paths: &'a [String],
+) -> Result<Vec<(&'a PathClass, BTreeSet<&'a str>)>, String> {
+    let mut found = Vec::new();
     for class in &policy.high_risk {
-        let mut matched = false;
+        let mut matched = BTreeSet::new();
         for pattern in &class.paths {
             let re = Regex::new(pattern).map_err(|e| {
                 format!(
@@ -196,23 +197,38 @@ pub fn high_risk_classes(
                     class.class
                 )
             })?;
-            matched = matched || write_paths.iter().any(|p| re.is_match(p));
+            matched.extend(
+                write_paths
+                    .iter()
+                    .filter(|p| re.is_match(p))
+                    .map(String::as_str),
+            );
         }
-        if matched {
-            classes.push(class.class.clone());
+        if !matched.is_empty() {
+            found.push((class, matched));
         }
     }
-    Ok(classes)
+    Ok(found)
 }
 
-/// D3.3: risk の判定。規則（上から順に）:
+/// D3.3: write path のどれかに合う高 risk の class の名前（review 方針の順。当て方と誤りは [`high_risk_matches`]）。
+pub fn high_risk_classes(
+    policy: &ReviewPolicy,
+    write_paths: &[String],
+) -> Result<Vec<String>, String> {
+    Ok(high_risk_matches(policy, write_paths)?
+        .into_iter()
+        .map(|(class, _)| class.class.clone())
+        .collect())
+}
+
+/// D3.3: risk の判定（ADR 2026-11-17-boundary-change-risk-review D1）。規則（上から順に）:
 /// - 方針が `Absent` → `None`（`review_policy_absent`）。`Unavailable`・正規表現を読めない → `Unknown`
 ///   （`review_policy_unavailable:<要約>`）。
-/// - write path が高 risk の class に合い、brief が `new_state`・`new_branch`・`new_fallback`・`new_port` の
-///   どれかを宣言 → `High`（class と欄の組ごとに `path_class:<class>+<欄>`）。
+/// - write path が高 risk の class に合う → brief の宣言によらず `High`。理由は class（方針の順）ごとに、合った path
+///   （辞書順）の `path_class:<class>:<path>` と class の不変条件の `invariant:<class>:<名前>`。その後に brief が
+///   宣言した欄の `declared:<欄>`（level には効かない reviewer の材料）、brief が無ければ `brief_absent_human_plan`。
 /// - brief が `new_fallback` を宣言 → path に依らず `High`（`new_fallback`）。
-/// - 高 risk の class に合い brief が無い → `Low`（`brief_absent_human_plan`）。planner の計画は採用前の検証
-///   （`execution_plan::require_design_brief`）で差し戻されるので、ここに来るのは planner 以外の計画だけ。
 /// - それ以外 → `Low`（理由なし）。
 pub fn assess_risk(
     policy: &ReviewPolicyState,
@@ -226,29 +242,37 @@ pub fn assess_risk(
         }
         ReviewPolicyState::Unavailable(why) => return RiskAssessment::unavailable(why),
     };
-    let classes = match high_risk_classes(policy, write_paths) {
-        Ok(classes) => classes,
+    let matches = match high_risk_matches(policy, write_paths) {
+        Ok(matches) => matches,
         Err(why) => return RiskAssessment::unavailable(&why),
     };
     let declared = brief.map(DesignBrief::declared_new).unwrap_or_default();
-    let mut reasons: Vec<String> = classes
-        .iter()
-        .flat_map(|class| {
-            declared
+    let mut reasons = Vec::new();
+    for (class, paths) in &matches {
+        let name = &class.class;
+        reasons.extend(paths.iter().map(|p| format!("path_class:{name}:{p}")));
+        reasons.extend(
+            class
+                .invariants
                 .iter()
-                .map(move |field| format!("path_class:{class}+{field}"))
-        })
-        .collect();
+                .map(|i| format!("invariant:{name}:{i}")),
+        );
+    }
+    if !matches.is_empty() {
+        reasons.extend(declared.iter().map(|field| format!("declared:{field}")));
+        if brief.is_none() {
+            reasons.push("brief_absent_human_plan".to_string());
+        }
+    }
     if declared.contains(&"new_fallback") {
         reasons.push("new_fallback".to_string());
     }
-    if !reasons.is_empty() {
-        return RiskAssessment::new(RiskLevel::High, reasons);
-    }
-    if brief.is_none() && !classes.is_empty() {
-        return RiskAssessment::new(RiskLevel::Low, vec!["brief_absent_human_plan".to_string()]);
-    }
-    RiskAssessment::new(RiskLevel::Low, Vec::new())
+    let level = if reasons.is_empty() {
+        RiskLevel::Low
+    } else {
+        RiskLevel::High
+    };
+    RiskAssessment::new(level, reasons)
 }
 
 #[cfg(test)]

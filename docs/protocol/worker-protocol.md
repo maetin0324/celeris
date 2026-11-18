@@ -99,7 +99,7 @@ celeris ◀─stdout── {"type":"progress", ...}\n
 | `context.interrupt` | string | –（省略可。Phase 53, ADR-0044 D2） | **直前の run を人のコメントで止めた**とき、そのコメントの本文。前置きのいちばん先に「**人からの割り込み**: …」として出る。割り込みの直後の run にだけ載る（その run が終わったら消える） |
 | `context.comments_enabled` | bool | –（省略可。既定 false。Phase 53, ADR-0044 D2） | この run は `comment` を書ける。true のときだけ前置きに「短い進捗や判断の記録はコメントに書け」が出る。**仕事の run は true、対話 run（Phase 28 の「返事だけをする」run）とレビュー run は false** |
 | `context.recent_work` | array | –（省略可。空なら省略。Phase 33, ADR-0033 D4 追記） | 対話 run にだけ、担当の直近の仕事（最大 10 件、更新の新しい順。案件を選んでいればその案件のものを先に。対話・まとめ・承認・レビューは除く）。`RecentWork`: `{task_id, title, project_title?, status, finished_at?, outcome?, artifacts: string[]}`。`outcome` は終端の要約（`done` なら summary の 1 行目、`failed` なら理由、`blocked` なら質問）で、ストアのタスクとイベントから決定的に組む（LLM は使わない） |
-| `context.review` | object | –（省略可） | Review run だけ。`ReviewRequest`: `{summary, evidence, criteria, decisions?, answers?, checks?, policy_violations?, health?, design?}`（§10.2） |
+| `context.review` | object | –（省略可） | Review run だけ。`ReviewRequest`: `{summary, evidence, criteria, decisions?, answers?, checks?, policy_violations?, health?, design?, diff_design?}`（§10.2） |
 | `context.available_genres` | array | –（省略可。空なら省略。v3） | 分解・委譲できる run に渡す分野の一覧。`GenreContext`: `{id, description, capabilities?, input_artifacts?, output_artifacts?, roles?, harness?}` |
 | `context.subject_genre` | object | –（省略可） | レビュー対象の仕事の分野（`GenreContext`） |
 | `context.clusters` | array | –（省略可。空なら省略） | 使えるクラスタ。`{id, connected, work_dir?}` |
@@ -740,10 +740,11 @@ task.acceptance.len()`。受け入れ条件の無い Plan〈R6 で撤去した `
 `Check::Reviewer` 条件を判定する際、ディスパッチャは対象タスクとは別の run を起動する。
 `RunRequest.task` は永続化されない合成タスク（`kind = "review"`、`title = "Review: <対象 title>"`、
 `objective`/`acceptance`/`workspace`/`budget` は対象タスクと同じ）。`RunRequest.context.review` に
-`ReviewRequest{summary, evidence, criteria, decisions?, answers?, checks?, policy_violations?, health?, design?}` が入る（`criteria` は判定すべき `task.acceptance` の
+`ReviewRequest{summary, evidence, criteria, decisions?, answers?, checks?, policy_violations?, health?, design?, diff_design?}` が入る（`criteria` は判定すべき `task.acceptance` の
 インデックス一覧、`summary`/`evidence` は対象 run の `done` の内容、`decisions` / `answers` は人の決定と回答、
 `checks` は daemon が走らせた決定的な検査の結果、`policy_violations` は検出した subagent・別 LLM の起動、
-`health` は final review にだけ渡す健全性の材料、`design` は採用前の設計 review の run にだけ渡す計画の材料）。`context.inputs` には対象 run の
+`health` は final review にだけ渡す健全性の材料、`design` は採用前の設計 review の run にだけ渡す計画の材料、
+`diff_design` は final review にだけ渡す差分の設計の材料）。`context.inputs` には対象 run の
 `ArtifactProduced` が入る。run は対象タスクと同じ作業ディレクトリで実行される（成果物を直接読めるように
 するため。ワーカーには読み取り専用で振る舞うよう指示するが強制はしない。既知の制約）。
 
@@ -763,7 +764,11 @@ task.acceptance.len()`。受け入れ条件の無い Plan〈R6 で撤去した `
 にだけ載せる（WU の review・review 方針の無い repo では省略）。形は `{repos: [HealthRepoInput]}` で、1 repo は
 `{repo_id, target_sha, reviewed_sha, diff: {files, insertions, deletions, paths: [{path, insertions, deletions}]},
 owner_rows: [{path, row}], findings: {verdict, reviewable, counts: {findings, fail_grade, new, worsened, existing},
-new: [{rule_id, fingerprint, severity, delta, path?}], truncated}, policy: {source, changed, files}, invariants}`。
+new: [{rule_id, fingerprint, severity, delta, path?, symbol?, rationale?}], truncated}, policy: {source, changed, files},
+invariants, risk?}`。`findings.new[].symbol` は report の finding の最初の evidence の `symbol`（`deps.cycle` の循環の内部の
+新しい組なら `<src> -> <dst>`）、`rationale` は finding の `rationale` の写し。`risk`（ADR 2026-11-17-boundary-change-risk-review
+D3）は base 側の方針で差分の全 path（`--no-renames`。rename の両側と消した path）に当てた `RiskAssessment`。採用した計画の
+合格した設計 review が覆わない (class, path) の組を、dispatcher が `diff_design` で求める。
 `HealthReviewInput.brief`（任意）は採用した計画の設計 brief（`ExecutionPlanSpec.design_brief`）で、reviewer は宣言した
 `removals` が実際に消えたかを確かめる。
 `findings.new` は repo health の report のうち `delta` が `new`・`worsened` で例外の無いもの（上限 50 件。超えた数が
@@ -794,9 +799,13 @@ new: [{rule_id, fingerprint, severity, delta, path?}], truncated}, policy: {sour
 
 risk（`task_core::design_review::assess_risk`）が `high`・`unknown` の計画は、採用の前に reviewer run で設計 review
 する。その run の `context.review` は `summary`・`evidence`・`criteria` が空で、`design`（`DesignReviewRequest`）を持つ:
-`{brief?, plan_summary, risk: {level, reasons?}, review_policy?}`。`brief` は計画の設計 brief（無い計画では省略）、
-`risk.level` は `high` / `unknown`、`reasons` は判定の根拠（`path_class:<class>+new_state`・`new_fallback`・
-`review_policy_unavailable:<要約>` など）、`review_policy` は判定に使った base 側の方針（読めなかった `unknown` では省略）。
+`{brief?, plan_summary, risk: {level, reasons?}, review_policy?, owner_rows?}`。`brief` は計画の設計 brief（無い計画では省略）、
+`risk.level` は `high` / `unknown`、`reasons` は判定の根拠（`path_class:<class>:<path>`・`invariant:<class>:<名前>`・
+`declared:<欄>`・`brief_absent_human_plan`・`new_fallback`・`review_policy_unavailable:<要約>`。高 risk の class に合う path を
+書く計画は brief の `new_*` の宣言によらず `high`。ADR 2026-11-17-boundary-change-risk-review D1）、`review_policy` は判定に使った base 側の方針（読めなかった `unknown` では省略）。
+`owner_rows` は base 側の owner 地図のうち理由の path と計画の write path を含む表の行（`OwnerRow` の配列。dispatcher が `health_review::input::owner_rows` で引く。
+無ければ省略。final review の `diff_design` では省略し、reviewer prompt は `health.repos[].owner_rows` を使う）。reviewer prompt は理由 `path_class:<class>:<path>` ごとに
+path・class・owner 地図の行・class の不変条件（`PathClass.invariants` と根拠の file）を 1 行で出す（ADR 2026-11-17-boundary-change-risk-review D4）。
 reviewer は `review.json` に `design`（`DesignVerdictOut`）を書く:
 
 ```json
@@ -806,6 +815,18 @@ reviewer は `review.json` に `design`（`DesignVerdictOut`）を書く:
 
 `findings` の形と `kind` の固定 7 種は health verdict と同じ（`HealthFindingOut`。未知の `kind` は読み込みエラー）。
 `findings` は省略できる。
+
+#### final review の差分の設計の節（ADR 2026-11-17-boundary-change-risk-review D3・付記 (i)）
+
+final review の candidate の差分が、採用した計画の設計 review の覆わない高 risk の (class, path) の組に触れると、dispatcher は
+`context.review.diff_design`（`design` と同じ `DesignReviewRequest`。`plan_summary` は差分の stat、`risk` は覆われない組の理由、
+`review_policy` は base 側の方針）を付ける。`design` は付けない（`design` は採用前の設計 review の run だけ）。`summary`・`evidence`・
+`criteria`・`health` は通常の final review と同じ。reviewer は `verdicts`（と `health` を渡されたら `health`）と並べて `design` を書く:
+
+```json
+{"verdicts":[{"criterion":0,"pass":true,"reason":"…"}],
+ "design":{"pass":false,"findings":[{"kind":"symptom_fix_outside_owner","severity":"blocking","path":"crates/a.rs","reason":"…"}]}}
+```
 
 `criteria` に列挙された各インデックスについて `verdicts` に必ず 1 件対応するエントリが必要。次はすべて
 該当する `Reviewer` 条件を `pass=false`（理由に原因を記録）として扱う: run の終端が `done` 以外

@@ -46,6 +46,8 @@ fn sample_input() -> HealthReviewInput {
                     severity: "error".into(),
                     delta: "new".into(),
                     path: Some("crates/task-store/src/lib.rs".into()),
+                    symbol: Some("./src/a -> ./src/b".into()),
+                    rationale: Some("循環の内部に新しい組 ./src/a -> ./src/b".into()),
                 }],
                 truncated: 0,
                 reason: None,
@@ -56,6 +58,10 @@ fn sample_input() -> HealthReviewInput {
                 files: vec![],
             },
             invariants: BTreeMap::from([("events-append-only".into(), "CLAUDE.md".into())]),
+            risk: Some(task_core::design_review::RiskAssessment {
+                level: task_core::design_review::RiskLevel::High,
+                reasons: vec!["path_class:store:crates/task-store/src/lib.rs".into()],
+            }),
         }],
         brief: None,
     }

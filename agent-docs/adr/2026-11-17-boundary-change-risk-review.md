@@ -219,3 +219,23 @@ store の試験の file だけ 7、`store/mod.rs` 17、migrations 13、`store/ev
 - `prompts`: D4。objective の全文の試験。
 - `cases`: D5 と失敗注入。
 - `metrics`: 共通受入条件 (1)〜(6) の before/after（A の baseline §7 の同じコマンド）と、この replay の道具での after の件数・設計 review の回数と費用。
+
+## 付記（2026-11-18、計画 v3 の決定）
+
+計画 v2 の設計 review（2026-11-18）の blocking 2 件を受けて、計画 v3 で次を決めた。WorkUnit `review-wire` が実装の前にここへ書く。
+D3・D4 の記述と食い違うところは、この付記が優先する。
+
+- (i) port (c)（§5）の欄は `ReviewRequest.diff_design`（`Option<Box<DesignReviewRequest>>`。serde の default で、`None` なら JSON に出さない）にする。
+  final review の run だけが持つ。`ReviewRequest.design` は今までどおり採用前の計画の設計 review の run（dispatcher の `Completion::DesignReview` の経路）だけが持つ。
+  run の種類の正本は dispatcher の 1 つで、worker は `design` と `diff_design` のどちらがあるかで描画を分けるだけ（worker が run の種類を推測しない）。
+  worker の final review の prompt は、`diff_design` があれば人の決定・決定的 check・evidence・health の節を保ったまま設計の節（見出しは「差分」）を足し、
+  `review.json` には criterion ごとの `verdicts`（任意の `repair`）・health があれば `health`・`design`（既存の `DesignVerdictOut`）を同じ object に書かせる。
+  `design_section` は見出しと前置きだけを「採用前の計画」と「差分」で分け、brief・risk・方針・観点の行は共有する。
+- (ii) port (b)（§5、D4 の reviewer の health の節）の `HealthReportFinding.key` は作らない。report v1 の既存の欄（finding の最初の evidence の `symbol`
+  と finding の `rationale`）を `HealthReportFinding` の任意の欄に写す（WorkUnit `review-gate`）。鍵の書式 `cycle-edge:<src>-><dst>` を Rust で組み直さない。
+  policy の file（`scripts/dev/repo-health/`）は変えない。
+- (iii) final review で覆う範囲は class でなく (class, path) の組にする。採用した計画の合格した設計 review の risk の理由 `path_class:<class>:<path>` に、
+  同じ class で同じ path（または `/` で終わる dir の接頭辞）がある差分の path だけを覆う（class 単位では、同じ class の別の file の変更を素通しするため）。
+- (iv) `ReviewerPassReused`（同じ差分に対する reviewer の合格の再利用）は変えない。D3 を含む release が昇格する前に出た合格が昇格の後に再利用される限界は、
+  進捗の「本番への移行」節に書く。
+- (v) reviewer run の無い review（policy_only）で、覆われない (class, path) の組が残れば不合格にする（fail-closed。理由に class と path を残す）。

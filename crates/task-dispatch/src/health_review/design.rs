@@ -78,8 +78,8 @@ pub(crate) fn brief_required_classes(
     classes.into_iter().collect()
 }
 
-/// level の順位（高いほど設計 review の根拠が強い）。`unknown`（方針を読めない）は `low` より上、`high`（宣言と
-/// path から決まった）より下に置く。どちらも設計 review を起こす（D3.5）。
+/// level の順位（高いほど設計 review の根拠が強い）。`unknown`（方針を読めない）は `low` より上、`high`（高 risk の
+/// class の path か `new_fallback` の宣言から決まった）より下に置く。どちらも設計 review を起こす（D3.5）。
 fn rank(level: RiskLevel) -> u8 {
     match level {
         RiskLevel::None => 0,

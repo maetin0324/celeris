@@ -67,12 +67,19 @@ pub struct ReviewRequest {
     /// にだけ渡す。`None`（WU の review・review 方針の無い repo・旧 daemon）の `request.json` は従来と同じ。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub health: Option<HealthReviewInput>,
-    /// ADR 2026-11-07-health-review-integration D3.5: 採用前の設計 review の run だけ `Some`（`summary`・
-    /// `evidence`・`criteria` は空）。`RunContext` の直下でなくここに置く（欄の数の上限。進捗
-    /// `2026-11-07-health-v2-g2/dispatch/risk-events.md`）。final review・WU の review では `None`。
+    /// ADR 2026-11-07-health-review-integration D3.5: 採用前の計画の設計 review の run（dispatcher の
+    /// `Completion::DesignReview` の経路）だけ `Some`（`summary`・`evidence`・`criteria` は空）。`RunContext` の
+    /// 直下でなくここに置く（欄の数の上限。進捗 `2026-11-07-health-v2-g2/dispatch/risk-events.md`）。final review・
+    /// WU の review では常に `None`（final review の差分の設計の節は `diff_design`）。
     /// `Box` は `RunContext` を大きくしないため（future の stack。wire の形は変わらない）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub design: Option<Box<DesignReviewRequest>>,
+    /// ADR 2026-11-17-boundary-change-risk-review D3・付記 (i): final review の差分が、採用した計画の設計 review の
+    /// 覆わない高 risk の (class, path) の組に触れたとき、dispatcher が付ける設計の節（要約は差分の stat、risk は
+    /// 覆われない組の理由、方針は base 側）。final review の run だけが持ち、`design` と同時には付かない。reviewer は
+    /// criterion ごとの `verdicts` と並べて `ReviewOutput.design` を書く。`None` の `request.json` は従来と同じ。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff_design: Option<Box<DesignReviewRequest>>,
 }
 
 /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D6: reviewer に見せる検出 1 件（`Event::WorkerPolicyViolation` の写し）。
@@ -1060,8 +1067,9 @@ pub struct ReviewOutput {
     /// review では必須（無ければ不合格。I7）。旧 reviewer の `review.json` は省略で読める。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub health: Option<HealthVerdictOut>,
-    /// ADR 2026-11-07-health-review-integration D3.5: 設計 review の判定。`ReviewRequest.design` を渡した
-    /// review だけが書く。旧 reviewer の `review.json` は省略で読める。
+    /// ADR 2026-11-07-health-review-integration D3.5・ADR 2026-11-17-boundary-change-risk-review 付記 (i): 設計の
+    /// 判定。`ReviewRequest.design` を渡した採用前の計画の設計 review（`verdicts` は空）と、`ReviewRequest.diff_design`
+    /// を渡した final review（`verdicts` と並べて書く）だけが書く。旧 reviewer の `review.json` は省略で読める。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub design: Option<DesignVerdictOut>,
 }

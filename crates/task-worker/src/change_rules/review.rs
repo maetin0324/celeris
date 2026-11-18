@@ -1,13 +1,21 @@
 //! ADR 2026-11-07-health-review-integration D3.5・D4.1・D5.1・D5.4・D6.3・D7.2 と付記『二度目の final review の
-//! 差し戻しへの方針』(a): reviewer prompt に health の材料（`ReviewRequest.health`）と設計 review の材料
-//! （`ReviewRequest.design`）を出し、`review.json` に構造化 verdict（`ReviewOutput.health`・`.design`）を書かせる。
+//! 差し戻しへの方針』(a)、ADR 2026-11-17-boundary-change-risk-review 付記 (i): reviewer prompt に health の材料
+//! （`ReviewRequest.health`）と設計の材料（`ReviewRequest.design`・`.diff_design`）を出し、`review.json` に構造化
+//! verdict（`ReviewOutput.health`・`.design`）を書かせる。
 //!
 //! - `health_section` は `ReviewRequest.health` が `Some` のときだけ節を出す。`None`（WU の review・review 方針の
 //!   無い repo・通常の小さい変更）では空文字列。
-//! - `design_section` は `ReviewRequest.design` が `Some`（採用前の設計 review の run）のときだけ節を出す。
-//! - `result_section` は reviewer prompt の Result 節を組む唯一の関数。設計 review では `design` の形、final review
-//!   では `verdicts`（任意の `repair` を含む）の形と、health があれば `health` の形を 1 節で出す。例の JSON は
-//!   `ReviewOutput` を serde で書き出し、placeholder を使わない。
+//! - `design_section` は `ReviewRequest.design`（採用前の計画の設計 review の run）か `ReviewRequest.diff_design`
+//!   （final review の差分の設計の節）が `Some` のときだけ節を出す。見出しと前置きだけを「採用前の計画」と「差分」で
+//!   分け、brief・risk・方針・観点の行は共有する。run の種類は dispatcher が欄で決め、ここは欄を見るだけ。
+//! - `result_section` は reviewer prompt の Result 節を組む唯一の関数。採用前の計画の設計 review では `design` の形、
+//!   final review では `verdicts`（任意の `repair` を含む）の形と、health があれば `health`、`diff_design` があれば
+//!   `design` の形を 1 節で出す。例の JSON は `ReviewOutput` を serde で書き出し、placeholder を使わない。
+//! - ADR 2026-11-17-boundary-change-risk-review D4: health の節は new・worsened の finding の `fingerprint`・`symbol`
+//!   （`deps.cycle` の新しい組 `<src> -> <dst>`）・`rationale` を出す。設計の節の risk は理由 `path_class:<class>:<path>` ごとに
+//!   path・class・owner 地図の行（採用前の計画は `DesignReviewRequest.owner_rows`、差分は `HealthRepoInput.owner_rows`）・
+//!   class の不変条件と根拠の file を 1 行で出し、design の判定が要る理由（level）を添える。地図の行は dispatcher が
+//!   `health_review::input::owner_rows` で引いたものを `owner_lines` で描くだけで、ここでは探さない。
 //! - finding 種別は `HealthFindingKind::ALL` から列挙し、局所修復を許す種別は `allows_local_repair` から選ぶ。
 //!   種別の意味は汎用規約（`GENERIC_RULES`）の各項目の括弧内の名前で指し、説明文をここに写さない。
 //!
@@ -15,14 +23,15 @@
 
 use std::collections::BTreeMap;
 
-use task_core::design_review::{ReviewPolicy, RiskAssessment};
+use task_core::design_review::{ReviewPolicy, RiskAssessment, RiskLevel};
 use task_core::execution_plan::DesignBrief;
 
 use super::GENERIC_RULES;
 use crate::protocol::{
-    DesignVerdictOut, DiffStat, HealthFindingKind, HealthFindingOut, HealthFindingsSummary,
-    HealthPolicyState, HealthRepoInput, HealthReviewInput, HealthSeverity, HealthVerdictOut,
-    OwnerRow, PolicyVerdictOut, ReviewOutput, ReviewRepairHint, ReviewRequest, ReviewVerdictOut,
+    DesignReviewRequest, DesignVerdictOut, DiffStat, HealthFindingKind, HealthFindingOut,
+    HealthFindingsSummary, HealthPolicyState, HealthRepoInput, HealthReviewInput, HealthSeverity,
+    HealthVerdictOut, OwnerRow, PolicyVerdictOut, ReviewOutput, ReviewRepairHint, ReviewRequest,
+    ReviewVerdictOut,
 };
 
 /// health の材料の節の見出し（Result 節はこの見出しの名前で材料を指す）。
@@ -123,10 +132,18 @@ fn findings_lines(findings: &HealthFindingsSummary) -> String {
                 .as_deref()
                 .map(|p| format!(" path=`{p}`"))
                 .unwrap_or_default();
+            let symbol = finding
+                .symbol
+                .as_deref()
+                .map(|s| format!(" symbol=`{s}`"))
+                .unwrap_or_default();
             out.push_str(&format!(
-                "    - `{}` severity=`{}` delta=`{}`{path}\n",
-                finding.rule_id, finding.severity, finding.delta
+                "    - `{}` severity=`{}` delta=`{}`{path} fingerprint=`{}`{symbol}\n",
+                finding.rule_id, finding.severity, finding.delta, finding.fingerprint
             ));
+            if let Some(rationale) = &finding.rationale {
+                out.push_str(&format!("      - rationale: {}\n", rationale.trim_end()));
+            }
         }
     }
     if findings.truncated > 0 {
@@ -167,30 +184,79 @@ fn invariant_lines(invariants: &BTreeMap<String, String>) -> String {
     out
 }
 
-/// 付記 (a) A1（D3.5 2.）: 設計 review の節の見出し。
+/// 付記 (a) A1（D3.5 2.）: 採用前の計画の設計 review の節の見出し。
 pub const DESIGN_HEADING: &str = "## 設計 review（採用前の計画）";
+
+/// ADR 2026-11-17-boundary-change-risk-review 付記 (i): final review の差分の設計の節の見出し。
+pub const DIFF_DESIGN_HEADING: &str = "## 設計 review（差分）";
+
+/// 設計の節の判定の対象。どちらになるかは dispatcher が付けた欄（`design`・`diff_design`）で決まる。
+#[derive(Clone, Copy)]
+enum DesignTarget {
+    /// `ReviewRequest.design`: planner が作った採用前の計画。
+    Plan,
+    /// `ReviewRequest.diff_design`: final review の candidate の差分。
+    Diff,
+}
+
+/// 設計の節の対象と材料。`design` があればそれ（採用前の計画）、無ければ `diff_design`（差分）。
+fn design_target(review: &ReviewRequest) -> Option<(DesignTarget, &DesignReviewRequest)> {
+    match (review.design.as_deref(), review.diff_design.as_deref()) {
+        (Some(design), _) => Some((DesignTarget::Plan, design)),
+        (None, Some(design)) => Some((DesignTarget::Diff, design)),
+        (None, None) => None,
+    }
+}
 
 /// `risk.reasons` のうち、review 方針を読めなかった理由の語の頭（`task_core::design_review::assess_risk`）。
 const POLICY_UNAVAILABLE_PREFIX: &str = "review_policy_unavailable:";
 
-/// 付記 (a) A1: 設計 review の節。`ReviewRequest.design` が `Some` のときだけ出し、ほかは空文字列。
-/// 対象は採用前の計画で、計画の要約・設計 brief の全欄・risk・review 方針（読めなければその理由）と判定の観点を出す。
+/// 付記 (a) A1・ADR 2026-11-17-boundary-change-risk-review 付記 (i): 設計 review の節。`ReviewRequest.design`
+/// （採用前の計画）か `.diff_design`（final review の差分）が `Some` のときだけ出し、ほかは空文字列。見出しと前置きと
+/// 要約の見出しだけを対象で分け、設計 brief の全欄・risk・review 方針（読めなければその理由）と判定の観点は共有する。
 pub fn design_section(review: Option<&ReviewRequest>) -> String {
-    let Some(design) = review.and_then(|r| r.design.as_deref()) else {
+    let Some((target, design)) = review.and_then(design_target) else {
         return String::new();
     };
-    let mut out = format!(
-        "{DESIGN_HEADING}\n\
-         この run の review の対象は実装ではなく、planner が作った採用前の計画（下の要約と設計 brief）である。\
-         作業ツリーはまだこの計画の変更を含まない。作業ツリーは読み取り専用で読んでよい（owner 地図と既存の実装の\
-         確認に使う）が、file を変えない。受け入れ条件ごとの判定はしない。計画を上の「{generic}」と下の brief・\
-         risk・review 方針に照らして判定し、結果を下の Result 節の `design` に書く。\n\n\
-         ### 計画の要約\n{summary}\n\n",
-        generic = generic_heading(),
-        summary = design.plan_summary.trim_end(),
-    );
+    let generic = generic_heading();
+    let preface = match target {
+        DesignTarget::Plan => format!(
+            "{DESIGN_HEADING}\n\
+             この run の review の対象は実装ではなく、planner が作った採用前の計画（下の要約と設計 brief）である。\
+             作業ツリーはまだこの計画の変更を含まない。作業ツリーは読み取り専用で読んでよい（owner 地図と既存の実装の\
+             確認に使う）が、file を変えない。受け入れ条件ごとの判定はしない。計画を上の「{generic}」と下の brief・\
+             risk・review 方針に照らして判定し、結果を下の Result 節の `design` に書く。\n\n\
+             ### 計画の要約\n"
+        ),
+        DesignTarget::Diff => format!(
+            "{DIFF_DESIGN_HEADING}\n\
+             この final review の candidate の差分は、採用した計画の設計 review が覆っていない高 risk の path に触れている\
+             （下の risk の reasons。celeris が base 側の review 方針で決定的に判定した）。受け入れ条件ごとの判定に加えて、\
+             この差分そのものを上の「{generic}」と下の brief・risk・review 方針に照らして判定し、結果を下の Result 節の \
+             `design` に書く。差分は `git diff` を自分で読んで確かめ（health の材料があれば `<target_sha>..<reviewed_sha>`）、\
+             file を変えない。\n\n\
+             ### 差分の要約\n"
+        ),
+    };
+    let mut out = format!("{preface}{}\n\n", design.plan_summary.trim_end());
     out.push_str(&brief_lines(design.brief.as_ref()));
-    out.push_str(&risk_lines(&design.risk));
+    // D4: owner 地図の行は、採用前の計画では dispatcher が `owner_rows` に引いたもの、差分では health の材料の行。
+    let rows: Vec<&OwnerRow> = match target {
+        DesignTarget::Plan => design.owner_rows.iter().collect(),
+        DesignTarget::Diff => review
+            .and_then(|r| r.health.as_ref())
+            .map(|h| h.repos.iter().flat_map(|r| &r.owner_rows).collect())
+            .unwrap_or_default(),
+    };
+    out.push_str(&risk_lines(
+        &design.risk,
+        design.review_policy.as_ref(),
+        &rows,
+    ));
+    if matches!(target, DesignTarget::Plan) && !design.owner_rows.is_empty() {
+        out.push_str(&owner_lines(&design.owner_rows));
+        out.push('\n');
+    }
     out.push_str(&review_policy_lines(
         design.review_policy.as_ref(),
         &design.risk,
@@ -253,22 +319,82 @@ fn list_field(name: &str, items: &[String]) -> String {
     out
 }
 
-fn risk_lines(risk: &RiskAssessment) -> String {
+/// D4: risk の節。level、設計の判定が要る理由、理由ごとの 1 行（`path_class:<class>:<path>` は path・class・owner 地図の
+/// 行・class の不変条件と根拠の file、`invariant:<class>:<名前>` は根拠の file）。
+fn risk_lines(risk: &RiskAssessment, policy: Option<&ReviewPolicy>, rows: &[&OwnerRow]) -> String {
     let level = serde_json::to_value(risk.level)
         .ok()
         .and_then(|v| v.as_str().map(str::to_string))
         .unwrap_or_default();
     let mut out = format!("### risk（dispatcher の決定的な判定）\n- level: `{level}`\n");
+    match risk.level {
+        RiskLevel::High => out.push_str(
+            "- design の判定が要る理由: level が `high`。下の理由の path が高 risk の class に合う（`new_*` の宣言の有無に\
+             よらない。既存の条件を 1 行変えるだけでも同じ）か、brief が `new_fallback` を宣言した。\n",
+        ),
+        RiskLevel::Unknown => out.push_str(
+            "- design の判定が要る理由: level が `unknown`。review 方針・正規表現・差分のどれかを読めず、境界に触れるかを\
+             決められない（読めないものは合格にしない）。\n",
+        ),
+        RiskLevel::Low | RiskLevel::None => {}
+    }
     if risk.reasons.is_empty() {
         out.push_str("- reasons: 無し\n");
     } else {
         out.push_str("- reasons:\n");
         for reason in &risk.reasons {
-            out.push_str(&format!("  - `{reason}`\n"));
+            out.push_str(&format!(
+                "  - `{reason}`{}\n",
+                reason_detail(reason, policy, rows)
+            ));
         }
     }
     out.push('\n');
     out
+}
+
+/// 理由 1 件の補足（`<repo>:` の付いた複数 repo の理由も同じ）。方針の無い理由・他の語は空。
+fn reason_detail(reason: &str, policy: Option<&ReviewPolicy>, rows: &[&OwnerRow]) -> String {
+    let core = reason
+        .find("path_class:")
+        .or_else(|| reason.find("invariant:"))
+        .map_or(reason, |at| &reason[at..]);
+    let source = |name: &str| {
+        let file = policy.and_then(|p| p.invariants.get(name));
+        file.map_or(format!("`{name}`"), |f| format!("`{name}`（`{f}`）"))
+    };
+    if let Some((_, name)) = core
+        .strip_prefix("invariant:")
+        .and_then(|r| r.split_once(':'))
+    {
+        return format!(": 不変条件 {}", source(name));
+    }
+    let Some((class, path)) = core
+        .strip_prefix("path_class:")
+        .and_then(|r| r.split_once(':'))
+    else {
+        return String::new();
+    };
+    let matched: Vec<String> = rows
+        .iter()
+        .filter(|r| r.path == path)
+        .map(|r| format!("`{}`", r.row))
+        .collect();
+    let map = match matched.is_empty() {
+        true => "この path の行は無い".to_string(),
+        false => matched.join(" / "),
+    };
+    let invariants: Vec<String> = policy
+        .and_then(|p| p.high_risk.iter().find(|c| c.class == class))
+        .map(|c| c.invariants.iter().map(|i| source(i)).collect())
+        .unwrap_or_default();
+    let invariants = match invariants.is_empty() {
+        true => "無し".to_string(),
+        false => invariants.join("、"),
+    };
+    format!(
+        ": path `{path}`・class `{class}`。owner 地図の行: {map}。class の不変条件: {invariants}"
+    )
 }
 
 fn review_policy_lines(policy: Option<&ReviewPolicy>, risk: &RiskAssessment) -> String {
@@ -334,9 +460,10 @@ fn design_viewpoint_lines() -> String {
     )
 }
 
-/// D5.4・付記 (a) A2: reviewer prompt の Result 節を組む唯一の関数。設計 review（`design` が `Some`）は
-/// `verdicts` を空にして `design` を書く形、final review は `verdicts`（任意の `repair` を含む）の形と、
-/// health があれば `health` の形を出す。例の JSON は `ReviewOutput` を serde で書き出したもので、そのまま読める（A3）。
+/// D5.4・付記 (a) A2・ADR 2026-11-17-boundary-change-risk-review 付記 (i): reviewer prompt の Result 節を組む唯一の
+/// 関数。採用前の計画の設計 review（`design` が `Some`）は `verdicts` を空にして `design` を書く形、final review は
+/// `verdicts`（任意の `repair` を含む）の形と、health があれば `health`、`diff_design` があれば `design` の形を出す。
+/// 例の JSON は `ReviewOutput` を serde で書き出したもので、そのまま読める（A3）。
 pub fn result_section(review: Option<&ReviewRequest>, artifacts: &str) -> String {
     let mut out = format!(
         "## Result\n\
@@ -346,16 +473,17 @@ pub fn result_section(review: Option<&ReviewRequest>, artifacts: &str) -> String
     );
     if review.is_some_and(|r| r.design.is_some()) {
         out.push_str(&format!("`{}`\n", example_json(&design_example())));
-        out.push_str(&design_verdict_lines());
+        out.push_str(&design_verdict_lines(DesignTarget::Plan));
         return out;
     }
     let health = review.and_then(|r| r.health.as_ref());
+    let diff_design = review.is_some_and(|r| r.diff_design.is_some());
     let criterion = review
         .and_then(|r| r.criteria.first().copied())
         .unwrap_or(0);
     out.push_str(&format!(
         "`{}`\n",
-        example_json(&final_example(criterion, health))
+        example_json(&final_example(criterion, health, diff_design))
     ));
     out.push_str(
         "- `verdicts` には上の \"Criteria you must judge in this run\" の criterion ごとにちょうど 1 件を書く。\
@@ -368,6 +496,9 @@ pub fn result_section(review: Option<&ReviewRequest>, artifacts: &str) -> String
         Some(health) => out.push_str(&health_verdict_lines(health)),
         None => out.push('\n'),
     }
+    if diff_design {
+        out.push_str(&design_verdict_lines(DesignTarget::Diff));
+    }
     out
 }
 
@@ -378,24 +509,33 @@ fn example_json(output: &ReviewOutput) -> String {
     serde_json::to_string(output).unwrap_or_default()
 }
 
+/// `design` の例。局所修復は無いので `repair` を書かない。
+fn design_verdict_example(reason: &str) -> DesignVerdictOut {
+    DesignVerdictOut {
+        pass: false,
+        findings: vec![HealthFindingOut {
+            kind: HealthFindingKind::ALL[0],
+            severity: HealthSeverity::Blocking,
+            path: Some(EXAMPLE_PATH.to_string()),
+            reason: reason.to_string(),
+            repair: None,
+        }],
+    }
+}
+
 fn design_example() -> ReviewOutput {
     ReviewOutput {
         verdicts: Vec::new(),
         health: None,
-        design: Some(DesignVerdictOut {
-            pass: false,
-            findings: vec![HealthFindingOut {
-                kind: HealthFindingKind::ALL[0],
-                severity: HealthSeverity::Blocking,
-                path: Some(EXAMPLE_PATH.to_string()),
-                reason: "brief と計画のどこが規約に反するか".to_string(),
-                repair: None,
-            }],
-        }),
+        design: Some(design_verdict_example("brief と計画のどこが規約に反するか")),
     }
 }
 
-fn final_example(criterion: usize, health: Option<&HealthReviewInput>) -> ReviewOutput {
+fn final_example(
+    criterion: usize,
+    health: Option<&HealthReviewInput>,
+    diff_design: bool,
+) -> ReviewOutput {
     let local_repair = || ReviewRepairHint {
         scope: "local".to_string(),
         class: "test".to_string(),
@@ -433,7 +573,7 @@ fn final_example(criterion: usize, health: Option<&HealthReviewInput>) -> Review
             repair: Some(local_repair()),
         }],
         health,
-        design: None,
+        design: diff_design.then(|| design_verdict_example("差分のどこが規約に反するか")),
     }
 }
 
@@ -448,22 +588,43 @@ fn kind_line() -> String {
     )
 }
 
-/// 付記 (a) A2: 設計 review の `design` の書き方。`repair` は書かせない（局所修復は無い）。
-fn design_verdict_lines() -> String {
-    let mut out = String::from(
-        "- この run は設計 review なので、`verdicts` は空の配列 `[]` のまま書く（判定する受け入れ条件が無い）。\
-         判定は `design` に書く。\n",
-    );
+/// 付記 (a) A2・ADR 2026-11-17-boundary-change-risk-review 付記 (i): `design` の書き方。`repair` は書かせない
+/// （局所修復は無い）。採用前の計画では `verdicts` を空にさせ、final review の差分では `verdicts` と並べて書かせる。
+fn design_verdict_lines(target: DesignTarget) -> String {
+    // (前置き, 不合格になるもの, path の対象, advisory の申し送り先, repair を書かない理由)
+    let (intro, failed, touched, forward, repair) = match target {
+        DesignTarget::Plan => (
+            "- この run は設計 review なので、`verdicts` は空の配列 `[]` のまま書く（判定する受け入れ条件が無い）。\
+             判定は `design` に書く。\n"
+                .to_string(),
+            "計画",
+            "計画",
+            "planner",
+            "計画の不合格は planner が計画を作り直して直し、局所修復は無い。",
+        ),
+        DesignTarget::Diff => (
+            format!(
+                "この review には上の「{heading}」が付いているので、同じ object に `verdicts` と並べて `design` も\
+                 書く（上の例の `design`）:\n",
+                heading = DIFF_DESIGN_HEADING.trim_start_matches('#').trim(),
+            ),
+            "review",
+            "差分",
+            "次の run",
+            "`design` の不合格は局所修復に回らず、全 criterion の不合格になる。",
+        ),
+    };
+    let mut out = intro;
     out.push_str(&kind_line());
-    out.push_str(
-        "- `severity` は `blocking`（1 件でもあれば計画は不合格）か `advisory`（記録と planner への申し送りだけに\
+    out.push_str(&format!(
+        "- `severity` は `blocking`（1 件でもあれば{failed}は不合格）か `advisory`（記録と {forward} への申し送りだけに\
          使う）。blocking が 1 件でもあれば `\"pass\":false`、無ければ `\"pass\":true` と書く。\n\
-         - `path` は任意。計画が触る repo 相対 path を書き、無ければ欄ごと省く。\n\
-         - `repair` は書かない。計画の不合格は planner が計画を作り直して直し、局所修復は無い。\n\
+         - `path` は任意。{touched}が触る repo 相対 path を書き、無ければ欄ごと省く。\n\
+         - `repair` は書かない。{repair}\n\
          - 違反が無ければ `\"pass\":true,\"findings\":[]` と書く。`design` は省かない。\n\
          - `design` が無い review.json と、`kind`・`severity` に上の値以外を書いた review.json は、判定を読めない\
-         不合格に数える。\n\n",
-    );
+         不合格に数える。\n\n"
+    ));
     out
 }
 

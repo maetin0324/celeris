@@ -93,7 +93,7 @@ fn health_review_design_gate_takes_the_highest_level_across_repos() {
     assert_eq!(risk.level, RiskLevel::High);
     assert_eq!(
         risk.reasons,
-        vec!["web:path_class:store+new_state".to_string()]
+        vec!["web:path_class:store:store/b.rs", "web:declared:new_state"]
     );
     assert_eq!(digest, Some("b".repeat(64)));
     // 片方の repo の方針を読めなければ unknown。high の repo があれば high が勝つ。

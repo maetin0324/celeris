@@ -1068,8 +1068,12 @@ impl ReviewHumanContext {
         health: Option<task_worker::protocol::HealthReviewInput>,
     ) -> ReviewRequest {
         ReviewRequest {
-            // ADR 2026-11-07-health-review-integration D3.5: 設計 review の run だけが持つ（ここは final review）。
+            // ADR 2026-11-07-health-review-integration D3.5: 採用前の計画の設計 review の run（`Completion::DesignReview`
+            // の経路）だけが持つ。ここは final review なので常に `None`。
             design: None,
+            // ADR 2026-11-17-boundary-change-risk-review D3・付記 (i): final review の差分の設計の節。覆われない
+            // (class, path) の組の判定は WorkUnit `review-gate` が入れる。
+            diff_design: None,
             summary: subject.summary.clone(),
             evidence: subject.evidence.clone(),
             criteria: criteria.to_vec(),

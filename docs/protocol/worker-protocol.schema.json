@@ -1907,7 +1907,7 @@
       "type": "object"
     },
     "DesignReviewRequest": {
-      "description": "D3.5: `ReviewRequest.design`。risk が `high`・`unknown` の計画の採用前に dispatcher が作る。",
+      "description": "D3.5: `ReviewRequest.design`（risk が `high`・`unknown` の計画の採用前に dispatcher が作る。`plan_summary` は\n計画の要約）と、ADR 2026-11-17-boundary-change-risk-review 付記 (i) の `ReviewRequest.diff_design`（final review の\n差分が設計 review の覆わない高 risk の (class, path) の組に触れたとき dispatcher が作る。`plan_summary` は差分の\nstat、`risk` は覆われない組の理由）。",
       "properties": {
         "brief": {
           "anyOf": [
@@ -1921,7 +1921,7 @@
           "description": "計画の設計 brief（人の計画など brief の無い計画では省略）。"
         },
         "plan_summary": {
-          "description": "計画の要約（rationale・unit の key と題・write path）。",
+          "description": "判定の対象の要約。`design` では計画の要約（rationale・unit の key と題・write path）、`diff_design` では\n差分の stat。",
           "type": "string"
         },
         "review_policy": {
@@ -3801,7 +3801,7 @@
               "type": "null"
             }
           ],
-          "description": "ADR 2026-11-07-health-review-integration D3.5: 設計 review の判定。`ReviewRequest.design` を渡した\nreview だけが書く。旧 reviewer の `review.json` は省略で読める。"
+          "description": "ADR 2026-11-07-health-review-integration D3.5・ADR 2026-11-17-boundary-change-risk-review 付記 (i): 設計の\n判定。`ReviewRequest.design` を渡した採用前の計画の設計 review（`verdicts` は空）と、`ReviewRequest.diff_design`\nを渡した final review（`verdicts` と並べて書く）だけが書く。旧 reviewer の `review.json` は省略で読める。"
         },
         "health": {
           "anyOf": [
@@ -3953,7 +3953,18 @@
               "type": "null"
             }
           ],
-          "description": "ADR 2026-11-07-health-review-integration D3.5: 採用前の設計 review の run だけ `Some`（`summary`・\n`evidence`・`criteria` は空）。`RunContext` の直下でなくここに置く（欄の数の上限。進捗\n`2026-11-07-health-v2-g2/dispatch/risk-events.md`）。final review・WU の review では `None`。\n`Box` は `RunContext` を大きくしないため（future の stack。wire の形は変わらない）。"
+          "description": "ADR 2026-11-07-health-review-integration D3.5: 採用前の計画の設計 review の run（dispatcher の\n`Completion::DesignReview` の経路）だけ `Some`（`summary`・`evidence`・`criteria` は空）。`RunContext` の\n直下でなくここに置く（欄の数の上限。進捗 `2026-11-07-health-v2-g2/dispatch/risk-events.md`）。final review・\nWU の review では常に `None`（final review の差分の設計の節は `diff_design`）。\n`Box` は `RunContext` を大きくしないため（future の stack。wire の形は変わらない）。"
+        },
+        "diff_design": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignReviewRequest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-11-17-boundary-change-risk-review D3・付記 (i): final review の差分が、採用した計画の設計 review の\n覆わない高 risk の (class, path) の組に触れたとき、dispatcher が付ける設計の節（要約は差分の stat、risk は\n覆われない組の理由、方針は base 側）。final review の run だけが持ち、`design` と同時には付かない。reviewer は\ncriterion ごとの `verdicts` と並べて `ReviewOutput.design` を書く。`None` の `request.json` は従来と同じ。"
         },
         "evidence": {
           "description": "対象 run の `done.evidence`。",

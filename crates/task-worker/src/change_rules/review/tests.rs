@@ -12,8 +12,8 @@ use task_core::execution_plan::{DesignBrief, DesignOption};
 use super::*;
 use crate::claude_code::build_prompt;
 use crate::protocol::{
-    DesignReviewRequest, HealthFindingCounts, HealthReportFinding, PathStat, ReviewOutput,
-    ReviewRequest, RunContext,
+    DesignReviewRequest, Evidence, HealthFindingCounts, HealthReportFinding, PathStat,
+    ReviewDecision, ReviewOutput, ReviewRequest, RunContext,
 };
 
 /// Result 節の次に来る result.json の指示の先頭。
@@ -674,4 +674,168 @@ fn change_rules_design_review_without_policy_or_brief_explains_why() {
             "{needle:?} missing in:\n{section}"
         );
     }
+}
+
+/// ADR 2026-11-17-boundary-change-risk-review 付記 (i) の final review の `diff_design`。人の決定・evidence・health と
+/// 差分の設計の節を全部持つ（`health` は引数で付け外しする）。
+fn diff_design_request(health: Option<HealthReviewInput>) -> ReviewRequest {
+    ReviewRequest {
+        summary: "middleware の条件を直した".to_string(),
+        evidence: vec![Evidence {
+            criterion: 1,
+            command: Some("cargo nextest run -p alpha".to_string()),
+            exit: Some(0),
+            stdout_tail: Some("12 passed".to_string()),
+        }],
+        criteria: vec![1],
+        decisions: vec![ReviewDecision {
+            task_id: crate::protocol::tests::sample_task().id,
+            key: "order".to_string(),
+            question: "どの順で入れるか".to_string(),
+            option: "rust-first".to_string(),
+            option_label: "Rust を先に入れる".to_string(),
+            note: None,
+        }],
+        health,
+        diff_design: Some(Box::new(DesignReviewRequest {
+            brief: Some(full_brief()),
+            plan_summary: "diff: 1 file、+2 行・-1 行\n- `crates/alpha/src/plan.rs`（+2・-1）"
+                .to_string(),
+            risk: high_risk(),
+            review_policy: Some(policy()),
+        })),
+        ..ReviewRequest::default()
+    }
+}
+
+/// 付記 (i): `diff_design` 付きの final review の prompt は、final review の節（人の決定・判定する criterion・worker の
+/// evidence・health）を 1 つも落とさず、その後ろ（Result 節の前）に差分の設計の節を足す。採用前の計画の見出しと前置き
+/// （「受け入れ条件ごとの判定はしない」）は出ない。既存の試験は `design`（採用前）と `diff_design` 無しの final review
+/// しか作らないので、`diff_design` を見落として final review の節を消す描画（`design` の分岐への合流）を検出できない。
+#[test]
+fn prompt_final_design_keeps_criteria_evidence_health_and_adds_the_diff_design_section() {
+    let prompt = review_prompt(Some(diff_design_request(Some(HealthReviewInput {
+        repos: vec![repo("alpha", false)],
+        brief: None,
+    }))));
+    let mut last = 0;
+    for heading in [
+        "## Human decisions and answers (authoritative)",
+        "## Worker's self-reported summary (not to be trusted blindly)\nmiddleware の条件を直した\n",
+        "## Criteria you must judge in this run\n- criterion 1\n",
+        "## Evidence self-reported by the worker (not to be trusted blindly)\n\
+         - criterion 1: command `cargo nextest run -p alpha` exit=0 stdout_tail=\"12 passed\"\n",
+        HEALTH_HEADING,
+        DIFF_DESIGN_HEADING,
+        "## Result\n",
+    ] {
+        assert_eq!(
+            prompt.matches(heading).count(),
+            1,
+            "{heading:?} in:\n{prompt}"
+        );
+        let at = prompt.find(heading).unwrap_or_default();
+        assert!(at > last, "{heading:?} out of order in:\n{prompt}");
+        last = at;
+    }
+    assert!(prompt.contains("- decision order (task "), "{prompt}");
+    let section_at = prompt.find(DIFF_DESIGN_HEADING).unwrap_or_default();
+    let result_at = prompt.find("## Result\n").unwrap_or_default();
+    let section = &prompt[section_at..result_at];
+    for needle in [
+        "受け入れ条件ごとの判定に加えて",
+        "### 差分の要約\ndiff: 1 file、+2 行・-1 行\n- `crates/alpha/src/plan.rs`（+2・-1）\n",
+        "- root_cause: planner が owner を決めずに計画する\n",
+        "- level: `high`\n",
+        "  - `path_class:dispatch:crates/alpha/src/plan.rs`\n",
+        "  - `dispatch`: `^crates/alpha/src/`、`^scripts/health/`\n",
+        "### 判定の観点",
+    ] {
+        assert!(
+            section.contains(needle),
+            "{needle:?} missing in:\n{section}"
+        );
+    }
+    for absent in [
+        DESIGN_HEADING,
+        "受け入れ条件ごとの判定はしない",
+        "### 計画の要約",
+    ] {
+        assert!(!prompt.contains(absent), "{absent:?} in:\n{prompt}");
+    }
+}
+
+/// 付記 (i): `diff_design` 付きの final review の Result 節の例の JSON を `ReviewOutput` で読むと、criterion ごとの
+/// `verdicts`（`repair` 付き）と `design`（`repair` 無し）の両方があり、health があれば `health` もある。文は `verdicts`
+/// と並べて `design` を書かせ、採用前の計画の「`verdicts` は空」を出さない。`ReviewOutput` は未知の欄を捨てるので、
+/// 欄名の誤りは `Some` の確認で検出する（既存の試験の final review の例は `design` が `None` であることしか見ない）。
+#[test]
+fn prompt_final_design_result_example_has_verdicts_and_design() {
+    for (case, health) in [
+        (
+            "with health",
+            Some(HealthReviewInput {
+                repos: vec![repo("alpha", true)],
+                brief: None,
+            }),
+        ),
+        ("without health", None),
+    ] {
+        let has_health = health.is_some();
+        let prompt = review_prompt(Some(diff_design_request(health)));
+        let output = result_example(&prompt);
+        assert_eq!(output.verdicts.len(), 1, "{case}");
+        assert_eq!(output.verdicts[0].criterion, 1, "{case}: first criterion");
+        assert!(output.verdicts[0].repair.is_some(), "{case}");
+        assert_eq!(output.health.is_some(), has_health, "{case}");
+        let design = output
+            .design
+            .unwrap_or_else(|| panic!("{case}: design missing"));
+        assert!(!design.pass, "{case}");
+        assert_eq!(design.findings.len(), 1, "{case}");
+        assert!(design.findings[0].repair.is_none(), "{case}");
+        let result = section_after(&prompt, "## Result\n");
+        for needle in [
+            "- `verdicts` には上の \"Criteria you must judge in this run\" の criterion ごとにちょうど 1 件を書く。",
+            "「設計 review（差分）」が付いているので、同じ object に `verdicts` と並べて `design` も書く",
+            "- `repair` は書かない。`design` の不合格は局所修復に回らず、全 criterion の不合格になる。",
+            "- `path` は任意。差分が触る repo 相対 path を書き、無ければ欄ごと省く。",
+            "`design` が無い review.json と、",
+        ] {
+            assert!(result.contains(needle), "{case}: {needle:?} in:\n{result}");
+        }
+        assert_eq!(
+            result.contains("`health` が無い review.json"),
+            has_health,
+            "{case}"
+        );
+        assert!(!result.contains("`verdicts` は空の配列"), "{case}");
+    }
+}
+
+/// 付記 (i): `design_section` は採用前の計画と差分で見出しと前置き（要約の見出しまで）だけが違い、要約の本文から後
+/// （brief・risk・方針・観点）は同じ文字列になる。片方だけ直して文面がずれる変更を検出する。
+#[test]
+fn prompt_final_design_section_shares_every_line_after_the_preface() {
+    let material = diff_design_request(None)
+        .diff_design
+        .unwrap_or_else(|| panic!("diff_design"));
+    let plan = design_section(Some(&ReviewRequest {
+        design: Some(material.clone()),
+        ..ReviewRequest::default()
+    }));
+    let diff = design_section(Some(&ReviewRequest {
+        diff_design: Some(material),
+        ..ReviewRequest::default()
+    }));
+    let plan_body = plan
+        .split_once("### 計画の要約\n")
+        .map(|(_, body)| body)
+        .unwrap_or_else(|| panic!("plan summary heading in:\n{plan}"));
+    let diff_body = diff
+        .split_once("### 差分の要約\n")
+        .map(|(_, body)| body)
+        .unwrap_or_else(|| panic!("diff summary heading in:\n{diff}"));
+    assert_eq!(plan_body, diff_body);
+    assert!(plan.starts_with(DESIGN_HEADING) && diff.starts_with(DIFF_DESIGN_HEADING));
 }

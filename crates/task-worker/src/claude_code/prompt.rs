@@ -1689,8 +1689,8 @@ fn build_review_prompt(task: &Task, context: &RunContext, run_id: &str, artifact
     out.push('\n');
     out.push_str(&harness_artifacts_section_for_review(context));
     match &context.review {
-        // 付記 (a) A1・A2: 設計 review の run は採用前の計画を判定する。受け入れ条件の判定と worker の evidence の
-        // 節は出さない。
+        // 付記 (a) A1・A2: 採用前の計画の設計 review の run（`design`）は計画を判定する。受け入れ条件の判定と
+        // worker の evidence の節は出さない。
         Some(review) if review.design.is_some() => {
             out.push_str(&crate::change_rules::review::design_section(Some(review)));
         }
@@ -1799,6 +1799,11 @@ fn build_review_prompt(task: &Task, context: &RunContext, run_id: &str, artifact
             }
             out.push('\n');
             out.push_str(&crate::change_rules::review::health_section(review));
+            // ADR 2026-11-17-boundary-change-risk-review 付記 (i): final review の `diff_design` は、上の人の決定・
+            // check・evidence・health の節を保ったまま差分の設計の節を足す（`None` なら空文字列）。
+            if review.diff_design.is_some() {
+                out.push_str(&crate::change_rules::review::design_section(Some(review)));
+            }
         }
         None => {
             out.push_str("## Review context\nno review context\n\n");

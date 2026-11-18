@@ -1183,6 +1183,68 @@ impl Dispatcher {
         Ok(Some(reasons.join("; ")))
     }
 
+    /// ADR-0130 D4: record the task branch's behind commits against its target. Never fails the
+    /// caller (Git/store errors are only logged).
+    pub(super) fn observe_behind_target(
+        &self,
+        task_id: TaskId,
+        repo_id: task_core::RepoId,
+        worktree: &Path,
+        target_ref: &str,
+    ) -> Option<task_core::behind_target::BehindTargetSnapshot> {
+        task_ops::behind_target::observe_behind_target(
+            self.store.as_ref(),
+            task_id,
+            repo_id,
+            worktree,
+            target_ref,
+            self.now_utc(),
+        )
+        .inspect_err(|error| {
+            tracing::warn!(%task_id, %target_ref, %error, "behind target observation failed")
+        })
+        .ok()
+    }
+
+    /// ADR-0118 review sync target of one repo ([`behind_target::review_target`]). The repo's default
+    /// branch is read only when the task is not a tree child.
+    pub(crate) fn review_target_ref(
+        &self,
+        task: &Task,
+        repo_id: task_core::RepoId,
+        source: &Path,
+    ) -> Result<Option<String>, DispatchError> {
+        let parent = task_core::tree::parent_branch(task, &self.config.worktree_branch_prefix);
+        let configured = match parent {
+            Some(_) => None,
+            None => self.store.repo_get(repo_id)?.and_then(|r| r.default_branch),
+        };
+        let target = behind_target::review_target(parent, configured.as_deref(), source);
+        Ok(target)
+    }
+
+    /// `(repo, worktree, target_ref)` of every local Git worktree the review sync of `task` would rebase.
+    pub(super) fn review_sync_targets(
+        &mut self,
+        task: &Task,
+    ) -> Result<Vec<(task_core::RepoId, PathBuf, String)>, DispatchError> {
+        let remote = matches!(&task.workspace, WorkspaceSpec::Remote { .. })
+            || self.cluster_of(task).is_some();
+        if remote || task.repos.is_empty() {
+            return Ok(Vec::new());
+        }
+        let Some(workspaces) = self.task_workspaces_for(task) else {
+            return Ok(Vec::new());
+        };
+        let mut targets = Vec::new();
+        for (repo_id, worktree, source) in behind_target::sync_sites(task, &workspaces) {
+            if let Some(target_ref) = self.review_target_ref(task, repo_id, &source)? {
+                targets.push((repo_id, worktree, target_ref));
+            }
+        }
+        Ok(targets)
+    }
+
     /// 同 ADR D4: 止めた repo の target ref の先頭 commit の committer 時刻（UNIX 秒）。読めなければ `None`。
     fn target_commit_time(&self, task: &Task, repo_id: task_core::RepoId) -> Option<i64> {
         let workspaces = self.task_workspaces_for(task)?;

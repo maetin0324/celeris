@@ -1,7 +1,11 @@
 //! ADR-0079: depth-limited automatic leaves; durable counters from existing events.
-use super::*;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU32, Ordering};
+
+use task_core::{
+    Checkpoint, CostOfReversal, DecisionKind, DecisionOption, DecisionPathEntry, DecisionRequest,
+    DecisionStatus, Event, Task, TreeLimits, WorkUnitRow,
+};
 
 #[derive(Debug)]
 pub(super) struct AutoLeafWatch {
@@ -168,52 +172,47 @@ pub(super) fn counts(
     Some(counts)
 }
 
-impl Dispatcher {
-    pub(super) fn auto_leaf_decision(
-        &self,
-        task: &Task,
-        wu: &task_core::WorkUnitRow,
-        run_id: &str,
-        counts: &AutoLeafCounts,
-        checkpoint: Option<&task_core::Checkpoint>,
-    ) -> Result<task_core::DecisionRequest, DispatchError> {
-        use task_core::{
-            CostOfReversal, DecisionKind, DecisionOption, DecisionRequest, DecisionStatus,
-        };
-        let limits = self.config.execution.limits.tree;
-        let mut path =
-            task_ops::tree::decision_path(self.store.as_ref(), task).map_err(ops_to_store)?;
-        if let Some(last) = path.last_mut() {
-            last.stage = wu.phase.clone();
-        }
-        path.push(task_core::DecisionPathEntry {
-            task_id: task.id,
-            title: wu.spec.title.clone(),
-            stage: None,
-            unit: Some(wu.key.clone()),
-        });
-        let progress = checkpoint
-            .map(|cp| cp.completed.join("; "))
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| counts.progress.clone())
-            .chars()
-            .take(500)
-            .collect::<String>();
-        Ok(DecisionRequest {
-            id: ulid::Ulid::new().to_string(),
-            key: format!("auto_leaf_budget:{}:{run_id}", wu.id),
-            kind: DecisionKind::LeafTooLarge,
-            question: format!("自動で実行した leaf {}「{}」の継続を確認してください。前回の続行回答以降（未回答なら開始以降）: compaction/context rollover {} 回（上限 {}）、continuation {} 回（上限 {}）。直近の進捗: {}", wu.key, wu.spec.title, counts.compactions, limits.auto_leaf_max_compactions, counts.continuations, limits.auto_leaf_max_continuations, if progress.is_empty() { "記録なし" } else { &progress }),
-            options: vec![
-                DecisionOption { key: "run-as-leaf".into(), label: "続ける".into(), consequence: Some("checkpoint/session を引き継ぎ、警戒の計数を再開する".into()) },
-                DecisionOption { key: "replan".into(), label: "replan で小さな leaf に分ける".into(), consequence: None },
-                DecisionOption { key: "withdraw".into(), label: "この unit を取り下げる".into(), consequence: None },
-            ],
-            recommended: "replan".into(), cost_of_reversal: CostOfReversal::Low,
-            cost_note: Some("gate は compound だが深さ上限のため leaf のまま自動実行した。実測の回数が閾値を超えたので停止した。".into()),
-            needed_before: vec![wu.key.clone()], path,
-            raised_by: task_core::DecisionRaisedBy { task_id: task.id, run_id: Some(run_id.into()), origin: task_core::DecisionOrigin::Daemon },
-            status: DecisionStatus::Open, answer: None, withdrawn_reason: None,
-        })
+/// The decision request that stops an automatic leaf over its budget. `path` is the decision path
+/// of `task` (its last entry gets the WU's stage, then the WU itself is appended).
+pub(super) fn decision_request(
+    task: &Task,
+    wu: &WorkUnitRow,
+    run_id: &str,
+    counts: &AutoLeafCounts,
+    checkpoint: Option<&Checkpoint>,
+    limits: TreeLimits,
+    mut path: Vec<DecisionPathEntry>,
+) -> DecisionRequest {
+    if let Some(last) = path.last_mut() {
+        last.stage = wu.phase.clone();
+    }
+    path.push(DecisionPathEntry {
+        task_id: task.id,
+        title: wu.spec.title.clone(),
+        stage: None,
+        unit: Some(wu.key.clone()),
+    });
+    let progress = checkpoint
+        .map(|cp| cp.completed.join("; "))
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| counts.progress.clone())
+        .chars()
+        .take(500)
+        .collect::<String>();
+    DecisionRequest {
+        id: ulid::Ulid::new().to_string(),
+        key: format!("auto_leaf_budget:{}:{run_id}", wu.id),
+        kind: DecisionKind::LeafTooLarge,
+        question: format!("自動で実行した leaf {}「{}」の継続を確認してください。前回の続行回答以降（未回答なら開始以降）: compaction/context rollover {} 回（上限 {}）、continuation {} 回（上限 {}）。直近の進捗: {}", wu.key, wu.spec.title, counts.compactions, limits.auto_leaf_max_compactions, counts.continuations, limits.auto_leaf_max_continuations, if progress.is_empty() { "記録なし" } else { &progress }),
+        options: vec![
+            DecisionOption { key: "run-as-leaf".into(), label: "続ける".into(), consequence: Some("checkpoint/session を引き継ぎ、警戒の計数を再開する".into()) },
+            DecisionOption { key: "replan".into(), label: "replan で小さな leaf に分ける".into(), consequence: None },
+            DecisionOption { key: "withdraw".into(), label: "この unit を取り下げる".into(), consequence: None },
+        ],
+        recommended: "replan".into(), cost_of_reversal: CostOfReversal::Low,
+        cost_note: Some("gate は compound だが深さ上限のため leaf のまま自動実行した。実測の回数が閾値を超えたので停止した。".into()),
+        needed_before: vec![wu.key.clone()], path,
+        raised_by: task_core::DecisionRaisedBy { task_id: task.id, run_id: Some(run_id.into()), origin: task_core::DecisionOrigin::Daemon },
+        status: DecisionStatus::Open, answer: None, withdrawn_reason: None,
     }
 }

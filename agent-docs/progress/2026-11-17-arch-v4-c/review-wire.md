@@ -10,7 +10,7 @@ updated: 2026-11-18
 ADR: [2026-11-17-boundary-change-risk-review.md](../../adr/2026-11-17-boundary-change-risk-review.md) の §5 port (c)・D3 と、
 この WorkUnit が書いた「## 付記（2026-11-18、計画 v3 の決定）」(i)〜(v)。基準は `$CELERIS_WU_BASE`（この WorkUnit の base）。
 commit は件名で挙げる: `arch-v4 C review-wire: final review の設計の節を ReviewRequest.diff_design で渡し、prompt が verdicts・health・evidence を保って design も求める`、
-`arch-v4 C review-wire: 進捗に検査の結果を書く`。
+`arch-v4 C review-wire: 進捗に検査の結果を書く`、`arch-v4 C review-wire: 進捗に提出時の HEAD の test-affected の結果を書く`。
 
 ## 変更
 - ADR の付記（受け入れ条件 3）: (i) port (c) の欄は `ReviewRequest.diff_design`（final review だけ）、(ii) `HealthReportFinding.key` は作らず
@@ -62,7 +62,8 @@ commit は件名で挙げる: `arch-v4 C review-wire: final review の設計の�
 - wire・dispatcher・prompt の `diff_design` の grep（計画の check 3）: exit 0。
 - `bash scripts/dev/check-health.sh --out …`: exit 0（143 秒）。必須 rule は `policy.changed` を含め全部 `pass`（policy の file は変えていない）。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
-- `bash scripts/dev/test-affected.sh`: 下の「test-affected」に書く。
+- `bash scripts/dev/test-affected.sh`: exit 0（737 秒）。対象 crate は celeris・celeris-campaign・celerisctl・llm-proxy・task-api・task-dispatch・task-worker（`--list`）。
+  nextest 6,084 passed・21 skipped、doc test は ok、script bundle の SKIP 0 件。web の型検査・unit 試験は対象外（web/・docs/api/・task-api の通常依存の変更が無い）。
 
 ## LoC（`git diff --numstat $CELERIS_WU_BASE HEAD`）
 - production Rust: +161 −67（純増 94。ADR の目安 400 行以内。内訳 `change_rules/review.rs` +124 −52、`protocol.rs` +13 −5、

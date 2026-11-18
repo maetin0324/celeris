@@ -239,3 +239,98 @@ D3・D4 の記述と食い違うところは、この付記が優先する。
 - (iv) `ReviewerPassReused`（同じ差分に対する reviewer の合格の再利用）は変えない。D3 を含む release が昇格する前に出た合格が昇格の後に再利用される限界は、
   進捗の「本番への移行」節に書く。
 - (v) reviewer run の無い review（policy_only）で、覆われない (class, path) の組が残れば不合格にする（fail-closed。理由に class と path を残す）。
+
+## 付記（実装）
+
+2026-11-18、WorkUnit `closeout` が書く。上の決定節と「付記（2026-11-18、計画 v3 の決定）」に対し、実装で違ったところと既知の限界を書く。
+食い違うところはこの付記が優先する。各 WorkUnit の記録は [進捗](../progress/2026-11-17-arch-v4-c.md) と同名の dir の file。
+
+### main への入り方の順（D6）
+- `PathClass.invariants` の欄（`#[serde(default, skip_serializing_if = "Vec::is_empty")]`）は、C の Rust の leaf より先に別の task 01M7NZW0BSD3FR38XMJG190BB4 で
+  main に入った（件名「ADR: PathClass に任意の欄 invariants を先に足す決定（アーキv4 C の D2・D6 の一部）を記録する」「PathClass に任意の欄 invariants を足し、往復試験と schema を更新する」）。
+  profile の差分だけを main に入れると、main の `health_review_scenario_real_cli` の往復の比較（`invariants` が消える）が落ちるため。人が 2026-11-18 に
+  順 `rust-first` を選び、運用者が前提の task を起票した。
+- policy の唯一の leaf `profile` の差分は、人が承認し（2026-11-18、認可 01M7NX38P09PR9JTTAPDA96VW2）、運用者が main に no-ff で merge した
+  （件名「integrate 01M7MZTKB2 profile: [review] に境界の 6 class と class ごとの不変条件を足す（policy の branch、人の承認と operator の hand merge）」）。
+  後の leaf は `scripts/dev/repo-health/` を変えていない。
+- leaf `risk-rule` は main と同じ欄を持つので、literal（`vec![]`）・doc comment・往復試験 2 件（`path_class_invariants_survive_round_trip`・
+  `path_class_without_invariants_round_trips_without_field`）の文面を main に揃えて衝突を無くした。
+
+### 範囲の check の replan
+- 計画 v1 の leaf `risk-rule` の範囲の check は、許可の式に `PathClass` の literal を持つ `crates/task-worker/src/protocol/{design_review,health}/tests.rs` と、
+  doc comment から生成される `docs/api/v1/{api-v1,event}.schema.json`・`web/api/generated/schema.json` を含めていなかった。D1・D6 の実装からこの 5 file の変更は
+  避けられず、check は成果をどう直しても落ちた。1 回目の申告は replan に届かず、`yield.plan_issue` で申告し直し、計画 v3 が許可の式を足した
+  （`crates/task-worker/src/protocol/(design_review|health)/tests\.rs$`、`docs/(protocol|api/v1)/`、`web/api/generated/schema\.json$`）。
+
+### port (c): `ReviewRequest.diff_design`（付記 (i) のとおり）
+- final review の設計の節は `ReviewRequest.diff_design` で渡す。`ReviewRequest.design` は採用前の計画の設計 review の run（`Completion::DesignReview` の経路、
+  `health_review/design_gate.rs`）だけが持ち、final review の `review.rs` の `into_request` は `design` を常に `None`、`diff_design` を材料から入れる。
+  run の種類の正本は dispatcher の 1 つで、worker は欄の有無で見出し・前置き・Result 節の形を分けるだけ（private の `DesignTarget`）。
+- reviewer は `review.json` の同じ object に `verdicts`・`health`・`design` を書く。`Verdict::from_final_review` が、`diff_design` を渡した review で `design` が無い
+  （`DIFF_DESIGN_VERDICT_MISSING`）・`pass = false` なら不合格（`fail_all`。局所修復なし）にする。codex・acp・pi の reviewer run も同じ `build_review_prompt` を通る。
+
+### D3: 差分の path は既存の `diff_stat` の changed（`--no-renames`）
+- D3 の「`git diff --name-status --find-renames` の path を集める」新しい git の経路は作らず、final review の材料が既に取る `health_review/input.rs` の
+  `diff_stat`（`git diff --numstat -z --no-renames <target>..<reviewed>`）の changed を再利用した。`--no-renames` では rename は「元の path の削除と先の path の
+  追加」になるので、rename の両側と消した path が入る。copy は先の path だけ（元の file は変わらない）。
+- 判定は同じ `assess_risk(state, changed, None)` で、2 つ目の判定は無い。brief を渡さないので `assess_risk` が足す `brief_absent_human_plan` は差分の risk から外す
+  （`diff_risk`）。`--find-renames` に戻すと rename の元が落ちることを、`boundary_case_3_move_cannot_escape` の失敗注入で確かめた。
+
+### D4: 地図の行は既存の `input::owner_rows` を再利用
+- D4 の「`task_core::design_review` に新しい探索関数（最初の 1 行・長い接頭辞から）」は作らず、final review の health の材料が既に使う
+  `task_dispatch::health_review::input::owner_rows`（行の中の path が変更 path・親 dir・`foo.rs` の module dir を含む行を地図の順に最大 40 件）と、描画の
+  `change_rules::review::owner_lines` を再利用した。
+- 採用前の計画の設計 review では、dispatcher（`design_review_hold`）が判定に使った方針（`definition_sha256` が `DesignReviewRequested.policy_sha256` と同じ）の
+  repo の base の版の地図を `input::requested_policy` で読み、risk の理由の path を先に、計画の write path を後にして `DesignReviewRequest.owner_rows`
+  （任意の欄）で渡す。差分の設計の節では `owner_rows` を空にし、同じ request の `HealthRepoInput.owner_rows` を使う（同じ行を 2 か所に持たない）。
+- reviewer の `risk_lines` は理由 `path_class:<class>:<path>` ごとに path・class・地図の行・class の不変条件と根拠の file を 1 行で出す。worker と planner の
+  `repo_section` は宣言によらない設計 review の規則・class ごとの不変条件・`deps.cycle` の依存の規則を出す。
+
+### port (b): `HealthReportFinding.key` は作らない（付記 (ii) のとおり）
+- report v1 の既存の欄（最初の evidence の `symbol` と finding の `rationale`）を `HealthReportFinding.symbol`・`rationale`（任意の欄）に写した。
+  B の鍵 `cycle-edge:<src>-><dst>` を Rust で組み直さない。reviewer の health の節は new・worsened の finding に `fingerprint`・`symbol`・`rationale` を出す。
+- 修復の run には `health_repairs` の reason（`health:<fp>（evidence: …、symbol: <src> -> <dst>）`）が既存の `prior_review` の経路で届く。
+
+### 覆う範囲は (class, path)（付記 (iii) のとおり）
+- 採用した計画の `plan_sha256` で、最後の `DesignReviewed` が合格のときだけ、同じ sha の `DesignReviewRequested.risk` の `path_class:<class>:<path>` に
+  同じ class で同じ path（または `/` で終わる dir の接頭辞）がある差分の path を覆う（`covered_pairs`）。不合格・採用していない計画・計画の sha 無しは何も覆わない。
+- 複数 repo の計画の理由（`<repo>:path_class:…`）は覆わない側に倒した（final review の repo は id、計画の repo は名前で、対応を引く経路を足さなかった）。
+
+### policy_only（reviewer run の無い review）の不合格（付記 (v) のとおり）
+- `record_policy_only` が base 側の方針と `diff_stat` で毎回 risk を決め、`HealthInputJob::attach` の `fail_uncovered` が、覆われない組があれば評価済みの health の
+  合格の項目を `UNCOVERED_WITHOUT_REVIEWER` と class・path の理由付きの不合格（substantive）にする。もともと不合格の項目は元の理由のまま。
+  `ReviewExtras` に欄を足して `review_task` に不合格を足す案は、size.responsibility-growth の existing の単位（`spawn_review`・`review_task`）の行を増やすので取らなかった。
+- WorkUnit `cases` が、`health_review::review_item::evaluate_all` が評価済みの項目（`RepoHealth::Evaluated`）を `take()` で捨てていた不具合（この経路で項目が
+  消えると fail-open になる）を `take_if` で直した（試験 `boundary_case_6_fail_closed` の (e)）。
+
+### `ReviewerPassReused` は変えない（付記 (iv) のとおり）
+- D3 を含む release が昇格する前に出た reviewer の合格が、昇格の後に `ReviewerPassReused` で再利用されると、その candidate には差分の設計の判定が求められない。
+  昇格の後、`risk` の無い `HealthReviewInputBuilt`（昇格の前の記録）は再利用せず作り直す（repo health を 1 回余計に走らせる）。
+
+### fail-closed の実装
+- 方針を読めない・適用判定が `Unavailable`・差分を取れない repo は `RepoRisk::unknown`（`review_policy_unavailable:<要約>`、level `Unknown`）で設計の判定を求める。
+  正規表現を読めない方針は `assess_risk` が `Unknown`。材料作りの task が落ちた（`JoinError`）ときも `Unknown` の `diff_design`。方針が `Absent` の repo は何もしない。
+
+### 規模
+- production の Rust の純増は +662 行（risk-rule +29、review-wire +94、review-gate +370、prompts +181、前提の task +3、cases の修正ほか。A の §7 C12 の
+  `source-size-report.py --exclusive-classes` を before と HEAD に当てた値。[metrics](../progress/2026-11-17-arch-v4-c/metrics.md) §6）。
+  「規模の目安」の 400 行を 262 行超えた。新しい module・trait・framework・reviewer の run の種類・verdict の型・event kind は足していない。
+  受け入れるか縮めるかは人が決める（進捗の「未解決」）。
+
+### 既知の限界
+- D1・D3・D4 は、この変更を含む release が昇格した後の daemon と worker でだけ効く（昇格は人だけ）。この task 自身の final review は今の daemon で走る。
+- 人の計画（`PlanOrigin::Human`）は採用前の risk の判定を通らない（leaf `risk-rule` が呼び出し元を確かめた。D1 の未確認）。その変更は D3 が final review で覆う。
+- 同期の無い repo（`NOT_SYNCED`）と remote workspace の repo は差分が無いので risk を当てない（health の材料も今までどおり無い）。
+- 複数 repo の計画の task は、差分の設計の判定を毎回求められる（上の「覆う範囲」）。
+- `docs/architecture-map.md` に、新しい class の file の多く（`task-api/src/middleware.rs`・`principal.rs`・`handlers/authority.rs`・`task-core/src/authority.rs`・
+  `cos/operations.rs`・`task-ops/src/lifecycle.rs`・`task-core/src/transition.rs`・`task-worker/src/browser_policy.rs`・`dispatcher/worker_finish.rs`・
+  `celeris/src/instance.rs`）の path も親 dir も無い。設計 review の prompt の地図の行はそれらの path で「この path の行は無い」になる。
+- `owner_rows` は行ごとに最初に当たった変更 path を持つ。差分の設計の節で理由の path が別の path の行に覆われると、理由の行に「この path の行は無い」と出る
+  （行は health の節の一覧にある）。採用前の計画では理由の path を先に渡すので起きない。
+- 設計 review の回数は増える。replay（2026-10-28T00:00Z 以降の main の first-parent の非 merge 499 commit）で class に合う commit は 80 → 94。
+  増える設計 review は +14〜+94 回／20.9 日、A の reviewer run の中央値で $28.66〜$192.42（見積もり。旧い規則で High だった件数は commit から分からない）。
+  web/・docs/ だけの 10 commit と agent-docs/ だけの 213 commit は前後とも 0 件。
+- `execution_plan::assess_plan_risk` は試験だけが使う（production の呼び出しは無い）。
+
+### 状態
+- 実装・実証・計測は済んだ（2026-11-18。task の branch）。main への取り込みは task の final review の後。release の gate と本番への昇格は人・運用者が行う。

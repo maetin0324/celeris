@@ -128,6 +128,9 @@ pub struct RepoHealthFinding {
 pub struct RepoHealthEvidence {
     #[serde(default)]
     pub path: Option<String>,
+    /// report の evidence の `symbol`（module・関数・組の名前）。
+    #[serde(default)]
+    pub symbol: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

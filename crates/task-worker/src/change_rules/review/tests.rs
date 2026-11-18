@@ -81,6 +81,8 @@ fn repo(repo_id: &str, policy_changed: bool) -> HealthRepoInput {
                     severity: "error".to_string(),
                     delta: "new".to_string(),
                     path: Some("crates/alpha/src/lib.rs".to_string()),
+                    symbol: None,
+                    rationale: None,
                 },
                 HealthReportFinding {
                     rule_id: "deps.cycle".to_string(),
@@ -88,6 +90,8 @@ fn repo(repo_id: &str, policy_changed: bool) -> HealthRepoInput {
                     severity: "warning".to_string(),
                     delta: "worsened".to_string(),
                     path: None,
+                    symbol: None,
+                    rationale: None,
                 },
             ],
             truncated: 0,
@@ -103,6 +107,7 @@ fn repo(repo_id: &str, policy_changed: bool) -> HealthRepoInput {
             },
         },
         invariants: BTreeMap::from([("events-append-only".to_string(), "RULES.md".to_string())]),
+        risk: None,
     }
 }
 

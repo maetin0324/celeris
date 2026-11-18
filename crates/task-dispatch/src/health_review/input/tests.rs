@@ -715,3 +715,5 @@ fn health_review_input_reuse_is_bound_to_the_checker_version() {
     }
     assert_eq!(log_lines(&log), 2, "no report without a readable policy");
 }
+
+mod risk_tests;

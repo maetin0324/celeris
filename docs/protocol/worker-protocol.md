@@ -764,7 +764,11 @@ task.acceptance.len()`。受け入れ条件の無い Plan〈R6 で撤去した `
 にだけ載せる（WU の review・review 方針の無い repo では省略）。形は `{repos: [HealthRepoInput]}` で、1 repo は
 `{repo_id, target_sha, reviewed_sha, diff: {files, insertions, deletions, paths: [{path, insertions, deletions}]},
 owner_rows: [{path, row}], findings: {verdict, reviewable, counts: {findings, fail_grade, new, worsened, existing},
-new: [{rule_id, fingerprint, severity, delta, path?}], truncated}, policy: {source, changed, files}, invariants}`。
+new: [{rule_id, fingerprint, severity, delta, path?, symbol?, rationale?}], truncated}, policy: {source, changed, files},
+invariants, risk?}`。`findings.new[].symbol` は report の finding の最初の evidence の `symbol`（`deps.cycle` の循環の内部の
+新しい組なら `<src> -> <dst>`）、`rationale` は finding の `rationale` の写し。`risk`（ADR 2026-11-17-boundary-change-risk-review
+D3）は base 側の方針で差分の全 path（`--no-renames`。rename の両側と消した path）に当てた `RiskAssessment`。採用した計画の
+合格した設計 review が覆わない (class, path) の組を、dispatcher が `diff_design` で求める。
 `HealthReviewInput.brief`（任意）は採用した計画の設計 brief（`ExecutionPlanSpec.design_brief`）で、reviewer は宣言した
 `removals` が実際に消えたかを確かめる。
 `findings.new` は repo health の report のうち `delta` が `new`・`worsened` で例外の無いもの（上限 50 件。超えた数が

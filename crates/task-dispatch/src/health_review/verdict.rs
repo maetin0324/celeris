@@ -24,6 +24,8 @@ use task_worker::protocol::{
     PolicyVerdictOut,
 };
 
+use task_worker::protocol::ReviewRequest;
+
 use crate::review::Verdict;
 
 /// I7 の不合格の reason（`{tag}: ` の後ろ）。
@@ -66,6 +68,45 @@ impl Verdict {
                 with_policy(verdicts, input, health.policy.as_ref(), criteria, tag)
             }
             _ => Ok(verdicts),
+        }
+    }
+}
+
+/// ADR 2026-11-17-boundary-change-risk-review D3 の不合格の reason（`{tag}: ` の後ろ。後ろに覆われない組の理由が続く）。
+pub(crate) const DIFF_DESIGN_VERDICT_MISSING: &str =
+    "design verdict missing or invalid in review.json for the uncovered boundary changes";
+
+impl Verdict {
+    /// final review の `review.json` を読む（[`Verdict::from_review_json`] に D3 を足す）。`review` は reviewer に渡した
+    /// `ReviewRequest`。`diff_design` を渡した review で `design` が無い・壊れている・`pass = false` なら `Err`
+    /// （呼び出し側の `fail_all`。局所修復にしない）。
+    pub(crate) fn from_final_review(
+        text: &str,
+        review: Option<&ReviewRequest>,
+        criteria: &[usize],
+        tag: &str,
+        review_rel: &str,
+    ) -> Result<Vec<Verdict>, String> {
+        let health = review.and_then(|r| r.health.as_ref());
+        let verdicts = Self::from_review_json(text, health, criteria, tag, review_rel)?;
+        let Some(asked) = review.and_then(|r| r.diff_design.as_deref()) else {
+            return Ok(verdicts);
+        };
+        let design = serde_json::from_str::<ReviewOutput>(text)
+            .ok()
+            .and_then(|output| output.design);
+        let reasons = asked.risk.reasons.join(", ");
+        match design {
+            Some(design) if design.pass => Ok(verdicts),
+            Some(design) => {
+                let findings: Vec<&str> =
+                    design.findings.iter().map(|f| f.reason.as_str()).collect();
+                Err(format!(
+                    "{tag}: design verdict failed for the uncovered boundary changes ({reasons}): {}",
+                    findings.join("; ")
+                ))
+            }
+            None => Err(format!("{tag}: {DIFF_DESIGN_VERDICT_MISSING} ({reasons})")),
         }
     }
 }

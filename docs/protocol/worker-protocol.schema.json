@@ -2806,6 +2806,17 @@
           "description": "review する candidate の SHA。",
           "type": "string"
         },
+        "risk": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RiskAssessment"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-11-17-boundary-change-risk-review D3: base 側の方針で差分の全 path（`diff` の `--no-renames`。rename の\n両側・消した path）に当てた risk（`task_core::design_review::assess_risk`。brief は渡さない）。覆われない\n(class, path) の組は dispatcher が `ReviewRequest.diff_design` で求める。これの無い記録は再利用しない。"
+        },
         "target_sha": {
           "description": "review 前の同期で決めた target の SHA（ADR-0118）。",
           "type": "string"
@@ -2838,12 +2849,26 @@
             "null"
           ]
         },
+        "rationale": {
+          "description": "report の finding の `rationale`（判定の根拠の文）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "rule_id": {
           "type": "string"
         },
         "severity": {
           "description": "`error` | `warning` | `info`。",
           "type": "string"
+        },
+        "symbol": {
+          "description": "最初の evidence の `symbol`（`deps.cycle` の循環の内部の新しい組なら `<src> -> <dst>`）。",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

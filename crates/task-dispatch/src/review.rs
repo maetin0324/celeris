@@ -76,10 +76,19 @@ pub struct ReviewerRun {
     /// ADR 2026-10-20-mlsys-main2-fixes D1-3: 対象 task の木に token 予算があれば、この reviewer run を途中の
     /// 累積 usage で止める watch（sink が同じ watch に `UsageProgress` を渡す）。予算が無ければ `None`。
     pub(crate) token_budget: Option<Arc<crate::dispatcher::token_budget::TokenBudgetWatch>>,
-    /// ADR 2026-11-07-health-review-integration D4: final review の health の材料（`ReviewRequest.health`）。
-    /// `spawn_review` が reviewer run の非同期 task の中で入れる（`health_review::input`）。WU の review・
-    /// health を作らない review では `None`。
+    /// final review の材料（`ReviewRequest.health`・`diff_design`）。`spawn_review` が reviewer run の非同期 task の
+    /// 中で入れる（`health_review::input`）。WU の review・材料を作らない review では空。
+    pub material: FinalReviewMaterial,
+}
+
+/// final review の reviewer に渡す材料（`health_review::input::HealthInputJob::attach` が 1 回の材料作りで作る）。
+#[derive(Debug, Clone, Default)]
+pub struct FinalReviewMaterial {
+    /// ADR 2026-11-07-health-review-integration D4: health の材料（`ReviewRequest.health`）。
     pub health: Option<task_worker::protocol::HealthReviewInput>,
+    /// ADR 2026-11-17-boundary-change-risk-review D3: 差分の覆われない (class, path) の組への設計の判定の要求
+    /// （`ReviewRequest.diff_design`。組が無ければ `None`）。
+    pub diff_design: Option<Box<task_worker::protocol::DesignReviewRequest>>,
 }
 
 /// `Plan` kind の検証パラメータ（ADR-0007 D2/D4, ADR-0028 D3）。
@@ -1065,15 +1074,15 @@ impl ReviewHumanContext {
         self,
         subject: &ReviewSubject,
         criteria: &[usize],
-        health: Option<task_worker::protocol::HealthReviewInput>,
+        material: FinalReviewMaterial,
     ) -> ReviewRequest {
         ReviewRequest {
             // ADR 2026-11-07-health-review-integration D3.5: 採用前の計画の設計 review の run（`Completion::DesignReview`
             // の経路）だけが持つ。ここは final review なので常に `None`。
             design: None,
-            // ADR 2026-11-17-boundary-change-risk-review D3・付記 (i): final review の差分の設計の節。覆われない
-            // (class, path) の組の判定は WorkUnit `review-gate` が入れる。
-            diff_design: None,
+            // ADR 2026-11-17-boundary-change-risk-review D3・付記 (i)・(iii): final review の差分の設計の節（覆われない
+            // (class, path) の組があるときだけ。`health_review::input` が作る）。
+            diff_design: material.diff_design,
             summary: subject.summary.clone(),
             evidence: subject.evidence.clone(),
             criteria: criteria.to_vec(),
@@ -1082,7 +1091,7 @@ impl ReviewHumanContext {
             checks: self.checks,
             policy_violations: self.policy_violations,
             // ADR 2026-11-07-health-review-integration D4.2: candidate SHA ごとに 1 回作った材料。
-            health,
+            health: material.health,
         }
     }
 }
@@ -1237,7 +1246,7 @@ async fn run_reviewer_inner(
             inputs: produced.to_vec(),
             // ADR-0117 D1: `RunContext.answers` は worker run 用。人の回答は `ReviewRequest.answers` に載せる。
             answers: vec![],
-            review: Some(human_context.into_request(subject, criteria, run.health.clone())),
+            review: Some(human_context.into_request(subject, criteria, run.material.clone())),
             role: None,
             children: Vec::new(),
             // ADR-0027 D1: Reviewer run は委譲しない（M8 相当）。
@@ -1255,7 +1264,7 @@ async fn run_reviewer_inner(
         },
     };
     let tag = format!("reviewer({})", run.run_id);
-    let health = req.context.review.as_ref().and_then(|r| r.health.clone());
+    let review = req.context.review.clone();
     // ADR 2026-11-06-misplaced-report-recovery-generalized D3: 誤配置した review.json の回収の基準時刻。
     let run_started = std::time::SystemTime::now();
     // reviewer の process にも run 専用の `TMPDIR` を与える（この関数を抜けると消える）。
@@ -1379,7 +1388,9 @@ async fn run_reviewer_inner(
         Err(e) => return fail_all(format!("{tag}: {review_rel} not found or unreadable: {e}")),
     };
     // ADR 2026-11-07-health-review-integration D5: health を渡した review は health verdict も読んで写す。
-    Verdict::from_review_json(&text, health.as_ref(), criteria, &tag, &review_rel).or_else(fail_all)
+    // ADR 2026-11-17-boundary-change-risk-review D3: `diff_design` を渡した review は `design` の合格も要る。
+    Verdict::from_final_review(&text, review.as_ref(), criteria, &tag, &review_rel)
+        .or_else(fail_all)
 }
 
 /// ADR 2026-10-18-artifact-exists-directory: ディレクトリの成果物の要約。`dir` 以下の通常ファイル

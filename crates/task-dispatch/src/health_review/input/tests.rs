@@ -216,9 +216,15 @@ fn health_review_input_built_once_per_candidate() {
     let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut first_work = work(&store, "review-1", &candidate, scratch.path());
     let task_id = first_work.task_id;
-    let first = build_health_input(&first_work).unwrap();
+    let first =
+        build_final_review_material(&first_work, crate::health_review::gate::bundled_checker())
+            .health
+            .unwrap();
     first_work.review_run = "review-2".into();
-    let second = build_health_input(&first_work).unwrap();
+    let second =
+        build_final_review_material(&first_work, crate::health_review::gate::bundled_checker())
+            .health
+            .unwrap();
     assert_eq!(first, second);
     assert_eq!(log_lines(&log), 1, "repo health ran once");
     let repo = &first.repos[0];
@@ -295,7 +301,9 @@ fn health_review_input_policy_absent_builds_material_without_policy_values() {
     );
     let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut w = work(&store, "review-1", &candidate, scratch.path());
-    let first = build_health_input(&w).expect("absent repos get material");
+    let first = build_final_review_material(&w, crate::health_review::gate::bundled_checker())
+        .health
+        .expect("absent repos get material");
     assert_eq!(log_lines(&log), 1);
     assert_eq!(
         w.evaluated.lock().unwrap().len(),
@@ -303,7 +311,12 @@ fn health_review_input_policy_absent_builds_material_without_policy_values() {
         "the report is shared with the health item"
     );
     w.review_run = "review-2".into();
-    assert_eq!(build_health_input(&w).as_ref(), Some(&first));
+    assert_eq!(
+        build_final_review_material(&w, crate::health_review::gate::bundled_checker())
+            .health
+            .as_ref(),
+        Some(&first)
+    );
     assert_eq!(log_lines(&log), 1, "the recorded material is reused");
     let repo = &first.repos[0];
     assert_eq!(
@@ -354,7 +367,13 @@ fn health_review_input_reuse_is_bound_to_candidate_base_and_policy() {
     let dir = repo.path();
     let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut w = work(&store, "review-1", &first, scratch.path());
-    let build = |w: &HealthInputWork| build_health_input(w).expect("material").repos.remove(0);
+    let build = |w: &HealthInputWork| {
+        build_final_review_material(w, crate::health_review::gate::bundled_checker())
+            .health
+            .expect("material")
+            .repos
+            .remove(0)
+    };
     let a = build(&w);
     assert_eq!(log_lines(&log), 1);
 
@@ -441,7 +460,9 @@ fn health_review_input_policy_absent_failed_report_is_not_reused() {
     let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let w = work(&store, "review-1", &candidate, scratch.path());
     for n in 1..=2 {
-        let input = build_health_input(&w).expect("material with an unknown policy");
+        let input = build_final_review_material(&w, crate::health_review::gate::bundled_checker())
+            .health
+            .expect("material with an unknown policy");
         let repo = &input.repos[0];
         assert_eq!(
             (repo.findings.verdict.as_str(), repo.findings.reviewable),
@@ -465,7 +486,9 @@ fn health_review_input_failed_report_is_recorded_as_unknown() {
     let (_repo, candidate) = stub_repo("base", None, &log);
     let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let w = work(&store, "review-1", &candidate, scratch.path());
-    let input = build_health_input(&w).unwrap();
+    let input = build_final_review_material(&w, crate::health_review::gate::bundled_checker())
+        .health
+        .unwrap();
     let findings = &input.repos[0].findings;
     assert_eq!(
         (findings.verdict.as_str(), findings.reviewable),
@@ -473,7 +496,9 @@ fn health_review_input_failed_report_is_recorded_as_unknown() {
     );
     assert!(findings.reason.as_deref().unwrap().contains("report"));
     assert_eq!(input.repos[0].policy.source, POLICY_UNKNOWN);
-    build_health_input(&w).unwrap();
+    build_final_review_material(&w, crate::health_review::gate::bundled_checker())
+        .health
+        .unwrap();
     assert_eq!(log_lines(&log), 2, "not reused");
     let built: Vec<HealthRepoInput> = store
         .events_for(w.task_id)
@@ -574,8 +599,9 @@ fn health_enforce_g2_bundled_checker_builds_material_and_policy_state() {
         &candidate,
         &scratch.path().join("material"),
     );
-    let built =
-        build_health_input_with(&w, Some(&bundled)).expect("material from the bundled checker");
+    let built = build_final_review_material(&w, Some(&bundled))
+        .health
+        .expect("material from the bundled checker");
     assert_eq!(log_lines(&log), 1, "the checker ran once for the candidate");
     let repo = &built.repos[0];
     assert_eq!(
@@ -587,7 +613,10 @@ fn health_enforce_g2_bundled_checker_builds_material_and_policy_state() {
         (repo.policy.source.as_str(), repo.policy.changed),
         ("base", false)
     );
-    assert_eq!(build_health_input_with(&w, Some(&bundled)), Some(built));
+    assert_eq!(
+        build_final_review_material(&w, Some(&bundled)).health,
+        Some(built)
+    );
     assert_eq!(log_lines(&log), 1, "the recorded material is reused");
 
     let only: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
@@ -598,7 +627,7 @@ fn health_enforce_g2_bundled_checker_builds_material_and_policy_state() {
         &scratch.path().join("policy-only"),
     );
     w.policy_only = true;
-    assert_eq!(build_health_input_with(&w, Some(&bundled)), None);
+    assert_eq!(build_final_review_material(&w, Some(&bundled)).health, None);
     assert_eq!(
         log_lines(&log),
         2,
@@ -619,7 +648,7 @@ fn health_enforce_g2_bundled_checker_builds_material_and_policy_state() {
         let none: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
         let mut w = work(&none, "review-1", &candidate, &scratch.path().join("none"));
         w.policy_only = policy_only;
-        assert_eq!(build_health_input_with(&w, None), None);
+        assert_eq!(build_final_review_material(&w, None).health, None);
         let recorded = skips(&none, w.task_id);
         assert_eq!(recorded.len(), 1, "{recorded:?}");
         assert!(
@@ -663,13 +692,17 @@ fn health_review_input_reuse_is_bound_to_the_checker_version() {
     let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let w = work(&store, "review-1", &candidate, scratch.path());
     let (old, new) = (bundled('b'), bundled('c'));
-    let first = build_health_input_with(&w, Some(&old)).expect("material");
+    let first = build_final_review_material(&w, Some(&old))
+        .health
+        .expect("material");
     assert_eq!(
-        build_health_input_with(&w, Some(&old)).as_ref(),
+        build_final_review_material(&w, Some(&old)).health.as_ref(),
         Some(&first)
     );
     assert_eq!(log_lines(&log), 1, "the same checker reuses the material");
-    let second = build_health_input_with(&w, Some(&new)).expect("material");
+    let second = build_final_review_material(&w, Some(&new))
+        .health
+        .expect("material");
     assert_eq!(log_lines(&log), 2, "a new checker version builds again");
     assert_eq!(first, second);
     let repo = &second.repos[0];
@@ -699,7 +732,7 @@ fn health_review_input_reuse_is_bound_to_the_checker_version() {
     ] {
         let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
         let w = work(&store, "review-1", &candidate, scratch.path());
-        assert_eq!(build_health_input_with(&w, checker), None);
+        assert_eq!(build_final_review_material(&w, checker).health, None);
         let recorded = skips(&store, w.task_id);
         assert_eq!(recorded.len(), 1, "{recorded:?}");
         assert!(recorded[0].0.contains(want), "{recorded:?}");

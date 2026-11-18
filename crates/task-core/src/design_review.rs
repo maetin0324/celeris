@@ -147,6 +147,15 @@ impl RiskLevel {
     }
 }
 
+/// 理由の語 `path_class:<class>:<path>`・`invariant:<class>:<名前>` の読み（書く側は `assess_risk`）。
+/// `(kind, class, path か名前)` を返す。`<repo>:` が前に付いた複数 repo の理由も読む。どちらでもない語は `None`。
+pub fn parse_risk_reason(reason: &str) -> Option<(&str, &str, &str)> {
+    ["path_class", "invariant"].into_iter().find_map(|kind| {
+        let (class, rest) = reason.split_once(&format!("{kind}:"))?.1.split_once(':')?;
+        Some((kind, class, rest))
+    })
+}
+
 /// D3.3: risk の判定の結果。`reasons` は判定の根拠の機械向けの語（`review_policy_absent`・
 /// `review_policy_unavailable:<要約>`・`path_class:<class>:<path>`・`invariant:<class>:<名前>`・`declared:<欄>`・
 /// `brief_absent_human_plan`・`new_fallback`。ADR 2026-11-17-boundary-change-risk-review D1）。`Low` は空。

@@ -4,7 +4,9 @@ use super::super::operations::{DispatchEnv, Matched, OperationAudit};
 use super::super::operations::{
     audited, decode_optional, decode_problem, path_param, unprocessable,
 };
+use crate::org_write::{self, OrgWritten};
 use crate::problem::ApiProblem;
+use crate::skills::{OrgSkillMountBody, plan_skill_mount};
 use serde_json::Value;
 use task_core::chat::CosOperation;
 use task_core::store::SqliteStore;
@@ -310,38 +312,35 @@ pub(crate) fn dispatch(
         | "org.browser_settings"
         | "org.skill_mount"
         | "org.skill_unmount" => {
-            use crate::handlers::org;
             let id = matched.id.clone().unwrap_or_default();
             let planned = match matched.action {
                 "org.create" => serde_json::from_value(body)
                     .map_err(|e| unprocessable("validation", format!("request.body: {e}")))
-                    .and_then(|input| org::plan_create(store, &env.genres, input)),
-                "org.update" => org::plan_patch(store, &env.genres, &id, decode_null(body)),
+                    .and_then(|input| org_write::plan_create(store, &env.genres, input)),
+                "org.update" => org_write::plan_patch(store, &env.genres, &id, decode_null(body)),
                 "org.browser_settings" => {
-                    org::plan_browser_settings(store, &env.genres, &id, decode_null(body))
+                    org_write::plan_browser_settings(store, &env.genres, &id, decode_null(body))
                 }
-                "org.skill_mount" => {
-                    serde_json::from_value::<crate::skills::OrgSkillMountBody>(body)
-                        .map_err(|e| unprocessable("validation", format!("request.body: {e}")))
-                        .and_then(|input| {
-                            crate::skills::plan_skill_mount(store, &id, &input.skill, true)
-                        })
-                }
+                "org.skill_mount" => serde_json::from_value::<OrgSkillMountBody>(body)
+                    .map_err(|e| unprocessable("validation", format!("request.body: {e}")))
+                    .and_then(|input| plan_skill_mount(store, &id, &input.skill, true)),
                 "org.skill_unmount" => empty_body(&body).and_then(|()| {
-                    crate::skills::plan_skill_mount(
-                        store,
-                        &id,
-                        &path_param(UNMOUNT, path, "{skill}"),
-                        false,
-                    )
+                    plan_skill_mount(store, &id, &path_param(UNMOUNT, path, "{skill}"), false)
                 }),
-                _ => empty_body(&body).and_then(|()| {
-                    crate::handlers::load_org_node(store, &id)?;
-                    Ok(org::OrgWrite::Delete(id.clone()))
-                }),
+                _ => empty_body(&body).and_then(|()| org_write::plan_delete(store, &id)),
             };
             let write = planned.map_err(|p| audit.reject(store, "org", &id, p))?;
-            audited(org::org_commit(store, write, matched.action, Some(audit))?)
+            audit.apply_checked(store, "org", write.target_id(), matched.action, |tx| {
+                match org_write::apply(tx, &write, "cos")? {
+                    OrgWritten::Node(n) => {
+                        serde_json::to_value(n).map_err(|e| ApiProblem::internal(e.to_string()))
+                    }
+                    OrgWritten::Deleted { id, existed: true } => {
+                        Ok(serde_json::json!({"id": id, "deleted": true}))
+                    }
+                    OrgWritten::Deleted { id, .. } => Err(ApiProblem::org_node_not_found(&id)),
+                }
+            })
         }
         "skill.put" | "skill.delete" => {
             let name = path_param(SKILL, path, "{name}");

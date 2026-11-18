@@ -186,25 +186,10 @@ impl SqliteStore {
         pin.check_org(&nodes).map_err(StoreError::Invalid)
     }
 
-    /// Persist a browser settings change and its org audit event atomically.
-    pub fn org_upsert_browser_settings(
-        &self,
-        node: &OrgNode,
-        actor: &str,
-    ) -> Result<OrgNode, StoreError> {
-        self.org_upsert_with_actor(node, Some(actor))
-    }
-
-    fn org_upsert_with_actor(
-        &self,
-        node: &OrgNode,
-        actor: Option<&str>,
-    ) -> Result<OrgNode, StoreError> {
-        self.write_tx(|tx| Self::org_upsert_tx(tx, node, actor))
-    }
-
-    /// Upsert `node` in the caller's transaction (CoS `org.*`). `actor` also records the browser
-    /// settings audit row (`org_browser_events`), as `org_upsert_browser_settings` does.
+    /// Upsert `node` in the caller's transaction (HTTP `/org` and CoS `org.*` through
+    /// `task_api::org_write::apply` inside `write_tx`; `org_upsert` wraps it in its own
+    /// transaction). `actor` also records the browser settings audit row (`org_browser_events`)
+    /// in the same transaction.
     pub fn org_upsert_tx(
         tx: &Connection,
         node: &OrgNode,
@@ -254,20 +239,10 @@ impl SqliteStore {
         Ok(())
     }
 
-    /// 削除。そのノードを `assignee` に持つ未終了タスクがあれば `StoreError::InUse`、
-    /// 子ノードがあっても `StoreError::InUse`（木を宙ぶらりんにしない）。無い id は `Ok(false)`。
-    pub fn org_delete(&self, id: &str) -> Result<bool, StoreError> {
-        let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let deleted = Self::org_delete_tx(&tx, id)?;
-        if deleted {
-            tx.commit()?;
-        }
-        Ok(deleted)
-    }
-
-    /// Delete org node `id` in the caller's transaction (CoS `org.delete`). Same refusals as
-    /// `org_delete`: `Ok(false)` when absent, `InUse` with open tasks or child nodes.
+    /// 呼び出し側の transaction の中で組織ノード `id` を消す（HTTP `DELETE /org/{id}` と CoS
+    /// `org.delete` が `write_tx` の中の `task_api::org_write::apply` から呼ぶ）。そのノードを
+    /// `assignee` に持つ未終了タスクがあれば `StoreError::InUse`、子ノードがあっても
+    /// `StoreError::InUse`（木を宙ぶらりんにしない）。無い id は `Ok(false)`。
     pub fn org_delete_tx(tx: &Connection, id: &str) -> Result<bool, StoreError> {
         let exists: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM org_nodes WHERE id = ?1)",

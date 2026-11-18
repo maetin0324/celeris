@@ -109,7 +109,8 @@ standing approval は無い。承認待ちの期限は既定・上限 30 分（�
 
 browser 設定の変更は `tracing::info!` に出ず、`org_browser_events`（migration `0051`）に
 actor と変更前後のスナップショットが同 transaction で残る
-（`crates/task-core/src/store/org.rs` の `org_upsert_browser_settings`）。読み取り API は無い。
+（`crates/task-core/src/store/org.rs` の `org_upsert_tx`。HTTP と CoS の両方が `crates/task-api/src/org_write.rs` の
+`apply` から呼ぶ）。読み取り API は無い。
 
 `profile` の丸ごと置換（`skills`・`policy` 等を含む）が必要なときは、通常の
 `PATCH /api/v1/org/browser-execution`（`OrgPatchBody`、本文は `{"profile": {…}}`）を使う。

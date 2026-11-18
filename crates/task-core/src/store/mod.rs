@@ -56,7 +56,9 @@
 //!   部品、ここは入口）。
 //! - `transition.rs`: `apply_transition_tx`（状態機械の適用と Event の追記を同じ tx で行う）と
 //!   終端遷移の cascade・非終端の子/依存の探索。
-//! - `org.rs`: 組織ノードの行変換・`profile_json`・`org_list_tx`/`org_upsert_tx` と
+//! - `org.rs`: 組織ノードの行変換・`profile_json`・`org_list_tx` と tx 内の書き込み
+//!   `org_upsert_tx`/`org_delete_tx`（HTTP と CoS は `write_tx` の中の `task_api::org_write::apply`
+//!   から呼ぶ。自分で transaction を開く wrapper は `org_directory.rs` の `org_upsert` だけ）と
 //!   `celerisctl org migrate-v2` 用の低レベル書き換え（ADR-0033 D1）。
 //! - `projects.rs`: 案件・途中目標の行変換、slug の検査/backfill、停止中の祖先の判定。
 //! - `repos.rs`: 案件のリポジトリ（`project_repos`）の行と backfill、`repo_*` の本体（ADR-0043 D1）。

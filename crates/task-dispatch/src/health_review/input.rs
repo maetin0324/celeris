@@ -48,7 +48,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use task_core::design_review::{
-    ReviewPolicy, ReviewPolicyState, RiskAssessment, RiskLevel, assess_risk,
+    ReviewPolicy, ReviewPolicyState, RiskAssessment, RiskLevel, assess_risk, parse_risk_reason,
 };
 use task_core::required_checks::health::HEALTH_CHECK_ID;
 use task_core::{Event, ReviewRepairHint, SqliteStore, Task, TaskId};
@@ -263,22 +263,6 @@ impl Dispatcher {
     }
 }
 
-/// 試験の入口: 材料の health だけ（作れた repo が 1 つも無い・`policy_only` なら `None`）。同梱の検査器は daemon が
-/// 起動で設定したもの（`gate::bundled_checker()`）を渡す。
-#[cfg(test)]
-pub fn build_health_input(work: &HealthInputWork) -> Option<HealthReviewInput> {
-    build_health_input_with(work, gate::bundled_checker())
-}
-
-/// 試験の入口: `bundled`（base に検査器の無い repo に当てる同梱の検査器）を選んで health だけを作る。
-#[cfg(test)]
-pub(crate) fn build_health_input_with(
-    work: &HealthInputWork,
-    bundled: Option<&BundledChecker>,
-) -> Option<HealthReviewInput> {
-    build_final_review_material(work, bundled).health
-}
-
 /// D4: final review の材料を作る本体（blocking）。health は作れた repo が 1 つも無い・`policy_only` なら `None`
 /// （`ReviewRequest.health` を持たない）。D3 の `diff_design` は覆われない組があるときだけ。`bundled` は base に検査器の
 /// 無い repo に当てる同梱の検査器。
@@ -404,6 +388,16 @@ fn stat_text(repo: &str, target: &str, reviewed: &str, diff: Option<&DiffStat>) 
     )
 }
 
+/// `<repo>:` の付かない（1 repo の）理由の語を `parse_risk_reason` で読む。複数 repo の語は読まない（覆わない側に倒す）。
+fn own_reason(why: &str) -> Option<(&str, &str, &str)> {
+    parse_risk_reason(why).filter(|(kind, ..)| why.starts_with(kind))
+}
+
+fn path_class_pair(why: &str) -> Option<(String, String)> {
+    let (kind, class, path) = own_reason(why)?;
+    (kind == "path_class").then(|| (class.to_string(), path.to_string()))
+}
+
 /// 付記 (iii): 採用した計画（`plan_sha256` が `adopted`）の最後の `DesignReviewed` が合格なら、同じ `plan_sha256` の
 /// `DesignReviewRequested.risk` の理由 `path_class:<class>:<path>` の組。それ以外は空（覆った組は無い）。複数 repo の
 /// 計画の理由（`<repo>:path_class:…`）は組にしない（覆わない側に倒す）。
@@ -429,14 +423,10 @@ pub(crate) fn covered_pairs(
         } if plan_sha256 == sha => Some(risk),
         _ => None,
     });
-    risk.map(|r| r.reasons.iter().filter_map(|why| path_pair(why)).collect())
-        .unwrap_or_default()
-}
-
-/// `path_class:<class>:<path>` の (class, path)。
-fn path_pair(why: &str) -> Option<(String, String)> {
-    let (class, path) = why.strip_prefix("path_class:")?.split_once(':')?;
-    Some((class.to_string(), path.to_string()))
+    risk.into_iter()
+        .flat_map(|r| &r.reasons)
+        .filter_map(|why| path_class_pair(why))
+        .collect()
 }
 
 /// 付記 (iii): 差分の risk の理由のうち覆われない残り。`Unknown` は全部、`High` は覆われない `path_class:<class>:<path>`
@@ -456,17 +446,15 @@ pub(crate) fn uncovered(risk: &RiskAssessment, covered: &[(String, String)]) -> 
     let left: Vec<(String, String)> = risk
         .reasons
         .iter()
-        .filter_map(|why| path_pair(why))
+        .filter_map(|why| path_class_pair(why))
         .filter(|(class, path)| !is_covered(class, path))
         .collect();
     risk.reasons
         .iter()
-        .filter(|why| match path_pair(why) {
-            Some(pair) => left.contains(&pair),
-            None => why
-                .strip_prefix("invariant:")
-                .and_then(|rest| rest.split_once(':'))
-                .is_some_and(|(class, _)| left.iter().any(|(c, _)| c == class)),
+        .filter(|why| match own_reason(why) {
+            Some(("path_class", class, path)) => left.iter().any(|(c, p)| c == class && p == path),
+            Some((_, class, _)) => left.iter().any(|(c, _)| c == class),
+            None => false,
         })
         .cloned()
         .collect()
@@ -956,7 +944,7 @@ pub(crate) fn requested_policy(
         .and_then(|map| show_at(&repo, &target, map, deadline));
     let mut paths: Vec<String> = reasons
         .iter()
-        .filter_map(|why| path_pair(why).map(|(_, p)| p))
+        .filter_map(|why| path_class_pair(why).map(|(_, p)| p))
         .collect();
     let rest: Vec<String> = write_paths
         .into_iter()

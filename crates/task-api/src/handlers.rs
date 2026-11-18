@@ -10,7 +10,7 @@ use axum::routing::{delete, get, patch, post, put};
 use futures_util::StreamExt;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use task_core::{OrgNode, ProjectId, SqliteStore};
+use task_core::ProjectId;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -365,14 +365,6 @@ async fn method_not_allowed() -> ApiProblem {
 // 読み取り（`GET /org`、`GET /projects`、`GET /projects/{id}`）は他の読み取りと同じで無認証でよい。
 // 組織の編集（POST/PATCH/DELETE `/org`）は**管理系**なので `token_file` 未設定でも 401（ADR-0017 D1 と同じ規律）。
 // 案件と途中目標の作成・状態変更は人の操作（`POST /tasks` と同じ扱い）なので通常の認証だけ。
-
-/// `id` を組織のノードとして読む（存在しなければ 404）。
-pub(crate) fn load_org_node(store: &SqliteStore, id: &str) -> Result<OrgNode, ApiProblem> {
-    store
-        .org_get(id)
-        .map_err(store_problem)?
-        .ok_or_else(|| ApiProblem::org_node_not_found(id))
-}
 
 pub(crate) fn parse_project_id(raw: &str) -> Result<ProjectId, ApiProblem> {
     raw.parse::<ProjectId>()

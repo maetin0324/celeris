@@ -116,7 +116,7 @@ pub struct ApiV1Schema {
     pub org_list: OrgList,
     pub org_create: OrgCreateBody,
     pub org_patch: OrgPatchBody,
-    pub browser_settings_patch: crate::handlers::org::BrowserSettingsPatch,
+    pub browser_settings_patch: crate::org_write::BrowserSettingsPatch,
     /// Phase 23（ADR-0033 D2）: 案件と途中目標。
     pub project_list: ProjectList,
     pub project_create: ProjectCreateBody,

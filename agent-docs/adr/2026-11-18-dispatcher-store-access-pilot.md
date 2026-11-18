@@ -1,6 +1,6 @@
 # ADR 2026-11-18: Dispatcher の 2 領域で self.store・self.config に触る file を減らす pilot（アーキ v4 E）
 
-- 状態: Accepted（設計だけ。この ADR を書いた WorkUnit `adr` は `crates/`・`scripts/`・`web/` を変えていない）
+- 状態: Accepted（本文は設計。この ADR を書いた WorkUnit `adr` は `crates/`・`scripts/`・`web/` を変えていない。実装と実測の結果は末尾の「付記 2026-11-18」）
 - task: 01M7MZTKB6GQ241F6JJYSPJNS1（依頼キー celeris-architecture-scalability-v4-20261117 の子 E、親 01M7MZT8KX547464YYS76QNP4G、依存 C 01M7MZTKB29VF5TX7FCQ15XEMW）
 - 進捗: [2026-11-18-arch-v4-e.md](../progress/2026-11-18-arch-v4-e.md)、計測コマンド: [measure-commands.md](../progress/2026-11-18-arch-v4-e/measure-commands.md)
 - 関係: [ADR 2026-11-11 dispatcher-state-ownership](2026-11-11-dispatcher-state-ownership.md)（D2・D3・D7 の付記）、ADR-0082（dispatcher.rs の module map）、
@@ -191,3 +191,62 @@ D（01M7MZTKB4RYM80S6CT3RST2N9）の設計（ADR 2026-11-18 org-write-shared-use
 6. 撤去対象: 上の「撤去対象」。
 7. 不変条件: transaction の範囲・event・lease の意味、書き込みの回数・順序・失敗時の扱いを変えない（反例試験と領域の試験）。対象 6 file が共有の状態に触らない
    （`store_access_guard_*`）。分母 69・76 が増えない（C3）。高 risk の class の path（worker_finish.rs・design_gate.rs ほか）を変えない。
+
+## 付記 2026-11-18（実測の結果。WorkUnit close）
+
+実装は WorkUnit wu-region（write-set・target-leaf・guard）と cos-region（relay・slot・guard）、計測は measure（counts・tests）。値の詳細と再現コマンドは
+[metrics.md](../progress/2026-11-18-arch-v4-e/metrics.md)、[wu-region.md](../progress/2026-11-18-arch-v4-e/wu-region.md)、
+[cos-region.md](../progress/2026-11-18-arch-v4-e/cos-region.md)。基準は main `bc665168c9ca`（B0）と `git merge-base HEAD main`（B1。件名
+`integrate wu/loc-fix (phase fix)`）。B0 と B1 の値は全部同じ。
+
+### 減った file と数値
+
+- self.store を書かなくなった file（6）: `behind_target.rs`・`auto_leaf.rs`・`write_set_gate.rs`・`write_set_record.rs`・`cos_chat/relay_rejudge.rs`・`cos_chat/slot_wait.rs`。
+- self.config を書かなくなった file（4）: `behind_target.rs`・`auto_leaf.rs`・`cos_chat/relay_rejudge.rs`・`cos_chat/slot_wait.rs`。
+- 増えた file は無い。出現が増えたのは前から書いていた入口の 6 file（`dispatch_run.rs`・`review_spawn.rs`・`work_units.rs`・`cos_chat/{launch,routes,control}.rs`）だけ。
+
+| 計測 | before（B0・B1） | after（HEAD） | 差 |
+|---|---|---|---|
+| C3 依頼 scope 69 file: self.store | 44 file / 633 | 38 / 633 | −6（目安 −5） |
+| C3 依頼 scope: self.config | 35 / 218 | 31 / 220 | −4（目安 −3） |
+| C3 論理 scope 76 file: self.store・self.config | 48 / 661・39 / 224 | 42 / 661・35 / 226 | −6・−4 |
+| E1（改行込み）依頼 scope: store・config | 46 / 759・35 / 227 | 40 / 759・31 / 227 | −6・−4 |
+| E2 crate 全体 138 file: store・config・SqliteStore の file | 53・40・50 | 47・36・49 | −6・−4・−1 |
+| 分母（依頼 scope・論理 scope・crate） | 69・76・138 | 69・76・138 | 0 |
+| E3 対象 6 file の token | 5・4・4・5・14・13 | 0・0・0・0・0・0 | — |
+| C12 production（全言語・Rust） B1 → HEAD | — | — | +61・+61（目安 +80 の中） |
+| C12 own_total_with_tests B1 → HEAD | — | — | +195（試験 +134 は guard の試験） |
+
+出現数が減らないのは、対象 file の参照を入口へ同じ数だけ移したから（読み書きの回数は同じ）。self.config の C3 の +2 は `work_units.rs` で rustfmt が
+`self\n.config` に割っていた 2 か所を 1 行にした分で、E1 では 227 → 227。dispatcher の SCC（今の checker で 4 単位・7 組・51 本）と C7b の S2
+（direct 6・transitive 14・package 4）は B1 → HEAD で変わらない。B1..HEAD の crates/ の差分は task-dispatch の 13 file（全部 M）だけ。
+
+### 証明の結果
+
+- 可視性: 対象 6 file に `impl Dispatcher`・`impl CosChatLaunch`・`use super::*;` が無く、引数・戻り値・欄に `Dispatcher`・`CosChatLaunch`・
+  `SqliteStore`・`DispatchConfig`・`CosChatLaunchConfig` が無い（E3 が 0）。足した型は `type RelayPick`・`enum SlotWaitStep` と、可視性を
+  `pub(super)` にした既存の `struct GitSite` だけ。trait・Manager・Port・Facade と、store・config を包む struct は無い。
+- 負の試験: `structure_guard.rs` の `store_access_guard_work_units`・`store_access_guard_cos_chat`・`store_access_guard_detects_each_violation`
+  （helper `shared_state_access`）。対象 file に `self.store` を一時的に入れると落ちることを wu-region と cos-region が確かめた（commit していない）。
+- 反例試験: 上の「反例試験」の表の 12 本がすべて pass。filter `cex_ | replan | parallel_work_unit | structure_guard | store_access_guard` の 121 本も全部 pass。
+
+### ADR の表と違ったこと
+
+- `record_run_write_sets` の入口は `work_units.rs` ではなく `dispatch_run.rs` に置いた（人の決定 `record-run-write-sets-home`、2026-11-18）。
+  `work_units.rs` は本体の行が閾値 2000 を超えた file（base 2060）で、repo health の `size.responsibility-growth` と `source-size` が 1 行の増加でも落ちる。
+  開始 HEAD の固定（`put_run_write_bases`）と取り出し・記録（`take_run_write_bases`）が同じ `dispatch_run.rs` に並ぶ。
+  `capture_run_write_bases` は method にせず、`dispatch_run.rs` の 1 か所で `put_run_write_bases(run_id, run_write_bases(task, ws))` を呼ぶ形にした。
+- 「`work_units.rs` は入口として残る（減らない）」の行は、次のように読み替える: `work_units.rs` は閾値を超えていて行を増やせず、module の本体の行の
+  合計（base 32338）も増やせない。入口を足すなら同じ量を同じ file で詰める（target-leaf は `auto_leaf_decision` の入口の分を、振る舞いを変えない
+  6 か所の圧縮で相殺し、2060 → 2056）。
+- `close_unlaunched`（`control.rs` に移した）・`fail_routes`・`close_stopped` は、閉じる state・落ちたときの範囲・通知・revoke・`digest_due` が違うので
+  併合していない（cos-region.md の比較の表）。
+
+### 未達の項目
+
+- 目安（store −5・config −3）・分母不増・crate 全体で同数・SqliteStore 不増・production +80 以内は、すべて満たした。余裕は store・config とも 1 file。
+- 共通受入条件 (5) の test-affected の時間は 1 回（769.32 s。A の S2 中央値 655.59 s より +113.73 s）だけで、悪化かどうかを判定していない（要判断。3 回の比較は G）。
+- (1) の A の before（3 単位・4 組・22 本）は B0 の checker の値で、今の checker（arch-v4 B の変更後）では B0・B1・HEAD とも 4・7・51。
+  同じ checker で比べた差は 0。
+- (3)（handlers⇄cos・SQL の公開面）は D の範囲で、E は扱っていない。
+- release gate（`scripts/selfdeploy/release.sh`）は未実施（人が行う）。

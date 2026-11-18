@@ -552,7 +552,8 @@ ADR 2026-10-28-cos-integrate-task の `POST /tasks/{id}/integration-requests/{re
   plan（読み取りと検証だけ。DB を書かない）と tx 内の apply（transaction を開かず、commit もしない）を、HTTP adapter（`handlers/org.rs`・`skills.rs`）が
   `SqliteStore::write_tx` で、CoS adapter（`cos/ops/admin.rs`）が `OperationAudit::apply_checked` で包む形にした（CoS の plan の拒否は `OperationAudit::reject`）。
   決定は [ADR 2026-11-18-org-write-shared-use-case](2026-11-18-org-write-shared-use-case.md) D1〜D4。実装は同じ task の WorkUnit `usecase`、
-  使われなくなる `SqliteStore` の org の wrapper の撤去は `store-prune` が行う（この付記を書いた時点では未実装）。
+  使われなくなる `SqliteStore` の org の wrapper の撤去は `store-prune` が行う（この付記を書いた時点では未実装。2026-11-18 に両方を実装し、
+  WorkUnit `close` がこの付記の形と code が合うことを確かめた。違いは D の ADR の「付記: 実装で分かった違い」）。
 - D5 の「通常 handler は監査 context 無しの `Applied::Direct`、CoS 経路は `OperationAudit` を渡し `Applied::Audited` を返す」は org には当てはまらない。
   org の共有の操作は `Option<&OperationAudit>` を受けず、`Applied` を返さない。
 - 新しい CoS 業務操作は既定でこの形で書く。共有の操作は `handlers`・`cos` に依存しない module に置き（task-api の中なら SCC の外の単位だけを使う。

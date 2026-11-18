@@ -4,7 +4,7 @@
 - task: 01M7MZTKB6GQ241F6JJYSPJNS1（依頼キー celeris-architecture-scalability-v4-20261117 の子 E、親 01M7MZT8KX547464YYS76QNP4G、依存 C 01M7MZTKB29VF5TX7FCQ15XEMW）
 - 進捗: [2026-11-18-arch-v4-e.md](../progress/2026-11-18-arch-v4-e.md)、計測コマンド: [measure-commands.md](../progress/2026-11-18-arch-v4-e/measure-commands.md)
 - 関係: [ADR 2026-11-11 dispatcher-state-ownership](2026-11-11-dispatcher-state-ownership.md)（D2・D3・D7 の付記）、ADR-0082（dispatcher.rs の module map）、
-  A の baseline（`artifacts/baseline.md` §6・§7。task 01M7MZTKAXM8GJGK8BPE13CQRM）、[ADR 2026-11-18 org-write-shared-use-case](2026-11-18-org-write-shared-use-case.md)（D）
+  A の baseline（`artifacts/baseline.md` §6・§7。task 01M7MZTKAXM8GJGK8BPE13CQRM）、ADR 2026-11-18 org-write-shared-use-case（D の WorkUnit adr の branch にあり、この ADR を書いた時点で main には未統合）（D）
 
 ## 背景
 
@@ -97,7 +97,7 @@ LoC の上限: 2 領域の production の純増は +80 行を目安にする（�
 
 ### D と write set が重ならないこと
 
-D（01M7MZTKB4RYM80S6CT3RST2N9）の設計（[ADR 2026-11-18 org-write-shared-use-case](2026-11-18-org-write-shared-use-case.md)）が変える path は
+D（01M7MZTKB4RYM80S6CT3RST2N9）の設計（ADR 2026-11-18 org-write-shared-use-case（D の WorkUnit adr の branch にあり、この ADR を書いた時点で main には未統合））が変える path は
 `crates/task-api/src/`（handlers・cos・skills・schema・新しい org_write.rs）と `crates/task-core/src/store/org.rs`。E が変える path は
 `crates/task-dispatch/src/dispatcher/` の下だけ（試験は `dispatcher/tests/structure_guard.rs`）。重ならないので D と並行してよい。
 

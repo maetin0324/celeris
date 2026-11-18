@@ -25,4 +25,6 @@ completed: 2026-11-18
 ## 検査
 - `sh scripts/dev/progress-index.sh --check` → exit 0（`progress-index --check: ok`）。
 - `git diff --name-only $CELERIS_WU_BASE -- crates scripts web | wc -l` → 0。
-- 変更は `agent-docs/` の 4 file だけ（Rust を変えていないので、test-affected・clippy・fmt の結果は result の summary に書く）。
+- `bash scripts/dev/test-affected.sh` → exit 0（`試験対象の変更なし（docs のみ等）`、repo-health は doc-only）。初回は exit 1 だった:
+  main に無い D の ADR への link が壊れていた（repo-health の new 1 件）。link を平文に直して再実行した。
+- `cargo fmt --all -- --check` → exit 0。`cargo clippy --workspace -- -D warnings` は実行していない（Rust の差分 0。run の壁時計を優先した）。

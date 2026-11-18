@@ -40,6 +40,9 @@ pub struct ReviewPolicy {
 pub struct PathClass {
     pub class: String,
     pub paths: Vec<String>,
+    /// この class が守る不変条件の名前（`ReviewPolicy.invariants` の key）。任意で、空なら書き出さない。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub invariants: Vec<String>,
 }
 
 /// ADR 2026-11-07-health-review-integration D3.1: 実装前に短く整理する設計 brief。risk の判定

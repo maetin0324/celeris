@@ -3392,6 +3392,13 @@
         "class": {
           "type": "string"
         },
+        "invariants": {
+          "description": "この class が守る不変条件の名前（`ReviewPolicy.invariants` の key）。任意で、空なら書き出さない。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "paths": {
           "items": {
             "type": "string"

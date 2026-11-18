@@ -164,6 +164,7 @@ fn policy() -> ReviewPolicy {
                 "^crates/alpha/src/".to_string(),
                 "^scripts/health/".to_string(),
             ],
+            invariants: vec![],
         }],
         invariants: BTreeMap::from([("events-append-only".to_string(), "RULES.md".to_string())]),
         definition_sha256: "sha-policy".to_string(),

@@ -2796,7 +2796,7 @@ fn org_upsert_rejects_a_second_secretary_and_cycles() {
 }
 
 #[test]
-fn org_delete_refuses_while_a_task_is_open_or_children_remain() {
+fn org_delete_tx_refuses_while_a_task_is_open_or_children_remain() {
     let store = SqliteStore::open_in_memory().unwrap();
     seed_secretary(&store);
     store
@@ -2810,19 +2810,26 @@ fn org_delete_refuses_while_a_task_is_open_or_children_remain() {
     task.assignee = Some("poc".into());
     store.insert(&task).unwrap();
 
-    let err = store.org_delete("poc").unwrap_err();
+    // HTTP と CoS と同じ形（`write_tx` の中の `org_delete_tx`）で消す。
+    let delete = |id: &str| store.write_tx(|tx| SqliteStore::org_delete_tx(tx, id));
+    let err = delete("poc").unwrap_err();
     assert!(matches!(err, StoreError::InUse { .. }), "{err}");
+    assert!(
+        store.org_get("poc").unwrap().is_some(),
+        "a refused delete leaves the node"
+    );
     // 子を抱えた部も消せない。
-    let err = store.org_delete("coding").unwrap_err();
+    let err = delete("coding").unwrap_err();
     assert!(matches!(err, StoreError::InUse { .. }), "{err}");
+    assert!(store.org_get("coding").unwrap().is_some());
     // タスクが終端になれば消せる。
     store
         .apply_transition(task.id, Trigger::Cancel, None)
         .unwrap();
-    assert!(store.org_delete("poc").unwrap());
+    assert!(delete("poc").unwrap());
     assert!(store.org_get("poc").unwrap().is_none());
     assert!(
-        !store.org_delete("poc").unwrap(),
+        !delete("poc").unwrap(),
         "deleting a missing node is Ok(false)"
     );
 }

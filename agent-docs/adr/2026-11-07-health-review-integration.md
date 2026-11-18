@@ -459,3 +459,30 @@ task 01M74X0XAN0MCFJ4KZ3VVFT2QA（G4-R1: review 方針の無い汎用 repo の�
 
 ## 付記（2026-11-17、#[path] の file の行の数え先）
 task 01M7MZTKAZQY72EX2R4RQ1WVWF（アーキ v4 B）。付記（2026-11-08、dispatch の実装）の「file は `health_review/` にあるので、行は `health_review` の module に数えられる」は、[ADR 2026-11-17 repo-health-scc-edges-logical-modules](2026-11-17-repo-health-scc-edges-logical-modules.md) D2・D4 で改める。`#[path]` で読む file は宣言した file の論理 module に属す。`design_gate.rs`・`design_verdict.rs` と `plan_adoption.rs`・`policy_review.rs`・`worker_profile.rs`・`inventory.rs`・`check_item.rs`・`review_limits.rs` の行と依存の辺は `dispatcher` の module に数えられる。置き場所（`crates/task-dispatch/src/health_review/`）は変えない。状態: 2026-11-17 の時点では決定だけ。検査器の変更が main に入るまでは、検査器は今までどおり `health_review` に数える。
+
+## 付記（2026-11-18、境界の意味を変える改修の risk）
+task 01M7MZTKB29VF5TX7FCQ15XEMW（アーキ v4 C）が D2.2・D3.3・D3.5・I8 を改めた。決定の本文と実装での違いは
+[ADR 2026-11-17 boundary-change-risk-review](2026-11-17-boundary-change-risk-review.md)（D1〜D6、「付記（2026-11-18、計画 v3 の決定）」、「付記（実装）」）。
+この付記は要点と、この ADR の中で読み替える箇所だけを書く。上の本文は当時の記録として書き換えない。
+- 理由: D3.3 の規則は「高 risk の path」と「`new_*` の宣言」の積で、既存の認可・lease・transaction・event の判定の条件を 1 行変える改修は宣言が無ければ `Low` になった。
+  判定は計画の write path だけを見て実際の差分を見ず、profile の 7 class は `task-api/src/knowledge.rs`・`cos/operations.rs`・`dispatcher/worker_finish.rs`・
+  `task-worker/src/browser_policy.rs` などの境界の file を含まなかった。
+- D2.2 の読み替え: `[[review.high_risk]]` の項目に任意の `invariants`（同じ profile の `[review.invariants]` の key の配列。外れた名前・形の違う値は
+  `profile_invalid`）を足した。D2.3 の JSON は `high_risk[{class, paths, invariants?}]`、D2.4 の Rust の型は `PathClass.invariants`（serde の default、空なら出さない）。
+  `profiles/celeris.toml` は 13 class（既存の 7 と `authz`・`transaction`・`event-apply`・`browser`・`worker-finish`・`review-gate`。`selfdeploy` に
+  `crates/celeris/src/instance.rs` を足した）、`[review.invariants]` は 17 件（付記「G2 の完了時の突き合わせ」の 13 件と新しい 4 件）。全 class が `invariants` を持つ。
+  policy の file の変更は人の差分承認と運用者の hand merge で main に入った（新しい ADR の「付記（実装）」）。
+- D3.3 の読み替え: write path が高 risk の class に合えば、brief の `new_*` の宣言によらず `High`。理由は `path_class:<class>:<path>`・`invariant:<class>:<名前>`、
+  宣言した欄は `declared:<欄>`（level に効かない）。brief の無い計画も class に合えば `High`（補足の理由 `brief_absent_human_plan`）。`new_fallback` は今のまま path に依らず `High`。
+  旧い理由の語 `path_class:<class>+new_state` と「人の計画で brief が無ければ `Low`」の規則は撤去した。`Absent` → `None`、読めない → `Unknown` は変えない（I4 の純粋関数のまま）。
+- D3.5 の読み替え: 設計 review は採用前の計画に加え、final review の差分にも当てる。final review の材料（`health_review/input.rs` の `build_final_review_material`）が
+  base 側の方針で実際の差分（`diff_stat` の `--no-renames`。rename の両側と消した path）に同じ `assess_risk` を当て、採用した計画の合格した設計 review が覆わない
+  (class, path) の組が残れば、`ReviewRequest.diff_design` で同じ final review の reviewer run に `design`（`DesignVerdictOut`）を求める。`design` が無い・`pass = false`・
+  方針や差分を読めない（`Unknown`）は合格しない（`Verdict::from_final_review`。fail closed）。reviewer run の無い review は覆われない組が残れば不合格。
+  新しい event kind・reviewer の run の種類・verdict の型は足していない。`ReviewerPassReused` の扱いは変えない。
+- I8 の読み替え: I8 は不変条件の名前 `policy-change-needs-human`（根拠の file はこの ADR）として `profiles/celeris.toml` の `[review.invariants]` に登録し、
+  class `review-gate`（risk の判定・設計 review・policy の関門・health の入口の file）の不変条件にした。risk の理由と reviewer の prompt に名前と根拠の file が出る。
+  I8 の中身（policy の file を変える candidate は人の承認なしには合格しない）は変えない。候補が自分の profile で class を外しても判定は base 側の方針で `High` のままで、
+  policy だけの候補は reviewer の承認の後も人の `Approval` の子を待つことを `boundary_case_5_policy_self_approval_impossible` で確かめた。
+- 変えないもの: I3・I4・I5・I7・I9、`Event` の種類と欄、D3.5 1.〜5. の採用前の設計 review の流れ、D6 の policy の関門。
+- 状態: 実装・実証は task の branch で済んだ（2026-11-18）。効くのは、この変更を含む release が昇格した後の daemon と worker から（昇格は人だけ）。

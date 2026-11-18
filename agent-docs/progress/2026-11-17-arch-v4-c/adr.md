@@ -1,8 +1,9 @@
 ---
 title: アーキ v4 C adr — 境界の意味を変える改修を高 risk にする規則・class の補完・final review の差分 risk・6 ケースの設計
 tasks: [01M7MZTKB29VF5TX7FCQ15XEMW]
-status: running
-updated: 2026-11-17
+status: done
+updated: 2026-11-18
+completed: 2026-11-18
 ---
 # adr（WorkUnit）
 

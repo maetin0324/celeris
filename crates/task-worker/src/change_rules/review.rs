@@ -23,9 +23,7 @@
 
 use std::collections::BTreeMap;
 
-use task_core::design_review::{
-    ReviewPolicy, RiskAssessment, RiskLevel, RiskReason, parse_risk_reason,
-};
+use task_core::design_review::{ReviewPolicy, RiskAssessment, RiskLevel, parse_risk_reason};
 use task_core::execution_plan::DesignBrief;
 
 use super::GENERIC_RULES;
@@ -362,10 +360,8 @@ fn reason_detail(reason: &str, policy: Option<&ReviewPolicy>, rows: &[&OwnerRow]
         file.map_or(format!("`{name}`"), |f| format!("`{name}`（`{f}`）"))
     };
     let (class, path) = match parse_risk_reason(reason) {
-        Some(RiskReason::Invariant { name, .. }) => {
-            return format!(": 不変条件 {}", source(name));
-        }
-        Some(RiskReason::PathClass { class, path }) => (class, path),
+        Some(("invariant", _, name)) => return format!(": 不変条件 {}", source(name)),
+        Some((_, class, path)) => (class, path),
         None => return String::new(),
     };
     let matched: Vec<String> = rows

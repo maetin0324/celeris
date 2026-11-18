@@ -147,25 +147,13 @@ impl RiskLevel {
     }
 }
 
-/// `assess_risk` が書く理由の語を読み戻した結果。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RiskReason<'a> {
-    /// `path_class:<class>:<path>`
-    PathClass { class: &'a str, path: &'a str },
-    /// `invariant:<class>:<名前>`
-    Invariant { class: &'a str, name: &'a str },
-}
-
 /// 理由の語 `path_class:<class>:<path>`・`invariant:<class>:<名前>` の読み（書く側は `assess_risk`）。
-/// `<repo>:` が前に付いた複数 repo の理由も読む。どちらでもない語は `None`。
-pub fn parse_risk_reason(reason: &str) -> Option<RiskReason<'_>> {
-    if let Some(at) = reason.find("path_class:") {
-        let (class, path) = reason[at + "path_class:".len()..].split_once(':')?;
-        return Some(RiskReason::PathClass { class, path });
-    }
-    let at = reason.find("invariant:")?;
-    let (class, name) = reason[at + "invariant:".len()..].split_once(':')?;
-    Some(RiskReason::Invariant { class, name })
+/// `(kind, class, path か名前)` を返す。`<repo>:` が前に付いた複数 repo の理由も読む。どちらでもない語は `None`。
+pub fn parse_risk_reason(reason: &str) -> Option<(&str, &str, &str)> {
+    ["path_class", "invariant"].into_iter().find_map(|kind| {
+        let (class, rest) = reason.split_once(&format!("{kind}:"))?.1.split_once(':')?;
+        Some((kind, class, rest))
+    })
 }
 
 /// D3.3: risk の判定の結果。`reasons` は判定の根拠の機械向けの語（`review_policy_absent`・

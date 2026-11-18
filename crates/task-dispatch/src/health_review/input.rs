@@ -48,8 +48,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use task_core::design_review::{
-    ReviewPolicy, ReviewPolicyState, RiskAssessment, RiskLevel, RiskReason, assess_risk,
-    parse_risk_reason,
+    ReviewPolicy, ReviewPolicyState, RiskAssessment, RiskLevel, assess_risk, parse_risk_reason,
 };
 use task_core::required_checks::health::HEALTH_CHECK_ID;
 use task_core::{Event, ReviewRepairHint, SqliteStore, Task, TaskId};
@@ -389,22 +388,14 @@ fn stat_text(repo: &str, target: &str, reviewed: &str, diff: Option<&DiffStat>) 
     )
 }
 
-/// `<repo>:` の付かない（1 repo の）理由の語を `task_core::design_review::parse_risk_reason` で読む。
-/// 複数 repo の `<repo>:path_class:…` は読まない（覆わない側に倒す）。
-fn own_reason(why: &str) -> Option<RiskReason<'_>> {
-    if why.starts_with("path_class:") || why.starts_with("invariant:") {
-        parse_risk_reason(why)
-    } else {
-        None
-    }
+/// `<repo>:` の付かない（1 repo の）理由の語を `parse_risk_reason` で読む。複数 repo の語は読まない（覆わない側に倒す）。
+fn own_reason(why: &str) -> Option<(&str, &str, &str)> {
+    parse_risk_reason(why).filter(|(kind, ..)| why.starts_with(kind))
 }
 
-/// 理由の語の `path_class:<class>:<path>` の (class, path)。
 fn path_class_pair(why: &str) -> Option<(String, String)> {
-    match own_reason(why)? {
-        RiskReason::PathClass { class, path } => Some((class.to_string(), path.to_string())),
-        RiskReason::Invariant { .. } => None,
-    }
+    let (kind, class, path) = own_reason(why)?;
+    (kind == "path_class").then(|| (class.to_string(), path.to_string()))
 }
 
 /// 付記 (iii): 採用した計画（`plan_sha256` が `adopted`）の最後の `DesignReviewed` が合格なら、同じ `plan_sha256` の
@@ -432,13 +423,10 @@ pub(crate) fn covered_pairs(
         } if plan_sha256 == sha => Some(risk),
         _ => None,
     });
-    risk.map(|r| {
-        r.reasons
-            .iter()
-            .filter_map(|why| path_class_pair(why))
-            .collect()
-    })
-    .unwrap_or_default()
+    risk.into_iter()
+        .flat_map(|r| &r.reasons)
+        .filter_map(|why| path_class_pair(why))
+        .collect()
 }
 
 /// 付記 (iii): 差分の risk の理由のうち覆われない残り。`Unknown` は全部、`High` は覆われない `path_class:<class>:<path>`
@@ -464,10 +452,8 @@ pub(crate) fn uncovered(risk: &RiskAssessment, covered: &[(String, String)]) -> 
     risk.reasons
         .iter()
         .filter(|why| match own_reason(why) {
-            Some(RiskReason::PathClass { class, path }) => {
-                left.iter().any(|(c, p)| c == class && p == path)
-            }
-            Some(RiskReason::Invariant { class, .. }) => left.iter().any(|(c, _)| c == class),
+            Some(("path_class", class, path)) => left.iter().any(|(c, p)| c == class && p == path),
+            Some((_, class, _)) => left.iter().any(|(c, _)| c == class),
             None => false,
         })
         .cloned()

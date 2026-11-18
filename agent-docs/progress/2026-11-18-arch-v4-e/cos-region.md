@@ -1,8 +1,9 @@
 ---
 title: アーキ v4 E — cos_chat 領域（relay_rejudge・slot_wait を store・設定に触らない関数にする）
 tasks: [01M7QT7K78ZABD62HM4J3BKNJE]
-status: running
+status: done
 updated: 2026-11-18
+completed: 2026-11-18
 ---
 # アーキ v4 E — cos_chat 領域: relay_rejudge・slot_wait
 
@@ -224,3 +225,101 @@ C3・E2 の file 数（`git grep` の作業ツリー検索。非試験 file）:
 - `docs/architecture-map.md` の cos_chat の行の入口の記述は close の段で直す（ADR の撤去対象）。
 - `retry_routes` の期限の式（`started_at` が無いと期限切れにしない）と `run_elapsed`（無いと 0 秒）は `max_wall_secs = 0` のときだけ結果が違う。
   意味をそろえるかは別の判断なので、この WorkUnit では変えていない。
+
+## guard（store_access_guard_cos_chat と 2 領域の before/after）
+
+ADR の「証明」3 の `store_access_guard_cos_chat` を `crates/task-dispatch/src/dispatcher/tests/structure_guard.rs` の末尾に足し、WU 領域（wu-region）と
+cos_chat 領域（relay・slot）を合わせた before/after を [measure-commands.md](measure-commands.md) の C3・E1・E2・E3・C12 で測った。
+before は `git merge-base HEAD main`（件名 `integrate wu/loc-fix (phase fix)` の commit。C3・E1・E2 の値は bc665168 と同じ）、after は提出時の HEAD。
+この WorkUnit は dispatcher/ の非試験の file を変えていない（変えたのは structure_guard.rs とこの file だけ）。
+
+### 結論（guard）
+
+- 目安に届いた。dispatcher/ の self.store を書く file は 44 → 38（−6。目安 −5）、self.config は 35 → 31（−4。目安 −3）。
+  crate 全体も 53 → 47（−6）・40 → 36（−4）で同じ数だけ減った。非試験 file（scope 69・論理 76・crate 138）と `#[path]` の行 94 は変わらない。
+  SqliteStore を書く file は scope 27 → 26、論理 29 → 28、crate 50 → 49（増えていない）。ADR の「合計の見込み」（38・31、論理 42・35）と同じ値。
+- 対象 6 file（WU の 4 file と cos_chat の relay_rejudge・slot_wait）は E3 の 7 token が comment を含めて 0。`store_access_guard_work_units`・
+  `store_access_guard_cos_chat`・`store_access_guard_detects_each_violation` の 3 本が通る。
+- dispatcher/ の非試験の行は +61（C12 の `views.product_only.lines` 375763 → 375824）。ADR の 2 領域の目安 +80 の中（WU 領域 +32、cos_chat 領域 +29）。
+
+### 試験（structure_guard.rs の末尾に足したもの）
+
+- `store_access_guard_cos_chat`: `include_str!` で読んだ `cos_chat/relay_rejudge.rs`・`cos_chat/slot_wait.rs` を wu-region の `shared_state_access`
+  （token の一覧は `SHARED_STATE_TOKENS`）に通し、違反が 0 であることを確かめる。helper は写していない・変えていない
+  （`fn shared_state_access` と `SHARED_STATE_TOKENS` は crates の中に 1 つずつ。`grep -rn` で確かめた）。
+- doc comment に書いた不変条件: cos_chat 領域の判断の file は共有の状態に触る経路を持たない（ADR D1）。候補・受信箱・chat run の読み書きと起動は入口
+  （`launch.rs` の `relay_rejudge`・`plan_rejudge`・`retry_slot_waits`、`routes.rs` の `hold_slot_wait`、`control.rs` の `close_unlaunched`）が行う。
+- 既存の試験で検出できない理由（doc comment に書いた）: 振る舞いの試験（`cos_chat_triage_*`・`cos_slot_wait`・`cos_launch_cross`）はどの file が
+  store に触るかを見ないので、対象 file に `impl CosChatLaunch` と `self.store` を戻しても全部通る。
+- 検出の確認: `slot_wait.rs` の末尾に `const _P: &str = "self.store";` を一時的に足して
+  `cargo nextest run -p task-dispatch -E 'test(store_access_guard)'` を走らせると、`store_access_guard_cos_chat` が
+  `dispatcher/cos_chat/slot_wait.rs reaches shared state through ["self.store"]` で落ちた（3 tests run: 2 passed, 1 failed）。
+  file は `git checkout --` で元に戻した（commit していない）。戻した後は 3 passed。
+
+### C3・E1・E2 の before/after（基準 `git merge-base HEAD main` → 提出時の HEAD。2 領域の合計）
+
+| 計測 | 範囲 | before（file / 出現） | after（file / 出現） | file の差 |
+|---|---|---|---|---|
+| C3 self.store | scope 69 file | 44 / 633 | 38 / 633 | −6 |
+| C3 self.config | scope 69 file | 35 / 218 | 31 / 220 | −4 |
+| C3 self.store | 論理 76 file | 48 / 661 | 42 / 661 | −6 |
+| C3 self.config | 論理 76 file | 39 / 224 | 35 / 226 | −4 |
+| E1 self.store（改行込み） | scope | 46 / 759 | 40 / 759 | −6 |
+| E1 self.config（改行込み） | scope | 35 / 227 | 31 / 227 | −4 |
+| E1 self.store（改行込み） | 論理 | 50 / 791 | 44 / 791 | −6 |
+| E1 self.config（改行込み） | 論理 | 39 / 233 | 35 / 233 | −4 |
+| E2 SqliteStore を書く file | scope・論理 | 27・29 | 26・28 | −1・−1 |
+| E2 crate self.store | crate 非試験 138 file | 53 / 683 | 47 / 683 | −6 |
+| E2 crate self.config | crate | 40 / 238 | 36 / 240 | −4 |
+| E2 crate SqliteStore | crate | 50 / 195 | 49 / 195 | −1 |
+| 非試験 file 数 | scope・論理・crate | 69・76・138 | 69・76・138 | 0 |
+| `#[path]` の行 | crates/task-dispatch/src | 94 | 94 | 0 |
+
+SqliteStore の file の −1 は `relay_rejudge.rs` の `&task_core::SqliteStore` の引数を消した分（出現 195 は同じ。入口の `launch.rs` は前から SqliteStore を書く）。
+
+### E3（対象 6 file。列は self.store self.config SqliteStore Dispatcher CosChatLaunch(Config) DispatchConfig `use super::*`。comment の行も数える）
+
+| file | before | after |
+|---|---|---|
+| `dispatcher/behind_target.rs` | `2 1 0 2 0 0 0`（計 5） | `0 0 0 0 0 0 0`（計 0） |
+| `dispatcher/auto_leaf.rs` | `1 1 0 1 0 0 1`（計 4） | `0 0 0 0 0 0 0`（計 0） |
+| `dispatcher/write_set_gate.rs` | `2 0 0 1 0 0 1`（計 4） | `0 0 0 0 0 0 0`（計 0） |
+| `dispatcher/write_set_record.rs` | `2 0 0 2 0 0 1`（計 5） | `0 0 0 0 0 0 0`（計 0） |
+| `dispatcher/cos_chat/relay_rejudge.rs` | `5 1 1 4 3 0 0`（計 14） | `0 0 0 0 0 0 0`（計 0） |
+| `dispatcher/cos_chat/slot_wait.rs` | `8 1 0 2 2 0 0`（計 13） | `0 0 0 0 0 0 0`（計 0） |
+
+### 出現数が増えた理由
+
+file ごとの行数と C3（1 行）・E1（改行込み）の出現数（before → after）:
+
+| file | 行数 | C3 store | C3 config | E1 store | E1 config |
+|---|---|---|---|---|---|
+| `cos_chat/launch.rs`（入口） | 1086 → 1215 | 15 → 19 | 3 → 5 | 24 → 32 | 3 → 5 |
+| `cos_chat/routes.rs`（入口） | 289 → 320 | 10 → 11 | 2 → 2 | 11 → 12 | 2 → 2 |
+| `cos_chat/control.rs`（入口） | 327 → 367 | 10 → 13 | 1 → 1 | 14 → 18 | 1 → 1 |
+| cos_chat の対象 2 file の計 | 354 → 183 | 8 → 0 | 2 → 0 | 13 → 0 | 2 → 0 |
+| `dispatch_run.rs`（入口） | 1683 → 1749 | 30 → 34 | 25 → 25 | 36 → 40 | 25 → 25 |
+| `review_spawn.rs`（入口） | 1564 → 1626 | 47 → 49 | 14 → 15 | 53 → 55 | 14 → 15 |
+| `work_units.rs`（入口） | 2060 → 2056 | 57 → 58 | 11 → 14 | 64 → 65 | 14 → 15 |
+| WU の対象 4 file の計 | 632 → 540 | 7 → 0 | 2 → 0 | 7 → 0 | 2 → 0 |
+
+- self.store の出現は C3 633 → 633、E1 759 → 759: 対象 6 file から消えた参照（C3 15・E1 20）が入口 6 file に同じ数だけ移った。読み書きの回数は同じ。
+- self.config の出現は C3 で 218 → 220（+2）、E1 で 227 → 227（0）。対象 6 file から消えた 4 が入口に 4 移った。C3 の +2 は wu-region で
+  `work_units.rs` の rustfmt が `self\n.config` に割っていた 2 か所（検査の lease の ttl）を 1 行に書き直したため（E1 では同じ数）。cos_chat 領域は
+  C3・E1 とも出現数を変えていない。参照の数そのものは増えていない。crate の self.config の 238 → 240 も同じ 2 か所。
+
+### dispatcher/ の非試験の行の増減（C12）
+
+- `source-size-report.py --exclusive-classes`（script と toml は base から `git show` で取り出した）: `views.product_only.lines` 375763 → 375824（+61）、
+  `rust_lines` 331072 → 331133（+61）、`own_total_with_tests` 1028966 → 1029161（+195）、`class_totals.external_test` 457713 → 457847（+134。structure_guard.rs）、
+  `inline_test` 21419 → 21419。merge-base と HEAD の間で production の変更は dispatcher/ だけなので、+61 が dispatcher/ の非試験の行の増減。
+- `git diff --numstat <merge-base> HEAD`（非試験、計 +718/−657 = +61）: WU 領域 dispatch_run.rs +69/−3、review_spawn.rs +62/−0、work_units.rs +34/−38、
+  behind_target.rs +34/−83、auto_leaf.rs +47/−48、write_set_gate.rs +34/−67、write_set_record.rs +102/−111（+32）。cos_chat 領域 launch.rs +131/−2、
+  routes.rs +39/−8、control.rs +40/−0、relay_rejudge.rs +64/−137、slot_wait.rs +62/−160（+29）。
+- ADR の LoC の目安: 2 領域の純増 +80 以下（+61）。replan の閾値 +200 の下。
+
+### check の出力の要点（提出時の HEAD で実行。基準は git merge-base HEAD main、WorkUnit は `$CELERIS_WU_BASE`）
+
+- Task の受け入れ条件 0 の snippet → `files 69->69 store 44->38 occ 633->633 config 35->31 occ 218->220 crate-store 53->47 crate-config 40->36 SqliteStore-files 50->49`、exit 0。
+- Task の受け入れ条件 4 の grep（新しい trait・Manager・Facade・Port・Service）→ exit 0（該当なし）。
+- `git diff <merge-base> HEAD -- crates/task-dispatch/src/health_review crates/task-dispatch/src/dispatcher/worker_finish.rs crates/task-dispatch/src/execution_coordination.rs crates/task-dispatch/src/project_orchestration.rs` → 差分なし。

@@ -226,3 +226,28 @@ fn f(e: DispatchError) -> Result<(), DispatchError> { // self.config, CosChatLau
 ";
     assert_eq!(shared_state_access(clean), Vec::<&str>::new());
 }
+
+/// 不変条件（ADR 2026-11-18 dispatcher-store-access-pilot D1）: cos_chat 領域の判断の file は共有の状態に触る経路を持たない。
+/// 候補・受信箱・chat run の読み書きと起動は入口（`launch.rs` の `relay_rejudge`・`plan_rejudge`・`retry_slot_waits`、
+/// `routes.rs` の `hold_slot_wait`、`control.rs` の `close_unlaunched`）が行い、この 2 file の関数には値を渡す。
+/// 既存の試験で検出できない理由: 振る舞いの試験（`cos_chat_triage_*`・`cos_slot_wait`・`cos_launch_cross`）はどの file が
+/// store に触るかを見ないので、対象 file に `impl CosChatLaunch` と `self.store` を戻しても全部通る。
+#[test]
+fn store_access_guard_cos_chat() {
+    let files = [
+        (
+            "relay_rejudge.rs",
+            include_str!("../cos_chat/relay_rejudge.rs"),
+        ),
+        ("slot_wait.rs", include_str!("../cos_chat/slot_wait.rs")),
+    ];
+    for (file, src) in files {
+        let found = shared_state_access(src);
+        assert!(
+            found.is_empty(),
+            "dispatcher/cos_chat/{file} reaches shared state through {found:?}; read and write the store and \
+             the config in the entry file and pass values to this file's functions \
+             (ADR 2026-11-18 dispatcher-store-access-pilot D1)"
+        );
+    }
+}

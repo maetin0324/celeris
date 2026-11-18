@@ -12,7 +12,8 @@ use task_ops::knowledge::SkillUse;
 use serde_json::json;
 use task_core::SqliteStore;
 use task_core::chat::{
-    ChatMessage, ChatMessageQuery, ChatRunSessionMode, ChatRunState, ChatSessionKey, ChatThreadKind,
+    ChatError, ChatMessage, ChatMessageQuery, ChatRunSessionMode, ChatRunState, ChatSessionKey,
+    ChatStatusPhase, ChatThreadKind, chat_run_state_is_terminal,
 };
 use task_worker::adapter::{RunLimits, WorkerAdapter};
 use task_worker::protocol::{
@@ -21,11 +22,13 @@ use task_worker::protocol::{
 };
 use time::OffsetDateTime;
 
-use task_core::chat::triage::CosTriageItemReport;
+use task_core::chat::triage::{CosTriageClaim, CosTriageItemReport};
 use task_worker::protocol::{CosChatInboxDecision, CosChatInboxItem, CosChatInboxOption};
 
 use super::attachments::{stage_message_attachments, workspace_dir};
+use super::relay_rejudge;
 use super::sink::{ChatClock, ChatRunSink, chat_finish_for};
+use super::slot_wait::{self, SlotWaitStep};
 use super::triage::TriageSkip as Skip;
 use crate::dispatcher::Dispatcher;
 use crate::dispatcher::route_select::RoutePick;
@@ -375,6 +378,50 @@ impl Dispatcher {
 }
 
 impl CosChatLaunch {
+    /// 枠待ち（`slot_wait.rs`）の run を 1 tick に 1 回、期限・停止・枠を見て処理する。次の手は `slot_wait::step` が決める。
+    pub(super) fn retry_slot_waits(&mut self, dispatcher: &mut Dispatcher) {
+        // 巡回の中で表から外れるのは今の run だけで、他の run は足されない（`hold_slot_wait` は待っている run に何もしない）。
+        for (id, wait) in self.slot_waits.clone() {
+            let (now, thread) = (dispatcher.now_utc(), wait.thread_id.as_str());
+            let Ok(run) = self.store.chat_run_get(thread, &id) else {
+                self.slot_waits.remove(&id);
+                continue;
+            };
+            let config = self.run_configs.get(thread).unwrap_or(&self.config);
+            let gate = dispatcher.coord.accepting_new_work()
+                && dispatcher.maint.disk_ready()
+                && config.enabled
+                && self.has_capacity(dispatcher);
+            let running = self.running.contains_key(thread);
+            match slot_wait::step(&run, running, config.max_wall_secs, gate, now) {
+                SlotWaitStep::Drop => drop(self.slot_waits.remove(&id)),
+                SlotWaitStep::Close {
+                    state,
+                    prelaunch,
+                    text,
+                } => self.close_unlaunched(&run, state, prelaunch, text, now),
+                SlotWaitStep::Hold => {}
+                SlotWaitStep::Launch => {
+                    self.launch_routes(dispatcher, thread, &run, wait.first_route, None, now);
+                    if self.running.contains_key(thread) {
+                        self.slot_waits.remove(&id);
+                        let text = "CoS の枠が空いたので起動しました";
+                        let _ =
+                            self.store
+                                .chat_run_status(&id, ChatStatusPhase::Working, text, now);
+                    } else if self
+                        .store
+                        .chat_run_get(thread, &id)
+                        .map_or(true, |r| chat_run_state_is_terminal(r.state))
+                    {
+                        // 枠以外の理由で選べなくなって閉じた（従来の route_unavailable）。
+                        self.slot_waits.remove(&id);
+                    }
+                }
+            }
+        }
+    }
+
     fn claim_queued(&mut self, dispatcher: &mut Dispatcher) -> Result<(), String> {
         // ADR 2026-10-28-cos-inbox-chat-summary D4: a thread with new triage items runs the triage
         // before a queued daemon request (role=system); a person's message still goes first.
@@ -412,6 +459,88 @@ impl CosChatLaunch {
             }
             self.start_thread(dispatcher, &thread.id, ClaimSource::Queue)?;
         }
+        Ok(())
+    }
+
+    /// ADR 2026-10-27-relayed-instructions 付記 A2: one pass that hands each covered escalated
+    /// item, with the ids of the relays covering it, to one run per idle thread (`relay_rejudge.rs`
+    /// chooses). R2: a thread with a live run waits (the store re-checks in the claim
+    /// transaction), so the running triage run and the re-judging run never overlap.
+    pub(super) fn relay_rejudge(&mut self, dispatcher: &mut Dispatcher) -> Result<(), String> {
+        let now = dispatcher.now_utc();
+        let candidates = self
+            .store
+            .cos_triage_relay_candidates(now)
+            .map_err(|e| e.to_string())?;
+        let fresh = relay_rejudge::fresh(candidates, &self.running, &self.triage.rejudge_settled);
+        if fresh.is_empty() {
+            return Ok(());
+        }
+        // ADR 2026-11-06-cos-chat-launch-scaling D3: the derived inbox is built for the
+        // candidates' tasks only (the same items as the full inbox), so this pass does not scan
+        // every task of the store. A candidate whose key names no task falls back to the full
+        // inbox once.
+        let keys: Vec<_> = fresh
+            .iter()
+            .map(|c| task_ops::human_inbox::item_task_id(self.store.as_ref(), &c.source_key))
+            .collect();
+        let inbox = if keys.iter().all(Option::is_some) {
+            self.triage.relay_inbox_builds.scoped += 1;
+            let tasks = keys.into_iter().flatten().collect();
+            self.human_inbox_touching(dispatcher, now, &tasks)?.items
+        } else {
+            self.triage.relay_inbox_builds.full += 1;
+            self.human_inbox_items(dispatcher, now)?
+        };
+        let (per_thread, settled) = relay_rejudge::pick(fresh, &inbox);
+        self.triage.rejudge_settled.extend(settled);
+        for (thread, rejudge) in per_thread {
+            self.launch_rejudge(dispatcher, &thread, now, |store, run_id| {
+                store.cos_triage_relay_claim(&thread, run_id, &rejudge, now)
+            })?;
+        }
+        Ok(())
+    }
+
+    /// ADR 2026-10-30-cos-review-open-waits D4: one pass that hands each escalated plan approval
+    /// whose task's decisions the person has answered since the judgment to one run per idle
+    /// thread. The store holds the state (the item's input message); no LLM, no judgment here.
+    pub(super) fn plan_rejudge(&mut self, dispatcher: &mut Dispatcher) -> Result<(), String> {
+        let now = dispatcher.now_utc();
+        let candidates = self
+            .store
+            .cos_triage_plan_rejudge_candidates()
+            .map_err(|e| e.to_string())?;
+        for (thread, items) in relay_rejudge::plan_per_thread(candidates, &self.running) {
+            self.launch_rejudge(dispatcher, &thread, now, |store, run_id| {
+                store.cos_triage_plan_rejudge_claim(&thread, run_id, &items, now)
+            })?;
+        }
+        Ok(())
+    }
+
+    /// 空いている thread で claim できたら（store が 1 transaction で item と run を結ぶ）、その run を起こす。
+    fn launch_rejudge(
+        &mut self,
+        dispatcher: &mut Dispatcher,
+        thread: &str,
+        now: OffsetDateTime,
+        claim: impl FnOnce(&SqliteStore, &str) -> Result<Option<CosTriageClaim>, ChatError>,
+    ) -> Result<(), String> {
+        if self.running.contains_key(thread) || !self.has_capacity(dispatcher) {
+            return Ok(());
+        }
+        let run_id = ulid::Ulid::new().to_string();
+        let Some(claim) = claim(&self.store, &run_id).map_err(|e| e.to_string())? else {
+            return Ok(());
+        };
+        let run = self
+            .store
+            .chat_run_get(&claim.thread_id, &claim.run_id)
+            .map_err(|e| e.to_string())?;
+        self.run_configs
+            .insert(thread.to_string(), self.config.clone());
+        self.launch_routes(dispatcher, thread, &run, 0, None, now);
         Ok(())
     }
 

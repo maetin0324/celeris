@@ -64,8 +64,8 @@ ADR: [2026-11-17-boundary-change-risk-review.md](../../adr/2026-11-17-boundary-c
 - `cargo nextest run -p task-dispatch -E 'test(/boundary_case_/)'`: 6 passed。`grep` で `fn boundary_case_[1-6]_` の番号は 6 種。
 - `cargo nextest run -p task-dispatch -E 'test(/boundary_case_|review_item|health_review_input|reuse/)'`: 63 passed（`evaluate_all` の既存の試験を含む）。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
-- `bash scripts/dev/test-affected.sh`: 結果は下の「test-affected」。
-- 範囲の check（`sh "$CELERIS_WU_SCOPE_PATHS"` の path が範囲の正規表現に入る）: 結果は下。
+- `bash scripts/dev/test-affected.sh`: exit 0（約 713 秒）。対象 crate は celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。nextest 3,933 passed・11 skipped、doc test は ok、script bundle の SKIP 0 件。web の型検査・unit 試験は対象外（web/・docs/api/・task-api の通常依存の変更が無い）。
+- 範囲の check（`sh "$CELERIS_WU_SCOPE_PATHS"` の path を範囲の正規表現に当てる）: 範囲外 0 件。変更 path は `cases.md`・`dispatcher/tests/boundary_cases.rs`・`dispatcher/tests/health_review_design_verdict.rs`・`dispatcher/tests/mod.rs`・`health_review/review_item.rs` の 5 件。
 - 全体の試験と release gate は走らせていない（release gate だけで走る。`agent-docs/adr/2026-10-20-full-tests-at-release-only.md`）。
 
 ## LoC（`git diff --numstat $CELERIS_WU_BASE HEAD`）

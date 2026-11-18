@@ -26,9 +26,10 @@ use task_ops::knowledge::{self as ops_kb, SkillError};
 use time::OffsetDateTime;
 
 use crate::cos::operations::{Applied, OperationAudit};
-use crate::handlers::{ApiResult, Params, json_response, load_org_node, no_query, read_json};
+use crate::handlers::{ApiResult, Params, json_response, no_query, read_json};
 use crate::knowledge::{require_kb, root_of};
 use crate::middleware::require_admin;
+use crate::org_write::{self, OrgWrite, load_org_node};
 use crate::problem::{ApiProblem, store_problem};
 use crate::state::ApiState;
 use crate::types::ValidationError;
@@ -409,10 +410,10 @@ async fn mount_skill(
     let node = state
         .blocking(move |store| {
             let write = plan_skill_mount(store, &id, &skill, true)?;
-            crate::handlers::org::org_commit(store, write, "org.skill_mount", None)?.direct()
+            store.write_tx(|tx| org_write::apply(tx, &write, "admin"))
         })
         .await?
-        .ok_or_else(|| ApiProblem::internal("skill mount returned no node"))?;
+        .into_node()?;
     tracing::info!(who = "admin", op = "org_skill_mount", org_id = %node.id, skill = %skill_for_log, "admin: skill mounted");
     Ok(json_response(StatusCode::OK, &node))
 }
@@ -428,10 +429,10 @@ async fn unmount_skill(
     let node = state
         .blocking(move |store| {
             let write = plan_skill_mount(store, &id, &skill, false)?;
-            crate::handlers::org::org_commit(store, write, "org.skill_unmount", None)?.direct()
+            store.write_tx(|tx| org_write::apply(tx, &write, "admin"))
         })
         .await?
-        .ok_or_else(|| ApiProblem::internal("skill unmount returned no node"))?;
+        .into_node()?;
     tracing::info!(who = "admin", op = "org_skill_unmount", org_id = %node.id, "admin: skill unmounted");
     Ok(json_response(StatusCode::OK, &node))
 }
@@ -443,12 +444,12 @@ pub(crate) fn plan_skill_mount(
     id: &str,
     skill: &str,
     mount: bool,
-) -> Result<crate::handlers::org::OrgWrite, ApiProblem> {
+) -> Result<OrgWrite, ApiProblem> {
     let mut node = load_org_node(store, id)?;
     ops_kb::set_skill_mount(&mut node.profile.skills_mounts, skill, mount)
         .map_err(skill_error_to_problem)?;
     node.updated_at = OffsetDateTime::now_utc();
-    Ok(crate::handlers::org::OrgWrite::Upsert {
+    Ok(OrgWrite::Upsert {
         node: Box::new(node),
         browser: false,
     })

@@ -13,7 +13,7 @@ use serde_json::json;
 use task_core::SqliteStore;
 use task_core::chat::{
     ChatError, ChatMessage, ChatMessageQuery, ChatRunSessionMode, ChatRunState, ChatSessionKey,
-    ChatThreadKind,
+    ChatStatusPhase, ChatThreadKind, chat_run_state_is_terminal,
 };
 use task_worker::adapter::{RunLimits, WorkerAdapter};
 use task_worker::protocol::{
@@ -28,6 +28,7 @@ use task_worker::protocol::{CosChatInboxDecision, CosChatInboxItem, CosChatInbox
 use super::attachments::{stage_message_attachments, workspace_dir};
 use super::relay_rejudge;
 use super::sink::{ChatClock, ChatRunSink, chat_finish_for};
+use super::slot_wait::{self, SlotWaitStep};
 use super::triage::TriageSkip as Skip;
 use crate::dispatcher::Dispatcher;
 use crate::dispatcher::route_select::RoutePick;
@@ -377,6 +378,50 @@ impl Dispatcher {
 }
 
 impl CosChatLaunch {
+    /// 枠待ち（`slot_wait.rs`）の run を 1 tick に 1 回、期限・停止・枠を見て処理する。次の手は `slot_wait::step` が決める。
+    pub(super) fn retry_slot_waits(&mut self, dispatcher: &mut Dispatcher) {
+        // 巡回の中で表から外れるのは今の run だけで、他の run は足されない（`hold_slot_wait` は待っている run に何もしない）。
+        for (id, wait) in self.slot_waits.clone() {
+            let (now, thread) = (dispatcher.now_utc(), wait.thread_id.as_str());
+            let Ok(run) = self.store.chat_run_get(thread, &id) else {
+                self.slot_waits.remove(&id);
+                continue;
+            };
+            let config = self.run_configs.get(thread).unwrap_or(&self.config);
+            let gate = dispatcher.coord.accepting_new_work()
+                && dispatcher.maint.disk_ready()
+                && config.enabled
+                && self.has_capacity(dispatcher);
+            let running = self.running.contains_key(thread);
+            match slot_wait::step(&run, running, config.max_wall_secs, gate, now) {
+                SlotWaitStep::Drop => drop(self.slot_waits.remove(&id)),
+                SlotWaitStep::Close {
+                    state,
+                    prelaunch,
+                    text,
+                } => self.close_unlaunched(&run, state, prelaunch, text, now),
+                SlotWaitStep::Hold => {}
+                SlotWaitStep::Launch => {
+                    self.launch_routes(dispatcher, thread, &run, wait.first_route, None, now);
+                    if self.running.contains_key(thread) {
+                        self.slot_waits.remove(&id);
+                        let text = "CoS の枠が空いたので起動しました";
+                        let _ =
+                            self.store
+                                .chat_run_status(&id, ChatStatusPhase::Working, text, now);
+                    } else if self
+                        .store
+                        .chat_run_get(thread, &id)
+                        .map_or(true, |r| chat_run_state_is_terminal(r.state))
+                    {
+                        // 枠以外の理由で選べなくなって閉じた（従来の route_unavailable）。
+                        self.slot_waits.remove(&id);
+                    }
+                }
+            }
+        }
+    }
+
     fn claim_queued(&mut self, dispatcher: &mut Dispatcher) -> Result<(), String> {
         // ADR 2026-10-28-cos-inbox-chat-summary D4: a thread with new triage items runs the triage
         // before a queued daemon request (role=system); a person's message still goes first.

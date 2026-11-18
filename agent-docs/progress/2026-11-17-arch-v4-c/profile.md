@@ -1,15 +1,16 @@
 ---
 title: アーキ v4 C profile — [review] に境界の class と class ごとの不変条件を足す（policy の唯一の leaf）
 tasks: [01M7MZTKB29VF5TX7FCQ15XEMW]
-status: blocked
-updated: 2026-11-17
+status: done
+updated: 2026-11-18
+completed: 2026-11-18
 ---
 # profile（WorkUnit）
 
 ADR: [2026-11-17-boundary-change-risk-review.md](../../adr/2026-11-17-boundary-change-risk-review.md) の D2・D6。基準は `$CELERIS_WU_BASE`。
-policy の file を変える唯一の leaf。人の差分承認と operator の main への hand merge（件名『integrate 01M7MZTKB2 profile: …』）を待つ。
+policy の file を変える唯一の leaf。人が差分を承認し（2026-11-18）、operator が main に hand merge した（下の「人の承認と merge」）。
 
-## 人が決めること（merge の前）
+## 人が決めたこと（merge の前に聞いた。回答は下の「人の承認と merge」）
 1. 下の「policy の差分の要約」を承認するか。
 2. **merge の順**: この差分を main に入れると、main の Rust の試験 `health_review_scenario_real_cli`（task-dispatch、
    `crates/task-dispatch/src/health_review/scenario_tests.rs:581`）が 1 件落ちる。daemon は新しい JSON を読める（下の「Rust の読み込み」）。
@@ -71,7 +72,7 @@ policy の file でない変更: 試験 `scripts/tests/test_repo_health_review_b
   注意: 同じ `CARGO_TARGET_DIR` で別の worktree の木を build すると、元の worktree の試験の binary が古い木の path（`CARGO_MANIFEST_DIR`）のまま
   新しいと判定される（使い捨ての worktree を消した後に `copy_checker` が `NotFound` で落ちた）。`git ls-files -z crates | xargs -0 touch` で作り直した。
 
-## 検査（提出時の HEAD で実行）
+## 検査（merge の前の run で実行）
 - `python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health_review_*.py'` → 26 件 OK（新しい 7 件と既存の review policy の 19 件。
   既存の `test_health_review_celeris_profile_points_at_existing_paths` が各 path の式が追跡 file に当たることを確かめる）。
 - 失敗注入（commit しない）: 名前の検査（`_check_review_invariant_names` の呼び出し）を外す → `test_boundary_unknown_invariant_name_is_load_error`・
@@ -82,11 +83,40 @@ policy の file でない変更: 試験 `scripts/tests/test_repo_health_review_b
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
 
 ## 人の承認と merge
-未（人の差分承認と operator の hand merge を待つ）。1 回目の run が result.json に書いた決定 `profile-merge-order` は人に届いていない
-（WU の run の `decisions` は check が通ったときだけ読まれる。`run_settlement/work_unit.rs` の `reads_worker_decisions`）。2 回目の run は task の質問で聞いた。
+- 人の決定（2026-11-18。認可 01M7NX38P09PR9JTTAPDA96VW2 への回答を外部の運用者が task のコメントで伝えた）:
+  - この leaf の policy の差分（`profiles/celeris.toml` の境界の 6 class と selfdeploy の `instance.rs`、全 class の `invariants`、
+    `[review.invariants]` の 4 名、`health/profile.py` の検査、`review-policy-v1.schema.json`）を承認する。
+  - main に入れる順は `rust-first`（推奨案）。
+- 運用者がしたこと（コメントのとおり。この run は件名で main の履歴にあることを確かめた）:
+  - 前提の小さな task 01M7NZW0BSD3FR38XMJG190BB4 を起票し、main に入れた。件名「ADR: PathClass に任意の欄 invariants を先に足す決定（アーキv4 C の D2・D6 の一部）を記録する」
+    「PathClass に任意の欄 invariants を足し、往復試験と schema を更新する」。
+  - この WU の branch を main に no-ff で merge した。件名「integrate 01M7MZTKB2 profile: [review] に境界の 6 class と class ごとの不変条件を足す（policy の branch、人の承認と operator の hand merge）」。
+    task の branch もその merge へ fast-forward した。WU の branch は fast-forward していない（merge の第 2 親がこの branch の 1 つ前の run の head）。
+- この run は差分を作り直していない（自分の変更を自分で承認していない）。この run の変更はこの進捗 file だけ。
+
+## 再実行の run の検査（提出時の HEAD で実行。2026-11-18）
+- merge の commit: `m=$(git log --format=%H --grep='^integrate 01M7MZTKB2 profile' -n 1 main HEAD)` → 1 件見つかった（親は 2 つ）。
+  `git diff --name-only $m^1 $m` → 8 file: `scripts/dev/repo-health/{health/profile.py,profiles/celeris.toml,schema/review-policy-v1.schema.json}`、
+  `scripts/tests/test_repo_health_review_boundary.py`、`agent-docs/adr/2026-11-17-boundary-change-risk-review.md`、`agent-docs/progress/2026-11-17-arch-v4-c.md`
+  と同名 dir の `adr.md`・`profile.md`。許可した path（policy の file・新しい試験・C の ADR と進捗）の外は無い。
+  `git diff --stat HEAD $m^2` → 差分なし（merge した木はこの branch の HEAD と同じ）。`git diff --stat HEAD main -- scripts/dev/repo-health scripts/tests/test_repo_health_review_boundary.py` → 差分なし。
+- `python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health_review_*.py'` → 26 件 OK（新しい 7 件と既存の review policy の 19 件）。
+- `bash scripts/dev/check-health.sh --out <artifacts>/health-report.json` → exit 0。必須 rule 15 件と任意 rule 6 件がすべて pass（`policy.changed` も pass。
+  `--base auto` は `git merge-base HEAD main` で、merge の後は HEAD になり、policy の差分が比較に入らないため）。
+- Rust の読み込み（main の木。operator は回していない）: `git worktree add --detach $TMPDIR/main-tree main` の木で
+  `cargo nextest run -p task-dispatch -E 'test(/health_review_scenario_real_cli|health_review_policy|health_enforce_g2_review_policy/)'`
+  → exit 0、32 tests run: 32 passed, 1865 skipped。merge 前にこの branch だけで落ちた `health_review_scenario_real_cli` の往復の比較
+  （class ごとの `invariants`）が main で通る。使い捨ての worktree は消し、この worktree の `crates` を touch した（上の注意と同じ理由）。
+- clippy・fmt・test-affected・progress-index（提出時の HEAD）: 下の「提出時の検査」。
+
+## 提出時の検査（提出時の HEAD で実行。2026-11-18。この run に main との同期は無い）
+- `bash scripts/dev/test-affected.sh` → exit 0（repo-health: verdict=pass、`policy.changed` pass、「試験対象の変更なし（docs のみ等）」）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0、出力なし。
+- `sh scripts/dev/progress-index.sh --check` → exit 0（ok）。
+- `sh "$CELERIS_WU_SCOPE_PATHS"` → 5 path（`profile.md`・policy の file 3 つ・新しい試験）。objective の範囲の外は無い。
 
 ## 未解決
-- merge の順（「人が決めること」2）。決まるまで merge しない。
+- 無し（merge の順は人が `rust-first` に決め、main に入った）。
 
 ## 提案
 - WU の run が `decisions` を書き、check が落ちたときも決定の要求を記録する（今は `reads_worker_decisions` が reason `completed` だけを読み、

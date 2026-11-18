@@ -66,6 +66,46 @@ pub(super) fn close_stopped(
         .map_err(|e| e.to_string())
 }
 
+impl CosChatLaunch {
+    /// 枠待ち（`slot_wait.rs`）の run を起動しないまま閉じる。列挙の理由が書けない旧い行（追跡なし）は印なしの終了にする。
+    /// `close_stopped`・`routes.rs` の `fail_routes` とは仕様が違う（cos-region.md の slot 節の比較）。
+    pub(super) fn close_unlaunched(
+        &mut self,
+        run: &ChatRun,
+        state: ChatRunState,
+        prelaunch: ChatPrelaunchReason,
+        text: &str,
+        now: OffsetDateTime,
+    ) {
+        self.slot_waits.remove(&run.id);
+        let result = self
+            .store
+            .chat_run_finish_prelaunch(&run.id, state, prelaunch, Some(text), now)
+            .map(|_| ())
+            .or_else(|_| {
+                self.store
+                    .chat_run_finish(&run.id, state, None, Some(text), now)
+                    .map(|_| ())
+            });
+        if let Err(error) = result {
+            tracing::warn!(%error, run_id = %run.id, "CoS slot wait close failed");
+        }
+        if state == ChatRunState::Failed
+            && let Err(error) = self.store.chat_system_message_add_once(
+                &run.thread_id,
+                &format!("cos-route:{}:slot-wait-expired", run.id),
+                &format!("CoS が返事できませんでした。理由: {text}"),
+                &[],
+                now,
+            )
+        {
+            tracing::warn!(%error, run_id = %run.id, "CoS slot wait notice failed");
+        }
+        let _ = self.store.cos_run_credential_revoke(&run.id, now);
+        self.triage.digest_due = true;
+    }
+}
+
 pub(super) fn stop_intent(run: &ChatRun) -> ChatStopIntent {
     if run.reason.as_deref() == Some("stopped by human") {
         ChatStopIntent::Stop

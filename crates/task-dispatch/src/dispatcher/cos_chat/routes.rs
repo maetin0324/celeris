@@ -4,6 +4,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use super::launch::CosChatLaunch;
 use super::sink::ChatRunSink;
+use super::slot_wait::{SLOT_WAIT_TEXT, SlotWait};
 use crate::dispatcher::Dispatcher;
 use std::sync::Arc;
 
@@ -18,6 +19,14 @@ pub(super) fn failure_text(reason: &str) -> String {
     format!(
         "CoS が返事できませんでした。理由: {reason}\n利用可能なアカウントの枠・ログイン状態を確認して再送してください。"
     )
+}
+
+/// Seconds since the run started; 0 when `started_at` is missing or unreadable.
+pub(super) fn run_elapsed(run: &ChatRun, now: OffsetDateTime) -> u64 {
+    run.started_at
+        .as_deref()
+        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+        .map_or(0, |start| (now - start).whole_seconds().max(0) as u64)
 }
 
 impl CosChatLaunch {
@@ -154,14 +163,8 @@ impl CosChatLaunch {
         previous: Option<Arc<ChatRunSink>>,
         now: OffsetDateTime,
     ) {
-        let config = self.run_configs.get(thread).unwrap_or(&self.config).clone();
-        let elapsed = run
-            .started_at
-            .as_deref()
-            .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
-            .map_or(0, |start| (now - start).whole_seconds().max(0) as u64);
-        let mut cfg = config;
-        cfg.max_wall_secs = cfg.max_wall_secs.saturating_sub(elapsed);
+        let mut cfg = self.run_configs.get(thread).unwrap_or(&self.config).clone();
+        cfg.max_wall_secs = cfg.max_wall_secs.saturating_sub(run_elapsed(run, now));
         if cfg.max_wall_secs == 0 {
             self.fail_routes(
                 run,
@@ -210,6 +213,34 @@ impl CosChatLaunch {
             );
             self.fail_routes(run, &failure.text, failure.reason, failover.as_deref(), now);
         }
+    }
+
+    /// 枠だけで選べなかった run を待ちに入れる。すでに待っている run には何も書かない（tick ごとに event を増やさない）。
+    fn hold_slot_wait(
+        &mut self,
+        run: &ChatRun,
+        thread: &str,
+        first_route: usize,
+        now: OffsetDateTime,
+    ) {
+        if self.slot_waits.contains_key(&run.id) {
+            return;
+        }
+        self.slot_waits.insert(
+            run.id.clone(),
+            SlotWait {
+                thread_id: thread.to_owned(),
+                first_route,
+            },
+        );
+        let _ = self.store.chat_run_status(
+            &run.id,
+            ChatStatusPhase::Waiting,
+            &format!(
+                "{SLOT_WAIT_TEXT}: 同時実行数の枠が空くまで待ち、空いたら同じ入力で起動します"
+            ),
+            now,
+        );
     }
 
     /// Close a run that cannot (or can no longer) start a route. A run whose process never launched

@@ -859,7 +859,7 @@ fn boundary_policy() -> ReviewPolicy {
         }],
         invariants: BTreeMap::from([(
             "api-principal-from-token".to_string(),
-            "docs/adr/api-principals.md".to_string(),
+            "PRINCIPALS.md".to_string(),
         )]),
         definition_sha256: "sha-boundary".to_string(),
     }
@@ -901,13 +901,13 @@ fn prompt_boundary_design_review_shows_reason_owner_row_and_invariants() {
     let section = section_after(&prompt, DESIGN_HEADING);
     let line = format!(
         "  - `path_class:authz:{BOUNDARY_PATH}`: path `{BOUNDARY_PATH}`・class `authz`。owner 地図の行: \
-         `{BOUNDARY_ROW}`。class の不変条件: `api-principal-from-token`（`docs/adr/api-principals.md`）\n"
+         `{BOUNDARY_ROW}`。class の不変条件: `api-principal-from-token`（`PRINCIPALS.md`）\n"
     );
     assert!(section.contains(&line), "reason line missing:\n{section}");
     assert!(
         section.contains(
             "  - `invariant:authz:api-principal-from-token`: 不変条件 `api-principal-from-token`\
-             （`docs/adr/api-principals.md`）\n"
+             （`PRINCIPALS.md`）\n"
         ),
         "{section}"
     );

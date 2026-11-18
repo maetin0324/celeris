@@ -12,7 +12,7 @@ pub(super) const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcde
 pub(super) const STORE_PATH: &str = "crates/task-store/src/rows.rs";
 
 /// stub の方針の owner 地図（[`checker_repo`] が base に commit する）と、その表の `crates/task-store/` の行。
-const OWNER_MAP: &str = "docs/map.md";
+const OWNER_MAP: &str = "OWNERS.md";
 const OWNER_ROW: &str = "| store | `crates/task-store/` | rows |";
 
 /// `source` の方針（高 risk の class `store` = `^crates/task-store/`、owner 地図 [`OWNER_MAP`]）を出す stub。
@@ -36,7 +36,6 @@ pub(super) fn checker_repo(stub: &str) -> tempfile::TempDir {
     let script = repo.path().join(CHECKER_SCRIPT);
     std::fs::create_dir_all(script.parent().unwrap()).unwrap();
     std::fs::write(&script, stub).unwrap();
-    std::fs::create_dir_all(repo.path().join("docs")).unwrap();
     std::fs::write(
         repo.path().join(OWNER_MAP),
         format!("| 領域 | path | 入口 |\n|---|---|---|\n{OWNER_ROW}\n"),

@@ -434,20 +434,7 @@ impl Dispatcher {
         }
         // ADR 2026-11-18-rejected-worker-decisions-reach-human D1: 受け付けなかった要求は 1 件の決定（`needed_before:
         // self`）にまとめて受け付けた決定と同じく記録する（受信箱・通知に出て、要求を出した仕事を止める）。
-        if let Some(escalated) = &batch.escalated {
-            events.push(Event::worker_progress(
-                run_id,
-                format!(
-                    "受け付けられなかった worker の決定の要求を決定 {} にまとめて人に出し、この仕事を答えが出るまで止めます（ADR 2026-11-18-rejected-worker-decisions-reach-human）",
-                    escalated.key
-                ),
-            ));
-        }
-        let recorded: Vec<&task_core::DecisionSpec> = batch
-            .accepted
-            .iter()
-            .chain(batch.escalated.iter())
-            .collect();
+        let recorded: Vec<&task_core::DecisionSpec> = batch.recorded().collect();
         if recorded.is_empty() {
             return Ok(Some(WorkerDecisions {
                 events,

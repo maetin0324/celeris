@@ -579,6 +579,13 @@ pub struct WorkerDecisionBatch {
     pub escalated: Option<DecisionSpec>,
 }
 
+impl WorkerDecisionBatch {
+    /// 記録する決定: 受け付けた決定（束ねを含む）と、受け付けなかった要求のまとめ（D1）。
+    pub fn recorded(&self) -> impl Iterator<Item = &DecisionSpec> {
+        self.accepted.iter().chain(self.escalated.iter())
+    }
+}
+
 /// ADR 2026-11-18-rejected-worker-decisions-reach-human D1: 受け付けなかった要求 1 件（まとめの問いの 1 行の材料）。
 struct RejectedRequest {
     /// 元の要求の 1 行（読めた要求は [`spec_summary`]、読めなかった要素は位置 `#n`）。
@@ -779,7 +786,7 @@ fn rejected_decision(key: &str, lost: &[RejectedRequest], target: &str) -> Decis
     let mut cost = CostOfReversal::Low;
     for (i, r) in lost.iter().enumerate() {
         question.push_str(&format!(
-            "\n{}) {} — 受け付けなかった理由: {}",
+            "\n{}) {}。受け付けなかった理由: {}",
             i + 1,
             r.summary,
             r.reason

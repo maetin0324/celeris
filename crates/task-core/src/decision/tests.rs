@@ -375,12 +375,16 @@ fn rejected_worker_decisions_become_one_self_decision() {
     );
     assert_eq!(e.cost_of_reversal, CostOfReversal::High);
     assert!(validate_shape(e).is_empty(), "{:?}", validate_shape(e));
+    assert_eq!(
+        batch.recorded().map(|d| d.key.as_str()).collect::<Vec<_>>(),
+        vec!["ok", "rejected-2"]
+    );
     for needle in [
         "決定の要求 4 件",
         "1) trim question trim?（選択肢: a=label a / b=label b。推奨: label a）",
         r#"needed_before names an unknown unit "integrate-s1""#,
         "2) w2 question w2?",
-        "3) #4 w5 q5 — 受け付けなかった理由: decision #4:",
+        "3) #4 w5 q5。受け付けなかった理由: decision #4:",
         "4) h1 question h1?",
     ] {
         assert!(e.question.contains(needle), "{needle:?} in {}", e.question);

@@ -24,7 +24,7 @@ updated: 2026-11-18
 
 ## 行数の測定
 基準は `git merge-base HEAD main`。script と `source-size-report.toml` は基準の commit から `git show <base>:<path>` で取り出して base と HEAD の両方に当てた（`--config` で指定）。
-command: `python3 <script> --exclusive-classes --rev <rev> --format json`（production は views.product_only の lines と rust_lines、own_total は views.own_total_with_tests）。測定は trim-lines の commit 後の HEAD。
+command: `python3 <script> --exclusive-classes --rev <rev> --format json`（production は views.product_only の lines と rust_lines、own_total は views.own_total_with_tests）。測定は trim 統合後の HEAD で再実行し、表の値は同じだった。
 
 | 指標 | base | HEAD | 差 |
 |---|---|---|---|
@@ -40,7 +40,9 @@ own_total_with_tests は往復の試験・input の試験の書き換えで +44�
 - 受け入れ 1: `rg -n 'build_health_input\b|build_health_input_with' crates/` は 0 件。
 - 受け入れ 2: `git diff <base> HEAD -- scripts/dev/repo-health` は空。新しい module・trait・crate は無い。ADR 付記は実装前の commit。
 - 受け入れ 3: 上の表。production Rust -3。
-- 受け入れ 4（提出時の HEAD で実行）: `bash scripts/dev/test-affected.sh` exit 0、`cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0、`cargo nextest run -p task-core -p task-dispatch -p task-worker -E 'test(/design_review|health_review|review_risk_|boundary_case_|change_rules/)'` exit 0（197 件通過、4399 件は対象外）。
+- 受け入れ 4（trim 統合後の HEAD で再実行、recheck-final。提出時の HEAD で実行）: `bash scripts/dev/test-affected.sh` exit 0、`cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0、`cargo nextest run -p task-core -p task-dispatch -p task-worker -E 'test(/design_review|health_review|review_risk_|boundary_case_|change_rules/)'` exit 0（197 件通過、4399 件は対象外）。
+
+- recheck-final の実行結果: (a) nextest 197 件実行・197 通過・4399 件対象外・exit 0、(b) `bash scripts/dev/test-affected.sh` exit 0（最後に「試験対象の変更なし」と出た。repo_health_gate は all checks passed）、(c) `cargo clippy --workspace -- -D warnings` exit 0、(d) `cargo fmt --all -- --check` exit 0、(e) 測定は上の表のとおり production Rust 331072→331069（-3）。全体の試験（nextest --workspace）は走らせていない。
 
 ## 未解決事項
 - 無し。

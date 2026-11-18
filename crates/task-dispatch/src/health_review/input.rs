@@ -505,6 +505,7 @@ fn diff_design(
             plan_summary: summary,
             risk: RiskAssessment { level, reasons },
             review_policy: policy,
+            owner_rows: Vec::new(),
         })
     })
 }
@@ -925,6 +926,47 @@ fn read_numstat(stdout: &str) -> (DiffStat, Vec<String>) {
         all.push(path.to_string());
     }
     (stat, all)
+}
+
+/// ADR 2026-11-17-boundary-change-risk-review D4: 設計 review（採用前の計画）の方針と owner 地図の行。`bases`（repo の dir と
+/// target、その repo の計画の write path）のうち、base の方針の `definition_sha256` が `sha`（`DesignReviewRequested`
+/// の `policy_sha256`）と同じ最初の repo の方針と、その版の `owner_map` の行。行は risk の理由の path
+/// （`path_class:<class>:<path>`）を先に、write path を後に [`owner_rows`] へ渡して引く（行の `path` は理由の path を
+/// 優先する）。合う方針が無ければ `None` と空、地図が無い・読めなければ空。
+pub(crate) fn requested_policy(
+    mut bases: impl Iterator<Item = ((PathBuf, String), Vec<String>)>,
+    sha: Option<&str>,
+    reasons: &[String],
+) -> (Option<ReviewPolicy>, Vec<OwnerRow>) {
+    let found = bases.find_map(|((repo, target), write_paths)| {
+        let state = super::policy::base_review_policy((repo.clone(), target.clone()));
+        let policy = state
+            .policy()
+            .filter(|p| Some(p.definition_sha256.as_str()) == sha)?
+            .clone();
+        Some((repo, target, policy, write_paths))
+    });
+    let Some((repo, target, policy, write_paths)) = found else {
+        return (None, Vec::new());
+    };
+    let deadline = Instant::now() + super::policy::REVIEW_POLICY_TIMEOUT;
+    let text = policy
+        .owner_map
+        .as_deref()
+        .and_then(|map| show_at(&repo, &target, map, deadline));
+    let mut paths: Vec<String> = reasons
+        .iter()
+        .filter_map(|why| path_pair(why).map(|(_, p)| p))
+        .collect();
+    let rest: Vec<String> = write_paths
+        .into_iter()
+        .filter(|p| !paths.contains(p))
+        .collect();
+    paths.extend(rest);
+    let rows = text
+        .map(|text| owner_rows(&text, &paths))
+        .unwrap_or_default();
+    (Some(policy), rows)
 }
 
 /// `git show <rev>:<path>`（無い・読めなければ `None`）。

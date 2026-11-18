@@ -1920,6 +1920,13 @@
           ],
           "description": "計画の設計 brief（人の計画など brief の無い計画では省略）。"
         },
+        "owner_rows": {
+          "description": "ADR 2026-11-17-boundary-change-risk-review D4: base 側の owner 地図のうち、risk の理由の path と計画の write path を\n含む表の行（dispatcher が `health_review::input::owner_rows` で引く。上限 40 件）。`design` だけが持つ。\n`diff_design` では空で、reviewer は同じ request の `health.repos[].owner_rows` を使う。",
+          "items": {
+            "$ref": "#/$defs/OwnerRow"
+          },
+          "type": "array"
+        },
         "plan_summary": {
           "description": "判定の対象の要約。`design` では計画の要約（rationale・unit の key と題・write path）、`diff_design` では\n差分の stat。",
           "type": "string"

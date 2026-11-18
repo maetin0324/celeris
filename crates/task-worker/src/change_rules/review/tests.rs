@@ -183,6 +183,7 @@ fn design_request(
 ) -> ReviewRequest {
     ReviewRequest {
         design: Some(Box::new(DesignReviewRequest {
+            owner_rows: Vec::new(),
             brief,
             plan_summary:
                 "rationale: owner を直す\n- unit `fix`: Planner を直す (writes crates/alpha/src/)"
@@ -249,8 +250,8 @@ fn change_rules_review_with_health_shows_every_field() {
         "  - ほか 1 file は上限で省略",
         "  - `crates/alpha/src/lib.rs`: | alpha | crates/alpha | Alpha::run |",
         "verdict=`fail`、reviewable=true、件数 findings=5・fail_grade=1・new=1・worsened=1・existing=3",
-        "    - `size.file` severity=`error` delta=`new` path=`crates/alpha/src/lib.rs`\n",
-        "    - `deps.cycle` severity=`warning` delta=`worsened`\n",
+        "    - `size.file` severity=`error` delta=`new` path=`crates/alpha/src/lib.rs` fingerprint=`fp-1`\n",
+        "    - `deps.cycle` severity=`warning` delta=`worsened` fingerprint=`fp-2`\n",
         "- policy: source=`base`、changed=true、変わった policy の file: `scripts/health/rules.py`\n",
         "- policy: source=`base`、changed=false\n",
         "  - `events-append-only`: `RULES.md`",
@@ -502,7 +503,7 @@ fn change_rules_design_review_prompt_shows_the_plan_and_the_design_shape() {
         "- removals:\n  - 旧い check_plan 経路\n",
         "- invariants:\n  - events は追記専用\n",
         "- level: `high`\n",
-        "  - `path_class:dispatch:crates/alpha/src/plan.rs`\n",
+        "  - `path_class:dispatch:crates/alpha/src/plan.rs`: path `crates/alpha/src/plan.rs`・class `dispatch`。owner 地図の行: この path の行は無い。class の不変条件: 無し\n",
         "  - `new_fallback`\n",
         "- owner 地図: `docs/architecture-map.md`",
         "  - `dispatch`: `^crates/alpha/src/`、`^scripts/health/`\n",
@@ -703,6 +704,7 @@ fn diff_design_request(health: Option<HealthReviewInput>) -> ReviewRequest {
         }],
         health,
         diff_design: Some(Box::new(DesignReviewRequest {
+            owner_rows: Vec::new(),
             brief: Some(full_brief()),
             plan_summary: "diff: 1 file、+2 行・-1 行\n- `crates/alpha/src/plan.rs`（+2・-1）"
                 .to_string(),
@@ -752,7 +754,7 @@ fn prompt_final_design_keeps_criteria_evidence_health_and_adds_the_diff_design_s
         "### 差分の要約\ndiff: 1 file、+2 行・-1 行\n- `crates/alpha/src/plan.rs`（+2・-1）\n",
         "- root_cause: planner が owner を決めずに計画する\n",
         "- level: `high`\n",
-        "  - `path_class:dispatch:crates/alpha/src/plan.rs`\n",
+        "  - `path_class:dispatch:crates/alpha/src/plan.rs`: path `crates/alpha/src/plan.rs`・class `dispatch`。owner 地図の行: この path の行は無い。class の不変条件: 無し\n",
         "  - `dispatch`: `^crates/alpha/src/`、`^scripts/health/`\n",
         "### 判定の観点",
     ] {
@@ -843,4 +845,185 @@ fn prompt_final_design_section_shares_every_line_after_the_preface() {
         .unwrap_or_else(|| panic!("diff summary heading in:\n{diff}"));
     assert_eq!(plan_body, diff_body);
     assert!(plan.starts_with(DESIGN_HEADING) && diff.starts_with(DIFF_DESIGN_HEADING));
+}
+
+/// ADR 2026-11-17-boundary-change-risk-review D4 の試験（prefix `prompt_boundary_`）で使う境界の方針: class `authz` は
+/// 不変条件 `api-principal-from-token` を守り、その根拠の file は方針の `invariants` にある。
+fn boundary_policy() -> ReviewPolicy {
+    ReviewPolicy {
+        owner_map: Some("docs/architecture-map.md".to_string()),
+        high_risk: vec![PathClass {
+            class: "authz".to_string(),
+            paths: vec!["^crates/api/src/middleware\\.rs$".to_string()],
+            invariants: vec!["api-principal-from-token".to_string()],
+        }],
+        invariants: BTreeMap::from([(
+            "api-principal-from-token".to_string(),
+            "docs/adr/api-principals.md".to_string(),
+        )]),
+        definition_sha256: "sha-boundary".to_string(),
+    }
+}
+
+const BOUNDARY_PATH: &str = "crates/api/src/middleware.rs";
+const BOUNDARY_ROW: &str =
+    "| 認可 | `crates/api/src/middleware.rs` | `require_admin` | ADR api-principals |";
+
+fn boundary_risk() -> RiskAssessment {
+    RiskAssessment {
+        level: RiskLevel::High,
+        reasons: vec![
+            format!("path_class:authz:{BOUNDARY_PATH}"),
+            "invariant:authz:api-principal-from-token".to_string(),
+        ],
+    }
+}
+
+fn boundary_row() -> OwnerRow {
+    OwnerRow {
+        path: BOUNDARY_PATH.to_string(),
+        row: BOUNDARY_ROW.to_string(),
+    }
+}
+
+/// 不変条件（D4）: 採用前の計画の設計 review の prompt（`build_prompt`）で、risk の理由 `path_class:<class>:<path>` の
+/// 行に path・class・dispatcher が `DesignReviewRequest.owner_rows` で渡した owner 地図の行・class の不変条件と根拠の
+/// file が 1 行で載り、`invariant:` の理由に根拠の file が付き、design の判定が要る理由（level `high` は宣言によらない）
+/// が出る。既存の設計 review の試験は理由を `- \`<reason>\`` の形でしか見ず、owner_rows の欄も無かったので、地図の行や
+/// 不変条件が落ちても検出できない。
+#[test]
+fn prompt_boundary_design_review_shows_reason_owner_row_and_invariants() {
+    let mut review = design_request(None, boundary_risk(), Some(boundary_policy()));
+    if let Some(design) = review.design.as_mut() {
+        design.owner_rows = vec![boundary_row()];
+    }
+    let prompt = review_prompt(Some(review));
+    let section = section_after(&prompt, DESIGN_HEADING);
+    let line = format!(
+        "  - `path_class:authz:{BOUNDARY_PATH}`: path `{BOUNDARY_PATH}`・class `authz`。owner 地図の行: \
+         `{BOUNDARY_ROW}`。class の不変条件: `api-principal-from-token`（`docs/adr/api-principals.md`）\n"
+    );
+    assert!(section.contains(&line), "reason line missing:\n{section}");
+    assert!(
+        section.contains(
+            "  - `invariant:authz:api-principal-from-token`: 不変条件 `api-principal-from-token`\
+             （`docs/adr/api-principals.md`）\n"
+        ),
+        "{section}"
+    );
+    assert!(
+        section.contains("design の判定が要る理由: level が `high`")
+            && section.contains("`new_*` の宣言の有無に"),
+        "{section}"
+    );
+    assert!(
+        section.contains(&format!("  - `{BOUNDARY_PATH}`: {BOUNDARY_ROW}\n")),
+        "owner rows block missing:\n{section}"
+    );
+
+    // 地図に行の無い path は「行は無い」と書く（黙って落とさない）。unknown は読めないことを理由にする。
+    let mut review = design_request(None, boundary_risk(), Some(boundary_policy()));
+    if let Some(design) = review.design.as_mut() {
+        design.risk.level = RiskLevel::Unknown;
+    }
+    let prompt = review_prompt(Some(review));
+    assert!(
+        prompt.contains("owner 地図の行: この path の行は無い"),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains("design の判定が要る理由: level が `unknown`"),
+        "{prompt}"
+    );
+}
+
+/// 不変条件（D4・計画 v3 の付記 (ii)）: final review の prompt（`build_prompt`）の health の節に new・worsened の finding の
+/// `rule_id`・`fingerprint`・`symbol`（B の新しい組 `<src> -> <dst>`）・`rationale` が載り、差分の設計の節の理由の行に
+/// health の材料の owner 地図の行（`HealthRepoInput.owner_rows`）が載る。既存の試験は finding を `rule_id`・severity・
+/// delta・path でしか見ないので、`symbol`・`rationale` を描かない reviewer prompt を検出できない。
+#[test]
+fn prompt_boundary_final_review_shows_finding_symbol_rationale_and_owner_row() {
+    let mut health_repo = repo("alpha", false);
+    health_repo.owner_rows = vec![boundary_row()];
+    health_repo.findings.new = vec![HealthReportFinding {
+        rule_id: "deps.cycle".to_string(),
+        fingerprint: "deps.cycle:abc123".to_string(),
+        severity: "error".to_string(),
+        delta: "new".to_string(),
+        path: Some("crates/api/src/a.rs".to_string()),
+        symbol: Some("crates/api/src/a -> crates/api/src/c".to_string()),
+        rationale: Some("既存の循環の内部に新しい組を足した".to_string()),
+    }];
+    let mut review = diff_design_request(Some(HealthReviewInput {
+        repos: vec![health_repo],
+        brief: None,
+    }));
+    if let Some(design) = review.diff_design.as_mut() {
+        design.risk = boundary_risk();
+        design.review_policy = Some(boundary_policy());
+    }
+    let prompt = review_prompt(Some(review));
+    let health = section_after(&prompt, HEALTH_HEADING);
+    assert!(
+        health.contains(
+            "    - `deps.cycle` severity=`error` delta=`new` path=`crates/api/src/a.rs` \
+             fingerprint=`deps.cycle:abc123` symbol=`crates/api/src/a -> crates/api/src/c`\n\
+             \x20     - rationale: 既存の循環の内部に新しい組を足した\n"
+        ),
+        "{health}"
+    );
+    let design = section_after(&prompt, DIFF_DESIGN_HEADING);
+    assert!(
+        design.contains(&format!(
+            "owner 地図の行: `{BOUNDARY_ROW}`。class の不変条件: `api-principal-from-token`"
+        )),
+        "{design}"
+    );
+}
+
+/// 不変条件（D4）: worker と planner の prompt（`build_prompt`）の repo 固有の規約の節に、class の path を変える変更は
+/// `new_*` の宣言によらず設計 review の対象になる規則、class ごとの不変条件（`PathClass.invariants` から）、既存の循環に
+/// 新しい組を足すと `deps.cycle` が fail になる依存の規則が載る。objective は 1,500 文字で切れない（末尾まで載る）。
+/// 既存の試験（`change_rules_generic_repo_section_follows_only_with_a_review_policy`）は class の path と方針の不変条件
+/// しか見ないので、旧い規則の文（「計画は brief が要り設計 review の対象」だけ）や class の不変条件の欠落を検出できない。
+#[test]
+fn prompt_boundary_worker_and_planner_get_class_rule_invariants_and_dependency_rule() {
+    use crate::change_rules::tests::{planner_context, prompt_for, tree_planner, workspace_with};
+    let context = RunContext {
+        workspace: workspace_with(Some(boundary_policy())),
+        ..RunContext::default()
+    };
+    let mut task = crate::protocol::tests::sample_task();
+    task.objective = format!("{}END-OF-OBJECTIVE", "あ".repeat(3000));
+    let worker = build_prompt(&task, &context, "run-boundary", "artifacts");
+    let planner = prompt_for(
+        TaskKind::Execute,
+        &[],
+        &planner_context(tree_planner(), Some(boundary_policy())),
+    );
+    for prompt in [&worker, &planner] {
+        let section = section_after(prompt, crate::change_rules::REPO_RULES_HEADING);
+        assert!(
+            section.contains("`new_state`・`new_branch`・`new_fallback`・`new_port` の宣言によらず設計 review の対象"),
+            "{section}"
+        );
+        assert!(
+            section.contains(
+                "計画に書かずに触れても、final review で設計の判定（`design`）を求められる"
+            ),
+            "{section}"
+        );
+        assert!(
+            section.contains(
+                "  - `authz`: `^crates/api/src/middleware\\.rs$`（不変条件: `api-principal-from-token`）\n"
+            ),
+            "{section}"
+        );
+        assert!(section.contains("`deps.cycle` が fail になる"), "{section}");
+        assert!(section.contains("`<src> -> <dst>`"), "{section}");
+    }
+    assert!(
+        worker.contains("END-OF-OBJECTIVE"),
+        "objective was truncated"
+    );
 }

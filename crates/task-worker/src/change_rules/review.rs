@@ -11,6 +11,11 @@
 //! - `result_section` は reviewer prompt の Result 節を組む唯一の関数。採用前の計画の設計 review では `design` の形、
 //!   final review では `verdicts`（任意の `repair` を含む）の形と、health があれば `health`、`diff_design` があれば
 //!   `design` の形を 1 節で出す。例の JSON は `ReviewOutput` を serde で書き出し、placeholder を使わない。
+//! - ADR 2026-11-17-boundary-change-risk-review D4: health の節は new・worsened の finding の `fingerprint`・`symbol`
+//!   （`deps.cycle` の新しい組 `<src> -> <dst>`）・`rationale` を出す。設計の節の risk は理由 `path_class:<class>:<path>` ごとに
+//!   path・class・owner 地図の行（採用前の計画は `DesignReviewRequest.owner_rows`、差分は `HealthRepoInput.owner_rows`）・
+//!   class の不変条件と根拠の file を 1 行で出し、design の判定が要る理由（level）を添える。地図の行は dispatcher が
+//!   `health_review::input::owner_rows` で引いたものを `owner_lines` で描くだけで、ここでは探さない。
 //! - finding 種別は `HealthFindingKind::ALL` から列挙し、局所修復を許す種別は `allows_local_repair` から選ぶ。
 //!   種別の意味は汎用規約（`GENERIC_RULES`）の各項目の括弧内の名前で指し、説明文をここに写さない。
 //!
@@ -18,7 +23,7 @@
 
 use std::collections::BTreeMap;
 
-use task_core::design_review::{ReviewPolicy, RiskAssessment};
+use task_core::design_review::{ReviewPolicy, RiskAssessment, RiskLevel};
 use task_core::execution_plan::DesignBrief;
 
 use super::GENERIC_RULES;
@@ -127,10 +132,18 @@ fn findings_lines(findings: &HealthFindingsSummary) -> String {
                 .as_deref()
                 .map(|p| format!(" path=`{p}`"))
                 .unwrap_or_default();
+            let symbol = finding
+                .symbol
+                .as_deref()
+                .map(|s| format!(" symbol=`{s}`"))
+                .unwrap_or_default();
             out.push_str(&format!(
-                "    - `{}` severity=`{}` delta=`{}`{path}\n",
-                finding.rule_id, finding.severity, finding.delta
+                "    - `{}` severity=`{}` delta=`{}`{path} fingerprint=`{}`{symbol}\n",
+                finding.rule_id, finding.severity, finding.delta, finding.fingerprint
             ));
+            if let Some(rationale) = &finding.rationale {
+                out.push_str(&format!("      - rationale: {}\n", rationale.trim_end()));
+            }
         }
     }
     if findings.truncated > 0 {
@@ -227,7 +240,23 @@ pub fn design_section(review: Option<&ReviewRequest>) -> String {
     };
     let mut out = format!("{preface}{}\n\n", design.plan_summary.trim_end());
     out.push_str(&brief_lines(design.brief.as_ref()));
-    out.push_str(&risk_lines(&design.risk));
+    // D4: owner 地図の行は、採用前の計画では dispatcher が `owner_rows` に引いたもの、差分では health の材料の行。
+    let rows: Vec<&OwnerRow> = match target {
+        DesignTarget::Plan => design.owner_rows.iter().collect(),
+        DesignTarget::Diff => review
+            .and_then(|r| r.health.as_ref())
+            .map(|h| h.repos.iter().flat_map(|r| &r.owner_rows).collect())
+            .unwrap_or_default(),
+    };
+    out.push_str(&risk_lines(
+        &design.risk,
+        design.review_policy.as_ref(),
+        &rows,
+    ));
+    if matches!(target, DesignTarget::Plan) && !design.owner_rows.is_empty() {
+        out.push_str(&owner_lines(&design.owner_rows));
+        out.push('\n');
+    }
     out.push_str(&review_policy_lines(
         design.review_policy.as_ref(),
         &design.risk,
@@ -290,22 +319,82 @@ fn list_field(name: &str, items: &[String]) -> String {
     out
 }
 
-fn risk_lines(risk: &RiskAssessment) -> String {
+/// D4: risk の節。level、設計の判定が要る理由、理由ごとの 1 行（`path_class:<class>:<path>` は path・class・owner 地図の
+/// 行・class の不変条件と根拠の file、`invariant:<class>:<名前>` は根拠の file）。
+fn risk_lines(risk: &RiskAssessment, policy: Option<&ReviewPolicy>, rows: &[&OwnerRow]) -> String {
     let level = serde_json::to_value(risk.level)
         .ok()
         .and_then(|v| v.as_str().map(str::to_string))
         .unwrap_or_default();
     let mut out = format!("### risk（dispatcher の決定的な判定）\n- level: `{level}`\n");
+    match risk.level {
+        RiskLevel::High => out.push_str(
+            "- design の判定が要る理由: level が `high`。下の理由の path が高 risk の class に合う（`new_*` の宣言の有無に\
+             よらない。既存の条件を 1 行変えるだけでも同じ）か、brief が `new_fallback` を宣言した。\n",
+        ),
+        RiskLevel::Unknown => out.push_str(
+            "- design の判定が要る理由: level が `unknown`。review 方針・正規表現・差分のどれかを読めず、境界に触れるかを\
+             決められない（読めないものは合格にしない）。\n",
+        ),
+        RiskLevel::Low | RiskLevel::None => {}
+    }
     if risk.reasons.is_empty() {
         out.push_str("- reasons: 無し\n");
     } else {
         out.push_str("- reasons:\n");
         for reason in &risk.reasons {
-            out.push_str(&format!("  - `{reason}`\n"));
+            out.push_str(&format!(
+                "  - `{reason}`{}\n",
+                reason_detail(reason, policy, rows)
+            ));
         }
     }
     out.push('\n');
     out
+}
+
+/// 理由 1 件の補足（`<repo>:` の付いた複数 repo の理由も同じ）。方針の無い理由・他の語は空。
+fn reason_detail(reason: &str, policy: Option<&ReviewPolicy>, rows: &[&OwnerRow]) -> String {
+    let core = reason
+        .find("path_class:")
+        .or_else(|| reason.find("invariant:"))
+        .map_or(reason, |at| &reason[at..]);
+    let source = |name: &str| {
+        let file = policy.and_then(|p| p.invariants.get(name));
+        file.map_or(format!("`{name}`"), |f| format!("`{name}`（`{f}`）"))
+    };
+    if let Some((_, name)) = core
+        .strip_prefix("invariant:")
+        .and_then(|r| r.split_once(':'))
+    {
+        return format!(": 不変条件 {}", source(name));
+    }
+    let Some((class, path)) = core
+        .strip_prefix("path_class:")
+        .and_then(|r| r.split_once(':'))
+    else {
+        return String::new();
+    };
+    let matched: Vec<String> = rows
+        .iter()
+        .filter(|r| r.path == path)
+        .map(|r| format!("`{}`", r.row))
+        .collect();
+    let map = match matched.is_empty() {
+        true => "この path の行は無い".to_string(),
+        false => matched.join(" / "),
+    };
+    let invariants: Vec<String> = policy
+        .and_then(|p| p.high_risk.iter().find(|c| c.class == class))
+        .map(|c| c.invariants.iter().map(|i| source(i)).collect())
+        .unwrap_or_default();
+    let invariants = match invariants.is_empty() {
+        true => "無し".to_string(),
+        false => invariants.join("、"),
+    };
+    format!(
+        ": path `{path}`・class `{class}`。owner 地図の行: {map}。class の不変条件: {invariants}"
+    )
 }
 
 fn review_policy_lines(policy: Option<&ReviewPolicy>, risk: &RiskAssessment) -> String {

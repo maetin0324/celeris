@@ -5,7 +5,8 @@
 //! - 組み立て口は `claude_code::prompt` の `prompt_header` だけ（D1.2）。全 run kind（execute・plan・replan・
 //!   execution plan・review）がそこを通るので、汎用規約はどの harness の prompt にも 1 回だけ入る。adapter
 //!   （codex・pi・acp・claude_code）と CoS chat（`build_cos_chat_parts`）では足さない（D1.3）。
-//! - repo 固有の規約（`repo_section`）は `RunContext.workspace` の review 方針（付記 B1・B4。dispatcher が worker と
+//! - repo 固有の規約（`repo_section`。class の path の変更は `new_*` の宣言によらず設計 review になる規則・class ごとの
+//!   不変条件・依存の規則を含む。ADR 2026-11-17-boundary-change-risk-review D4）は `RunContext.workspace` の review 方針（付記 B1・B4。dispatcher が worker と
 //!   planner の run にだけ base 側から読んで入れる）から、汎用規約の直後に出す。無ければ何も出さない。
 //! - `design_brief_section` は /3 の planner に設計 brief（`ExecutionPlanSpec.design_brief`）の書き方を示す（D3.4）。
 //! - reviewer prompt の health の材料と Result 節は `review`（D4.1・D5.4・D6.3）。
@@ -47,12 +48,24 @@ pub fn repo_section(context: &RunContext) -> String {
     }
     if !policy.high_risk.is_empty() {
         out.push_str(
-            "- 高 risk の path class（path は repo 相対 path に当てる正規表現。この class の path を変える計画は\
-             設計 brief が要り、設計 review の対象になる）:\n",
+            "- 高 risk の path class（path は repo 相対 path に当てる正規表現。括弧はその class が守る不変条件）。この class の \
+             path を変える計画・差分は、`new_state`・`new_branch`・`new_fallback`・`new_port` の宣言によらず設計 review の\
+             対象になる（既存の判定の条件を 1 行変えるだけでも同じ）。planner の計画は設計 brief が要る。計画に書かずに\
+             触れても、final review で設計の判定（`design`）を求められる:\n",
         );
         for class in &policy.high_risk {
             let paths: Vec<String> = class.paths.iter().map(|p| format!("`{p}`")).collect();
-            out.push_str(&format!("  - `{}`: {}\n", class.class, paths.join(", ")));
+            let invariants: Vec<String> =
+                class.invariants.iter().map(|i| format!("`{i}`")).collect();
+            let guards = match invariants.is_empty() {
+                true => String::new(),
+                false => format!("（不変条件: {}）", invariants.join(", ")),
+            };
+            out.push_str(&format!(
+                "  - `{}`: {}{guards}\n",
+                class.class,
+                paths.join(", ")
+            ));
         }
     }
     if !policy.invariants.is_empty() {
@@ -61,9 +74,15 @@ pub fn repo_section(context: &RunContext) -> String {
             out.push_str(&format!("  - `{name}`: `{source}`\n"));
         }
     }
+    out.push_str(DEPENDENCY_RULE);
     out.push('\n');
     out
 }
+
+/// ADR 2026-11-17-boundary-change-risk-review D4・ADR 2026-11-17-repo-health-scc-edges-logical-modules: 依存の規則。
+const DEPENDENCY_RULE: &str = "- 依存の規則: 既存の循環（module の強連結成分）の中に新しい依存の組 `<src> -> <dst>` を足すと、\
+     循環の node の数が変わらなくても repo health の `deps.cycle` が fail になる（final review の health の材料と修復の\
+     run の前回の判定に `symbol` として出る）。新しい依存は循環の外から一方向に足す。\n";
 
 /// D3.4: /3 の planner に設計 brief（`design_brief`）の書き方を示す節。欄は汎用規約の「実装前 brief」の
 /// 7 項目に対応させる。高 risk の path class の一覧は `repo_section` の節を指し、ここには再掲しない。

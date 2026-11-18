@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use task_core::design_review::{ReviewPolicy, RiskAssessment};
 use task_core::execution_plan::DesignBrief;
 
-use super::HealthFindingOut;
+use super::{HealthFindingOut, OwnerRow};
 
 /// D3.5: `ReviewRequest.design`（risk が `high`・`unknown` の計画の採用前に dispatcher が作る。`plan_summary` は
 /// 計画の要約）と、ADR 2026-11-17-boundary-change-risk-review 付記 (i) の `ReviewRequest.diff_design`（final review の
@@ -30,6 +30,11 @@ pub struct DesignReviewRequest {
     /// 判定に使った base 側の review 方針（読めなかった `unknown` では省略）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review_policy: Option<ReviewPolicy>,
+    /// ADR 2026-11-17-boundary-change-risk-review D4: base 側の owner 地図のうち、risk の理由の path と計画の write path を
+    /// 含む表の行（dispatcher が `health_review::input::owner_rows` で引く。上限 40 件）。`design` だけが持つ。
+    /// `diff_design` では空で、reviewer は同じ request の `health.repos[].owner_rows` を使う。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub owner_rows: Vec<OwnerRow>,
 }
 
 /// D3.5: `ReviewOutput.design`。`pass = false` なら planner を replan で起こし、`findings` を planner の

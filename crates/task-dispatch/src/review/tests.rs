@@ -1944,6 +1944,7 @@ async fn zero_or_a_stale_misplaced_review_json_keeps_the_not_found_failure() {
 fn review_risk_final_review_sets_diff_design_not_design() {
     use task_core::design_review::{RiskAssessment, RiskLevel};
     let asked = Box::new(task_worker::protocol::DesignReviewRequest {
+        owner_rows: Vec::new(),
         brief: None,
         plan_summary: "repo r: a..b: 1 file（+1 −1）\n".into(),
         risk: RiskAssessment {

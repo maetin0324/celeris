@@ -31,7 +31,8 @@ use crate::health_review::design::{
     brief_required_classes, design_review_in_flight, design_review_runs, merge_risk,
     pending_design_review, plan_summary, planner_run_before, write_paths_by_repo,
 };
-use crate::health_review::policy::{REVIEW_POLICY_TIMEOUT, load_review_policy};
+use crate::health_review::input::requested_policy;
+use crate::health_review::policy::base_review_policy;
 use crate::run_settlement::run_end_record;
 use task_core::ExecutionPlanSpec;
 use task_core::design_review::ReviewPolicyState;
@@ -52,72 +53,66 @@ pub(super) struct DesignPolicies {
 }
 
 impl Dispatcher {
-    /// task の repo ごとの review 方針（`names` の repo だけ。名前 `""` は案件の repo の無い作業場所）。target は
-    /// review 前の同期と同じ `review_target_ref`、案件の repo の無い task は worktree の base。remote は
-    /// `Unavailable`、git の repo が無ければ `Absent`（`policy::review_policy_target` と同じ規則を repo ごとに当てる）。
-    fn repo_review_policies(
+    /// task の repo `name`（`""` は案件の repo の無い作業場所）の review 方針を読む base（repo の dir と target）。target は
+    /// review 前の同期と同じ `review_target_ref`、案件の repo の無い task は worktree の base。読めなければ方針の状態:
+    /// remote は `Unavailable`、git の repo が無ければ `Absent`（`policy::review_policy_target` と同じ規則を repo ごとに当てる）。
+    fn repo_review_base(
         &self,
         task: &Task,
-        names: &[String],
-    ) -> Vec<(String, ReviewPolicyState)> {
-        let state_of = |name: &String| -> ReviewPolicyState {
-            if matches!(task.workspace, WorkspaceSpec::Remote { .. }) {
-                return ReviewPolicyState::Unavailable("remote workspace".into());
-            }
-            let Some(workspaces) = self.task_workspaces_for(task) else {
-                return if task.repos.is_empty() {
-                    ReviewPolicyState::Absent
-                } else {
-                    ReviewPolicyState::Unavailable("作業場所の repo を解決できない".into())
-                };
-            };
-            let repo = workspaces
-                .repos
-                .into_iter()
-                .enumerate()
-                .find(|(i, r)| &r.name == name || (name.is_empty() && *i == 0))
-                .map(|(_, r)| r);
-            let Some(worktree) = repo.and_then(|r| r.worktree) else {
-                return ReviewPolicyState::Absent;
-            };
-            let target = match task.repos.iter().find(|r| &r.name == name) {
-                Some(reference) => {
-                    match self.review_target_ref(task, reference.repo_id, &worktree.repo) {
-                        Ok(Some(target)) => target,
-                        Ok(None) => {
-                            return ReviewPolicyState::Unavailable(format!(
-                                "repo {name} の target branch を解決できない"
-                            ));
-                        }
-                        Err(e) => {
-                            return ReviewPolicyState::Unavailable(format!(
-                                "repo {name} の target branch を読めない: {e}"
-                            ));
-                        }
+        name: &str,
+    ) -> Result<(std::path::PathBuf, String), ReviewPolicyState> {
+        let unavailable = ReviewPolicyState::Unavailable;
+        if matches!(task.workspace, WorkspaceSpec::Remote { .. }) {
+            return Err(unavailable("remote workspace".into()));
+        }
+        let Some(workspaces) = self.task_workspaces_for(task) else {
+            return Err(match task.repos.is_empty() {
+                true => ReviewPolicyState::Absent,
+                false => unavailable("作業場所の repo を解決できない".into()),
+            });
+        };
+        let repo = workspaces
+            .repos
+            .into_iter()
+            .enumerate()
+            .find(|(i, r)| r.name == name || (name.is_empty() && *i == 0))
+            .map(|(_, r)| r);
+        let Some(worktree) = repo.and_then(|r| r.worktree) else {
+            return Err(ReviewPolicyState::Absent);
+        };
+        let target = match task.repos.iter().find(|r| r.name == name) {
+            Some(reference) => {
+                match self.review_target_ref(task, reference.repo_id, &worktree.repo) {
+                    Ok(Some(target)) => target,
+                    Ok(None) => {
+                        return Err(unavailable(format!(
+                            "repo {name} の target branch を解決できない"
+                        )));
+                    }
+                    Err(e) => {
+                        return Err(unavailable(format!(
+                            "repo {name} の target branch を読めない: {e}"
+                        )));
                     }
                 }
-                None => worktree.base.sha.clone(),
-            };
-            load_review_policy(
-                &worktree.repo,
-                &target,
-                crate::health_review::gate::bundled_checker(),
-                REVIEW_POLICY_TIMEOUT,
-            )
+            }
+            None => worktree.base.sha.clone(),
         };
-        names.iter().map(|n| (n.clone(), state_of(n))).collect()
+        Ok((worktree.repo, target))
     }
 
-    /// 計画が書く repo（と task の先頭の repo）の review 方針。
+    /// 計画が書く repo（と task の先頭の repo）の review 方針（[`Self::repo_review_base`] の base から読む）。
     fn plan_review_policies(
         &self,
         task: &Task,
         spec: &ExecutionPlanSpec,
     ) -> Vec<(String, ReviewPolicyState)> {
-        let names: Vec<String> = write_paths_by_repo(spec, &primary_repo(task))
-            .into_keys()
-            .collect();
-        self.repo_review_policies(task, &names)
+        let names = write_paths_by_repo(spec, &primary_repo(task)).into_keys();
+        let state = |n: &str| {
+            self.repo_review_base(task, n)
+                .map_or_else(|s| s, base_review_policy)
+        };
+        names.map(|n| (n.clone(), state(&n))).collect()
     }
 
     /// D3.3: 検証を通った planner の計画が高 risk の class の path を書き、brief が無ければ `DesignBriefMissing` を
@@ -228,20 +223,18 @@ impl Dispatcher {
         else {
             return Ok(true);
         };
-        let policies = self.plan_review_policies(task, plan);
-        let review_policy = policies.into_iter().find_map(|(_, state)| match state {
-            ReviewPolicyState::Present(p)
-                if Some(&p.definition_sha256) == policy_sha256.as_ref() =>
-            {
-                Some(p)
-            }
-            _ => None,
-        });
+        // ADR 2026-11-17-boundary-change-risk-review D4: 判定に使った方針と、その repo の base の版の owner 地図の行。
+        let bases = write_paths_by_repo(plan, &primary_repo(task)).into_iter();
+        let bases =
+            bases.filter_map(|(n, paths)| Some((self.repo_review_base(task, &n).ok()?, paths)));
+        let (review_policy, owner_rows) =
+            requested_policy(bases, policy_sha256.as_deref(), &risk.reasons);
         let request = DesignReviewRequest {
             brief: plan.design_brief.clone(),
             plan_summary: plan_summary(plan),
             risk: risk.clone(),
             review_policy,
+            owner_rows,
         };
         self.start_design_review(task, request)?;
         Ok(true)

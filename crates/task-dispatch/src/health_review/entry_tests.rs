@@ -148,6 +148,7 @@ fn health_enforce_entry_repairs_group_by_rule() {
         rule_id: rule.to_string(),
         fingerprint: format!("{rule}:{hash}"),
         paths: paths.iter().map(|p| p.to_string()).collect(),
+        symbols: Vec::new(),
     };
     let repairs = health_repairs(&[
         failure("size.x", "bb", &[]),
@@ -368,4 +369,23 @@ fn health_enforce_entry_non_celeris_repo_uses_bundled_checker() {
         repairs[0].reason,
         format!("health:deps.violation:{:016x}（evidence: {SRC}）", 7)
     );
+}
+
+/// 不変条件（ADR 2026-11-17-boundary-change-risk-review D4）: [`health_repairs`] の reason は finding の evidence の
+/// `symbol`（`deps.cycle` の新しい組 `<src> -> <dst>`）を `symbol:` で運ぶ。reason は修復の run の `prior_review` に
+/// そのまま載るので、修復の worker が前回の review の新しい辺を読める。`; ` を使わないので bucket（`repair_buckets`）の
+/// 区切りは変わらない。既存の試験は path だけの finding しか作らないので、symbol の欠落を検出できない。
+#[test]
+fn health_enforce_entry_repairs_carry_symbols() {
+    let repairs = health_repairs(&[HealthFailure {
+        rule_id: "deps.cycle".to_string(),
+        fingerprint: "deps.cycle:aa".to_string(),
+        paths: vec!["src/a.rs".to_string()],
+        symbols: vec!["src/a -> src/c".to_string()],
+    }]);
+    assert_eq!(
+        repairs[0].reason,
+        "health:deps.cycle:aa（evidence: src/a.rs、symbol: src/a -> src/c）"
+    );
+    assert!(!repairs[0].reason.contains("; "));
 }

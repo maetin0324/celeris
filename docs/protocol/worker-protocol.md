@@ -799,10 +799,13 @@ D3）は base 側の方針で差分の全 path（`--no-renames`。rename の両�
 
 risk（`task_core::design_review::assess_risk`）が `high`・`unknown` の計画は、採用の前に reviewer run で設計 review
 する。その run の `context.review` は `summary`・`evidence`・`criteria` が空で、`design`（`DesignReviewRequest`）を持つ:
-`{brief?, plan_summary, risk: {level, reasons?}, review_policy?}`。`brief` は計画の設計 brief（無い計画では省略）、
+`{brief?, plan_summary, risk: {level, reasons?}, review_policy?, owner_rows?}`。`brief` は計画の設計 brief（無い計画では省略）、
 `risk.level` は `high` / `unknown`、`reasons` は判定の根拠（`path_class:<class>:<path>`・`invariant:<class>:<名前>`・
 `declared:<欄>`・`brief_absent_human_plan`・`new_fallback`・`review_policy_unavailable:<要約>`。高 risk の class に合う path を
 書く計画は brief の `new_*` の宣言によらず `high`。ADR 2026-11-17-boundary-change-risk-review D1）、`review_policy` は判定に使った base 側の方針（読めなかった `unknown` では省略）。
+`owner_rows` は base 側の owner 地図のうち理由の path と計画の write path を含む表の行（`OwnerRow` の配列。dispatcher が `health_review::input::owner_rows` で引く。
+無ければ省略。final review の `diff_design` では省略し、reviewer prompt は `health.repos[].owner_rows` を使う）。reviewer prompt は理由 `path_class:<class>:<path>` ごとに
+path・class・owner 地図の行・class の不変条件（`PathClass.invariants` と根拠の file）を 1 行で出す（ADR 2026-11-17-boundary-change-risk-review D4）。
 reviewer は `review.json` に `design`（`DesignVerdictOut`）を書く:
 
 ```json

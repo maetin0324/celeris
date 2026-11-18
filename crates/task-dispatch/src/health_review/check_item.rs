@@ -7,7 +7,7 @@
 //! 写しの規則はここだけに置く:
 //!
 //! - Pass・PolicyOnly: 合格（PolicyOnly は WU・段の統合では先へ進める。D3.1）。
-//! - Repair: 不合格。reason は rule ごとの `health:<rule_id>:<hash>[,…]（evidence: …）` を `; ` で並べた文で、
+//! - Repair: 不合格。reason は rule ごとの `health:<rule_id>:<hash>[,…]（evidence: …、symbol: …）` を `; ` で並べた文で、
 //!   `task_core::classify_review_failure` が `RepairClass::Health` に分ける（D3.2）。class の数え方は
 //!   [`repair_buckets`]（`health:<rule_id>`）。
 //! - Error（Unavailable を含む）: 不合格。reason は `health_check_error: <理由>`（[`check_error`] が読む）。repair・replan に

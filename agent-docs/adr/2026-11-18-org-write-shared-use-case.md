@@ -4,7 +4,7 @@ tasks: [01M7MZTKB4RYM80S6CT3RST2N9]
 # ADR 2026-11-18: org の書き込みを task-api の共有 use-case（`org_write.rs`）へ集約し、HTTP と CoS の adapter から一方向に呼ぶ
 
 - 日付: 2026-11-18
-- 状態: Accepted（決定だけ。この ADR を書いた WorkUnit `adr` は `crates/`・`web/` を変えていない。旧コードに当てる契約試験は WorkUnit
+- 状態: Accepted・実装済み（2026-11-18。実装との違いは末尾の「付記: 実装で分かった違い」。以下は ADR を書いた時点の記述: 決定だけ。この ADR を書いた WorkUnit `adr` は `crates/`・`web/` を変えていない。旧コードに当てる契約試験は WorkUnit
   `contract-tests`、集約は `usecase`、store の wrapper の撤去は `store-prune`、計測は `metrics`・`timing`、まとめは `close` が行う）
 - 関係: [ADR-0033 組織・案件・報告](0033-organization-projects-and-reports.md) D1（`/org` の編集）、
   [ADR 2026-10-09 CoS の全変更操作](2026-10-09-cos-operations-all-mutations.md)（不変条件 `cos-audit-same-tx`）、
@@ -250,3 +250,18 @@ WorkUnit の objective が指定した command:
 人の依頼（子 D）が範囲を「task-api の `handlers/org.rs` と `cos/ops/admin.rs` の周辺を選ぶ狭い pilot」に限った。`usecase` の後に残る操作の側の 17 file（広い command の予想 18 から型の定義側の `cos/operations.rs` を除く）は承認・変更・判断・
 文書・知識・案件・task・実行計画・cron などの別々の領域にまたがり、領域ごとに HTTP と CoS の契約試験を旧コードで先に固定する作業が要る。
 `knowledge.rs` は C が足した `transaction` class の高 risk の path で、子 F の候補の範囲でもある。全部を D で移すと pilot の範囲を超える。
+
+## 付記: 実装で分かった違い（2026-11-18、WorkUnit `close`）
+
+WorkUnit `close` が提出時の HEAD の code と、この ADR・[ADR 2026-10-09](2026-10-09-cos-operations-all-mutations.md) の付記「org の書き込みの形」を照らした。
+D1〜D4・§4 の撤去・「付記: 2 つの形の使い分けと撤去の条件」の形は実装と合う。違いは次の 3 点で、どれも決定の意味を変えない。
+
+- D5 の `OrgWritten::Node(OrgNode)` は `Node(Box<OrgNode>)` にした。`clippy::large_enum_variant`（608 byte 対 25 byte）で `-D warnings` が落ちたため。
+  `OrgWrite::Upsert` の `node: Box<OrgNode>` と同じ扱い（進捗 [usecase.md](../progress/2026-11-18-arch-v4-d/usecase.md) の「ADR からの差」）。
+- D1 に無い `OrgWritten::into_node()` を足した。HTTP の 5 route（`handlers/org.rs` 3・`skills.rs` 2）が「`Node` は node、`Deleted` は internal」の同じ写像を使うので、
+  adapter ごとに写さない。CoS の腕は `Deleted { existed }` を自分で写す（D3 のまま）。
+- §4 の store の試験は「3 つの検査」ではなく 4 つ（未終了 task・子ノードの `InUse`、成功、無い id の `false`）と、拒否の後に行が残ることの検査にした
+  （`store::tests::org_delete_tx_refuses_while_a_task_is_open_or_children_remain`。進捗 [store-prune.md](../progress/2026-11-18-arch-v4-d/store-prune.md)）。
+
+「付記: 2 つの形の使い分けと撤去の条件」の file の数の実測（提出時の HEAD）: 狭い command は 14 file（予想どおり）、広い command と `git grep -lE '\bApplied\b'` は
+18 file（表の `handlers/org.rs` が消えた。予想どおり）。残る操作の側は `cos/operations.rs` を除く 17 file。撤去の条件・期限（子 H の完了報告）・責任者は変えない。

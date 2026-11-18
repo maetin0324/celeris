@@ -174,3 +174,79 @@ A の baseline §7 の command を同じ規則で before（`git merge-base HEAD 
 - `usecase`: D1〜D4。`docs/architecture-map.md` の「組織・案件・報告」の行に `org_write.rs` を足す。`cos/operations.rs`（`authz` class）は変えない。
 - `store-prune`: §4 の task-core の 3 関数と試験の移し替え。`crates/task-core/src/store/` は `store` class なので、この ADR を設計 brief として参照する。
 - `metrics`・`timing`: §6。
+
+## 付記: 2 つの形の使い分けと撤去の条件
+
+（2026-11-18、WorkUnit `adr-forms`。[ADR 2026-10-09](2026-10-09-cos-operations-all-mutations.md) の D5 の段落と末尾の「付記: org の書き込みの形」がここを参照する。）
+
+### 使い分け
+
+- 新しい CoS 業務操作（アーキ v4 A の S1 のシナリオ）は、既定でこの ADR の org_write の形で書く。`handlers`・`cos` に依存しない module に
+  plan（読み取りと検証）と `apply(tx, ..)`（呼び出し元の transaction の中で書く）を置き、HTTP adapter は `SqliteStore::write_tx`、
+  CoS adapter は `OperationAudit::reject`・`apply_checked` で包む。共有の操作に `Option<&OperationAudit>` を渡さず、`Applied` を返させない。
+- 既存の `Applied` の形（ADR 2026-10-09 D5: 共有の操作が `Option<&OperationAudit>` を受け、`Applied::Direct`・`Applied::Audited` を返す）は、
+  下の一覧の操作に残る。新しい操作をこの形で足さない。移すまで 2 つの形が並存するので、撤去の条件・期限・責任者を下に書く（変更の規約 7）。
+
+### `Applied` の形を残す file（この付記を書いた時点の HEAD。`usecase` の前）
+
+WorkUnit の objective が指定した command:
+
+    git grep -l 'Option<&OperationAudit>' crates/task-api/src
+
+→ 14 file。`crates/task-api/src/cos/operations.rs` は型の定義側（`Applied`・`OperationAudit`・`audited` と、自身も `Option<&OperationAudit>` を受ける
+`file_op` の定義）で、操作の側は 13 file。
+
+| file | `Option<&OperationAudit>` を受ける関数 |
+|---|---|
+| `crates/task-api/src/approvals.rs` | `decide_op`・`create_standing_rule_op`・`delete_standing_rule_op` |
+| `crates/task-api/src/changes.rs` | `changes_effect`・`integrate_op`・`pr_merge_op` |
+| `crates/task-api/src/cos/operations.rs` | `file_op`（型の定義側） |
+| `crates/task-api/src/decisions.rs` | `answer_op`・`withdraw_op`・`revise_op`・`resolve_op` |
+| `crates/task-api/src/docs.rs` | `docs_effect`・`reject_for`・`docs_init_op`・`put_page_op`・`delete_page_op`・`promote_op`・`maintenance_op` |
+| `crates/task-api/src/handlers/projects.rs` | `create_project_op`・`put_project_brief_op` |
+| `crates/task-api/src/handlers/task_actions.rs` | `retry_op`・`patch_task_op`・`create_comment_op`・`reopen_op`・`rereview_op` |
+| `crates/task-api/src/handlers/tasks.rs` | `create_task_op`・`create_task_linked_op` |
+| `crates/task-api/src/integrate_task.rs` | `integrate_task_op` |
+| `crates/task-api/src/knowledge.rs` | `record_op`・`accept_op`・`reject_op`（`put_page_op` は下の完全修飾の書き方） |
+| `crates/task-api/src/lifecycle.rs` | `project_action_op`・`task_pause_op` |
+| `crates/task-api/src/model_catalog.rs` | `put_override_op`・`delete_override_op` |
+| `crates/task-api/src/repos.rs` | `create_repo_op`・`patch_repo_op`・`delete_repo_op` |
+| `crates/task-api/src/skills.rs` | `put_skill_op`・`delete_skill_op` |
+
+この command は完全修飾の `Option<&crate::cos::operations::OperationAudit>` と、lifetime 付きの型の別名 `Option<&'a OperationAudit>` を拾わない。
+同じ形の file をすべて数える command（A と違う数え方なので両方の値を書く）:
+
+    git grep -lE "Option<&('[a-z_]+ )?(crate::cos::operations::)?OperationAudit>" crates/task-api/src
+
+→ 19 file（上の 14 と次の 5）。`git grep -lE '\bApplied\b' crates/task-api/src` も同じ 19 file を返す。
+
+| file | 関数 |
+|---|---|
+| `crates/task-api/src/cron_jobs.rs` | `type Audit<'a> = Option<&'a OperationAudit>` を受ける `create_job_op`・`update_job_op`・`delete_job_op`・`pause_job_op`・`resume_job_op`・`run_job_op` と補助の `reject_with`・`resolve_for` |
+| `crates/task-api/src/execution.rs` | `execution_plan_adopt_op`・`tree_adopt_op`・`phase_gate_op`・`decompose_op` |
+| `crates/task-api/src/handlers/clusters.rs` | `put_local_settings_op`・`put_cluster_settings_op` |
+| `crates/task-api/src/handlers/org.rs` | `org_commit`（D の `usecase` が消す） |
+| `crates/task-api/src/inbox_notifications.rs` | `notice_read_op`・`notice_read_all_op` |
+
+`usecase` の後の予想（約束ではない。`metrics` か `close` が測る）: 狭い command は 14 のまま（`handlers/org.rs` はもともと入らない。`skills.rs` は
+`put_skill_op`・`delete_skill_op` が残る）、広い command は 19 → 18。
+
+### 撤去の条件
+
+- その領域の共有の操作を変える task が、同じ変更でその操作を org_write の形へ移す（`Option<&OperationAudit>` の引数と `Applied` の戻り値を消し、
+  HTTP は `write_tx`、CoS は `reject`・`apply_checked` で包む）。移す task は、移す操作の HTTP と CoS の response・拒否理由・認可・同一 transaction の試験を
+  移す前のコードで先に固定する（D の `contract-tests` と同じ手順）。
+- 全部が移ったら（上の広い command の出力が `cos/operations.rs` だけになったら）、同じ変更で `cos::operations` の `Applied` 型（`direct`・`audited` を含む）・
+  `file_op` などに残る `Option<&OperationAudit>` の引数・ADR 2026-10-09 D5 の `Applied` の記述を消す。
+
+### 期限と責任者
+
+- 期限: 親 01M7MZT8KX547464YYS76QNP4G の子 H（最後の統合・健全性の確認）の完了報告。H は上の 2 本の command で残る file の数を数えて両方の値を書き、
+  残る領域ごとに、移行の task を提案するか、意図して残す理由を書く。
+- 責任者: 移行はその領域の共有の操作を変える task の担当。残数の確認と提案は子 H。移行の task を起票するかは人が決める。
+
+### D がこの task で全部を移さない理由
+
+人の依頼（子 D）が範囲を「task-api の `handlers/org.rs` と `cos/ops/admin.rs` の周辺を選ぶ狭い pilot」に限った。`usecase` の後に残る操作の側の 17 file（広い command の予想 18 から型の定義側の `cos/operations.rs` を除く）は承認・変更・判断・
+文書・知識・案件・task・実行計画・cron などの別々の領域にまたがり、領域ごとに HTTP と CoS の契約試験を旧コードで先に固定する作業が要る。
+`knowledge.rs` は C が足した `transaction` class の高 risk の path で、子 F の候補の範囲でもある。全部を D で移すと pilot の範囲を超える。

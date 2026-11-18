@@ -60,7 +60,9 @@ pub async fn evaluate_all(
 ) {
     let events = Arc::new(events);
     for check in checks.iter_mut() {
-        let Some(RepoHealth::At(dir)) = check.health.take() else {
+        // 評価済みの項目（`Evaluated`）は取り出さずに残す（`take` で消すと項目が無言で落ちる。boundary_case_6_）。
+        let Some(RepoHealth::At(dir)) = check.health.take_if(|h| matches!(h, RepoHealth::At(_)))
+        else {
             continue;
         };
         let binding = check.binding.clone();

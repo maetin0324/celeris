@@ -68,7 +68,7 @@ fn finding(kind: &str, reason: &str) -> serde_json::Value {
 
 /// 設計 review の run の台本。
 #[derive(Clone)]
-enum Script {
+pub(super) enum Script {
     /// `review.json` に `design { pass, findings }` を書いて `done`。
     Verdict(bool, Vec<serde_json::Value>),
     /// `review.json` を `design` 無しで書いて `done`。
@@ -78,9 +78,9 @@ enum Script {
 }
 
 /// planner の計画を順に出し、設計 review の run を台本どおりに終える adapter。
-struct DesignScriptAdapter {
-    inner: PlannerScriptAdapter,
-    designs: StdMutex<std::collections::VecDeque<Script>>,
+pub(super) struct DesignScriptAdapter {
+    pub(super) inner: PlannerScriptAdapter,
+    pub(super) designs: StdMutex<std::collections::VecDeque<Script>>,
 }
 
 #[async_trait]

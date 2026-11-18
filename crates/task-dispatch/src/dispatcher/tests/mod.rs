@@ -3269,6 +3269,9 @@ mod structure_guard;
 /// （`src/dispatcher/tests/write_set_gate.rs`）。
 mod write_set_gate;
 
+/// ADR 2026-11-17-boundary-change-risk-review D5: 安全境界の意味を変える改修の 6 ケース（`boundary_case_<n>_`。実 profile と
+/// 実際の判定経路。`src/dispatcher/tests/boundary_cases.rs`）。
+mod boundary_cases;
 mod health_inventory;
 mod health_limits_budget;
 mod health_limits_review;

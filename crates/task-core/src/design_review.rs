@@ -148,8 +148,7 @@ impl RiskLevel {
 }
 
 /// 理由の語 `path_class:<class>:<path>`・`invariant:<class>:<名前>` の読み（書く側は `assess_risk`）。
-/// `(kind, class, 残り)` を返す（kind は `path_class` か `invariant`、残りは path か名前）。`<repo>:` が前に付いた複数 repo の
-/// 理由も読む。どちらでもない語は `None`。
+/// `(kind, class, path か名前)` を返す。`<repo>:` が前に付いた複数 repo の理由も読む。どちらでもない語は `None`。
 pub fn parse_risk_reason(reason: &str) -> Option<(&str, &str, &str)> {
     ["path_class", "invariant"].into_iter().find_map(|kind| {
         let (class, rest) = reason.split_once(&format!("{kind}:"))?.1.split_once(':')?;

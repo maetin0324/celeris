@@ -393,7 +393,6 @@ fn own_reason(why: &str) -> Option<(&str, &str, &str)> {
     parse_risk_reason(why).filter(|(kind, ..)| why.starts_with(kind))
 }
 
-/// 理由の語の `path_class:<class>:<path>` の (class, path)。
 fn path_class_pair(why: &str) -> Option<(String, String)> {
     let (kind, class, path) = own_reason(why)?;
     (kind == "path_class").then(|| (class.to_string(), path.to_string()))
@@ -424,13 +423,10 @@ pub(crate) fn covered_pairs(
         } if plan_sha256 == sha => Some(risk),
         _ => None,
     });
-    risk.map(|r| {
-        r.reasons
-            .iter()
-            .filter_map(|why| path_class_pair(why))
-            .collect()
-    })
-    .unwrap_or_default()
+    risk.into_iter()
+        .flat_map(|r| &r.reasons)
+        .filter_map(|why| path_class_pair(why))
+        .collect()
 }
 
 /// 付記 (iii): 差分の risk の理由のうち覆われない残り。`Unknown` は全部、`High` は覆われない `path_class:<class>:<path>`

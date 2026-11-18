@@ -553,12 +553,14 @@ mod settings_tests {
         }
     }
 
+    type EnvLog = Arc<Mutex<Vec<Vec<(String, String)>>>>;
+
     /// `accepts` だけを受け、run の時点の env を `log` に残す adapter。
     #[derive(Clone)]
     struct Probe {
         accepts: Vec<AdapterSetting>,
         env: Vec<(String, String)>,
-        log: Arc<Mutex<Vec<Vec<(String, String)>>>>,
+        log: EnvLog,
     }
 
     #[async_trait]

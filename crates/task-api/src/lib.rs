@@ -62,6 +62,8 @@ mod middleware;
 pub mod milestones;
 pub mod model_catalog;
 pub mod notify;
+/// ADR 2026-11-18-org-write-shared-use-case D1: 組織のノードの書き込みの plan と transaction の中の適用。
+mod org_write;
 pub mod principal;
 mod problem;
 pub mod project_plan;

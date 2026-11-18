@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::run_settlement::{self, AskReason, ReplanOrAsk};
+use task_core::execution_plan::WU_BASE_ENV;
 
 impl Dispatcher {
     /// ADR-0072 D14/D6・E4 (g): `wu.spec.checks` を `review::exec_check_outcome`（review.rs の `Check::Command` 実行を再利用）で
@@ -44,11 +45,8 @@ impl Dispatcher {
             None => self.work_dir_for(&task),
         };
         if wu.phase.is_some() {
-            let ttl = self
-                .config
-                .review_timeout
-                .saturating_mul(wu.spec.checks.len() as u32 * 2 + 1)
-                + self.config.lease_grace;
+            let timeouts = wu.spec.checks.len() as u32 * 2 + 1;
+            let ttl = self.config.review_timeout.saturating_mul(timeouts) + self.config.lease_grace;
             if let Err(e) = self.store.renew_lease(task_id, &run_id, ttl) {
                 tracing::warn!(%task_id, %run_id, error = %e, "could not extend the work unit lease for its checks");
             }
@@ -63,9 +61,7 @@ impl Dispatcher {
         let cwd = work_dir.as_deref().filter(|w| w.is_dir()).unwrap_or(&dir);
         let scope = super::wu_base::scope_env(cwd, &wu.id, false)?;
         if !scope.is_empty() {
-            check_env
-                .set
-                .retain(|(k, _)| k != task_core::execution_plan::WU_BASE_ENV);
+            check_env.set.retain(|(k, _)| k != WU_BASE_ENV);
             check_env.set.extend(scope);
         }
         let ws: task_worker::LocalWorkspace = match work_dir {
@@ -154,13 +150,8 @@ impl Dispatcher {
         task: &Task,
         base_commit: Option<&str>,
     ) -> Vec<(String, String)> {
-        let mut env = Vec::new();
-        if let Some(base) = base_commit {
-            env.push((
-                task_core::execution_plan::WU_BASE_ENV.to_string(),
-                base.to_string(),
-            ));
-        }
+        let base = base_commit.map(|b| (WU_BASE_ENV.to_string(), b.to_string()));
+        let mut env: Vec<_> = base.into_iter().collect();
         if let Some(branch) = self
             .task_workspaces_for(task)
             .and_then(|ws| ws.repos.iter().find_map(|r| r.branch().map(str::to_string)))
@@ -286,11 +277,8 @@ impl Dispatcher {
                 return Ok(false);
             }
         }
-        let ttl = self
-            .config
-            .review_timeout
-            .saturating_mul(checks as u32 * 2 + 1)
-            + self.config.lease_grace;
+        let timeouts = checks as u32 * 2 + 1;
+        let ttl = self.config.review_timeout.saturating_mul(timeouts) + self.config.lease_grace;
         if let Err(e) = self.store.renew_lease(task.id, run_id, ttl) {
             tracing::warn!(task_id = %task.id, %run_id, error = %e, "could not extend the work unit lease for the hand-off");
         }
@@ -719,10 +707,10 @@ impl Dispatcher {
     /// 無い Task は並列 1（WU の worktree なし）。remote / `Shared` / 書き込み可能な `dir` の repo /
     /// git の worktree が無い Task は並列 1 に倒し、理由を返す。
     pub(super) fn parallel_mode(&self, task: &Task) -> Result<ParallelMode, DispatchError> {
-        let serial = |reason: Option<String>| ParallelMode {
+        let serial = |reason: Option<&str>| ParallelMode {
             limit: 1,
             worktrees: false,
-            fallback: reason,
+            fallback: reason.map(str::to_string),
         };
         let Some(plan) = self.store.execution_plan_active(task.id)? else {
             return Ok(serial(None));
@@ -733,8 +721,7 @@ impl Dispatcher {
         match &task.workspace {
             WorkspaceSpec::Remote { .. } => {
                 return Ok(serial(Some(
-                    "remote workspace: no work unit worktrees on the cluster (ADR-0074 D1.2)"
-                        .to_string(),
+                    "remote workspace: no work unit worktrees on the cluster (ADR-0074 D1.2)",
                 )));
             }
             WorkspaceSpec::Local {
@@ -742,25 +729,21 @@ impl Dispatcher {
                 ..
             } => {
                 return Ok(serial(Some(
-                    "workspace_mode = shared: work units share the task's directory (ADR-0074 D1.2)"
-                        .to_string(),
+                    "workspace_mode = shared: work units share the task's directory (ADR-0074 D1.2)",
                 )));
             }
             WorkspaceSpec::Local { .. } => {}
         }
         let Some(ws) = self.task_workspaces_for(task) else {
             return Ok(serial(Some(
-                "no git worktree for this task (the local path is not a git repository)"
-                    .to_string(),
+                "no git worktree for this task (the local path is not a git repository)",
             )));
         };
         if ws.repos.is_empty() {
-            return Ok(serial(Some(
-                "no repository in this task's workspace".to_string(),
-            )));
+            return Ok(serial(Some("no repository in this task's workspace")));
         }
         if let Some(repo) = ws.repos.iter().find(|r| !r.is_git()) {
-            return Ok(serial(Some(format!(
+            return Ok(serial(Some(&format!(
                 "repository {} is a writable dir (not git): work units would share it (ADR-0074 D1.2)",
                 repo.name
             ))));
@@ -1518,6 +1501,23 @@ impl Dispatcher {
         Ok(())
     }
 
+    /// ADR-0079: the decision request of an automatic leaf over its budget ([`auto_leaf::decision_request`]).
+    pub(super) fn auto_leaf_decision(
+        &self,
+        task: &Task,
+        wu: &task_core::WorkUnitRow,
+        run_id: &str,
+        counts: &auto_leaf::AutoLeafCounts,
+        checkpoint: Option<&task_core::Checkpoint>,
+    ) -> Result<task_core::DecisionRequest, DispatchError> {
+        let limits = self.config.execution.limits.tree;
+        let path =
+            task_ops::tree::decision_path(self.store.as_ref(), task).map_err(ops_to_store)?;
+        Ok(auto_leaf::decision_request(
+            task, wu, run_id, counts, checkpoint, limits, path,
+        ))
+    }
+
     /// ADR-0072 D9（Phase E2）: WU の spec から prompt に渡す文脈を組み立てる（`## Objective` の
     /// 差し替え・計画の一覧・依存する WU の完了要約）。
     pub(super) fn work_unit_prompt_context(
@@ -1572,7 +1572,7 @@ impl Dispatcher {
             Vec::new()
         };
         // ADR-0079 D7（Phase R3a）: この leaf が待っていた決定の人の回答（前置きの「人の決定」節。固定の書式）。
-        let human_decisions = match self.store.get(task_id)? {
+        let mut human_decisions = match self.store.get(task_id)? {
             Some(task) if self.config.execution.limits.tree.enabled => {
                 task_ops::decision::leaf_decision_lines(
                     self.store.as_ref(),
@@ -1586,7 +1586,6 @@ impl Dispatcher {
         };
         let events = self.store.events_for(task_id)?;
         // ADR-0074 付記（2026-10-02）: 前の段の途中確認で人が continue に付けたメモ（同じ「人の決定」節。tree に依らない）。
-        let mut human_decisions = human_decisions;
         human_decisions.extend(task_ops::phase_gate::continue_note_lines(
             &events,
             units,
@@ -1731,15 +1730,12 @@ impl Dispatcher {
     /// 同じ `update_task` で書く。入力は store と担当の実効 profile から決定的に計算する（LLM なし）。
     /// 記録に失敗しても dispatch は止めない（経路が無い Task は従来どおり gate の判定に従う）。
     fn execution_route_if_needed(&self, task: Task) -> Task {
-        let Some(routing) = task.routing.clone() else {
+        let Some(routing) = task.routing.clone().filter(|r| r.route.is_none()) else {
             return task;
         };
         let Some(gate) = routing.execution.as_ref() else {
             return task;
         };
-        if routing.route.is_some() {
-            return task;
-        }
         let inputs = match self.direct_route_inputs(&task) {
             Ok(inputs) => inputs,
             Err(e) => {

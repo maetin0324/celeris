@@ -55,6 +55,8 @@ ADR §6 の予想（22 → 19、52 → 50）と一致した。C2・C7b・C12 は
 - `bash scripts/dev/test-affected.sh` → exit 0。repo-health verdict=pass（deps.cycle pass、size.responsibility-growth pass、new=0 worsened=0）、
   web 101 file・705 試験 pass、nextest 6109 試験 pass（21 skip）、doc test pass。
   この実行の後に `OrgWritten::Node` を `Box` にした（clippy の指摘）。その後に task-api の試験と health を再実行した（下）。
+- `Box` にした後の HEAD で: `cargo nextest run -p task-api` → 870 試験 pass（2 skip）。`bash scripts/dev/check-health.sh` → exit 0、verdict=pass
+  （deps.cycle pass、size.responsibility-growth pass、new=0 worsened=0）。`sh scripts/dev/progress-index.sh --check` → exit 0。
 - `cargo nextest run -p task-api -E 'test(org_write_contract) | test(cos_ops_admin_config) | binary(organization)'` → 30 試験 pass
   （`org_write_contract` 6・`cos_ops_admin_config` 4・`organization` 20）。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。

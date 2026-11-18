@@ -719,3 +719,180 @@ async fn startup_closes_only_terminal_tasks_integration_requests_once() {
         }));
     }
 }
+
+/// planner run を 2 回目から試験が開けるまで止める adapter。planner 以外の run は起動した run id を記録して `Done`。
+struct PlannerGateAdapter {
+    plans: StdMutex<VecDeque<String>>,
+    planner_runs: AtomicUsize,
+    planner_started: StdMutex<Vec<String>>,
+    other_runs: StdMutex<Vec<String>>,
+    gate: tokio::sync::Semaphore,
+}
+
+#[async_trait]
+impl WorkerAdapter for PlannerGateAdapter {
+    fn id(&self) -> &str {
+        "instant"
+    }
+    async fn run(
+        &self,
+        req: RunRequest,
+        run_id: &str,
+        _limits: RunLimits,
+        _sink: &dyn EventSink,
+    ) -> Result<RunOutcome, AdapterError> {
+        std::fs::create_dir_all(&req.artifacts_dir).ok();
+        if req.context.execution_planner.is_some() {
+            let json = self
+                .plans
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| "{}".to_string());
+            std::fs::write(req.artifacts_dir.join("execution-plan.json"), json)
+                .expect("write execution-plan.json");
+            let nth = self.planner_runs.fetch_add(1, Ordering::SeqCst);
+            self.planner_started
+                .lock()
+                .unwrap()
+                .push(run_id.to_string());
+            if nth >= 1 {
+                if let Ok(permit) = self.gate.acquire().await {
+                    permit.forget();
+                }
+            }
+        } else {
+            self.other_runs.lock().unwrap().push(run_id.to_string());
+        }
+        Ok(RunOutcome {
+            terminal: Terminal::Done {
+                summary: "ok".into(),
+                evidence: vec![],
+                usage: None,
+            },
+            exit_code: Some(0),
+        })
+    }
+}
+
+/// 不変条件: task の lease を task 単位の run（planner）が持つ間は、その task の WU の run を起こさない。
+/// 承認待ちの版の `ready` の leaf も、planner の後に採用・承認された版に従って 1 回だけ dispatch される。
+/// 本番 2026-11-18 03:34Z（task 01M7MZTKB29VF5TX7FCQ15XEMW）: replan 後の planner の間に risk-rule が約 3 秒の
+/// 中断と再 dispatch を 56 回繰り返した。
+/// 既存の `plan_gate_replan_does_not_dispatch_the_unapproved_version` が検出できない理由: planner の adapter が
+/// すぐ返すので planner の run の間に別 tick が回らず、v1 の unit は kind task だけで 2 本目以降の経路の対象外。
+#[tokio::test]
+async fn planner_lease_blocks_parallel_work_unit_dispatch() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let root = root_task(dir.path());
+    let root_id = root.id;
+    store.create_task(&root, vec![]).unwrap();
+    let plan = v3_plan(
+        vec![stage("s1", true)],
+        vec![task_unit("c", "s1", &[], "true"), leaf("a", "s1", &[])],
+    );
+    let adapter = Arc::new(PlannerGateAdapter {
+        plans: StdMutex::new(VecDeque::from([plan.clone(), plan])),
+        planner_runs: AtomicUsize::new(0),
+        planner_started: StdMutex::new(Vec::new()),
+        other_runs: StdMutex::new(Vec::new()),
+        gate: tokio::sync::Semaphore::new(0),
+    });
+    let mut d = tree_dispatcher(&store, adapter.clone());
+    run_until_quiet(&mut d, &store, 400).await;
+    assert_eq!(
+        gate_state(&store, root_id),
+        task_ops::plan_gate::PlanGateState::Pending
+    );
+    // 承認待ちの版の leaf a は `ready`（本番の risk-rule と同じ立場）。
+    let a = unit(&store.work_units_for(root_id).unwrap(), "a").clone();
+    assert_eq!(a.status, task_core::WorkUnitStatus::Ready);
+    assert_eq!(a.runs, 0);
+
+    task_ops::plan_gate::plan_gate(
+        store.as_ref(),
+        root_id,
+        task_ops::plan_gate::PlanGateAction::Replan,
+        Some("again".into()),
+        "human",
+    )
+    .unwrap();
+    // 出来事待ち: 2 回目の planner の run が起動し、止まるまで tick を進める。
+    let mut ticks = 0;
+    while adapter.planner_started.lock().unwrap().len() < 2 {
+        d.tick().unwrap();
+        tokio::task::yield_now().await;
+        ticks += 1;
+        assert!(ticks < 200, "the replan planner never started");
+    }
+    let planner_run = adapter.planner_started.lock().unwrap()[1].clone();
+    let holder = |store: &Arc<SqliteStore>| {
+        store
+            .get(root_id)
+            .unwrap()
+            .unwrap()
+            .lease
+            .map(|l| l.worker_run_id)
+    };
+    assert_eq!(holder(&store), Some(planner_run.clone()));
+
+    let seq_before = store.events_for(root_id).unwrap().len();
+    for _ in 0..5 {
+        d.tick().unwrap();
+        tokio::task::yield_now().await;
+        assert_eq!(holder(&store), Some(planner_run.clone()));
+    }
+    let events = store.events_for(root_id).unwrap();
+    let new_events: Vec<_> = events.iter().skip(seq_before).collect();
+    assert!(
+        !new_events.iter().any(|(_, e)| matches!(
+            e,
+            Event::WorkUnitTransitioned { key, to: task_core::WorkUnitStatus::Running, .. } if key == "a"
+        )),
+        "leaf a must not start under the planner's lease: {new_events:?}"
+    );
+    assert!(
+        !events.iter().any(|(_, e)| matches!(
+            e,
+            Event::WorkerFinished { outcome, .. } if outcome.contains("no longer running under this lease")
+        )),
+        "no run is aborted for the lease"
+    );
+    let a = unit(&store.work_units_for(root_id).unwrap(), "a").clone();
+    assert_eq!(a.runs, 0);
+    assert_eq!(a.status, task_core::WorkUnitStatus::Ready);
+    assert!(adapter.other_runs.lock().unwrap().is_empty());
+
+    // planner を開ける。次の版を承認すると木は done まで進み、leaf a は 1 回だけ dispatch される。
+    adapter.gate.add_permits(1);
+    run_until_quiet(&mut d, &store, 800).await;
+    assert_eq!(
+        gate_state(&store, root_id),
+        task_ops::plan_gate::PlanGateState::Pending
+    );
+    assert_eq!(
+        unit(&store.work_units_for(root_id).unwrap(), "a").runs,
+        0,
+        "the unapproved version stays parked"
+    );
+    approve_root_plan(&store, root_id);
+    let report = run_until_idle(&mut d, 1200).await;
+    assert!(report.idle, "{report:?}");
+    assert_eq!(store.get(root_id).unwrap().unwrap().status, Status::Done);
+    let units = store.work_units_for(root_id).unwrap();
+    assert_eq!(unit(&units, "a").runs, 1);
+    let starts = store
+        .events_for(root_id)
+        .unwrap()
+        .iter()
+        .filter(|(_, e)| {
+            matches!(
+                e,
+                Event::WorkUnitTransitioned { key, to: task_core::WorkUnitStatus::Running, .. } if key == "a"
+            )
+        })
+        .count();
+    assert_eq!(starts, 1, "leaf a is dispatched exactly once");
+    assert_replay_is_clean(&store);
+}

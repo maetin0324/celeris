@@ -1,13 +1,14 @@
 ---
 title: アーキ v4 E — 同じ規則で測った before/after と共通受入条件 (1)〜(6)
 tasks: [01M7R60D0K6ZF1KCNG2QYHZEV8]
-status: running
+status: done
 updated: 2026-11-18
+completed: 2026-11-18
 ---
 # アーキ v4 E — 同じ規則で測った before/after（measure）
 
 [measure-commands.md](measure-commands.md) の C1・C2・C3・C7b・C12 と E1〜E3 を、次の 3 つの rev に当てた（WorkUnit counts）。
-(5)（test-affected の時間）と反例試験の結果は WorkUnit tests がこの file に足す。
+(5)（test-affected の時間）と反例試験の結果は WorkUnit tests が足した（節「(5) test-affected の時間」と「反例試験」）。
 
 | 記号 | rev | 内容 |
 |---|---|---|
@@ -28,6 +29,9 @@ source（`crates/`・`scripts/`・`web/`・`docs/`）は変えていない。こ
 - (3) B1..HEAD で task-api・task-core・task-ops の差分は 0。crates/ の差分は task-dispatch の 13 file（全部 M）だけ。
 - (4) S2 は direct 6・transitive 14・package 4 のまま（3 rev とも）。
 - (6) production は B1 → HEAD で +61 行（全言語・Rust とも）、own_total_with_tests は +195。ADR の目安 +80 の中、replan の閾値 +200 の下。
+- (5) S2 の comment probe での test-affected は 1 回で 769.32 s（exit 0、nextest 3,936 passed・11 skipped）。A の S2 before の中央値 655.59 s
+  （3,917 passed）より 113.73 s 長い。1 回だけの値なので、悪化かどうかは判定しない。3 回の比較は G の担当で「要判断」。
+- 反例試験（lease・restart・stale review・並列 WU・replan）は ADR の 12 本がすべて pass。filter に当たった 121 本も全部 pass（2,772 skipped）。
 
 ## (2) C3・E1・E2・E3
 
@@ -181,6 +185,76 @@ script と toml は B0 から `git show` で取り出して 3 rev に当てた�
 - B0 → HEAD の +725 のうち +664 は B・C の変更（B0..B1）で、E の外。
 - この task は行数の純減を目的にしていないので、純減の判定は無い（ADR の上限 +80 だけを見る）。
 
+## (5) test-affected の時間
+
+A の baseline.md §7 C8・C9 と同じ手順で 1 回だけ測った（WorkUnit tests、提出時の HEAD〈件名 `arch-v4 E counts: metrics.md に C3・E1〜E3・…`〉の作業ツリー）。
+
+1. S2 の comment probe を入れた: `crates/task-dispatch/src/run_settlement/work_unit.rs`・`run_settlement.rs`・`dispatcher/worker_finish.rs`・
+   `dispatcher/work_units.rs` の各 file の最初の `//` の行（4 file とも 1 行目の `//!`）の末尾に ` probe-$(date +%s%N)` を足した。`git diff --numstat` は
+   4 file とも `1 1`（行数も名も増えない）。`test-affected.sh --list` の対象 crate は celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。
+2. 計る前に反例試験の nextest（下の節）を 1 回走らせ、target を warm にした（A の計測も warm の target で、probe で再 build されるのは
+   task-dispatch とその逆依存だけ）。
+3. load を待った: `s=0; while awk '{exit !($1>4)}' /proc/loadavg && [ $s -lt 1200 ]; do sleep 10; s=$((s+10)); done`。20 s 待って 1 分 load average が
+   3.91 になった（条件内）。
+4. `/usr/bin/time -v bash scripts/dev/test-affected.sh` を foreground で 1 回（2026-11-18T21:09:19Z 開始）。
+5. `git checkout --` で 4 file を戻した。`git status --porcelain crates/` は 0 行、`git diff --quiet -- crates/` は exit 0（crates/ は clean）。
+
+| | E（1 回） | A の S2 before（run 1 / 2 / 3、中央値） |
+|---|---|---|
+| 開始時の 1 分 load average | 3.91（5 分 5.98・15 分 9.85） | 4 以下（§7 C8 の waitload） |
+| 経過時間（`Elapsed`） | 769.32 s（12:49.32） | 695.36 / 655.59 / 647.32 s、中央値 655.59 s |
+| exit | 0 | 0 |
+| nextest | 3,936 run・3,936 passed（9 slow）・11 skipped、181 binary、443.874 s | 3,917 passed・11 skipped（406.6 / 418.0 / 406.1 s） |
+| test の build（cargo の `Finished` 行） | 2m 19s | baseline.md の表に無い |
+| user の CPU 時間 | 3,629.05 s（system 811.90 s、CPU 577%） | 3,705 / 3,104 / 2,961 s |
+| repo-health（test-affected の先頭） | pass（new 0・worsened 0、base は `git merge-base HEAD main`） | pass |
+| doc test・web | doc test が通った（log に `Doc-tests` が 14 節。失敗 0）。web は対象外 | doc test、web は対象外 |
+
+- 差: 経過時間は A の中央値より +113.73 s（+17.3%）、nextest の部分は A の 3 回の最大 418.0 s より +25.9 s。試験の数は +19（B・C・E が足した試験）。
+- 1 回だけの値で、3 回の比較をしていないので、悪化かどうかは判定しない。**要判断**: 3 回の比較（同じ host・同じ load 条件で E と A の before を並べるか）は
+  G の担当として判断を残す。
+- 終了時の load average は 7.11 / 10.90 / 10.75 で、計測中に load が上がった（test-affected 自身の CPU 577% を含む。他の process の分は未確認）。
+- log の末尾に `rm: cannot remove '/local/celeris/data/scratch/tr-1001/.trash-…/own-eval': Permission denied` が 3 行出たが、exit は 0（一時 dir の後始末の警告）。
+- 生の log は run の artifacts の `ta.log`・`ta-time.txt`・`ta-start.txt`（run 終了後は残らない前提で、上の表に要点を写した）。
+
+## 反例試験
+
+command（提出時の HEAD、probe を入れる前に実行。2 回目は 1 試験ずつの結果を出すため `--status-level all --final-status-level none` を足した）:
+
+```sh
+cargo nextest run -p task-dispatch -p celeris -p celerisctl \
+  -E 'test(cex_) | test(replan) | test(parallel_work_unit) | test(structure_guard) | test(store_access_guard)'
+```
+
+結果: exit 0。`Starting 121 tests across 65 binaries (2772 tests skipped)`、`121 tests run: 121 passed, 2772 skipped`（2 回とも同じ。build 込みの 1 回目は
+116.45 s、試験の実行は 8.09 s）。内訳は task-dispatch 119 本、celeris 2 本（`project_controller_core_s6_review_failed_replans_once`・
+`max_replans_changes_without_restart_and_is_written_back_with_comments`）、celerisctl 0 本。名に `cex_` を持つもの 40 本、`replan` 66 本、
+`parallel_work_unit` 4 本、structure_guard・store_access_guard 14 本（`store_access_guard_work_units`・`store_access_guard_cos_chat`・
+`store_access_guard_detects_each_violation` を含む。名の重なりがあるので合計は 121 にならない）。
+
+ADR [2026-11-18 dispatcher-store-access-pilot](../../adr/2026-11-18-dispatcher-store-access-pilot.md) の「反例試験」の表の 12 本（すべて
+`crates/task-dispatch/src/dispatcher/tests/` の下。名は変えていない）:
+
+| 範囲 | 試験（module::名） | 結果 |
+|---|---|---|
+| lease | `cex_lease_restart::cex_stale_holder_late_finish_does_not_overwrite_the_reassigned_run` | PASS（0.656 s） |
+| lease | `cex_lease_restart::cex_lease_renew_after_expired_snapshot_keeps_the_holder` | PASS（0.665 s） |
+| restart | `cex_lease_restart::cex_draining_instance_reclaims_its_expired_lease_without_redispatching` | PASS（0.601 s） |
+| restart | `cex_lease_restart::cex_restart_after_crash_between_wu_and_task_transitions_is_idempotent` | PASS（0.566 s） |
+| restart | `cex_lease_restart::cex_restart_after_wu_done_promotes_dependents_once` | PASS（0.638 s） |
+| stale review | `cex_lease_restart::cex_restart_old_reviewer_pass_after_ownerless_close_is_ignored` | PASS（0.528 s） |
+| stale review | `cex_review_authority::cex_review_late_pass_on_the_old_candidate_does_not_pass_the_rebased_candidate` | PASS（1.163 s） |
+| 並列 WU | `cex_lease_restart::cex_two_parallel_work_unit_runs_finishing_in_one_tick_lose_no_update` | PASS（1.325 s） |
+| 並列 WU | `cex_lease_restart::cex_run_finish_and_work_unit_check_finish_in_one_tick` | PASS（1.403 s） |
+| replan | `cex_late_completion::cex_late_review_and_integration_after_replan_are_dropped` | PASS（1.701 s） |
+| replan | `cex_late_completion::cex_late_review_pass_after_replan_is_dropped` | PASS（2.000 s） |
+| replan | `cex_late_completion::cex_late_review_pass_after_repair_is_dropped` | PASS（2.003 s） |
+
+範囲外: task-api・task-core・task-ops・task-worker にも名に replan・parallel_work_unit を含む関数がある（`git grep -lE 'fn [a-z_]*(replan|parallel_work_unit)'` で 24 file。試験の本数は数えていない）。この 4 crate は E で変えておらず
+（`git diff --quiet $(git merge-base HEAD main) HEAD -- crates/task-api crates/task-core crates/task-ops crates/task-worker` が exit 0）、
+task-dispatch に依存しない（4 crate の `Cargo.toml` に `task-dispatch` の行が 0。task-dispatch に依存するのは campaign・celeris・celerisctl・llm-proxy だけ）。
+E の変更はこの 4 crate の試験の結果を変えないので、走らせていない。
+
 ## 数えないものの確認
 
 | 項目 | command（要点） | 結果 |
@@ -198,7 +272,8 @@ script と toml は B0 から `git show` で取り出して 3 rev に当てた�
 ## 未達・未解決
 
 - 未達の項目は無い（store −6・config −4、分母不減、crate 全体で同数、SqliteStore 不増、production +61 ≤ +80）。目安に対する余裕は store・config とも 1 file。
-- (5) test-affected の時間と反例試験（lease・restart・stale review・並列 WU・replan）の結果は WorkUnit tests が書く。この WorkUnit では測っていない。
+- (5) は 1 回だけの値（769.32 s。A の S2 中央値 655.59 s より +113.73 s）。悪化かどうかは判定していない。**要判断**: 3 回の比較は G の担当。
+- 反例試験は ADR の 12 本と filter の 121 本がすべて pass。未達は無い。
 - (1) の A の before（3・4・22）は B0 の checker でしか出ない。H の最終の集計で checker の版をそろえて比べるなら、今の checker の値（3 rev とも 4・7・51）を基準にする。
 
 ## 提案

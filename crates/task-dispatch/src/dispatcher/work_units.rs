@@ -1821,9 +1821,11 @@ impl Dispatcher {
         })
     }
 
-    /// ADR-0074 D1.3 3.（Phase F2b）: 並列 WU の 2 本目以降。このインスタンスが既に run を持っている
-    /// （＝工程の lease の持ち主の）Task だけを対象にする（引き継ぎ中の別インスタンスの Task には
-    /// 手を出さない。持ち主のいない Task は再起動の照合〈D1.7〉が Ready に戻す）。
+    /// ADR-0074 D1.3 3.（Phase F2b）: 並列 WU の 2 本目以降。このインスタンスが既に run を持ち、かつ task の lease の
+    /// 保持者が工程（`phase:`）の Task だけを対象にする（引き継ぎ中の別インスタンスの Task には手を出さない。
+    /// 持ち主のいない Task は再起動の照合〈D1.7〉が Ready に戻す）。planner など task 単位の run が lease を持つ間は
+    /// 起こさない（起こしても次の tick の `abort_stale_runs` が打ち切る。
+    /// 2026-11-18-no-wu-dispatch-under-task-run-lease）。
     ///
     /// 戻り値は（起こした run の数, `max_concurrency` が尽きて走査を途中で切ったか）。
     /// 2026-10-03-write-set-no-starvation: 起こせなかった WU（write-set の重なりで待たされた等）は飛ばして
@@ -1840,14 +1842,13 @@ impl Dispatcher {
         for task in self.store.running_tasks_with_runnable_work_units(window)? {
             if !self.is_eligible(&task)
                 || self.supervisor.runs_for_task(task.id) == 0
+                || !matches!(&task.lease, Some(l) if is_phase_lease_holder(&l.worker_run_id))
                 || self.coord.processes().is_integrating(task.id)
                 || self.supervisor.was_just_aborted(task.id)
+                // ADR-0079 D13（Phase R5a）: subtree の一時停止・案件の停止の後は、走っている run は終わるまで走らせるが、
+                // 並列 WU の 2 本目以降は新しく起こさない（`ready_tasks` と同じ判定）。
+                || self.store.halted_by_pause(&task)?
             {
-                continue;
-            }
-            // ADR-0079 D13（Phase R5a）: subtree の一時停止・案件の停止の後は、走っている run は終わるまで走らせるが、
-            // 並列 WU の 2 本目以降は新しく起こさない（`ready_tasks` と同じ判定）。
-            if self.store.halted_by_pause(&task)? {
                 continue;
             }
             let mode = self.parallel_mode(&task)?;
@@ -1857,26 +1858,22 @@ impl Dispatcher {
                     return Ok((dispatched, true));
                 }
                 let units = self.store.work_units_for(task.id)?;
-                let in_flight = units
-                    .iter()
-                    .filter(|u| {
-                        u.status == task_core::WorkUnitStatus::Running
-                            && u.kind != task_core::WorkUnitKind::Integrate
-                    })
-                    .count();
-                if in_flight >= mode.limit {
+                let running = |u: &&task_core::WorkUnitRow| {
+                    u.status == task_core::WorkUnitStatus::Running
+                        && u.kind != task_core::WorkUnitKind::Integrate
+                };
+                if units.iter().filter(running).count() >= mode.limit {
                     break;
                 }
                 // 並列上限で切らずに候補を全部並べ、この tick にまだ試していない最初の WU を選ぶ。
                 let ids = crate::execution_scheduler::runnable_in_phase(&units, 0, usize::MAX);
                 let Some(wu) = ids
-                    .iter()
-                    .find(|id| !tried.contains(*id))
-                    .and_then(|id| units.into_iter().find(|u| &u.id == id))
+                    .into_iter()
+                    .find(|id| tried.insert(id.clone()))
+                    .and_then(|id| units.into_iter().find(|u| u.id == id))
                 else {
                     break;
                 };
-                tried.insert(wu.id.clone());
                 if self.dispatch_one(task.clone(), Some(wu), now)? {
                     dispatched += 1;
                 }

@@ -975,9 +975,9 @@ impl Dispatcher {
         // 無い。`run_worker` は DB から task を読み直すので、実効の予算を必ず渡す（`wall` だけでなく `max_turns` も効かせる）。
         extras.budget = Some(task.budget);
         // ADR-0130 D2: 実装 run の開始 HEAD を worker を起こす前に固定する（planner run は書かない）。
-        if !is_planner_dispatch {
-            self.capture_run_write_bases(&task, &run_id, worktree.as_ref());
-        }
+        let ws = worktree.as_ref().filter(|_| !is_planner_dispatch);
+        let bases = write_set_record::run_write_bases(&task, ws);
+        self.coord.put_run_write_bases(&run_id, bases);
         // 多目的 routing Phase 3（ADR 2026-10-04 §3.4・§6）: task / WU / 実効 profile / 履歴から RoutingContext を
         // 組み、features を記録し、registry があれば run に結んで ref を worker の文脈に載せる。
         let routing_events: Vec<Event> = match self.store.events_for(task.id) {
@@ -1042,6 +1042,72 @@ impl Dispatcher {
         );
         self.maint.admission().started(disk);
         Ok(true)
+    }
+
+    /// ADR-0130 D3: `dispatch_one` の write-set gate の入口。hint を store から読み（planner run と CoS の対話 run は
+    /// 読まずに予約なし）、`write_set_gate::reservation` で候補の予約を作り、実行中の run の鍵を引数にして
+    /// `ExecutionCoordination::admit_write_set` に判定させる。`Hold` なら task の待ち（`TaskWait::WriteSet`）を記録してから返す。
+    /// 呼び元は `Hold` で `Ok(false)` を返すだけ。
+    pub(super) fn admit_write_set(
+        &mut self,
+        task: &Task,
+        run_key: &RunKey,
+        wu: Option<&task_core::WorkUnitRow>,
+        is_planner_dispatch: bool,
+    ) -> Result<WriteSetAdmission, DispatchError> {
+        let candidate = if is_planner_dispatch || task_core::is_conversation(task) {
+            None
+        } else {
+            let task_hint = self.store.effective_task_write_paths(task.id)?;
+            let wu_hint = wu
+                .map(|wu| self.store.work_unit_expected_write_paths(&wu.id))
+                .transpose()?;
+            write_set_gate::reservation(task, task_hint, wu_hint)
+        };
+        let running = self.supervisor.run_keys();
+        let admission = self
+            .coord
+            .admit_write_set(run_key, candidate, running, self.coord.ticks());
+        if let WriteSetAdmission::Hold { blocker } = &admission {
+            let blocking_task_ids = vec![blocker.task];
+            self.note_dispatch_wait(task.id, task_core::TaskWait::WriteSet { blocking_task_ids });
+        }
+        Ok(admission)
+    }
+
+    /// ADR-0130 D2: worker run の終了時（WU の自動 commit の後）に actual write-set を残す。失敗は warn だけ。
+    /// 記録は `write_set_record` の関数が組み立て、ここは開始 HEAD（`dispatch_one` が固定したもの）の取り出しと
+    /// store への書き込みだけを行う。done になった v2 WU は、続けて `base_commit..HEAD` を WU の最終 snapshot として残す。
+    pub(super) fn record_run_write_sets(
+        &mut self,
+        task: &Task,
+        run_id: &str,
+        wu: Option<&task_core::WorkUnitRow>,
+        wu_completed: bool,
+    ) {
+        let bases = self.coord.take_run_write_bases(run_id);
+        // 開始 HEAD が無いときだけ、手元に Git worktree があるか（`unavailable` の理由）を見る。
+        let has_local_site = bases.is_none()
+            && self
+                .task_workspaces_for(task)
+                .is_some_and(|ws| !write_set_record::git_sites(task, &ws).is_empty());
+        let work_unit_id = wu.map(|w| w.id.clone());
+        let records =
+            write_set_record::run_records(task, run_id, work_unit_id, bases, has_local_site);
+        for record in &records {
+            if let Err(e) = self.store.record_run_write_set(record) {
+                tracing::warn!(task_id = %task.id, %run_id, repo = %record.repo_id, error = %e, "failed to record the run's write-set");
+            }
+        }
+        if let Some(wu) = wu.filter(|w| wu_completed && w.phase.is_some())
+            && let Some(ws) = self.task_workspaces_for(task)
+        {
+            for record in write_set_record::work_unit_records(task, wu, &ws) {
+                if let Err(e) = self.store.record_work_unit_write_set(&record) {
+                    tracing::warn!(task_id = %task.id, work_unit = %wu.key, repo = %record.repo_id, error = %e, "failed to record the work unit's write-set");
+                }
+            }
+        }
     }
 
     /// Phase 38（ADR-0028 追記。実機のレビュー不合格から）: 計画が**ハーネスで動く分野**の担当に

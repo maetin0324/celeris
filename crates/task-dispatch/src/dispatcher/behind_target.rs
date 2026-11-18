@@ -1,94 +1,45 @@
-//! ADR-0130 D4: record the task branch's behind commits against its target at the review
-//! sync measurement points. Never fails the caller (Git/store errors are only logged).
+//! ADR-0118 / ADR-0130 D4: the review sync target of a repo and the local Git worktrees the review
+//! sync of a task rebases. Reads Git only; the entries in `review_spawn.rs` read the repo's default
+//! branch and the branch prefix and record the behind measurement (ADR 2026-11-18
+//! dispatcher-store-access-pilot).
 
 use std::path::{Path, PathBuf};
 
-use task_core::behind_target::BehindTargetSnapshot;
-use task_core::{RepoId, Task, TaskId};
+use task_core::{RepoId, Task};
+use task_worker::TaskWorkspaces;
 
-use super::{DispatchError, Dispatcher};
-
-impl Dispatcher {
-    pub(super) fn observe_behind_target(
-        &self,
-        task_id: TaskId,
-        repo_id: RepoId,
-        worktree: &Path,
-        target_ref: &str,
-    ) -> Option<BehindTargetSnapshot> {
-        match task_ops::behind_target::observe_behind_target(
-            self.store.as_ref(),
-            task_id,
-            repo_id,
-            worktree,
-            target_ref,
-            self.now_utc(),
-        ) {
-            Ok(snapshot) => Some(snapshot),
+/// Review sync target ref of one repo: the parent task branch for a tree child (`parent`), otherwise
+/// the repo's default branch. `None` when the default branch cannot be resolved
+/// (ADR 2026-10-11-stranded-done-branches F1): the repo is left out of the review sync.
+pub(super) fn review_target(
+    parent: Option<String>,
+    configured_default: Option<&str>,
+    source: &Path,
+) -> Option<String> {
+    let target = match parent {
+        Some(parent) => parent,
+        None => match task_ops::changes::resolve_default_branch(source, configured_default) {
+            Ok(branch) => branch,
             Err(error) => {
-                tracing::warn!(%task_id, %target_ref, %error, "behind target observation failed");
-                None
+                tracing::warn!(source = %source.display(), %error, "review sync target skipped");
+                return None;
             }
-        }
-    }
+        },
+    };
+    Some(format!("refs/heads/{target}"))
+}
 
-    /// ADR-0118 review sync target of one repo: the parent task branch for a tree child,
-    /// otherwise the repo's default branch. `None` when the default branch cannot be resolved
-    /// (ADR 2026-10-11-stranded-done-branches F1): the repo is left out of the review sync.
-    pub(crate) fn review_target_ref(
-        &self,
-        task: &Task,
-        repo_id: RepoId,
-        source: &Path,
-    ) -> Result<Option<String>, DispatchError> {
-        let target = if let Some(parent) =
-            task_core::tree::parent_branch(task, &self.config.worktree_branch_prefix)
-        {
-            parent
-        } else {
-            let configured = self.store.repo_get(repo_id)?.and_then(|r| r.default_branch);
-            match task_ops::changes::resolve_default_branch(source, configured.as_deref()) {
-                Ok(branch) => branch,
-                Err(error) => {
-                    tracing::warn!(task_id = %task.id, %error, "review sync target skipped");
-                    return Ok(None);
-                }
-            }
+/// `(repo, worktree, source)` of every repo of `task` whose local Git worktree exists. Remote /
+/// projectless / non-Git workspaces have none (behind stays `null`).
+pub(super) fn sync_sites(task: &Task, ws: &TaskWorkspaces) -> Vec<(RepoId, PathBuf, PathBuf)> {
+    let mut sites = Vec::new();
+    for repo in &ws.repos {
+        let Some(worktree) = repo.worktree.as_ref().filter(|w| w.dir.is_dir()) else {
+            continue;
         };
-        Ok(Some(format!("refs/heads/{target}")))
-    }
-
-    /// `(repo, worktree, target_ref)` of every local Git worktree the review sync of `task`
-    /// would rebase. Remote / projectless / non-Git workspaces have none (behind stays `null`).
-    pub(super) fn review_sync_targets(
-        &mut self,
-        task: &Task,
-    ) -> Result<Vec<(RepoId, PathBuf, String)>, DispatchError> {
-        let remote = matches!(&task.workspace, task_core::WorkspaceSpec::Remote { .. })
-            || self.cluster_of(task).is_some();
-        if remote || task.repos.is_empty() {
-            return Ok(Vec::new());
+        if let Some(reference) = task.repos.iter().find(|r| r.name == repo.name) {
+            sites.push((reference.repo_id, worktree.dir.clone(), repo.source.clone()));
         }
-        let Some(workspaces) = self.task_workspaces_for(task) else {
-            return Ok(Vec::new());
-        };
-        let mut targets = Vec::new();
-        for repo in &workspaces.repos {
-            let Some(worktree) = &repo.worktree else {
-                continue;
-            };
-            if !worktree.dir.is_dir() {
-                continue;
-            }
-            let Some(reference) = task.repos.iter().find(|r| r.name == repo.name) else {
-                continue;
-            };
-            let Some(target_ref) = self.review_target_ref(task, reference.repo_id, &repo.source)?
-            else {
-                continue;
-            };
-            targets.push((reference.repo_id, worktree.dir.clone(), target_ref));
-        }
-        Ok(targets)
     }
+    sites
 }

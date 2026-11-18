@@ -45,7 +45,7 @@ fn request() -> DesignReviewRequest {
             high_risk: vec![PathClass {
                 class: "store".into(),
                 paths: vec!["^crates/task-core/src/store/".into()],
-                invariants: Vec::new(),
+                invariants: vec![],
             }],
             invariants: Default::default(),
             definition_sha256: "d".repeat(64),

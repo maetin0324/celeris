@@ -118,7 +118,7 @@ fn health_review_policy_present_maps_every_field_from_the_base() {
             high_risk: vec![PathClass {
                 class: "store".into(),
                 paths: vec!["^crates/task-store/".into()],
-                invariants: Vec::new(),
+                invariants: vec![],
             }],
             invariants: [("base".to_string(), sha), ("side".into(), "yes".into())]
                 .into_iter()

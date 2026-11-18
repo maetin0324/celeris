@@ -26,7 +26,7 @@ pub(super) fn policy() -> ReviewPolicy {
         high_risk: vec![PathClass {
             class: CLASS.to_string(),
             paths: vec![CLASS_PATH.to_string(), "^crates/task-store/".to_string()],
-            invariants: Vec::new(),
+            invariants: vec![],
         }],
         invariants: BTreeMap::from([(INVARIANT.to_string(), "CLAUDE.md".to_string())]),
         definition_sha256: "d".to_string(),

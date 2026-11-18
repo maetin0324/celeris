@@ -5,24 +5,11 @@ use serde_json::json;
 use super::*;
 use crate::execution_plan::{ExecutionPlanSpec, assess_plan_risk, plan_sha256, plan_write_paths};
 
-/// celeris.toml の `[review]` と同じ形の方針（store・events・authz の 3 class。authz と events は不変条件を持つ）。
+/// celeris.toml の `[review]` と同じ形の方針（authz・store・events の 3 class。authz だけが不変条件を持つ）。
 fn policy() -> ReviewPolicyState {
     ReviewPolicyState::Present(ReviewPolicy {
         owner_map: Some("docs/architecture-map.md".into()),
         high_risk: vec![
-            PathClass {
-                class: "store".into(),
-                paths: vec![
-                    "^crates/task-core/src/store/".into(),
-                    "^crates/task-core/migrations/".into(),
-                ],
-                invariants: Vec::new(),
-            },
-            PathClass {
-                class: "events".into(),
-                paths: vec!["^crates/task-core/src/model/events\\.rs$".into()],
-                invariants: vec!["events-append-only".into()],
-            },
             PathClass {
                 class: "authz".into(),
                 paths: vec![
@@ -30,6 +17,19 @@ fn policy() -> ReviewPolicyState {
                     "^crates/task-api/src/principal\\.rs$".into(),
                 ],
                 invariants: vec!["api-principal-from-token".into()],
+            },
+            PathClass {
+                class: "store".into(),
+                paths: vec![
+                    "^crates/task-core/src/store/".into(),
+                    "^crates/task-core/migrations/".into(),
+                ],
+                invariants: vec![],
+            },
+            PathClass {
+                class: "events".into(),
+                paths: vec!["^crates/task-core/src/model/events\\.rs$".into()],
+                invariants: vec![],
             },
         ],
         invariants: BTreeMap::from([
@@ -121,7 +121,7 @@ fn health_review_risk_unavailable_policy_is_unknown() {
         high_risk: vec![PathClass {
             class: "odd".into(),
             paths: vec!["(?<=crates/)x".into()],
-            invariants: Vec::new(),
+            invariants: vec![],
         }],
         ..ReviewPolicy::default()
     });
@@ -174,6 +174,7 @@ fn health_review_risk_class_path_is_high_without_new_declarations() {
             "crates/task-core/migrations/0100_x.sql",
             "crates/task-core/src/model/events.rs",
             "crates/task-core/src/store/tasks.rs",
+            "crates/task-api/src/principal.rs",
             "web/src/app.ts",
         ]),
         Some(&DesignBrief {
@@ -186,10 +187,11 @@ fn health_review_risk_class_path_is_high_without_new_declarations() {
     assert_eq!(
         many.reasons,
         vec![
+            "path_class:authz:crates/task-api/src/principal.rs",
+            "invariant:authz:api-principal-from-token",
             "path_class:store:crates/task-core/migrations/0100_x.sql",
             "path_class:store:crates/task-core/src/store/tasks.rs",
             "path_class:events:crates/task-core/src/model/events.rs",
-            "invariant:events:events-append-only",
             "declared:new_state",
             "declared:new_port",
         ]
@@ -200,7 +202,7 @@ fn health_review_risk_class_path_is_high_without_new_declarations() {
         high_risk: vec![PathClass {
             class: "lease".into(),
             paths: vec!["leases\\.rs$".into()],
-            invariants: Vec::new(),
+            invariants: vec![],
         }],
         ..ReviewPolicy::default()
     });
@@ -294,15 +296,15 @@ fn health_review_risk_new_fallback_is_high_on_any_path() {
 fn health_review_risk_plan_without_brief_on_class_path_is_high() {
     let risk = assess_risk(
         &policy(),
-        &paths(&["crates/task-core/src/model/events.rs"]),
+        &paths(&["crates/task-api/src/principal.rs"]),
         None,
     );
     assert_eq!(risk.level, RiskLevel::High);
     assert_eq!(
         risk.reasons,
         vec![
-            "path_class:events:crates/task-core/src/model/events.rs",
-            "invariant:events:events-append-only",
+            "path_class:authz:crates/task-api/src/principal.rs",
+            "invariant:authz:api-principal-from-token",
             "brief_absent_human_plan",
         ]
     );
@@ -477,4 +479,37 @@ fn health_review_risk_events_round_trip_and_read_without_optional_fields() {
             .unwrap()
             .contains("findings")
     );
+}
+
+/// 守る不変条件: `PathClass.invariants`（ADR 2026-11-18-pathclass-invariants-field）は、書いた JSON を
+/// 読んで書き直しても残る。
+///
+/// 既存の試験は `class`・`paths` だけを見るため、`invariants` が読み捨てられても（欄が無い型でも
+/// `deny_unknown_fields` の無い `PathClass` は未知の欄を黙って捨てる）落ちない。この試験は
+/// 往復の後の JSON を元と比べるので、読み捨てを検出できる。
+#[test]
+fn path_class_invariants_survive_round_trip() {
+    let src = json!({
+        "class": "events",
+        "paths": ["^crates/task-core/src/model/events\\.rs$"],
+        "invariants": ["events-append-only", "no-data-loss"],
+    });
+    let class: PathClass = serde_json::from_value(src.clone()).expect("read");
+    assert_eq!(class.invariants, vec!["events-append-only", "no-data-loss"]);
+    assert_eq!(serde_json::to_value(&class).expect("write"), src);
+}
+
+/// 守る不変条件: `invariants` を書かない JSON は、読み書きの後も同じで欄が出ない
+/// （`skip_serializing_if`）。
+///
+/// 既存の試験は値の比較で `invariants: vec![]` と欄の無さを区別しないため、空の配列が
+/// `"invariants": []` として出るようになっても落ちない。この試験は JSON の同値で見る。
+#[test]
+fn path_class_without_invariants_round_trips_without_field() {
+    let src = json!({"class": "store", "paths": ["^crates/task-core/src/store/"]});
+    let class: PathClass = serde_json::from_value(src.clone()).expect("read");
+    assert!(class.invariants.is_empty());
+    let out = serde_json::to_value(&class).expect("write");
+    assert_eq!(out, src);
+    assert!(out.get("invariants").is_none());
 }

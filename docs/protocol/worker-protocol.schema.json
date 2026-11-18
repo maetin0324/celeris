@@ -3393,7 +3393,7 @@
           "type": "string"
         },
         "invariants": {
-          "description": "ADR 2026-11-17-boundary-change-risk-review D2: この class が守る不変条件の名前（`ReviewPolicy.invariants` の\nkey）。任意の欄で、書かない profile もある。",
+          "description": "この class が守る不変条件の名前（`ReviewPolicy.invariants` の key）。任意で、空なら書き出さない。",
           "items": {
             "type": "string"
           },

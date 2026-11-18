@@ -9,7 +9,7 @@ fn policy(class: &str, pattern: &str, digest: &str) -> ReviewPolicyState {
         high_risk: vec![PathClass {
             class: class.into(),
             paths: vec![pattern.into()],
-            invariants: Vec::new(),
+            invariants: vec![],
         }],
         invariants: Default::default(),
         definition_sha256: digest.into(),

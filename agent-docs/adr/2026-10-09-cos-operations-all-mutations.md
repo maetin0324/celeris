@@ -375,6 +375,8 @@ thread/run/operation/actor を body から自己申告させない。DB の領�
 代答等のカードを `OperationAudit::apply` の 1 transaction に入れる（独立した store write を先に commit しない）。
 既存の domain event にも actor=cos と操作への相関を通す。全 route の処理を HTTP 自己呼出しで代理して認証を迂回しない。
 
+（2026-11-18）org の書き込みと新しい CoS 業務操作は、この `Applied` の形ではなく共有 use-case の形で書く。末尾の「付記: org の書き込みの形（2026-11-18、task 01M7MZTKB4RYM80S6CT3RST2N9）」と[ADR 2026-11-18-org-write-shared-use-case](2026-11-18-org-write-shared-use-case.md) を参照。
+
 ファイル・git・upload・daemon channel・release promote などの副作用は SQLite transaction では rollback できない。
 共有操作関数で安全な staging/既存の冪等処理と監査の開始・結果を結び、失敗・中断から再送しても二重適用せず、
 副作用前に除外・認可・revision を検査する。DB write と監査行の原子性を外部副作用の原子性と取り違えない。
@@ -543,3 +545,19 @@ ADR 2026-10-28-cos-integrate-task の `POST /tasks/{id}/integration-requests/{re
 ## 付記: 撤去した経路（2026-11-17）
 
 - `POST /console/instruct`（除外 `console_instruction_chain`）と `POST /reports/read`・`POST /reports/notified`（`report.read`・`report.notified`）は [ADR 2026-11-17-console-deprecated-api-aider-removal](2026-11-17-console-deprecated-api-aider-removal.md) で経路ごと消したので、上の表から行を消した。
+
+## 付記: org の書き込みの形（2026-11-18、task 01M7MZTKB4RYM80S6CT3RST2N9）
+
+- org（`/org` の作成・更新・browser settings・削除と、skill の mount・unmount）は、共有 use-case `crates/task-api/src/org_write.rs` の
+  plan（読み取りと検証だけ。DB を書かない）と tx 内の apply（transaction を開かず、commit もしない）を、HTTP adapter（`handlers/org.rs`・`skills.rs`）が
+  `SqliteStore::write_tx` で、CoS adapter（`cos/ops/admin.rs`）が `OperationAudit::apply_checked` で包む形にした（CoS の plan の拒否は `OperationAudit::reject`）。
+  決定は [ADR 2026-11-18-org-write-shared-use-case](2026-11-18-org-write-shared-use-case.md) D1〜D4。実装は同じ task の WorkUnit `usecase`、
+  使われなくなる `SqliteStore` の org の wrapper の撤去は `store-prune` が行う（この付記を書いた時点では未実装）。
+- D5 の「通常 handler は監査 context 無しの `Applied::Direct`、CoS 経路は `OperationAudit` を渡し `Applied::Audited` を返す」は org には当てはまらない。
+  org の共有の操作は `Option<&OperationAudit>` を受けず、`Applied` を返さない。
+- 新しい CoS 業務操作は既定でこの形で書く。共有の操作は `handlers`・`cos` に依存しない module に置き（task-api の中なら SCC の外の単位だけを使う。
+  今は `task_core`・`crate::problem`・`crate::types`）、`Option<&OperationAudit>` と `Applied` を受けさせない。
+  `Applied` の形を残す既存の操作の一覧・撤去の条件・期限・責任者は D の ADR の「付記: 2 つの形の使い分けと撤去の条件」に書いた。
+- D5 の同一 transaction の条件は変えない。CoS 経路では領域の write・`cos_operations` の行・監査 event を `apply_checked` の 1 つの transaction に入れ、
+  独立した store write を先に commit しない。apply の中で書き込みが拒否されたら transaction を rollback し、rejected の行と理由を残す。
+  外部副作用（file・git・upload など）の扱い（D5 の 2 段落目）も変えない。

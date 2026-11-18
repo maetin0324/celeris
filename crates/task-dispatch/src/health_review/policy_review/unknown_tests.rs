@@ -3,7 +3,7 @@
 //! ときは不明として candidate の SHA に結び付けて記録し、関門は人の承認なしに合格させない。
 //!
 //! 一時 git repo の main に stub の `repo_health.py` を commit し、branch `cand` に 1 commit を足す。材料作り
-//! （[`build_health_input`]）は stub を本当に起こし、残った event を [`Dispatcher::policy_review_gate`] が読む。
+//! （[`build_final_review_material`]）は stub を本当に起こし、残った event を [`Dispatcher::policy_review_gate`] が読む。
 //! 外部ネットワークに出ず、LLM を呼ばない。
 
 use std::path::Path;
@@ -13,7 +13,7 @@ use task_core::{FailedCheck, RepairDecision, RepoId, classify_review_failure};
 use super::*;
 use crate::dispatcher::tests::{dispatcher_without_bundled_checker, done_adapter, new_task};
 use crate::health_review::input::{
-    CandidateRepo, HEALTH_INPUT_TIMEOUT, HealthInputWork, build_health_input,
+    CandidateRepo, HEALTH_INPUT_TIMEOUT, HealthInputWork, build_final_review_material,
 };
 use crate::health_review::policy::REVIEW_POLICY_SCHEMA;
 use crate::review::RequiredRepoResult;
@@ -172,7 +172,7 @@ pub(super) fn case_for(checker: Option<(Policy, Report)>, changed: &str, reviewe
         timeout: HEALTH_INPUT_TIMEOUT,
         evaluated: Default::default(),
     };
-    build_health_input(&work);
+    build_final_review_material(&work, crate::health_review::gate::bundled_checker());
     Case {
         store,
         d,

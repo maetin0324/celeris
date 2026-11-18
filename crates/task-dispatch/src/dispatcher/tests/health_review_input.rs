@@ -561,7 +561,8 @@ fn policy_approvals(store: &Arc<SqliteStore>, task: &Task) -> Vec<Task> {
 #[tokio::test]
 async fn health_review_policy_no_reviewer_normal_change_passes_without_approval() {
     use crate::health_review::input::{
-        CandidateRepo, HEALTH_INPUT_TIMEOUT, HealthInputWork, NO_REVIEWER, build_health_input,
+        CandidateRepo, HEALTH_INPUT_TIMEOUT, HealthInputWork, NO_REVIEWER,
+        build_final_review_material,
     };
     let (repo, scratch, log) = health_repo("base");
     let r = review_flow(repo.path(), false, false, None).await;
@@ -600,7 +601,11 @@ async fn health_review_policy_no_reviewer_normal_change_passes_without_approval(
         evaluated: Default::default(),
         timeout: HEALTH_INPUT_TIMEOUT,
     };
-    assert!(build_health_input(&again).is_none());
+    assert!(
+        build_final_review_material(&again, crate::health_review::gate::bundled_checker())
+            .health
+            .is_none()
+    );
     assert_eq!(log_lines(&log).len(), 1, "the recorded state is reused");
     assert_eq!(policy_records(&events_of(&r.store, &r.task)).len(), 1);
 }
@@ -789,7 +794,7 @@ async fn health_review_input_not_built_for_work_units() {
 //
 // 再利用の鍵と失効（ADR 2026-11-11-health-generic-review-input R2）の単体の試験は `health_review::input::tests` の
 // `health_review_input_reuse_is_bound_to_candidate_base_and_policy`（candidate・base・base の方針）と
-// `health_review_input_reuse_is_bound_to_the_checker_version`（検査器の版）にある。そこは `build_health_input` を
+// `health_review_input_reuse_is_bound_to_the_checker_version`（検査器の版）にある。そこは `build_final_review_material(...).health` を
 // 直に呼び、dispatcher の reviewer run のやり直し・reviewer の合格の再利用・policy の関門を通らない。上の
 // `health_review_input_reused_on_reviewer_retry`・`…_not_built_when_the_reviewer_pass_is_reused` は方針が `Present`
 // の repo だけを流す。ここでは `Absent` の repo で、adapter が受けた `ReviewRequest.health` と task の状態を見る。

@@ -204,3 +204,23 @@ C3・E2 の file 数（`git grep` の作業ツリー検索。非試験 file）:
 `verdict=pass`、`fail_grade=0 new=0 worsened=0`、`deps.cycle`・`size.responsibility-growth` とも pass。module `crates/task-dispatch/src/dispatcher` の
 本体の行の合計は 32331 → 32329（−2）。repo-health の `_logic_lines` で 4 file の合計は 1690 → 1688（`slot_wait.rs` 161 → 56、`routes.rs` 266 → 292、
 `control.rs` 273 → 310、`launch.rs` 990 → 1030）。
+
+### 検査（提出時の HEAD で実行）
+
+- `cargo nextest run -p task-dispatch -E 'test(slot_wait) | test(cos_launch_cross) | test(cos_route) | test(cos_chat) | test(structure_guard) | test(store_access_guard)'`
+  → 259 passed。`cos_slot_wait` の 5 本（待ってから同じ run を起動・cooldown は待たない・予約は route_unavailable・期限で `slot_wait_expired`・
+  stop で起動前に閉じる）、`cos_launch_cross` の 8 本、`route_select::slot_wait` の 9 本を含む。
+- `cargo fmt --all -- --check` → exit 0。`cargo clippy --workspace -- -D warnings` → exit 0。
+- `bash scripts/dev/test-affected.sh` → exit 0（`repo-health: verdict=pass exit=0 … fail_grade=0 new=0 worsened=0`、
+  対象 crate: celeris celeris-campaign celerisctl llm-proxy task-dispatch、nextest 3935 passed・11 skipped、doc test は失敗 0）。
+  末尾の `rm: cannot remove …/own-eval: Permission denied` は scratch の後片付けの出力で、exit code に影響していない。
+- `git diff $CELERIS_WU_BASE -- crates/task-dispatch/src/dispatcher/tests crates/task-dispatch/src/dispatcher/worker_finish.rs crates/task-dispatch/src/health_review crates/task-dispatch/src/execution_coordination.rs crates/task-dispatch/src/project_orchestration.rs` → 差分なし。
+- 新しい trait・Manager・Facade・Port・Service の struct は無い（task の受け入れ条件 4 の grep が 0 件）。dispatcher/ に file を足していない・消していない。
+- 試験は足していない・弱めていない（method の名と引数を変えないので、既存の振る舞いの試験がそのまま新しい経路を通る）。
+
+### 未解決・次の候補
+
+- `store_access_guard_cos_chat`（relay_rejudge・slot_wait に違反 0）は guard の WorkUnit が structure_guard.rs に足す。
+- `docs/architecture-map.md` の cos_chat の行の入口の記述は close の段で直す（ADR の撤去対象）。
+- `retry_routes` の期限の式（`started_at` が無いと期限切れにしない）と `run_elapsed`（無いと 0 秒）は `max_wall_secs = 0` のときだけ結果が違う。
+  意味をそろえるかは別の判断なので、この WorkUnit では変えていない。

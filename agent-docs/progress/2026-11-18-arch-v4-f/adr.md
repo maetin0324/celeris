@@ -1,13 +1,16 @@
 ---
 title: アーキ v4 F adr — knowledge.rs・lifecycle.rs の transaction の境界の before の値
 tasks: [01M7RFMBFY4M3H3Z78KGN51RYB]
-status: running
+status: done
 updated: 2026-11-18
+completed: 2026-11-18
 ---
 # アーキ v4 F — before の値（WorkUnit `before`）
 
-ADR `agent-docs/adr/2026-11-18-knowledge-lifecycle-tx-boundary.md` と進捗の本体 `agent-docs/progress/2026-11-18-arch-v4-f.md` は
-WorkUnit `adr-doc` が書く。この file は before の値と再現 command だけを持つ。`crates/`・`web/`・`agent-docs/adr/` は変えていない。
+完了日: 2026-11-18。
+ADR は [2026-11-18-knowledge-lifecycle-tx-boundary](../../adr/2026-11-18-knowledge-lifecycle-tx-boundary.md)、進捗の本体は [2026-11-18-arch-v4-f.md](../2026-11-18-arch-v4-f.md)
+（どちらも WorkUnit `adr-doc` が書いた）。この file は before の値と再現 command と unit `adr` の検査の結果を持つ。
+`crates/`・`web/` と既存の ADR は変えていない。
 
 ## 基準
 
@@ -280,13 +283,15 @@ source-size-report の script と toml は after でも上の `$B`（before の�
 - 上の再現 command を `$B` に当てた。C2 は約 30 s、source-size-report は約 13 s で exit 0。値は上の表。
 - この file の sh の block を `awk` で取り出して `bash` でそのまま実行した → exit 0（約 41 s）。出力は上の表の値と全部一致した。
 
-## 検査
+## 検査（unit `adr` の提出時の HEAD で実行。WorkUnit `adr-doc` が ADR と進捗の本体を足した後。基準は `$CELERIS_WU_BASE`）
+- `sh scripts/dev/check-doc-links.sh` → exit 0（`check-doc-links: ok`）。`sh scripts/dev/check-adr-numbers.sh` → exit 0（`ok (461 files)`）。
 - `sh scripts/dev/progress-index.sh --check` → exit 0（`progress-index --check: ok`）。
-- `sh scripts/dev/check-doc-links.sh` → exit 0。`sh scripts/dev/check-adr-numbers.sh` → exit 0（`ok (460 files)`）。
-- `git diff --name-only "$CELERIS_WU_BASE" -- crates web agent-docs/adr | wc -l` → 0。`sh "$CELERIS_WU_SCOPE_PATHS"` → この file だけ。
-- `bash scripts/dev/test-affected.sh` → exit 0（`試験対象の変更なし（docs のみ等）`、repo-health は verdict=pass、new 0・worsened 0）。
+- 計画の check（ADR の語 34 個の `grep -qF`、`git diff --quiet $(git merge-base HEAD main) -- crates/ web/` と既存の ADR 3 本、この file の `status: done`、
+  進捗の本体の ADR への参照）→ exit 0。`sh "$CELERIS_WU_SCOPE_PATHS"` → ADR・進捗の本体・この file の 3 path だけ。
 - `cargo fmt --all -- --check` → exit 0。
-- `cargo clippy --workspace -- -D warnings` → exit 0（警告は vendor の `crates/script-runtime/vendor/deno_core/uv_compat/tcp.rs:818` の deprecated 1 件だけで、workspace の lint の対象外）。
+- `bash scripts/dev/test-affected.sh` → exit 0（約 16 s。`試験対象の変更なし（docs のみ等）`、repo-health は verdict=pass、new 0・worsened 0・existing 140）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（約 55 s。警告は vendor の `deno_core` の deprecated 1 件だけで、workspace の lint の対象外）。
+- WorkUnit `before` が自分の提出時に走らせた検査（文書の 3 本・差分 0・test-affected・fmt・clippy）も exit 0 だった（その記録は git の履歴にある）。
 
 ## 未解決
 - 無し。

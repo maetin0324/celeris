@@ -23,7 +23,9 @@
 
 use std::collections::BTreeMap;
 
-use task_core::design_review::{ReviewPolicy, RiskAssessment, RiskLevel};
+use task_core::design_review::{
+    ReviewPolicy, RiskAssessment, RiskLevel, RiskReason, parse_risk_reason,
+};
 use task_core::execution_plan::DesignBrief;
 
 use super::GENERIC_RULES;
@@ -355,25 +357,16 @@ fn risk_lines(risk: &RiskAssessment, policy: Option<&ReviewPolicy>, rows: &[&Own
 
 /// 理由 1 件の補足（`<repo>:` の付いた複数 repo の理由も同じ）。方針の無い理由・他の語は空。
 fn reason_detail(reason: &str, policy: Option<&ReviewPolicy>, rows: &[&OwnerRow]) -> String {
-    let core = reason
-        .find("path_class:")
-        .or_else(|| reason.find("invariant:"))
-        .map_or(reason, |at| &reason[at..]);
     let source = |name: &str| {
         let file = policy.and_then(|p| p.invariants.get(name));
         file.map_or(format!("`{name}`"), |f| format!("`{name}`（`{f}`）"))
     };
-    if let Some((_, name)) = core
-        .strip_prefix("invariant:")
-        .and_then(|r| r.split_once(':'))
-    {
-        return format!(": 不変条件 {}", source(name));
-    }
-    let Some((class, path)) = core
-        .strip_prefix("path_class:")
-        .and_then(|r| r.split_once(':'))
-    else {
-        return String::new();
+    let (class, path) = match parse_risk_reason(reason) {
+        Some(RiskReason::Invariant { name, .. }) => {
+            return format!(": 不変条件 {}", source(name));
+        }
+        Some(RiskReason::PathClass { class, path }) => (class, path),
+        None => return String::new(),
     };
     let matched: Vec<String> = rows
         .iter()

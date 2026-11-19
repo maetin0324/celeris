@@ -98,7 +98,10 @@ account の処理を共有の module へ移す unit（accounts）は、この 4 
 ## 6. 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 
 - `cargo nextest run -p task-api --test llm_accounts_admin --test cos_delivery_suite` → exit 0（55 passed）
-- `bash scripts/dev/test-affected.sh`・`cargo clippy --workspace -- -D warnings`・`cargo fmt --all -- --check` の結果は WorkUnit の報告に書く
+- `bash scripts/dev/test-affected.sh` → exit 0（nextest 6132 passed・21 skipped、web の tsc -b と unit 705 passed、repo_health_gate all checks passed）
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo clippy -p task-api --test llm_accounts_admin --test cos_delivery_suite -- -D warnings` → exit 0（足した試験の lint。`-p task-api --tests` 全体では、この WorkUnit が触れていない `llm_routes_admin` が base から clippy::type_complexity で落ちる）
+- `cargo fmt --all -- --check` → exit 0
 - `git diff --name-only $CELERIS_WU_BASE -- crates/task-api/src` → 出力なし（`crates/task-api/src` は変えていない）
 
 ## 変更

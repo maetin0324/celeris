@@ -1049,7 +1049,7 @@ async fn management_routes_refuse_missing_unknown_mcp_and_origin_callers() {
     let unknown = "Bearer not-the-token".to_string();
     let mcp = format!("Bearer {MCP_TOKEN}");
     let admin = auth();
-    let callers: Vec<(Vec<(&str, &str)>, u16, &str)> = vec![
+    let callers = vec![
         (vec![], 401, "unauthorized"),
         (
             vec![("authorization", unknown.as_str())],

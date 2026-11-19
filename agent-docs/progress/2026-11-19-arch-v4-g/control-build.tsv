@@ -1,0 +1,4 @@
+metric	scenario	rev	run	seconds	user_s	sys_s	exit	load1_start	valid	src_tree	note
+health	S2	before	1	87.26	69.28	8.39	1	0.75	yes	0c1d43aadffa35a14e9b80ac3184be425f70d210	attempt=1 waited=0s load=0.75 1.56 4.49 rss_kb=611708 fail_rules=size.responsibility-growth;source-size; findings=702 new=5 worsened=2 existing=695 base=bc665168 checker=bc665168
+health	S2	before	2	107.83	68.70	8.45	1	1.47	yes	0c1d43aadffa35a14e9b80ac3184be425f70d210	attempt=2 waited=0s load=1.47 1.58 3.99 rss_kb=611728 fail_rules=size.responsibility-growth;source-size; findings=702 new=5 worsened=2 existing=695 base=bc665168 checker=bc665168
+health	S2	before	3	86.19	68.81	8.24	1	2.71	yes	0c1d43aadffa35a14e9b80ac3184be425f70d210	attempt=3 waited=0s load=2.71 2.10 3.71 rss_kb=611576 fail_rules=size.responsibility-growth;source-size; findings=702 new=5 worsened=2 existing=695 base=bc665168 checker=bc665168

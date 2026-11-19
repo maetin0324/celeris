@@ -1,0 +1,11 @@
+metric	scenario	a_median	after_median	ratio	flag
+check_cold	-	53.65	53.90	1.0047	ok
+check_warm	S1	42.47	42.64	1.0040	ok
+check_warm	S2	14.67	15.56	1.0607	ok
+test_build_cold	-	142.39	147.03	1.0326	ok
+test_build_warm	S1	138.69	138.10	0.9957	ok
+test_build_warm	S2	77.64	81.60	1.0510	ok
+health	S1	86.56	93.58	1.0811	ok
+health	S2	81.92	96.09	1.1730	control
+test_affected	S1	893.41	906.03	1.0141	ok
+test_affected	S2	655.59	707.76	1.0796	ok

@@ -94,7 +94,8 @@ pub(crate) struct Inner {
     /// `None`。DB の絶対パス自体は `/health` に出さない（無認証のため。認証済みの `/config` が既に
     /// 返している）。
     pub(crate) db_mount: Option<task_core::mountinfo::MountInfo>,
-    /// 読み取り専用の view（`task_ops::routing_stage`）が別接続で開く DB の path。
+    /// store を開いた DB の path。読み取り専用の view（`task_ops::routing_stage`）が別接続で開き、chat 添付の
+    /// `ChatAttachmentStore::open` にも渡す（ADR 2026-11-19-chat-attachment-store-connection D1）。
     pub(crate) db_path: std::path::PathBuf,
     pub(crate) view: ViewContext,
     pub(crate) config_view: ConfigView,

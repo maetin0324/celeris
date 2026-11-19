@@ -709,6 +709,62 @@ pub fn attachment_provenance(
     })
 }
 
+/// `chat_attachments.expires_at` of one attachment (`None` once pinned), read on the store's read
+/// connection (ADR 2026-11-19-chat-attachment-store-connection D1). A missing row is
+/// `QueryReturnedNoRows`: the caller has just read the row through [`ChatAttachmentStore`].
+/// Do not call inside a `write_tx` / `cos_operation_apply` closure: without a read pool the read
+/// waits on the write connection's mutex that closure holds (ADR §3).
+pub fn attachment_expires_at(
+    store: &crate::store::SqliteStore,
+    attachment_id: &str,
+) -> Result<Option<String>, crate::store::StoreError> {
+    store.with_read_conn(|conn| {
+        Ok(conn.query_row(
+            "SELECT expires_at FROM chat_attachments WHERE id=?1",
+            [attachment_id],
+            |r| r.get(0),
+        )?)
+    })
+}
+
+/// Whether `client_upload_id` already has a committed upload record in the thread (the upload
+/// route answers a replay with 200 instead of 201), read on the store's read connection (ADR
+/// 2026-11-19-chat-attachment-store-connection D1). Do not call inside a `write_tx` /
+/// `cos_operation_apply` closure (ADR §3).
+pub fn upload_replayed(
+    store: &crate::store::SqliteStore,
+    thread_id: &str,
+    client_upload_id: &str,
+) -> Result<bool, crate::store::StoreError> {
+    store.with_read_conn(|conn| {
+        Ok(conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM chat_client_requests WHERE kind='upload' AND scope_id=?1 AND key=?2)",
+            params![thread_id, client_upload_id],
+            |r| r.get(0),
+        )?)
+    })
+}
+
+/// The `request_hash` a committed `attachment_ref` request stored for this attachment and
+/// idempotency key, if any (the references route answers a different owner under the same key
+/// with 409), read on the store's read connection (ADR 2026-11-19-chat-attachment-store-connection
+/// D1). Do not call inside a `write_tx` / `cos_operation_apply` closure (ADR §3).
+pub fn attachment_ref_request_hash(
+    store: &crate::store::SqliteStore,
+    attachment_id: &str,
+    idempotency_key: &str,
+) -> Result<Option<String>, crate::store::StoreError> {
+    store.with_read_conn(|conn| {
+        Ok(conn
+            .query_row(
+                "SELECT request_hash FROM chat_client_requests WHERE kind='attachment_ref' AND scope_id=?1 AND key=?2",
+                params![attachment_id, idempotency_key],
+                |r| r.get(0),
+            )
+            .optional()?)
+    })
+}
+
 /// Provenance of every attachment pinned to one owner, oldest pin first. Unlike
 /// [`ChatAttachmentStore::list_for_owner`] this keeps rows whose blob was deleted: the hash and
 /// origin stay a record even without the bytes.

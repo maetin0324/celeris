@@ -1,0 +1,29 @@
+metric	scope	before	after	checker	note
+dispatcher_files	request/C3	69	-	a-c3	分母。dispatcher/ の非試験 file。H の値（request/C3 の 69・633・220）の 69 と同じ。
+dispatcher_files	request/E1	69	-	e-e1	H の struct-store.tsv の after 69 と同じ。
+dispatcher_files	logical/C3	76	-	a-c3	分母。69 − project_decider_ts.rs ＋ #[path] の 8 file（非試験の #[path] の集合は base と同じ）。H の struct-store.tsv の after 76 と同じ。
+dispatcher_files	logical/E1	76	-	e-e1	H の struct-store.tsv の after 76 と同じ。
+dispatcher_store_files	request/C3	38	-	a-c3	H の struct-store.tsv の after 38 と同じ。
+dispatcher_store_hits	request/C3	633	-	a-c3	H の値（request/C3 の 69・633・220）の 633 と同じ。
+dispatcher_store_files	logical/C3	42	-	a-c3	H の struct-store.tsv の after 42 と同じ。
+dispatcher_store_hits	logical/C3	661	-	a-c3	H の struct-store.tsv の after 661 と同じ。
+dispatcher_config_files	request/C3	31	-	a-c3	H の struct-store.tsv の after 31 と同じ。
+dispatcher_config_hits	request/C3	220	-	a-c3	H の値（request/C3 の 69・633・220）の 220 と同じ。
+dispatcher_config_files	logical/C3	35	-	a-c3	H の struct-store.tsv の after 35 と同じ。
+dispatcher_config_hits	logical/C3	226	-	a-c3	H の struct-store.tsv の after 226 と同じ。
+dispatcher_store_files	request/E1	40	-	e-e1	H の struct-store.tsv の after 40 と同じ。
+dispatcher_store_hits	request/E1	759	-	e-e1	改行をまたぐ self\n.store も数える。H の struct-store.tsv の after 759 と同じ。
+dispatcher_config_files	request/E1	31	-	e-e1	H の struct-store.tsv の after 31 と同じ。
+dispatcher_config_hits	request/E1	227	-	e-e1	H の struct-store.tsv の after 227 と同じ。
+dispatcher_store_files	logical/E1	44	-	e-e1	H の struct-store.tsv の after 44 と同じ。
+dispatcher_store_hits	logical/E1	791	-	e-e1	H の struct-store.tsv の after 791 と同じ。
+dispatcher_config_files	logical/E1	35	-	e-e1	H の struct-store.tsv の after 35 と同じ。
+dispatcher_config_hits	logical/E1	233	-	e-e1	H の struct-store.tsv の after 233 と同じ。
+dispatch_crate_files	crate/E2	138	-	e-e2	分母。task-dispatch/src の非試験 file。E の metrics.md の HEAD の値 138 と同じ。
+dispatch_crate_store_hits	crate/E2	683	-	e-e2	E の metrics.md の HEAD の値 683 と同じ。
+dispatch_crate_config_hits	crate/E2	240	-	e-e2	E の metrics.md の HEAD の値 240 と同じ。
+dispatcher_sqlitestore_files	request/E2	26	-	e-e2	SqliteStore を書く dispatcher/ の非試験 file。E の metrics.md の HEAD の値 26 と同じ。
+dispatcher_sqlitestore_files	logical/E2	28	-	e-e2	E の metrics.md の HEAD の値 28 と同じ。
+loc_product_lines	repo/C12	375921	-	a-c12	H の loc-cost.tsv の loc_prod_all の after 375921 と同じ。source-size-report の script・toml は base と bc665168 で差分 0。
+loc_product_rust_lines	repo/C12	331230	-	a-c12	H の loc-cost.tsv の loc_prod_rust の after 331230 と同じ。source-size-report の script・toml は base と bc665168 で差分 0。
+loc_own_total_with_tests	repo/C12	1031506	-	a-c12	H の loc-cost.tsv の loc_own_total の after 1031506 と同じ。source-size-report の script・toml は base と bc665168 で差分 0。

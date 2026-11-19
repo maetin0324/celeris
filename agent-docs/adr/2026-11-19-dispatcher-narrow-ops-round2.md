@@ -265,3 +265,42 @@ R3 は試験を足さない。1 回化は振る舞いを変えないので、守
   同じ並びを持つ（store 4・config 4）。同じ file に 1 つの private 関数を置けば store −2・config −2 になるが、新しい helper の減りを数えるかの規則
   （「同じ並びが 2 か所以上あり、helper の後の総数が減るなら純減に数える」など）を先に決める必要がある。
 - `dispatch_run.rs` の `apply_plan_invalid_atomic` と `decision_self_hold` は同じ流れで同じ決定の一覧を読む。まとめるには `dispatch_run.rs` から見た引数を変える（R3 の D3 の外）。
+
+## 付記（2026-11-19、WorkUnit `after`）: 実測の結果
+
+測定は [measure.md](../progress/2026-11-19-arch-v4-h-r3/measure.md)、値は [metrics.tsv](../progress/2026-11-19-arch-v4-h-r3/metrics.tsv)。
+before は base.txt の sha（R3 の開始時の `git merge-base HEAD main`）、after は WorkUnit `cos`・`tree`・`verdict` を統合した HEAD。
+`measure.sh verify`・`gain`・`shrink` は exit 0。
+
+### 実測の値
+
+| metric | request/C3 | request/E1 | logical/C3 | logical/E1 |
+|---|---|---|---|---|
+| `dispatcher_files` | 69 → 69 | 69 → 69 | 76 → 76 | 76 → 76 |
+| `dispatcher_store_files` | 38 → 38 | 40 → 40 | 42 → 42 | 44 → 44 |
+| `dispatcher_store_hits` | 633 → 630（−3） | 759 → 756（−3） | 661 → 658（−3） | 791 → 788（−3） |
+| `dispatcher_config_files` | 31 → 31 | 31 → 31 | 35 → 35 | 35 → 35 |
+| `dispatcher_config_hits` | 220 → 212（−8） | 227 → 219（−8） | 226 → 218（−8） | 233 → 225（−8） |
+
+- file ごと（C3）: `tree_units.rs` store 56 → 55、`cos_chat/root_done.rs` store 16 → 14、`cos_chat/triage.rs` config 4 → 1、`cos_chat/fallback.rs` config 9 → 4。
+  E1 も同じ差。crate の非試験 138 file のうち差のある file はこの 4 つだけ。
+- crate 全体（E2）: store 683 → 680、config 240 → 232（dispatcher/ と同じ差）。SqliteStore を書く file 26 → 26（論理 28 → 28）。分母 69・76・138 は同じ。
+- production の行（C12、分類規則は base に固定）: 375921 → 375914（−7。root_done.rs −5、tree_units.rs −2）。Rust の production も −7、試験を含む自前の総量も −7。
+- 「成果に数える条件」1〜5 はすべて満たす（measure.md §3）。反例試験・構造の guard は 144 本が pass（measure.md §4。表の 12 本を含む）。
+
+### ADR の表と違ったこと
+
+- 数は表の見込み（file ごと・4 scope とも store −3・config −8）と同じ。違いは形だけで、数と振る舞いは変わらない。
+  - `fallback.rs` の 553 行: 表は「`if summary_on` にする」としたが、WorkUnit `cos` は if を外し、`handed` に入れる腕を `Ok(Some(report)) if summary_on` にした。
+    `summary_on` が偽なら `handed` は空で `queue_summary_request` を呼ばないので、前と同じ。
+  - `handoff_message`・`fallback_one` に足した引数の名は、表の `summary_on` でなく `summary_requested: bool`（`handoff_text` の引数の名と同じ）。
+  - 表は行の増減を見込んでいなかった。実測は 4 file の計で −7 行（D5 の「行を増やさない」を満たす）。
+- 表が「残す」とした参照は、実装でも全部残った（`cos.md`・`tree.md` の「残した参照と理由」）。D6 のとおり `review_verdict.rs`・`work_units.rs` は変わっていない。
+
+### 未達
+
+- 減りは小さい: request/C3 で store −3（633 の 0.5 %）・config −8（220 の 3.6 %）。参照を持つ file の数（store 38・config 31）は減っていない。
+  task の目的が挙げた `tree_units.rs` の config 19 は減っていない（表のとおり、どれも別の値か owner の操作 1 回で、D1 の手では減らない）。
+- `review_verdict.rs`（store 32・config 3）と `work_units.rs`（store 58・config 14）は D6 により実装していない。次の task の条件は上の「review_verdict.rs と work_units.rs の設計と決定」のとおり。
+- 「提案（R3 の範囲の外）」の 2 つ（`build_child_task` の同じ並びの helper で store −2・config −2、`dispatch_run.rs` の決定の一覧の 2 回の読み）は、規則と引数の変更の決定が要るので未着手。
+- release gate は未実施（R3 を含む release はまだ無い。`release.sh` は人が行う）。

@@ -207,8 +207,8 @@ WorkUnit の objective が指定した command:
 | `crates/task-api/src/handlers/task_actions.rs` | `retry_op`・`patch_task_op`・`create_comment_op`・`reopen_op`・`rereview_op` |
 | `crates/task-api/src/handlers/tasks.rs` | `create_task_op`・`create_task_linked_op` |
 | `crates/task-api/src/integrate_task.rs` | `integrate_task_op` |
-| `crates/task-api/src/knowledge.rs` | `record_op`・`accept_op`・`reject_op`（`put_page_op` は下の完全修飾の書き方） |
-| `crates/task-api/src/lifecycle.rs` | `project_action_op`・`task_pause_op` |
+| `crates/task-api/src/knowledge.rs` | `accept_op`・`reject_op`・`put_page_op`（`put_page_op` は下の完全修飾の書き方。2026-11-19 に子 H が子 F の後の関数に合わせた） |
+| `crates/task-api/src/lifecycle.rs` | `task_pause_op`（2026-11-19 に子 H が子 F の後の関数に合わせた） |
 | `crates/task-api/src/model_catalog.rs` | `put_override_op`・`delete_override_op` |
 | `crates/task-api/src/repos.rs` | `create_repo_op`・`patch_repo_op`・`delete_repo_op` |
 | `crates/task-api/src/skills.rs` | `put_skill_op`・`delete_skill_op` |
@@ -225,7 +225,7 @@ WorkUnit の objective が指定した command:
 | `crates/task-api/src/cron_jobs.rs` | `type Audit<'a> = Option<&'a OperationAudit>` を受ける `create_job_op`・`update_job_op`・`delete_job_op`・`pause_job_op`・`resume_job_op`・`run_job_op` と補助の `reject_with`・`resolve_for` |
 | `crates/task-api/src/execution.rs` | `execution_plan_adopt_op`・`tree_adopt_op`・`phase_gate_op`・`decompose_op` |
 | `crates/task-api/src/handlers/clusters.rs` | `put_local_settings_op`・`put_cluster_settings_op` |
-| `crates/task-api/src/handlers/org.rs` | `org_commit`（D の `usecase` が消す） |
+| `crates/task-api/src/handlers/org.rs` | `org_commit`（D の `usecase` が消した。2026-11-19 の main に無く、広い command に当たらない） |
 | `crates/task-api/src/inbox_notifications.rs` | `notice_read_op`・`notice_read_all_op` |
 
 `usecase` の後の予想（約束ではない。`metrics` か `close` が測る）: 狭い command は 14 のまま（`handlers/org.rs` はもともと入らない。`skills.rs` は

@@ -1,0 +1,46 @@
+metric	scope	before	after	checker	note
+rusqlite_prod_files	prod-excl-task-core-store	74	75	a-c4	+1 は crates/task-api/src/org_write.rs（D が足した共有 use-case。use rusqlite::Transaction）。crate 別 before task-core 42 task-api 16 task-ops 8 celeris 4 ほか 4、after task-api 17（他は同じ）
+sql_string_prod_files	prod-excl-task-core-store	50	50	a-c4	file の集合も同じ（task-core 38 task-api 4 task-ops 3 celeris 3 llm-proxy 1 celeris-mcp 1）
+conn_arg_task_core	crates/task-core/occ	320	320	a-c6	&Connection・&Transaction 型の引数・欄の行（production。inline の cfg(test) を含む近似）
+conn_arg_task_core	crates/task-core/files	76	76	a-c6	同じ grep の file 数
+conn_arg_task_core_store	crates/task-core/src/store/occ	205	205	a-c6	task-core の内数
+conn_arg_task_core_store	crates/task-core/src/store/files	49	49	a-c6	task-core の内数。A は file 数を書いていない（H が同じ grep で数えた）
+conn_arg_task_api	crates/task-api/occ	14	15	a-c6	+1 は org_write.rs:77 の tx: &Transaction（D の apply が呼び手の transaction を受ける）
+conn_arg_task_api	crates/task-api/files	9	10	a-c6	+1 は org_write.rs
+conn_arg_task_ops	crates/task-ops/occ	7	7	a-c6	lifecycle.rs の apply_project_change_tx の引数が &rusqlite::Connection から &rusqlite::Transaction に変わった（F）。数は同じ
+conn_arg_task_ops	crates/task-ops/files	4	4	a-c6	
+conn_fn_closure	crates/task-core	13	13	a-c6	補助（A §4 の Fn(&Connection) の closure 引数）
+conn_fn_closure	crates/task-api	4	4	a-c6	補助
+conn_fn_closure	crates/task-ops	5	4	a-c6	補助。−1 は task-ops/src/lifecycle.rs の apply_project_action の also: F（F が消した）
+sqlitestore_impl	plain	102	102	a-c6	impl SqliteStore の block（88 file のまま）
+sqlitestore_impl	path	105	105	a-c6	path 付きの impl crate::store::SqliteStore 3 を含む
+sqlitestore_impl	trait	6	6	a-c6	補助。impl … for SqliteStore の 6 件は同じ
+sqlitestore_pub	plain	633	631	a-c6	括弧を数える近似（A §6 の 6）
+sqlitestore_pub	path	636	634	a-c6	path 付きの 3 block を含む
+sqlitestore_pub_crate	plain	67	67	a-c6	pub(crate)・pub(super)・pub(in …)
+sqlitestore_pub_crate	path	67	67	a-c6	
+sqlitestore_private	plain	42	41	a-c6	補助
+sqlitestore_rdeps	normal-transitive	11	11	a-c7	task-core を通常依存で直接・間接に使う workspace の crate（cargo metadata --offline。宣言 normal 35・dev 14 は同じ）
+dispatcher_files	request/C3	69	69	a-c3	分母。dispatcher/ の非試験 file
+dispatcher_files	request/E1	69	69	e-e1	分母。dispatcher/ の非試験 file
+dispatcher_files	logical/C3	76	76	a-c3	分母。69 − project_decider_ts.rs ＋ #[path] の 8 file（after で選び直して同じ）
+dispatcher_files	logical/E1	76	76	e-e1	分母。69 − project_decider_ts.rs ＋ #[path] の 8 file（after で選び直して同じ）
+dispatcher_store_files	request/C3	44	38	a-c3	−6（E）
+dispatcher_store_files	request/E1	46	40	e-e1	−6（E）。改行をまたぐ self\n.store も数える
+dispatcher_store_files	logical/C3	48	42	a-c3	−6（E）
+dispatcher_store_files	logical/E1	50	44	e-e1	−6（E）
+dispatcher_store_hits	request/C3	633	633	a-c3	出現数は同じ（対象 file の参照が入口の file に移った）
+dispatcher_store_hits	request/E1	759	759	e-e1	
+dispatcher_store_hits	logical/C3	661	661	a-c3	
+dispatcher_store_hits	logical/E1	791	791	e-e1	
+dispatcher_config_files	request/C3	35	31	a-c3	−4（E）
+dispatcher_config_files	request/E1	35	31	e-e1	−4（E）
+dispatcher_config_files	logical/C3	39	35	a-c3	−4（E）
+dispatcher_config_files	logical/E1	39	35	e-e1	−4（E）
+dispatcher_config_hits	request/C3	218	220	a-c3	+2 は rustfmt で割れていた self\n.config 2 か所を 1 行にした分（E）。E1 では同じ
+dispatcher_config_hits	request/E1	227	227	e-e1	
+dispatcher_config_hits	logical/C3	224	226	a-c3	+2 は上と同じ
+dispatcher_config_hits	logical/E1	233	233	e-e1	
+applied_narrow	crates/task-api/src	14	14	d-narrow	git grep -l 'Option<&OperationAudit>'。file の集合も同じ
+applied_wide	crates/task-api/src	19	18	d-wide	−1 は handlers/org.rs（D）。回帰条件 18 以下を満たす。型の定義側 cos/operations.rs を除く操作の側は 17
+applied_functions	crates/task-api/src	58	55	h-awk	補助。広い command の file で Option<&…OperationAudit> か Audit<'_> を受ける関数（file_op を含む）。−3 は org_commit（D）・record_op・project_action_op（F）

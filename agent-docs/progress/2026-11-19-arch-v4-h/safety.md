@@ -1,10 +1,24 @@
 ---
 title: アーキ v4 H safety — 安全不変条件の試験（crate と filter を絞った再実行）と release gate の記録
 tasks: [01M7MZTKBPZPQE4XN451F8X84F]
-status: running
+status: done
 updated: 2026-11-19
+completed: 2026-11-19
 ---
 # safety（WorkUnit）
+
+## 0. 結論
+
+- 安全不変条件 10 件と arch_v4_counterexamples の計 11 行（[safety.tsv](safety.tsv)）: pass 11・fail 0・untested 0。passed は延べ 563 件
+  （`cex_lease_restart` 12 件と `cex_same_tick` 3 件は lease_atomicity と arch_v4_counterexamples の両方に数えた）。
+- 未達の不変条件: 無し。ただし 9 件は userns の env が無いと検査の前に return して pass に数えられる（実質は未検査）:
+  sqlite_source の task-worker の `db_guard` 7 件と、credential の celeris-credentiald の `injection_peer_uid` 2 件。
+- D・E・F の反例試験（arch_v4_counterexamples）: 81 passed、3 つの command がどれも exit 0。
+- release gate（記録を読んだだけ。release.sh・verify.sh・promote.sh・status.sh は走らせていない）: いまの current は release 1680de5cd1b4
+  （G の最後の commit「integrate wu/close (phase close)」2026-11-19T10:37:13Z）で、B〜G の最後の commit をすべて含む。
+  この release は gate ok（17 段がどれも exit 0、nextest 8525 passed・fail 0）、verify ok（6 検査 ok）で、2026-11-19T11:30:18Z に昇格した。
+  E・F・G を最初に含んだ release は gate・verify・昇格を記録で確かめた。B・C・D を最初に含んだ release（48b700ede57f・f85df0209504・eb1244bb5e8d）は
+  promote ログで昇格を確かめたが、release の dir が掃除で消えていて gate・verify の記録は未確認（詳細は下の「release gate」節）。
 
 不変条件ごとに、`docs/architecture-map.md` の試験の列と、`CLAUDE.md`・review 方針（`scripts/dev/repo-health/profiles/celeris.toml` の `[review]` 節）が挙げる根拠の file から試験を選んだ。
 試験は `cargo nextest list -p <crate> -E '<filter>'` で実在を確かめてから、`cargo nextest run -p <crate> -E '<filter>'` で走らせた。
@@ -12,7 +26,7 @@ workspace 全体・`--workspace`・doc test・e2e は走らせず、`CELERIS_USE
 結果の表は [safety.tsv](safety.tsv)（列は `invariant result command passed note`）。
 
 この節までは unit core（task-core・task-ops・task-dispatch・task-worker の 6 件）が書いた。
-後の unit api（ACL・credential・CoS 監査・selfdeploy の権限・D・E・F の反例試験）と record（release gate の記録）が同じ 2 file に行と節を足す。
+後の unit api（ACL・credential・CoS 監査・selfdeploy の権限・D・E・F の反例試験）と record（「0. 結論」と release gate の記録）が同じ file に節を足した。record は safety.tsv の行を変えていない。
 
 実行した tree: 作業ブランチの HEAD（基準は `$CELERIS_WU_BASE`、統合先は H の task branch）。この unit は crates/・scripts/・web/ を変えていない。
 nextest の summary の `skipped` は filter から外れた試験の数で、実行時の skip ではない。各 filter の `--run-ignored only` の件数はどれも 0 だった。
@@ -260,3 +274,101 @@ fail は 0 件、ignored は 0 件（各 filter の `--run-ignored only` の件�
   cargo nextest run -p task-api --test cos_delivery_suite tx_boundary_contract
   cargo nextest run -p task-dispatch -E 'test(store_access_guard) | test(structure_guard) | test(cex_) | test(write_set_)'
   ```
+
+## release gate
+
+ここから下は unit record が書いた。release gate は記録を読んだだけで、`release.sh`・`verify.sh`・`promote.sh`・`status.sh` は走らせていない。本番の file・DB・systemd には触れていない。
+読んだのは `docs/ops/selfdeploy.md` §0〜§4 が書く記録（`~/.local/celeris/releases/<sha12>/` の manifest.json・gate.json・verify.json・promoted.json・promote_failed.json、
+`releases/.build/<sha12>/gate.json`、current と previous の symlink）と、`promote.sh` が書く `/local/celeris/state/logs/promote-*.log` で、読んだのは 2026-11-19。
+この節の sha12 はどれも `git merge-base --is-ancestor <sha12> HEAD` が 0（exit 0）だった。
+
+### 読んだ command と出力の要点
+
+- `ls -la ~/.local/celeris/releases/` → release の dir は 4 つ（1680de5cd1b4・1c69c955f0fb・7014d24222c4・bb772ffca8ec）。`releases` は `/local/celeris/state/releases` への symlink。
+- `readlink /local/celeris/state/current /local/celeris/state/previous` → `releases/1680de5cd1b4`・`releases/7014d24222c4`（`~/.local/celeris/current`・`previous` はこの 2 つへの symlink）。
+- `python3 -I -m json.tool ~/.local/celeris/releases/<sha12>/{manifest,gate,verify,promoted}.json`（4 dir）→ 下の表。
+- `ls ~/.local/celeris/releases/*/promote_failed.json` → 無し（exit 2）。
+- `ls -lt ~/.local/celeris/releases/.build/`（`/var/lib/celeris/release-build/.build` への symlink）→ gate が落ちた sha の dir は最も新しいもので 2026-11-12。2026-11-17 以降の sha の dir は無い（`tree` は作業ツリー）。
+- `grep -E 'release=|current  ->|promoted [0-9a-f]{12}' /local/celeris/state/logs/promote-2026111{7,8,9}-*.log` → 下の昇格の連鎖。`ls /local/celeris/state/logs | grep rollback` → 無し。
+- `grep -E '^\s+Summary \[' ~/.local/celeris/releases/<sha12>/gate-logs/cargo-test.log` → nextest の件数。
+
+### B〜G の最後の commit
+
+main の履歴（`git log --first-parent main`）と各 task の進捗ファイルから特定した。D・E・F は task branch に main を取り込む merge の commit の後に main へ入った。祖先の判定には task 自身の最後の統合の commit を使った（後の merge の commit を含む release はこの commit も含む）。
+
+| task | 進捗ファイル | 最後の commit（件名・日時 UTC） | 特定の根拠 |
+|---|---|---|---|
+| B（01M7MZTKAZQY72EX2R4RQ1WVWF） | `2026-11-17-arch-v4-b.md` | 「integrate wu/closeout (phase closeout)」2026-11-17T21:45:07Z | この commit が B の進捗を done にする。次の commit から C の前提の task |
+| C（01M7MZTKB29VF5TX7FCQ15XEMW） | `2026-11-17-arch-v4-c.md` | 「integrate wu/loc-fix (phase fix)」2026-11-18T10:12:48Z | C の進捗と `loc-fix.md` を変える。D の進捗が before を「C の統合の後」のこの件名の commit と書く |
+| D（01M7MZTKB4RYM80S6CT3RST2N9） | `2026-11-18-arch-v4-d.md` | 「integrate wu/close (phase close)」2026-11-18T19:55:42Z | D の進捗を done にする。後に「Merge commit '…' into celeris/01M7MZTKB4RYM80S6CT3RST2N9」2026-11-18T20:08:59Z |
+| E（01M7MZTKB6GQ241F6JJYSPJNS1） | `2026-11-18-arch-v4-e.md` | 「integrate wu/close (phase close)」2026-11-18T22:21:03Z | E の進捗を done にする。後に「Merge commit '…' into celeris/01M7MZTKB6GQ241F6JJYSPJNS1」2026-11-18T22:31:07Z |
+| F（01M7MZTKB8A4NJQEEA35Q4G5JV） | `2026-11-18-arch-v4-f.md` | 「integrate wu/close (phase close)」2026-11-19T04:18:27Z | F の進捗を done にする。後に「Merge commit '…' into celeris/01M7MZTKB8A4NJQEEA35Q4G5JV」2026-11-19T04:30:48Z |
+| G（01M7MZTKBKXKEVBWS87PS5J9NK） | `2026-11-19-arch-v4-g.md` | 「integrate wu/close (phase close)」2026-11-19T10:37:13Z | G の進捗を done にする。G fix（01M7SJ2W618PYF6NAY721RJE07）の「integrate wu/fix (phase fix)」2026-11-19T10:28:48Z の後。main の先頭 |
+
+### 昇格の連鎖（2026-11-17〜11-19）と B〜G を含むか
+
+「含む」は `git merge-base --is-ancestor <B〜G の最後の commit> <release の commit>` が 0 のもの。昇格は promote ログの `promoted <sha12> (mode=live)` の行と、残っている release の promoted.json（status succeeded・exit_code 0）で確かめた。
+gate・verify の「記録 ok」は gate.json・verify.json の `ok: true`。「未確認」は release の dir も `.build/<sha12>/` も無く、gate.json・verify.json を読めないもの。
+
+| release | release の commit（件名・日時 UTC） | 昇格（UTC、from） | 含む task | gate | verify |
+|---|---|---|---|---|---|
+| 48b700ede57f | 「integrate wu/closeout (phase closeout)」2026-11-17T21:45:07Z | 2026-11-17T22:28:42Z、from f549b50b7ccc | B | 未確認 | 未確認（promote ログに `verify.live_ok=true`） |
+| b2fe0a5e920f | 「repair: PathClass.invariants の進捗に test-affected の結果を書く」2026-11-18T02:25:45Z | 2026-11-18T03:16:41Z | B | 未確認 | 未確認（同） |
+| f85df0209504 | 「integrate wu/loc-fix (phase fix)」2026-11-18T10:12:48Z | 2026-11-18T12:18:41Z | B・C | 未確認 | 未確認（同） |
+| ed43a4abb7bf | 「integrate wu/fix-test (phase fix)」2026-11-18T13:42:24Z | 2026-11-18T15:25:24Z | B・C | 未確認 | 未確認（同） |
+| 3033e0228853 | 「Merge commit '…' into celeris/01M7Q70NDQAK1KKXHY6WT027QZ」2026-11-18T16:18:10Z | 2026-11-18T17:17:11Z | B・C | 未確認 | 未確認（同） |
+| eb1244bb5e8d | 「Merge commit '…' into celeris/01M7MZTKB4RYM80S6CT3RST2N9」2026-11-18T20:08:59Z | 2026-11-18T21:10:04Z | B・C・D | 未確認 | 未確認（同） |
+| 1c69c955f0fb | 「Merge commit '…' into celeris/01M7MZTKB6GQ241F6JJYSPJNS1」2026-11-18T22:31:07Z | 2026-11-18T23:25:35Z、from eb1244bb5e8d | B〜E | 記録 ok（nextest 8515 passed） | 記録 ok |
+| bb772ffca8ec | 「進捗: rejected-worker-decisions」2026-11-19T00:08:00Z | 2026-11-19T01:25:29Z、from 1c69c955f0fb | B〜E | 記録 ok（nextest 8517 passed） | 記録 ok |
+| 7014d24222c4 | 「Merge commit '…' into celeris/01M7MZTKB8A4NJQEEA35Q4G5JV」2026-11-19T04:30:48Z | 2026-11-19T05:35:55Z、from bb772ffca8ec | B〜F | 記録 ok（nextest 8525 passed） | 記録 ok |
+| 1680de5cd1b4 | 「integrate wu/close (phase close)」2026-11-19T10:37:13Z | 2026-11-19T11:30:18Z、from 7014d24222c4。いまの current | B〜G | 記録 ok（nextest 8525 passed） | 記録 ok |
+
+残っている 4 release の記録の中身（4 つとも同じ形）:
+
+- manifest.json: `gate_ok: true`、`schema_version: 126`、web の 7 段が ok、browser_ledger ok。
+- gate.json: `ok: true`・`failed_step` 空。17 段（cargo-workspace-clean・cargo-fmt-check・control-ts-install・control-ts-bundle・script-bundle-verify・cargo-test・
+  script-bundle-tests・cargo-clippy・source-size-report・cargo-build・web の 7 段）がどれも exit 0。cargo_test は `nextest_exit 0`・`doctest_exit 0`・`failed 0`・`userns: true`。
+  nextest の件数（gate-logs/cargo-test.log の Summary 行）: 1c69c955f0fb 8515 passed・bb772ffca8ec 8517 passed・7014d24222c4 と 1680de5cd1b4 は 8525 passed、どれも 22 skipped・fail 0。
+- verify.json: `ok: true`・`live_ok: true`。検査 1（start-and-migrate）・2（counts-match）・3（main-gets）・5（n-1-compat）・6（smoke）・4d（web-app-start）の 6 件がどれも ok。
+- promoted.json: `status: succeeded`・`exit_code 0`・`mode: live`。actor は 4 件とも `external_operator:claude-code-ops-session`、`policy_ref: memory:promote-without-asking`。
+  `included.tasks` は 1c69c955f0fb が E（01M7MZTKB6GQ241F6JJYSPJNS1）、bb772ffca8ec が 01M7RFVV60RQTDKYEWAEH4YYGT、7014d24222c4 が F（01M7MZTKB8A4NJQEEA35Q4G5JV）、1680de5cd1b4 が G（01M7MZTKBKXKEVBWS87PS5J9NK）。
+
+### B〜G ごとの結果
+
+| task | 最初に含んだ release | その release の gate | verify | 昇格 | いまの current（1680de5cd1b4） |
+|---|---|---|---|---|---|
+| B | 48b700ede57f（「integrate wu/closeout (phase closeout)」2026-11-17） | 未確認 | 未確認 | した（2026-11-17T22:28:42Z） | 含む。gate ok・verify ok・昇格済み |
+| C | f85df0209504（「integrate wu/loc-fix (phase fix)」2026-11-18） | 未確認 | 未確認 | した（2026-11-18T12:18:41Z） | 含む。同上 |
+| D | eb1244bb5e8d（D の branch への merge、2026-11-18） | 未確認 | 未確認 | した（2026-11-18T21:10:04Z） | 含む。同上 |
+| E | 1c69c955f0fb（E の branch への merge、2026-11-18） | ok | ok | した（2026-11-18T23:25:35Z） | 含む。同上 |
+| F | 7014d24222c4（F の branch への merge、2026-11-19） | ok | ok | した（2026-11-19T05:35:55Z） | 含む。同上 |
+| G | 1680de5cd1b4（「integrate wu/close (phase close)」2026-11-19） | ok | ok | した（2026-11-19T11:30:18Z） | この release 自身 |
+
+B・C・D の最初の release の gate・verify を「未確認」とした理由: `~/.local/celeris/releases/<sha12>/` と `releases/.build/<sha12>/` がどちらも無く、gate.json・verify.json を読めない。
+release.sh の掃除が current・previous・検証済みの新しい 3 件だけを残す（`scripts/selfdeploy/release.sh` の「掃除」の節）ので、その後の release を作ったときに消えたとみられる。
+ただし、次の 3 つから gate と verify は ok だったと推定できる（記録そのものは読めていない）:
+promote ログに 3 件とも `promoted <sha12> (mode=live)` があり、`promote.sh` は verify.json の `ok` が真でなければ止まる（同じ script の「is not ok — refusing to promote」）。
+`verify.sh` は gate.json の `ok` が真でなければ止まる（「is not ok; refusing to verify」）。どちらの検査も 3 つの release の commit の版の script にある（`git show <commit>:scripts/selfdeploy/promote.sh`）。
+`release.sh` は gate が落ちると release の dir を作らない（`docs/ops/selfdeploy.md` §2）。
+B・C・D は後の 4 release（1c69c955f0fb 以降）にも含まれ、その gate・verify・昇格は記録で確かめた。
+
+人が確かめる読み取りだけの command（B・C・D の最初の release）:
+
+```
+ls -la ~/.local/celeris/releases/48b700ede57f ~/.local/celeris/releases/f85df0209504 ~/.local/celeris/releases/eb1244bb5e8d ~/.local/celeris/releases/.build/
+grep -vE 'preview:' /local/celeris/state/logs/promote-20261117-222401.log /local/celeris/state/logs/promote-20261118-121753.log /local/celeris/state/logs/promote-20261118-210838.log
+git -C ~/workspace/agent-platform show 48b700ede57f:scripts/selfdeploy/promote.sh | grep -n 'refusing to promote'
+```
+
+gate.json の写しが別の場所（`/local/celeris/state/backups`・release を作った run の成果物）に残っているかは調べていない（未確認）。
+
+### 気づいた点（直していない）
+
+- gate.json の `cargo_test.passed` は 4 release とも 3、`ignored` は 24 で、nextest の通過数（8515〜8525）を含まない。値は doc test の通過数 3（cargo-test.log の `test result:` 14 行の和）と、
+  nextest の skipped 22 と doc test の ignored 2 の和に一致する。nextest の件数は gate-logs/cargo-test.log の Summary 行にだけある。
+- gate.json の `cargo_test.userns` は 4 release とも true。上の 9 件（userns の env が無いと return する試験）が release gate で検査まで進んだかは、cargo-test.log が通過した試験を 1 件ずつ出さないので未確認。
+
+## 提案
+
+- release.sh の gate.json の `cargo_test` に nextest の passed・skipped を入れる（いまの `passed`・`ignored` は doc test の値と nextest の skipped の和に見える）。読む側（release の記録を読む検査・報告）が gate log を grep しなくて済む。
+- release の掃除で消える gate.json・verify.json・promoted.json の要約を、`/local/celeris/state/logs` の promote ログのように消えない場所へ 1 行ずつ残す。B・C・D のように後から gate・verify を記録で確かめられない release を無くす。

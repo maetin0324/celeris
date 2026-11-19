@@ -20,7 +20,7 @@ use std::sync::Arc;
 use axum::extract::{RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};
 
-use crate::handlers::{ApiResult, json_response};
+use crate::http_io::{ApiResult, json_response};
 use crate::middleware::require_admin;
 use crate::problem::{ApiProblem, store_problem};
 use crate::state::ApiState;
@@ -140,7 +140,7 @@ pub const BRANCH_COMMITS_LIMIT: usize = 500;
 
 /// `GET /releases`。
 pub(crate) async fn list(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> ApiResult {
-    crate::handlers::no_query(&raw)?;
+    crate::http_io::no_query(&raw)?;
     let instances = state
         .blocking(move |store| store.instance_list().map_err(store_problem))
         .await?;
@@ -172,11 +172,11 @@ pub(crate) async fn list(State(state): State<ApiState>, RawQuery(raw): RawQuery)
 pub(crate) async fn promote(
     State(state): State<ApiState>,
     caller: crate::Caller,
-    crate::handlers::Params(sha12): crate::handlers::Params<String>,
+    crate::http_io::Params(sha12): crate::http_io::Params<String>,
     headers: HeaderMap,
     RawQuery(raw): RawQuery,
 ) -> ApiResult {
-    crate::handlers::no_query(&raw)?;
+    crate::http_io::no_query(&raw)?;
     require_admin(&state, &headers)?;
     let Some(source) = state.inner.releases.clone() else {
         return Err(ApiProblem::release_not_promotable(
@@ -196,7 +196,7 @@ pub(crate) async fn promote(
     };
     let requested = sha12.clone();
     let accepted = tokio::task::spawn_blocking(move || {
-        crate::cos::operations::effect_result(promote_effect(
+        crate::problem::effect_result(promote_effect(
             source.as_ref(),
             &requested,
             &DeploymentContext::authenticated(&sha12, &actor),
@@ -213,7 +213,7 @@ pub(crate) fn promote_effect(
     source: &dyn ReleaseSource,
     sha12: &str,
     audit: &DeploymentContext,
-) -> crate::cos::operations::Effect<ReleasePromoteAccepted> {
+) -> crate::problem::Effect<ReleasePromoteAccepted> {
     match source.promote(sha12, audit) {
         Ok(accepted) => {
             // Record the caller provenance used by the detached script.
@@ -240,10 +240,10 @@ pub(crate) fn promote_effect(
 /// `GET /releases/{sha12}/promotion-preview`（読み取り。ADR 2026-10-04-release-notes）。
 pub(crate) async fn promotion_preview(
     State(state): State<ApiState>,
-    crate::handlers::Params(sha12): crate::handlers::Params<String>,
+    crate::http_io::Params(sha12): crate::http_io::Params<String>,
     RawQuery(raw): RawQuery,
 ) -> ApiResult {
-    crate::handlers::no_query(&raw)?;
+    crate::http_io::no_query(&raw)?;
     let Some(source) = state.inner.releases.clone() else {
         return Err(ApiProblem::release_not_found(&sha12));
     };
@@ -263,7 +263,7 @@ pub(crate) async fn deliveries(
     State(state): State<ApiState>,
     RawQuery(raw): RawQuery,
 ) -> ApiResult {
-    crate::handlers::no_query(&raw)?;
+    crate::http_io::no_query(&raw)?;
     let list = state
         .blocking(move |store| store.delivery_list().map_err(store_problem))
         .await?;

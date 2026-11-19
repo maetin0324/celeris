@@ -29,7 +29,7 @@ use super::operations::{
 };
 use super::triage_view::{self, CosInboxItem};
 use super::{CosCaller, cos_only, reject_identity_claims};
-use crate::handlers::{ApiResult, Params, json_response};
+use crate::http_io::{ApiResult, Params, json_response};
 use crate::inbox_notifications::{InboxAnswerBody, delegated_request, human_feed};
 use crate::problem::{ApiProblem, store_problem};
 use crate::query::QueryParams;
@@ -463,13 +463,13 @@ async fn resolve(
     RawQuery(raw): RawQuery,
     body: Body,
 ) -> ApiResult {
-    crate::handlers::no_query(&raw)?;
+    crate::http_io::no_query(&raw)?;
     let Some(Extension(caller)) = caller else {
         return Err(cos_only(
             "/api/v1/cos/inbox/{i}/resolve accepts only a CoS run credential; people answer in /api/v1/inbox",
         ));
     };
-    let value: Value = crate::handlers::read_json(body, false).await?;
+    let value: Value = crate::http_io::read_json(body, false).await?;
     reject_identity_claims(&value)?;
     let req: ResolveBody = serde_json::from_value(value.clone()).map_err(body_problem)?;
     for (name, field) in [

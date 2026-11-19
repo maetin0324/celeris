@@ -19,7 +19,7 @@ use tokio::sync::mpsc;
 use tokio::time::{Instant, MissedTickBehavior};
 
 use super::{authorize, chat_problem};
-use crate::handlers::{ApiResult, Params, json_response};
+use crate::http_io::{ApiResult, Params, json_response};
 use crate::problem::ApiProblem;
 use crate::query::QueryParams;
 use crate::sse::{CHANNEL_CAPACITY, closed, send};

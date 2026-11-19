@@ -17,6 +17,8 @@ use task_ops::daemon::DaemonSnapshot;
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, watch};
 
+/// ADR 2026-11-19-cos-handlers-remaining-edges D2: account の plan と作用（HTTP の route と CoS の操作が共有する）。
+mod account_write;
 mod accounts;
 mod admin;
 mod approvals;
@@ -45,6 +47,8 @@ pub mod execution;
 mod files;
 mod handlers;
 pub mod harnesses;
+/// ADR 2026-11-19-cos-handlers-remaining-edges D1: HTTP の道具（本文の読み取り・JSON の応答・path の値・query の拒否）。
+mod http_io;
 /// ADR-0044 D6（Phase 55）: 案件・途中目標の中止・一時停止・アーカイブ。
 mod human_epoch;
 mod inbox_notifications;

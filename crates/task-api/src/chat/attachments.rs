@@ -15,7 +15,7 @@ use time::OffsetDateTime;
 use tokio::io::AsyncWriteExt;
 
 use crate::chat::{authorize, chat_json, chat_problem};
-use crate::handlers::{ApiResult, Params, json_response, no_query};
+use crate::http_io::{ApiResult, Params, json_response, no_query};
 use crate::problem::ApiProblem;
 use crate::state::ApiState;
 
@@ -359,7 +359,7 @@ async fn delete(
 ) -> ApiResult {
     no_query(&raw)?;
     authorize(&state, &headers)?;
-    crate::cos::operations::effect_result(delete_effect(&state, &id))?;
+    crate::problem::effect_result(delete_effect(&state, &id))?;
     let mut response = axum::http::Response::new(Body::empty());
     *response.status_mut() = StatusCode::NO_CONTENT;
     Ok(response)
@@ -519,7 +519,7 @@ fn refused(err: &AttachmentError) -> bool {
 }
 
 /// The C effect result of an attachment store call (ADR 2026-10-09-cos-operations-external-effects).
-fn attachment_effect<T>(result: Result<T, AttachmentError>) -> crate::cos::operations::Effect<T> {
+fn attachment_effect<T>(result: Result<T, AttachmentError>) -> crate::problem::Effect<T> {
     match result {
         Ok(value) => Ok(Ok(value)),
         Err(err) if refused(&err) => Ok(Err(error(err))),
@@ -562,7 +562,7 @@ pub(crate) fn upload_effect(
     thread: &str,
     body: &CosUploadBody,
     bytes: Vec<u8>,
-) -> crate::cos::operations::Effect<ChatAttachmentResponse> {
+) -> crate::problem::Effect<ChatAttachmentResponse> {
     if let Err(problem) = upload_thread(db, thread) {
         return Ok(Err(problem));
     }
@@ -587,7 +587,7 @@ pub(crate) fn upload_effect(
 }
 
 /// `DELETE /chat/attachments/{a}` effect, shared by the route and `chat.attachment_delete`.
-pub(crate) fn delete_effect(state: &ApiState, id: &str) -> crate::cos::operations::Effect<()> {
+pub(crate) fn delete_effect(state: &ApiState, id: &str) -> crate::problem::Effect<()> {
     let store = match open(state) {
         Ok(store) => store,
         Err(problem) => return Ok(Err(problem)),

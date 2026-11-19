@@ -21,7 +21,7 @@ use task_core::chat::{
 use time::OffsetDateTime;
 use tokio::sync::Notify;
 
-use crate::handlers::{ApiResult, Params, json_response, no_query};
+use crate::http_io::{ApiResult, Params, json_response, no_query};
 use crate::middleware::require_admin;
 use crate::principal::{Caller, Principal};
 use crate::problem::ApiProblem;
@@ -98,7 +98,7 @@ pub(crate) fn chat_problem(error: ChatError) -> ApiProblem {
 
 async fn chat_json<T: DeserializeOwned>(body: Body) -> Result<T, ApiProblem> {
     // Keep malformed JSON/unknown fields distinct from well-formed but invalid field values.
-    let value: serde_json::Value = crate::handlers::read_json(body, false).await?;
+    let value: serde_json::Value = crate::http_io::read_json(body, false).await?;
     serde_json::from_value(value).map_err(|error| {
         let detail = error.to_string();
         if detail.starts_with("unknown field") {

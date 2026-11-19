@@ -16,7 +16,8 @@ use task_core::ProjectId;
 use task_core::notify::{Notification, NotificationKind};
 
 use crate::admin::{AdminRequest, NotifyAdminError};
-use crate::handlers::{ApiResult, json_response, rfc3339};
+use crate::handlers::rfc3339;
+use crate::http_io::{ApiResult, json_response};
 use crate::middleware::require_admin;
 use crate::problem::{ApiProblem, store_problem};
 use crate::secrets::fingerprint;
@@ -107,7 +108,7 @@ fn webhook_fingerprint(state: &ApiState) -> Option<String> {
 }
 
 pub(crate) async fn view(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> ApiResult {
-    crate::handlers::no_query(&raw)?;
+    crate::http_io::no_query(&raw)?;
     let recent = state
         .blocking(move |store| {
             let recent = store
@@ -149,17 +150,15 @@ pub(crate) async fn test(
     headers: HeaderMap,
     RawQuery(raw): RawQuery,
 ) -> ApiResult {
-    crate::handlers::no_query(&raw)?;
+    crate::http_io::no_query(&raw)?;
     require_admin(&state, &headers)?;
-    let result = crate::cos::operations::effect_result(test_effect(&state).await)?;
+    let result = crate::problem::effect_result(test_effect(&state).await)?;
     Ok(json_response(StatusCode::OK, &result))
 }
 
 /// The daemon side of `POST /notify/test` (shared with CoS `notify.test`, an external effect: a
 /// Discord message is sent).
-pub(crate) async fn test_effect(
-    state: &ApiState,
-) -> crate::cos::operations::Effect<NotifyTestResult> {
+pub(crate) async fn test_effect(state: &ApiState) -> crate::problem::Effect<NotifyTestResult> {
     if let Err(problem) = crate::middleware::require_active(state) {
         return Ok(Err(problem));
     }

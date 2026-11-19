@@ -27,7 +27,7 @@ use task_core::script_compare::{ScriptDomainError, ScriptGeneration, ScriptGener
 use task_core::store::SqliteStore;
 
 use crate::{
-    handlers::{ApiResult, json_response, no_query, read_json},
+    http_io::{ApiResult, json_response, no_query, read_json},
     problem::{ApiProblem, store_problem},
     script_domains::{SCRIPT_GENERATION_INVALID, domain_problem},
     state::ApiState,

@@ -27,8 +27,8 @@ pub use instructions::{InstructionRecord, inbox_answer_instruction_at};
 use instructions::{instructed_message, operation_target};
 
 use super::{CosCaller, cos_only, reject_identity_claims};
-use crate::handlers::{ApiResult, Params, json_response, no_query};
-use crate::problem::ApiProblem;
+use crate::http_io::{ApiResult, Params, json_response, no_query};
+use crate::problem::{ApiProblem, Effect};
 use crate::state::ApiState;
 
 /// Concatenate the domain-owned allowlists without a second list to maintain.
@@ -69,15 +69,6 @@ impl<T> Applied<T> {
             )),
         }
     }
-}
-
-/// Outcome of an external effect (C): `Ok(Ok(v))` done, `Ok(Err(problem))` refused before any
-/// change (settled `rejected`), `Err(problem)` outcome unknown (left pending for remediation).
-pub(crate) type Effect<T> = Result<Result<T, ApiProblem>, ApiProblem>;
-
-/// The handler's view of an [`Effect`]: either way a failure is the route's problem.
-pub(crate) fn effect_result<T>(effect: Effect<T>) -> Result<T, ApiProblem> {
-    effect.and_then(|result| result)
 }
 
 /// An [`Effect`] with its value serialized for the operation record.
@@ -629,7 +620,7 @@ async fn create_operation(
             "/api/v1/cos/operations accepts only a CoS run credential",
         ));
     };
-    let value: Value = crate::handlers::read_json(body, false).await?;
+    let value: Value = crate::http_io::read_json(body, false).await?;
     reject_identity_claims(&value)?;
     if value.get("expected_revision").is_none() && value.is_object() {
         return Err(unprocessable(
@@ -842,7 +833,7 @@ impl DispatchEnv {
             roles: state.inner.roles.clone(),
             genres: state.inner.genres.clone(),
             kb_root: crate::knowledge::root_of(state),
-            clusters: crate::handlers::cluster_ids(state),
+            clusters: state.cluster_ids(),
             tree_limits: state.inner.tree_limits,
             inbox_feed: None,
             api: state.clone(),

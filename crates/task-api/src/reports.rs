@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use task_core::report::{Report, ReportFilter, ReportId, ReportsLive};
 use task_core::{ProjectId, SqliteStore};
 
-use crate::handlers::{ApiResult, json_response};
+use crate::http_io::{ApiResult, json_response};
 use crate::problem::{ApiProblem, store_problem};
 use crate::query::QueryParams;
 use crate::state::ApiState;
@@ -96,10 +96,10 @@ pub(crate) async fn list(State(state): State<ApiState>, RawQuery(raw): RawQuery)
 
 pub(crate) async fn detail(
     State(state): State<ApiState>,
-    crate::handlers::Params(id): crate::handlers::Params<String>,
+    crate::http_io::Params(id): crate::http_io::Params<String>,
     RawQuery(raw): RawQuery,
 ) -> ApiResult {
-    crate::handlers::no_query(&raw)?;
+    crate::http_io::no_query(&raw)?;
     let report_id = parse_report_id(&id)?;
     let detail = state
         .blocking(move |store| {

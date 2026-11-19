@@ -53,3 +53,38 @@ G の各 leaf（scope・build-check・build-test・ta-*・control-*・fix）は�
   （`$CELERIS_WU_…/artifacts/raw/`、例: `health-S1-<試行>.json`・`timing-raw.log`）に置く。repo には置かない。
 - 要点（各回の値・開始時の load・exit・内訳）と中央値を leaf の md に書き、TSV を repo の `agent-docs/progress/2026-11-19-arch-v4-g/` に置く。
 - `CARGO_TARGET_DIR` は Celeris が渡した値のまま使う。`/tmp` に target を置かない。
+
+## TA
+
+test-affected（`metric=test_affected`）の測り方。ta-s1・ta-mix・ta-s2・control-s1・control-s2 が使う。A の §5.5 と §7 C9 の手順に、
+G で決めた準備・確認・待ち方・記録の仕方を足したもの。TSV の列・valid の規則・log の置き場は上の「## TSV」と「## log の置き場」に従う。
+
+1. 準備（計らない）: worktree に `web/node_modules`・`control-ts/node_modules` が無ければ、各 dir で `pnpm install --offline --frozen-lockfile`
+   を走らせる（test-affected.sh が中で走らせるのと同じ command）。どの回も install を含めずに測るため。A の S1 run 1 は test-affected の中の
+   `web install` を含み、A の S1 run 2・3 は含まない（A の log で確かめた）。
+2. `--list` の確認（計らない）: comment の probe（上の「## probe と戻し方」）を入れた状態で `bash scripts/dev/test-affected.sh --list` を走らせ、
+   `git checkout -- <file>` で戻す。対象が [scope.md](scope.md) §2 の表の after と同じこと（S1: 14 crate ＋ `web: typecheck+unit` ＋
+   `ts-verify: test-ts-verify`、S2: 5 crate）を確かめる。違えば測らず、違いを md に書く。
+3. 各回: waitload → comment の probe → `git diff --stat -- crates`（4 file・4 行の差分であること）→ `/proc/loadavg` を記録 →
+   `/usr/bin/time -v -o <raw>/ta-<S>-<回>.time bash scripts/dev/test-affected.sh > <raw>/ta-<S>-<回>.log 2>&1` → exit code を受ける →
+   `git checkout -- <file>` → `git status --porcelain -- crates` が空であることを記録。続けて測るときも各回の前に waitload する
+   （直前の回の負荷で 1 分 load が 4 を超えるため、2 分前後待つ）。
+4. 1 回の長さは S1 で約 900 s、S2 で約 650 s で、Bash の timeout（1200 s）に 2 回は入らない。上の 1〜3 を行う driver を nohup で起動し、
+   foreground の `sleep`（600 s 以下）で done の file を待つ:
+   `RAW=<成果物 dir>/raw nohup bash <成果物 dir>/raw/ta-driver.sh S1 1 2 > <成果物 dir>/raw/driver-S1.out 2>&1 < /dev/null &`
+   （引数はシナリオと回の番号の並び。終わると `raw/driver-S1.done` ができ、各回の `番号 exit 待った秒 load の 5 値` が `raw/ta-S1.runs` に、
+   時刻つきの記録が `raw/timing-raw.log` に入る）。driver と内訳の parser の写しは ta-s1 の run の成果物
+   `/local/celeris/data/workspaces/01M7MZTKBKXKEVBWS87PS5J9NK/wu/ta-s1/artifacts/raw/` の `ta-driver.sh`・`ta-summary.py`・`probe-comment.sh`。
+   自分の成果物 dir の `raw/` に写して使う。測っている間は repo の中の file を変えず、未追跡の file も置かない（health と test-affected の
+   変更 file の集合が変わる）。md・TSV は測り終えてから書く。
+5. 値と内訳: `python3 -I <raw>/ta-summary.py <raw>/ta-<S>-<回>.log <raw>/ta-<S>-<回>.time` が次を出す。
+   - `seconds`・`user_s`・`sys_s`・`exit`: `/usr/bin/time -v` の Elapsed・User time・System time・Exit status。
+   - health: log の `repo-health: verdict=… exit=… findings=… new=… worsened=…` の行と `repo_health_gate: all checks passed`。
+   - nextest: `Starting N tests across M binaries (… skipped)` と `Summary [ T s] N tests run: P passed (S slow), K skipped` の行。
+   - doc test: `test result:` の行の数と passed・failed・ignored の和。
+   - web（S1 だけ）: vitest の `Test Files`・`Tests` の行と node --test の `ℹ pass`・`ℹ fail`。`web install` の行の有無（1 の準備をしていれば無い）。
+   - ts-verify（S1 だけ）: `test-ts-verify: N passed, F failed` の行。script bundle の `SKIP: 0 件`。
+6. TSV の行: `test_affected <S> <after|before> <回> <seconds> <user_s> <sys_s> <exit> <開始時の 1 分 load> <valid> <git rev-parse HEAD:crates> <note>`。
+   note に試行の番号・待った秒・開始時の load の 3 値・nextest の passed/skipped/秒・web・ts-verify・health の verdict を書く。
+   valid は exit 0 かつ開始時の 1 分 load が 4 以下（上の「## TSV」）。比べるのは wall の中央値で、user の中央値も並べる。
+7. control の leaf（before）は bc665168 の tree で同じ 1〜6 を行う。`src_tree` は `git rev-parse bc665168:crates`、file は A の §7 C8 の S1 の 3 file・S2 の 4 file。

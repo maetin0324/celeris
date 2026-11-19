@@ -127,7 +127,7 @@ pub(super) async fn replay(
     let ReplayBody {} = read_json(body, true).await?;
     let worker = state.clone();
     let report = state
-        .blocking(move |store| crate::cos::operations::effect_result(replay_effect(&worker, store)))
+        .blocking(move |store| crate::problem::effect_result(replay_effect(&worker, store)))
         .await?;
     Ok(json_response(StatusCode::OK, &report))
 }
@@ -137,7 +137,7 @@ pub(super) async fn replay(
 pub(crate) fn replay_effect(
     state: &ApiState,
     store: &task_core::store::SqliteStore,
-) -> crate::cos::operations::Effect<task_ops::replay::ReplayReport> {
+) -> crate::problem::Effect<task_ops::replay::ReplayReport> {
     let Some(guard) = state.try_begin_replay() else {
         return Ok(Err(ApiProblem::replay_in_progress()));
     };

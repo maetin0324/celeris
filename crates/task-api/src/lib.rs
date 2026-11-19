@@ -17,6 +17,8 @@ use task_ops::daemon::DaemonSnapshot;
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, watch};
 
+/// ADR 2026-11-19-cos-handlers-remaining-edges D2: account の plan と作用（HTTP の route と CoS の操作が共有する）。
+mod account_write;
 mod accounts;
 mod admin;
 mod approvals;

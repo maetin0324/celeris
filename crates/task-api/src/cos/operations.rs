@@ -28,7 +28,7 @@ use instructions::{instructed_message, operation_target};
 
 use super::{CosCaller, cos_only, reject_identity_claims};
 use crate::http_io::{ApiResult, Params, json_response, no_query};
-use crate::problem::ApiProblem;
+use crate::problem::{ApiProblem, Effect};
 use crate::state::ApiState;
 
 /// Concatenate the domain-owned allowlists without a second list to maintain.
@@ -69,15 +69,6 @@ impl<T> Applied<T> {
             )),
         }
     }
-}
-
-/// Outcome of an external effect (C): `Ok(Ok(v))` done, `Ok(Err(problem))` refused before any
-/// change (settled `rejected`), `Err(problem)` outcome unknown (left pending for remediation).
-pub(crate) type Effect<T> = Result<Result<T, ApiProblem>, ApiProblem>;
-
-/// The handler's view of an [`Effect`]: either way a failure is the route's problem.
-pub(crate) fn effect_result<T>(effect: Effect<T>) -> Result<T, ApiProblem> {
-    effect.and_then(|result| result)
 }
 
 /// An [`Effect`] with its value serialized for the operation record.

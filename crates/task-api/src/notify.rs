@@ -152,15 +152,13 @@ pub(crate) async fn test(
 ) -> ApiResult {
     crate::http_io::no_query(&raw)?;
     require_admin(&state, &headers)?;
-    let result = crate::cos::operations::effect_result(test_effect(&state).await)?;
+    let result = crate::problem::effect_result(test_effect(&state).await)?;
     Ok(json_response(StatusCode::OK, &result))
 }
 
 /// The daemon side of `POST /notify/test` (shared with CoS `notify.test`, an external effect: a
 /// Discord message is sent).
-pub(crate) async fn test_effect(
-    state: &ApiState,
-) -> crate::cos::operations::Effect<NotifyTestResult> {
+pub(crate) async fn test_effect(state: &ApiState) -> crate::problem::Effect<NotifyTestResult> {
     if let Err(problem) = crate::middleware::require_active(state) {
         return Ok(Err(problem));
     }

@@ -196,7 +196,7 @@ pub(crate) async fn promote(
     };
     let requested = sha12.clone();
     let accepted = tokio::task::spawn_blocking(move || {
-        crate::cos::operations::effect_result(promote_effect(
+        crate::problem::effect_result(promote_effect(
             source.as_ref(),
             &requested,
             &DeploymentContext::authenticated(&sha12, &actor),
@@ -213,7 +213,7 @@ pub(crate) fn promote_effect(
     source: &dyn ReleaseSource,
     sha12: &str,
     audit: &DeploymentContext,
-) -> crate::cos::operations::Effect<ReleasePromoteAccepted> {
+) -> crate::problem::Effect<ReleasePromoteAccepted> {
     match source.promote(sha12, audit) {
         Ok(accepted) => {
             // Record the caller provenance used by the detached script.

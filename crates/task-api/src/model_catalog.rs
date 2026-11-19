@@ -334,7 +334,7 @@ async fn delete_override(
 async fn discover(State(state): State<ApiState>, RawQuery(raw): RawQuery, body: Body) -> ApiResult {
     no_query(&raw)?;
     let payload: DiscoverBody = read_json(body, true).await?;
-    let response = crate::cos::operations::effect_result(discover_effect(&state, payload).await)?;
+    let response = crate::problem::effect_result(discover_effect(&state, payload).await)?;
     Ok(json_response(StatusCode::ACCEPTED, &response))
 }
 
@@ -343,7 +343,7 @@ async fn discover(State(state): State<ApiState>, RawQuery(raw): RawQuery, body: 
 pub(crate) async fn discover_effect(
     state: &ApiState,
     payload: DiscoverBody,
-) -> crate::cos::operations::Effect<DiscoverResponse> {
+) -> crate::problem::Effect<DiscoverResponse> {
     if let Some(source) = &payload.source
         && let Err(problem) = parse_source(source)
     {

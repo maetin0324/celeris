@@ -187,3 +187,37 @@ after の値は WorkUnit `after` が測り、行の減りを移動の分（D1〜
 
 after（HEAD、head の検査器）: task-api の SCC の組 261 → 230（消えた 31・増えた 0）、ta_scc_lines 622 → 538、
 handlers → cos 19 → 14、cos → handlers 50 → 29（`super::` 4 → 0）、単位 49 → 49。値の正本は WorkUnit `after` の metrics.tsv。
+
+## 付記（2026-11-19、WorkUnit `boundary`）: 高 risk の 5 file の変更と不変条件
+
+経緯: この task の final review は health の `diff_design` で落ちた。v1 の計画は write path を dir（`crates/task-api/`）だけで書いたので、
+計画の設計 review は高 risk の class の path に当たらず、task の差分が変えた下の 5 file を覆わなかった（「reviewer run が無く判定できない」）。
+v2 の計画は WorkUnit `boundary` の `context.paths` に 5 file を file 単位で書き、計画の設計 review に覆わせる。この WorkUnit は `crates/` を変えない。
+
+変更は `git merge-base HEAD main` から HEAD まで（WorkUnit `http-tools`・`accounts` の commit）の差分で、どれも import と型・関数の path の
+書き換えだけである（移動先は `crate::http_io` と `crate::problem`）。response・拒否理由・認可（`require_admin`・principal の判定）・
+transaction の境界の行は差分に無い。
+
+| file | class | 不変条件 | 変更（+/− 行） | 確かめる試験 |
+|---|---|---|---|---|
+| `crates/task-api/src/cos/operations.rs` | authz | `api-principal-from-token`、`cos-audit-same-tx` | +4 −13。import 2 行（`crate::handlers::{ApiResult, Params, json_response, no_query}` → `crate::http_io::…`、`crate::problem::ApiProblem` → `crate::problem::{ApiProblem, Effect}`）。`Effect` 型と `effect_result` の定義（doc を含む 9 行）を消し `crate::problem` へ移した（D3）。`create_operation` の `crate::handlers::read_json` → `crate::http_io::read_json`。`DispatchEnv` の `crate::handlers::cluster_ids(state)` → `state.cluster_ids()`（`ApiState` の method）。`OperationAudit` の transaction と CoS の principal の判定（`create_operation` の credential の確認・`reject_identity_claims`）は変えていない | `cos_operations`（8）、`cos_delivery_suite` の `org_write_contract`（6）・`tx_boundary_contract`（8）、`auth_and_guards`（11）、`authority_ledger`（22）、`llm_accounts_admin`（19） |
+| `crates/task-api/src/handlers/authority.rs` | authz | `api-principal-from-token`、`cos-audit-same-tx` | +3 −0。`use axum::body::Body;`・`use crate::http_io::{ApiResult, Params, json_response, no_query, read_json};`・`use crate::problem::store_problem;` を足しただけ。これらは `use super::*;` で `handlers.rs` の import から得ていた名前で、D1 で `handlers.rs` から消えたので明示の import にした。関数の本体は変えていない | `authority_ledger`（22）、`auth_and_guards`（11）、`cos_operations`（8）、`cos_delivery_suite` の `tx_boundary_contract`（8） |
+| `crates/task-api/src/handlers/secrets.rs` | credential | `credential-stays-in-broker` | +2 −1。`use super::{ApiResult, Params, json_response, no_query, now_rfc3339, read_json};` を `use super::now_rfc3339;` と `use crate::http_io::{ApiResult, Params, json_response, no_query, read_json};` に分けた。秘密の値の扱いは変えていない | `run_worker_suite` の `secrets_admin`（12）、lib の `secrets::tests`（7） |
+| `crates/task-api/src/releases.rs` | selfdeploy | `unpromoted-release-no-takeover` | +9 −9。import 1 行（`crate::handlers::{ApiResult, json_response}` → `crate::http_io::…`）、`crate::handlers::no_query` → `crate::http_io::no_query` 4 か所、`crate::handlers::Params` → `crate::http_io::Params` 2 か所（`promote`・`promotion_preview` の引数）、`crate::cos::operations::effect_result` → `crate::problem::effect_result` 1 か所、`crate::cos::operations::Effect` → `crate::problem::Effect` 1 か所（`promote_effect` の戻り値の型）。`promote` の `require_admin` と昇格の判定は変えていない | lib の `releases::tests`（2）、`cos_delivery_suite` の `cos_ops_admin_config`（6。`cos_ops_admin_config_daemon_and_external_effects_run_once` が `release.promote` を 1 回だけ走らせる） |
+| `crates/task-api/src/knowledge.rs` | transaction | `task-state-in-sqlite`、`lifecycle-human-epoch-same-tx` | +1 −1。`use crate::handlers::{ApiResult, Params, json_response, no_query, read_json};` → `use crate::http_io::{…}` だけ | `knowledge`（10）、`cos_delivery_suite` の `tx_boundary_contract`（8。`cos_record_writes_audit_and_reference_in_one_transaction`・`cos_project_cancel_writes_audit_and_cascade_in_one_transaction` ほか）、lib の `knowledge::`（1） |
+
+括弧の数は WorkUnit `boundary` の提出時の HEAD の試験数。上の試験は次の 1 行で走る（WorkUnit `boundary` の check と同じ。結果は
+[boundary.md](../progress/2026-11-19-arch-v4-h-r2/boundary.md)）:
+
+```sh
+cargo nextest run -p task-api --lib --test run_worker_suite --test authority_ledger --test knowledge --test cos_operations --test auth_and_guards --test cos_delivery_suite --test llm_accounts_admin
+```
+
+差分の形の検査（WorkUnit `boundary` の check と同じ。出力が空なら import と path の書き換えだけ）:
+
+```sh
+mb=$(git merge-base HEAD main)
+git diff -U0 "$mb" HEAD -- crates/task-api/src/handlers/authority.rs crates/task-api/src/handlers/secrets.rs crates/task-api/src/releases.rs crates/task-api/src/knowledge.rs \
+  | grep -E '^[-+]' | grep -vE '^(\+\+\+|---) ' | grep -vE '^[-+]use |http_io::|handlers::(no_query|Params)|(cos::operations|problem)::(Effect|effect_result)'
+git diff -U0 "$mb" HEAD -- crates/task-api/src/cos/operations.rs | grep -E '^\+' | grep -v '^+++ ' | grep -vE 'http_io::|problem::|cluster_ids\(\)'
+```

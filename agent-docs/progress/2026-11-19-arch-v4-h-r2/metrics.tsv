@@ -1,0 +1,10 @@
+metric	scope	before	after	checker	note
+ta_scc_units	task-api の SCC（C2）	49	-	head	measure の metrics の ta_scc_units。H の struct-deps.tsv の after と同じ値
+ta_scc_pairs	task-api の SCC の単位の組（C2）	261	-	head	measure の metrics の ta_scc_pairs。H の struct-deps.tsv の after と同じ値
+ta_scc_lines	task-api の SCC の行の辺（C2）	622	-	head	measure の metrics の ta_scc_lines。H の struct-deps.tsv の after と同じ値
+handlers_to_cos_lines	git grep crate::cos::（C5、handlers/ と handlers.rs）	19	-	-	measure の metrics の handlers_to_cos_lines:grep。12 file
+handlers_to_cos_lines	repo-health の辺（C2 の task-api の SCC、handlers→cos）	19	-	head	measure の metrics の handlers_to_cos_lines:head。12 file。すべて crate::
+cos_to_handlers_lines	git grep crate::handlers（C5、cos/）	46	-	-	measure の metrics の cos_to_handlers_lines:grep_crate。9 file
+cos_to_handlers_lines	git grep (crate|super(::super)*)::handlers（A の C5 の式）	50	-	-	measure の metrics の cos_to_handlers_lines:grep_c5。crate:: 46 と super:: 4 の合計
+cos_to_handlers_lines	repo-health の辺（C2 の task-api の SCC、cos→handlers）	50	-	head	measure の metrics の cos_to_handlers_lines:head。9 file。crate:: 46・super:: 4（cos/ops/admin.rs の accounts）
+cos_to_handlers_super_lines	git grep super(::super)*::handlers（C5、cos/）	4	-	-	measure の metrics の cos_to_handlers_super_lines:grep。cos/ops/admin.rs の 4 行（accounts）

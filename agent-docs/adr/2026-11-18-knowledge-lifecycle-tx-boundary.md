@@ -4,8 +4,7 @@ tasks: [01M7MZTKB8A4NJQEEA35Q4G5JV]
 # ADR 2026-11-18: knowledge.rs の自前の SQLite 接続と task-ops の lifecycle.rs の closure の transaction を、SqliteStore の write_tx・with_read_conn と adapter の側の境界へ移す（アーキ v4 F）
 
 - 日付: 2026-11-18
-- 状態: Accepted（本文は設計。この ADR を書いた WorkUnit `adr-doc` は `crates/`・`web/`・既存の ADR を変えていない。実装と実測の結果は、コードを変える unit と
-  `close` が末尾に付記を足す）
+- 状態: Accepted・実装済み（2026-11-19。本文 D1〜D7 は設計のときの文面のまま残す。実装との違いと実測は末尾の「付記: 実装で分かった違いと実測」が上書きする）
 - task: 01M7MZTKB8A4NJQEEA35Q4G5JV（依頼キー celeris-architecture-scalability-v4-20261117 の子 F、親 01M7MZT8KX547464YYS76QNP4G）
 - 進捗: [2026-11-18-arch-v4-f.md](../progress/2026-11-18-arch-v4-f.md)、before の値と再現 command: [arch-v4-f/adr.md](../progress/2026-11-18-arch-v4-f/adr.md)
 - 関係: [ADR 2026-11-18 org-write-shared-use-case](2026-11-18-org-write-shared-use-case.md)（D。付記「2 つの形の使い分けと撤去の条件」）、
@@ -269,3 +268,51 @@ after の見込み（約束ではない。F の measure が同じ command で測
   `cos/ops/decisions.rs` と `cos/ops/projects.rs` は別の file なので、2 つの unit は並列にできる。task-dispatch の試験の file を変えるので、
   lifecycle の unit の test-affected は task-dispatch を含む。
 - measure は §7 の command を after に当て、close は付記で実装との違いを書く。
+
+## 付記: 実装で分かった違いと実測（2026-11-19、WorkUnit `close`）
+
+F の実装（WorkUnit `contract-tests`・`lifecycle-tx`・`provenance-read`・`knowledge-pin`）と計測（`metrics`）の結果。本文の D1〜D7・§7 と違う所は、この付記が本文を上書きする。
+数値は [arch-v4-f/metrics.md](../progress/2026-11-18-arch-v4-f/metrics.md)（before は `git merge-base HEAD main`、after は統合 `integrate wu/knowledge-pin (phase impl)` の tree。A の baseline.md §6・§7 の規則）。
+
+### 実装との違い
+
+| 本文 | 実装 | 理由・出典 |
+|---|---|---|
+| D2: `SqliteStore` に `pub fn attachment_provenance(&self, ..)` を足し、C6 の `pub` method は 631 → 632、`impl SqliteStore` の block は 102 → 103 | `task_core::chat::attachments::attachment_provenance(store: &SqliteStore, owner_kind, owner_id)` という自由関数にした。本体は `store.with_read_conn` で、`provenance_for_owner` は private。C6 の snippet は `pub` 631 → 631、block 102 → 102。task-core の `&SqliteStore` を第 1 引数に取る `pub` の自由関数は 7 → 8 | method にすると repo health の `size.responsibility-growth`（単位 `crates/task-core/src/chat` の `SqliteStore` の method 114 → 115、閾値 60）が worsened で落ちた。同じ形の前例は `route_extract::features_for_subject`。store の公開面は 1 増えたので、公開面の縮小には数えない（[provenance-read.md](../progress/2026-11-18-arch-v4-f/provenance-read.md)） |
+| D1: `attachments_unavailable` とその分岐を消す | 残した。`record_candidate(store, root, attachment_storage: bool, body)` の `attachment_storage` が偽で `attachment_ids` があれば 503 `attachments_unavailable`。CoS の腕は旧コードと同じく検査しない（`true` を渡す） | WorkUnit `knowledge-pin` の objective が保つと決めた。Path の引数は有無の bool に縮めた（[knowledge-pin.md](../progress/2026-11-18-arch-v4-f/knowledge-pin.md)） |
+| D1・D5: `record`・`inbox`・`inbox_detail` の `state.chat.attachment_db_path.clone()` を消す | 3 か所とも Path の写しは消えた。`attachment_db_path` は `knowledge.rs` で有無の旗として 3 か所（`inbox`・`inbox_detail` で偽なら provenance を空にする、`record` で偽なら 503）に残る。Path として読むのは D5 の範囲外の `chat/attachments.rs`（4 か所）と `cos/inbox.rs`（1 か所）だけ | store の DB と同じ file を指す値（`ApiState::new` が `Some(settings.db_path)` を入れる）が `SqliteStore` と別に 1 つ残る。消す条件は進捗の本体の「提案」 |
+| D6: 契約試験は 4 つ（record の pin の trigger 失敗を HTTP・CoS で各 1、CoS の `project.archive` の 2 回目の Unchanged、`project.pause` の UPDATE の trigger 失敗） | `crates/task-api/tests/cos_delivery_suite/tx_boundary_contract.rs` の 8 件（record 4〔成功と provenance、不正な添付、CoS の監査の行の挿入の失敗、busy〕、案件の cancel 4〔HTTP の応答と遷移 event、busy、CoS の監査の行の挿入の失敗、MCP の token と token 無しの拒否〕）。失敗は `cos_operations` への applied の行の挿入を断る trigger と、試験の別接続の `BEGIN IMMEDIATE` の lock で起こす | WorkUnit `contract-tests` が、書き込みを公開の経路だけで行い、tx の途中の失敗と busy を区別して固定する形にした。本文の 3（Unchanged の 2 回目）と 4（pause の UPDATE の trigger）を直接見る試験は足していない。Unchanged で加算しないことは `project_wake_api_human_refused_or_unchanged_requests_do_not_bump` が見る（[contract-tests.md](../progress/2026-11-18-arch-v4-f/contract-tests.md)） |
+| D1: busy のとき 500 `internal` → 503 `db_busy` | 試験 `busy_store_fails_record_without_residue_and_retry_succeeds` は 5xx と problem+json と残りが無いことだけを要求し、旧コード（500）と新コード（`write_tx`）の両方で通った。新コードの status が 503 であることは未確認（試験は値を固定していない） | 旧コードの 500 は contract-tests が一時的な print で確かめた |
+| D7: project-controller の付記 A1 の 9 の表を書き換える | 9 の表には案件の操作の行が無かったので、HTTP（数える）と CoS の `project.*`（数えない）の 2 行を足した。`crates/task-api/src/human_epoch.rs` の module doc の「`*_op` の `audit = Some`」も、腕が `reject`・`apply` を直接呼ぶ形を含むように直した | [lifecycle-tx.md](../progress/2026-11-18-arch-v4-f/lifecycle-tx.md) |
+| D7: `docs/architecture-map.md` は変えない見込み | `close` が 2 行を直した: knowledge の行（`POST /knowledge/inbox`）に共有の 3 関数・`cos/ops/decisions.rs`・この ADR・`tx_boundary_contract.rs`・pin の transaction の不変条件を足し、owner の行が無かった案件の lifecycle（`task-ops/src/lifecycle.rs`・task-api の `lifecycle.rs`・`human_epoch.rs`・`cos/ops/projects.rs`）の行を task-ops の表に足した | `check-architecture-map.py --diffs` の食い違いは 140 → 138（`missing_test` の task-lifecycle の 2 件が消えた。新しい食い違いは 0） |
+
+旧い経路を書いた ADR 3 本の付記（D7）は、close の時点の HEAD に残っている:
+[project-controller 付記 F](2026-11-04-project-controller.md)（`lifecycle-tx`）、
+[cos-live-fixes 付記「record の pin と監査の transaction を既存の owner へ寄せる」](2026-10-07-cos-live-fixes.md)（`knowledge-pin`）、
+[cos-chat-home 付記「受信箱の provenance の読み取りを store へ移す」](2026-10-05-cos-chat-home.md)（`provenance-read`）。
+
+### 実測（before → after）
+
+| 指標 | before | after |
+|---|---|---|
+| `knowledge.rs` の自前の接続の行（`Connection::open`・`TransactionBehavior`・`busy_timeout`・`open_attachment_index`・`record_op` など） | 10 | 0 |
+| task-ops の `lifecycle.rs` の Connection の closure の行（`FnOnce(&rusqlite::Connection)`・`apply_project_action`・`also: F`） | 3 | 0 |
+| 3 file の `rusqlite` の出現（`knowledge.rs`・task-ops `lifecycle.rs`・task-api `lifecycle.rs`） | 8・2・0 | 1・1・0（どちらも呼び手が開いた `&rusqlite::Transaction<'_>` の引数） |
+| task-ops が開く transaction | 1 | 0 |
+| crate の外へ `&Connection` を渡す公開の関数（`apply_project_action` の closure、`provenance_for_owner`） | 2 | 0 |
+| C6 `Fn(&Connection)`・`Fn(&Transaction)` の引数の行 | 22 | 21 |
+| C6 `&Connection`・`&Transaction` の引数の行、C4 `rusqlite` を書く production file | 347・75 | 347・75 |
+| C6 `SqliteStore` の `pub` method（snippet）／task-core の `&SqliteStore` を取る `pub` の自由関数 | 631／7 | 631／8（+1） |
+| C2 循環の件数・単位・組／行の辺 | 17・198・756／1,815 | 17・198・756／1,821（+6。新しい組は 0。CoS の腕が共有の関数を直接呼ぶ分と chat が store の型を名指しする分） |
+| C5 handlers → cos・cos → handlers の行 | 19・50 | 19・50 |
+| D の付記の 2 本の command の file 数／`Option<&OperationAudit>` を取る関数（`knowledge.rs`・`lifecycle.rs`） | 14・18／5 | 14・18／3 |
+| production 全言語・production Rust・own_total_with_tests（source-size-report） | 375,818・331,127・1,030,359 | 375,781・331,090・1,031,163（−37・−37・+804。試験 +841） |
+| 新しい trait・Port・flag・fallback | — | 0 |
+
+- 契約・反例試験 8 件は、旧コード（`contract-tests`）と実装の後（`lifecycle-tx`・`provenance-read`・`knowledge-pin` の各 unit）で、試験を変えずに通った。
+  §6 の既存の試験（`project_wake_api_human_*`・`cos_ops_projects_cron_project_lifecycle_is_audited`・`cos_live_fix_d2` の 3 件・`cos_chat_attach_handoff_kb_*`）も各 unit の test-affected で通った。
+- build・test-affected の時間の同条件 3 回の比較と review の費用は測っていない（共通受入条件 (5)。子 G の範囲）。
+- D の付記の撤去の条件について: F が `Applied` の形から移したのは `record_op`（D3）と `project_action_op`（D4）の 2 関数。`knowledge.rs` の `accept_op`・`reject_op`・
+  `put_page_op` と task-api の `lifecycle.rs` の `task_pause_op` は変えていないので、付記の条件の対象外で、`Applied` の形のまま残る。
+  [org-write-shared-use-case](2026-11-18-org-write-shared-use-case.md) の 2 本の command の一覧の表は `knowledge.rs` の行に `record_op`、`lifecycle.rs` の行に
+  `project_action_op` を挙げたまま（D の時点の一覧。F の範囲の外なので変えていない）。

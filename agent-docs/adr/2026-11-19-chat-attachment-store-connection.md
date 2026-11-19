@@ -278,3 +278,8 @@ script と設定は base の commit から `git show <base>:<path>` で取り出
 - 測定への影響: `rusqlite_prod_files`・`sql_string_prod_files` は `cos/triage_view.rs` の −1 と `cos_inbox.rs` の +1 で
   この WorkUnit の分は増減 0。`conn_open_files` は `cos/triage_view.rs` の −1（`cos_inbox.rs` は `Connection::open`・
   `busy_timeout` を持たない）。§7 の見込みのうち「新しい file を作れば増える」に当たる。
+- `crates/task-api/src/cos/triage_view.rs` は消さない。repo health の地図の対照（policy の file
+  `agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json`）が capability `cos-inbox-triage-operations-audit` の
+  不変条件「既に解決済みなら Conflict にする」の根拠にこの path を挙げ、消すと `arch-map.missing_invariant` が fail になる。
+  この file には接続も SQL も持たない resolve の判定 `terminal_conflict`（`cos/inbox.rs` から移した 409 の判定）だけを置く。
+  §1.6 の撤去（`open`・`Connection::open`・`busy_timeout`・4 つの読み取りの関数・SQL の定数・`item_row`）はそのまま行った。

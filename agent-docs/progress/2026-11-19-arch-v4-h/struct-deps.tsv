@@ -1,0 +1,30 @@
+metric	scope	before	after	checker	note
+cargo_edges	workspace の Cargo 宣言（normal+dev、cargo metadata）	49	49	-	normal 35・dev 14 が同じ。Cargo.toml・Cargo.lock の差分 0。before は A §2 #2 の値
+crate_cycles	workspace の通常依存の crate の SCC	0	0	-	cargo metadata の normal の辺の強連結成分（2 crate 以上）
+module_cycles	repo-health deps.cycle（C2 の SCC の数）	17	17	b0	after は B0 の profile で HEAD の tree を測った（b0 は HEAD の profile を読めない）
+module_cycles	repo-health deps.cycle（C1 の findings）	17	17	head	C2 の SCC の数も 17・17
+tc_scc_units	task-core の SCC（C2）	55	55	b0	
+tc_scc_units	task-core の SCC（C2）	55	55	head	
+tc_scc_pairs	task-core の SCC の単位の組（C2）	210	210	b0	組の集合も同じ
+tc_scc_pairs	task-core の SCC の単位の組（C2）	210	210	head	組の集合も同じ
+tc_scc_lines	task-core の SCC の行の辺（C2）	617	621	b0	+4 は task-core/src/chat/attachments.rs → store（F）
+tc_scc_lines	task-core の SCC の行の辺（C2）	617	621	head	b0 と同じ差
+ta_scc_units	task-api の SCC（C2）	49	49	b0	
+ta_scc_units	task-api の SCC（C2）	49	49	head	
+ta_scc_pairs	task-api の SCC の単位の組（C2）	261	261	b0	組の集合も同じ
+ta_scc_pairs	task-api の SCC の単位の組（C2）	261	261	head	組の集合も同じ
+ta_scc_lines	task-api の SCC の行の辺（C2）	628	618	b0	-12 は D（org.rs→cos -3・admin.rs→handlers -2・admin.rs→skills -2・skills.rs→handlers -4・schema.rs→handlers -1）、+2 は cos/ops/decisions.rs→knowledge
+ta_scc_lines	task-api の SCC の行の辺（C2）	632	622	head	head の検査器は super:: の 4 行を辺にするので b0 より 4 多い
+handlers_to_cos_lines	git grep crate::cos::（C5、handlers/ と handlers.rs）	22	19	-	13 file → 12 file
+handlers_to_cos_lines	repo-health の辺（C2 の task-api の SCC、handlers→cos）	22	19	b0	13 file → 12 file
+handlers_to_cos_lines	repo-health の辺（C2 の task-api の SCC、handlers→cos）	22	19	head	13 file → 12 file
+cos_to_handlers_lines	git grep crate::handlers（C5、cos/）	48	46	-	9 file → 9 file
+cos_to_handlers_lines	git grep (crate|super(::super)*)::handlers（A の C5 の式）	52	50	-	crate:: と super:: の合計
+cos_to_handlers_lines	repo-health の辺（C2 の task-api の SCC、cos→handlers）	48	46	b0	b0 の検査器は super:: を辺にしない
+cos_to_handlers_lines	repo-health の辺（C2 の task-api の SCC、cos→handlers）	52	50	head	super:: の 4 行を含む
+cos_to_handlers_super_lines	git grep super(::super)*::handlers（C5、cos/）	4	4	-	cos/ops/admin.rs の 4 行（accounts）
+responsibility_growth	repo-health size.responsibility-growth（C1）	94	94	head	finding の scope の集合も同じ。b0 × before も 94（A と同じ）
+dup_contract	repo-health dup.contract（C1）	210	210	head	finding の scope の集合も同じ。b0 × before も 210（A と同じ）
+owner_mismatch	repo-health arch-map.wrong_owner（C1）	31	31	head	finding の scope の集合も同じ。b0 × before は A の 31
+path_attr_files	task-dispatch の production の #[path]（A §3.2）	9	9	-	物理 health_review・論理 dispatcher の 8 と lib.rs の project_decider_ts.rs の 1
+path_attr_files	workspace の production の #[path]（単位の食い違い、H の追加）	15	15	-	task-dispatch 9・task-worker 5・task-core 1

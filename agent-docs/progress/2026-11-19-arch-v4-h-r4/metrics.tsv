@@ -1,0 +1,4 @@
+metric	scope	before	after	checker	note
+rusqlite_prod_files	prod-excl-task-core-store	75	-	a-c4	H の after の値 75（struct-store.tsv の rusqlite_prod_files）と同じ。before は measure.sh <base>（base.txt の rev）。after は WorkUnit after が measure.sh HEAD で埋める
+sql_string_prod_files	prod-excl-task-core-store	50	-	a-c4	H の after の値 50（struct-store.tsv の sql_string_prod_files）と同じ。before は measure.sh <base>（base.txt の rev）。after は WorkUnit after が measure.sh HEAD で埋める
+conn_open_files	prod-excl-task-core-store	47	-	a-c4	H の final-report の提案 12 の補助の指標（Connection::open・TransactionBehavior・busy_timeout の行を持つ file。除外は C4 と同じ）。H には値が無い。busy_timeout の設定欄の名前（task-api の lib.rs・types.rs・state.rs・handlers/system.rs、celeris の config ほか）も数えるので、接続を開く file の数そのものではない。base で task-api は chat/attachments.rs・cos/triage_view.rs を含む 6 file（cos/inbox.rs の triage_db は path を返すだけで数に入らない）

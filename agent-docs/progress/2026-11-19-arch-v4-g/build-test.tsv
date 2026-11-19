@@ -1,0 +1,10 @@
+metric	scenario	rev	run	seconds	user_s	sys_s	exit	load1_start	valid	src_tree	note
+test_build_cold	-	after	1	143.36	979.88	166.77	0	0.62	yes	a4f737a01c6040dd1761648a19c6aaa38c1383e0	attempt=1 waited=0s load=0.62 1.51 3.47 rss_kb=3626896
+test_build_cold	-	after	2	148.53	979.58	166.91	0	3.61	yes	a4f737a01c6040dd1761648a19c6aaa38c1383e0	attempt=2 waited=90s load=3.61 6.20 5.23 rss_kb=3652528
+test_build_cold	-	after	3	147.03	986.10	166.43	0	3.69	yes	a4f737a01c6040dd1761648a19c6aaa38c1383e0	attempt=3 waited=110s load=3.69 9.67 7.36 rss_kb=3617952
+test_build_warm	S1	after	1	134.76	749.78	114.18	0	3.57	yes	a4f737a01c6040dd1761648a19c6aaa38c1383e0	attempt=1 waited=130s load=3.57 11.25 9.16 prep_s=2.9 prep_exit=0 rss_kb=3625684
+test_build_warm	S1	after	2	138.10	765.44	112.96	0	3.38	yes	a4f737a01c6040dd1761648a19c6aaa38c1383e0	attempt=2 waited=110s load=3.38 11.26 10.40 prep_s=135.9 prep_exit=0 rss_kb=3622836
+test_build_warm	S1	after	3	141.75	754.29	113.83	0	3.41	yes	a4f737a01c6040dd1761648a19c6aaa38c1383e0	attempt=3 waited=130s load=3.41 12.68 12.00 prep_s=140.3 prep_exit=0 rss_kb=3651248
+test_build_warm	S2	after	1	81.60	308.33	57.66	0	3.77	yes	a4f737a01c6040dd1761648a19c6aaa38c1383e0	attempt=1 waited=130s load=3.77 12.96 12.93 prep_s=131.7 prep_exit=0 rss_kb=3605008
+test_build_warm	S2	after	2	84.99	296.26	57.22	0	3.91	yes	a4f737a01c6040dd1761648a19c6aaa38c1383e0	attempt=2 waited=120s load=3.91 11.96 12.89 prep_s=76.7 prep_exit=0 rss_kb=3644624
+test_build_warm	S2	after	3	80.95	296.62	57.47	0	3.83	yes	a4f737a01c6040dd1761648a19c6aaa38c1383e0	attempt=3 waited=80s load=3.83 10.06 12.09 prep_s=80.3 prep_exit=0 rss_kb=3618392

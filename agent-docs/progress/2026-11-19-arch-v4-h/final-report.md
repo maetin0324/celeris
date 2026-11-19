@@ -1,8 +1,9 @@
 ---
 title: アーキ v4 H final-report — A の基準からの before・after、検証の結果、未達・要判断、回帰条件
 tasks: [01M7MZTKBPZPQE4XN451F8X84F]
-status: running
+status: done
 updated: 2026-11-19
+completed: 2026-11-19
 ---
 # アーキ v4 H final-report
 
@@ -28,7 +29,39 @@ before は A の基準 main `bc665168c9caf1898adc4c611404bbee056daf9a`（以下 
 
 ## 結論
 
-<!-- fill: conclude -->
+人が決めること（H は決めていない。H は起票もしていない）:
+
+1. **未達の扱い**（close 段の決定 unmet）。共通受入条件 (1)・(2)・(4) は未達、(3) は一部だけ減った、(6) は増えた、(5) は health:S2 の悪化が残り、
+   review の時間と費用と修正の波及（#13）は比べられない。これらを未達として記録して H を閉じるか、次の task を求めるかを人が選ぶ。
+   一覧は「未達・要判断」の節（項目ごとに数値・理由・次の候補）。
+2. **提案の起票の要否**。「提案」の節の 17 件（D・E・F の次の候補、F の提案 1・2、`Applied` の形の移行 3 領域、planner の prompt の受入条件ほか）を
+   起票するかを人が選ぶ。H は 1 件も起票していない。
+3. **2026-11-25T06:00Z の後の review の比較を誰が行うか**（[review-prod.md](review-prod.md) §7.1 の手順。決定 unmet で人が決める）。
+
+数値の要点（before は B0、after は `git merge-base HEAD main`。どれも各 md・tsv の写しで、この file のために測り直していない）:
+
+- (1) 未達: module の循環 17 → 17、task-core の SCC 55 単位・210 組、task-api の SCC 49 単位・261 組はどれも同じ（組の集合も同じ）。
+  行の辺は task-api −10（b0 628 → 618）、task-core +4（617 → 621）。health の既存負債 94・210・31 も同じ。
+- (2) 未達: `rusqlite` を書く production file 74 → 75（+1 は D の `org_write.rs`）、SQL 文字列の file 50 → 50。dispatcher で self.store を書く file 44 → 38・
+  self.config 35 → 31 は参照を入口の file へ移した結果で（出現数 633 → 633）、成果に数えない。
+- (3) 一部: `SqliteStore` の `pub` method 633 → 631・private 42 → 41（D が消した method。成果に数える）、`Fn(&Connection)` の closure 引数は task-ops で 5 → 4
+  （F が消した）。handlers → cos 22 → 19 行、cos → handlers 48 → 46 行（`crate::`）だが、単位の循環は残る。task-api の `&Transaction` の引数は 14 → 15。
+- (4) 未達: S1 で変える file・単位 3 → 4（D の `org_write.rs`。抽象の追加）、S2 は 4 file・2 単位のまま。import する単位（b0 で S1 92 / 369、S2 6 / 14）と
+  test-affected の対象は同じ。修正の波及（#13）は B0 の後の窓に production を変えた commit が no-merges で 1 件・with-merges で 9 件しかなく、比べられない。
+- (5) health:S2 は 96.09 s で A（81.92 s）の +17.3 %。A の +10 %（90.11 s）を超える。コード由来は +2.02 s で、人が決定 h1 で keep と決めた。
+  ほかの 9 組は A の +10 % 以内。review の時間と費用は窓の長さが違い（A 7.625 日、after 1.875 日）比べられない。
+- (6) 増えた: production +822 行（375099 → 375921、すべて Rust）、試験 +4743 行、own_total_with_tests +5829 行。依頼は一律の純減を求めていない。
+- 判定経路: gate.tsv の 10 行すべて期待どおり（C の 6 ケース、`prompt_boundary_` 3 件、repo-health の試験 126 件、probe a は exit 1、probe b は exit 0）。
+  本番でも C を含む release の昇格の後の設計 review の要求 7 件（3 task・$14.33）は、すべて C の形の理由で始まった。
+- 実 prompt: worker 157 run と reviewer 20 run は、prompt が残る run のすべてで objective の末尾と受入条件が入った（cut 0）。worker の 4 run は prompt.txt が無く未確認。
+  planner の 24 run は objective の末尾が全部入ったが、task の受入条件は 0/126 件。
+- 安全不変条件: safety.tsv の 11 行すべて pass（延べ 563 件、fail 0）。D・E・F の反例試験は 81 passed。ただし userns の env が無いと検査の前に return する 9 件は実質未検査。
+- `Applied` の形: 広い command の file は 19 → 18 で、回帰条件（18 以下）を満たす。
+- リリースゲート: H を含む release の gate は未実施。いまの current の release（B〜G を含む）は gate ok・verify ok で昇格済み。
+
+成果に数えたのは、消した method（`pub` −2・private −1）と消した closure（−1）、`Applied` の旧い形を消して org_write の形にした関数（−3）である。行の辺の減り（task-api −10、
+handlers ⇄ cos −3・−2）は移動の分と削除の分を分けて測っていないので、成果として確定しない。dispatcher の file 数の減り（−6・−4）は移動なので数えない。
+増えた項目（`rusqlite` の file +1、S1 の file・単位 +1、`&Transaction` +1）は D の共有 use-case という抽象の追加による。分母（dispatcher の 69・76）は増えていない。
 
 ## (1) import・依存・循環の内部の辺
 
@@ -549,15 +582,115 @@ cargo nextest run -p task-api --test cos_delivery_suite org_write_contract && ca
 
 ## 未達・要判断
 
-<!-- fill: conclude -->
+A の 14 項目と共通受入条件 (1)〜(6)、verify 段の md から、減らなかった・増えた・比べられない・確かめられなかった項目を拾った。
+移動・分割・抽象の追加だけの変更と分母の増加は成果に数えていない（数値の欄の括弧にそう書いた）。次の候補の番号は「提案」の節の番号。
+未達のまま閉じるか、次の task を求めるかは人が決める（close 段の決定 unmet）。
+
+| 項目 | 数値 | 理由 | 次の候補 |
+|---|---|---|---|
+| (1) #3〜#5 module の循環と SCC の単位・組 | module の循環 17 → 17。task-core の SCC 55 単位・210 組、task-api の SCC 49 単位・261 組（before と after で同じ、組の集合も同じ）。行の辺は task-api −10（b0 628 → 618。移動の分を含む）、task-core +4（617 → 621） | D の org の pilot は行の辺を減らしたが組を消していない。task-core の +4 は F の `chat/attachments.rs → store`（[struct-deps.md](struct-deps.md) §0） | 提案 1・2（D の次の候補。`cos/ops/admin.rs` の accounts の 9 行と `cos/operations.rs` の HTTP の道具）。組を消すには残る辺のある領域をまとめて移す（D の提案） |
+| (1) #6〜#8 health の既存負債 | `size.responsibility-growth` 94 → 94、`dup.contract` 210 → 210、owner 不一致 31 → 31（finding の scope の集合も同じ） | B〜G はこの 3 rule の finding を減らす変更をしていない（struct-deps.md §0） | 減らす候補は材料の md に無い。増えないことを回帰条件で見る。減らす task を起こすかは人が決める |
+| (1) #14 `#[path]` と地図の抜け | 物理と論理が食い違う宣言は task-dispatch 9 → 9、workspace 15 → 15。`docs/architecture-map.md:67` は 3 file（check_item・review_limits・inventory）を書いていない | B〜G は `#[path]` の宣言を変えず、B0..after の地図の差分に 3 file の名の行が無い（struct-deps.md §3） | 提案 11（地図の `#[path]` の説明に 3 file を足す。文書だけ） |
+| (2) `rusqlite`・SQL 文字列の production file | `rusqlite` 74 → 75（+1 は抽象の追加）、SQL 文字列 50 → 50（file の集合も同じ） | +1 は D の共有 use-case `org_write.rs`。F は file の中の自前の接続を消したが、A の正規表現は「接続を開く行」と「呼び手の `&Transaction` を受ける行」を区別しない（[struct-store.md](struct-store.md) §7） | 提案 4・5（F の提案 1・2）と提案 12（C4 に「接続を開く行」の file 数を補助の指標として並べる） |
+| (2) #9 dispatcher の参照 | self.store を書く file 44 → 38、self.config 35 → 31（依頼 scope・C3。移動なので成果に数えない）。出現数 633 → 633・218 → 220、分母 69 → 69 | E が対象 file の参照を入口の file へ移した結果で、参照の総量は減っていない（struct-store.tsv の note） | 提案 3（E の次の候補。`review_verdict.rs`・`tree_units.rs`・cos_chat の 3 file。`work_units.rs` は先に設計） |
+| (3) handlers ⇄ cos の単位の循環 | handlers → cos 22 → 19 行、cos → handlers 48 → 46 行（`crate::`）と `super::` 4 → 4 行。task-api の SCC の組 261 は同じ | 減った行は D が org の処理を `org_write` に集めた変更による。残る辺のある領域（accounts・HTTP の道具ほか）は移していない | 提案 1・2 と同じ。比較には `super::` を辺にする head の検査器の値を使う（struct-deps.md の提案 2） |
+| (3) task-api の `&Connection`・`&Transaction` の引数 | 14 → 15（+1 は抽象の追加） | +1 は `org_write.rs:77` の `tx: &Transaction`。`org_write::apply` が CoS の `apply_checked` と同じ transaction に入るために要る引数で、接続を開く file は増えていない（D の未達・要判断、struct-store.md §7） | 減らす候補は無い（意図した増加として記録する）。接続を開く行の数は提案 12 の補助の指標で見る |
+| (3) #10・#12 と #2 SqliteStore の impl・逆依存・Cargo の辺 | impl block 102 → 102、task-core に依存する crate 11 → 11、Cargo の依存の辺 49 → 49 | B〜G は store の impl の分け方と crate の構成を変えていない | 材料に候補は無い。G は task-core の crate 分離の利益を S1・S2 とも 0 % と見積もり、推さなかった（[G の進捗](../2026-11-19-arch-v4-g.md)） |
+| (4) 変更波及（S1・S2） | S1 で変える file・単位 3 → 4（抽象の追加）、crate 2 → 2。S2 は 4 file・2 単位・1 crate のまま。import する単位は b0 で S1 92 / 369・S2 6 / 14 のまま。test-affected の対象も同じ集合 | D が plan と apply を別 file（`org_write.rs`）に分けたので、S1 の新しい操作は 1 file 多く触る。波及を減らす変更は B〜G に無い（[loc-cost.md](loc-cost.md) §0） | 材料に候補は無い（G の cause は crate 分離を推さなかった）。提案 1・2 で handlers ⇄ cos の組が減ったときに、同じ手順で数え直す |
+| (4) #13 修正の波及 | A の窓 194 件・複数 region 46.9 %・複数 module 69.1 %。B0 の後の窓は no-merges 1 件（0.0 %・0.0 %）、with-merges 9 件（55.6 %・55.6 %）。比較不能 | B0 の後の窓は件数が少なく、9 件はアーキ v4 の commit と WorkUnit の統合の merge で、通常の修正 1 件と粒度が違う（loc-cost.md §3） | 提案 13（同じ snippet を、通常の修正が数十件たまった窓、例えば B0 の後の 2 週間に当てる） |
+| (5) health:S2 の悪化 | 96.09 s（A 81.92 s の +17.3 %、上限 90.11 s を超える）。G が同じ host で測り直した before は 87.26 s、コード由来は `deps.violation` の CPU +2.02 s（+2.3 %） | 規則の上では code だが、人が決定 h1 で「直さない（keep）」と決めた。残りは測った時間帯の host の差（[G の進捗](../2026-11-19-arch-v4-g.md)） | 回帰条件を超えたら `lang_deps.py` の `mod` 宣言の走査を 1 回にまとめる（policy の別 review。G の次の候補） |
+| (5) review の時間と費用（C11） | A の窓 7.625 日・165 run・中央値 1137.5 s・$2.047。after の窓 1.875 日・30 run・514.4 s・$2.167。promo の窓 0.987 日・17 run。比較不能 | 窓の長さが違い、仕事の量も違う（[review-prod.md](review-prod.md) §0） | 提案 14（2026-11-25T06:00Z の後に review-prod.md §7.1 の手順で A と同じ長さの窓を比べる。誰が比べるかは決定 unmet） |
+| (5) 昇格後の設計 review と C の見積もり | promo の窓で要求 7 件・3 task・$14.33。見方 1 は +3.551 回/日・+$8.65/日（見積もり +0.670〜+4.498 回/日・+$1.37〜+$9.21/日の範囲の中）、見方 2 は 6.08 回/日・$12.59/日（上限を超える） | 窓が 1 日で、task がアーキ v4 の 3 件に偏る。見積もりは commit の単位、実績は計画の単位の要求で単位が違う（review-prod.md §6） | 提案 14 と同じ手順。見積もりを見直すかは人が決める（決定 unmet） |
+| (6) LoC | production +822 行（375099 → 375921、すべて Rust）、試験 +4743 行、own_total_with_tests +5829 行 | B〜F が足した code。アーキ v4 の依頼は一律の純減を求めていない（loc-cost.md §0） | 純減は求めない。production が 375921 行を超えて増えたら区分と file を調べる（回帰条件） |
+| 実 prompt: planner の受入条件 | planner の 24 run で task の受入条件 0/126 件（objective の末尾は 24/24） | `crates/task-worker/src/claude_code/prompt.rs` の `build_plan_prompt` が `task.acceptance` を出さない。今の `planner_prompt_*` の試験は受入条件の有無を見ない（[prompt-audit.md](prompt-audit.md)） | 提案 6（planner の prompt に受入条件の節を足すか決める） |
+| 実 prompt: prompt の無い worker の run | 4 run（C の risk-rule 3・D の adr-forms 1）。開始から 2.5〜2.7 秒で lease 喪失により中止、usage null。何が渡るはずだったかは未確認 | run の dir が作られる前に中止された。LLM は呼ばれていない（prompt-audit.md） | 材料に直す候補は無い。run の開始時の spec を残すかは提案 7 と合わせて人が決める |
+| 実 prompt: 過去の WorkUnit の run の監査 | 今の `work_units` 行と比べると 7 run が cut に見える（B の checker 4 run・C の risk-rule 3 run）。開始時の版と比べると欠け 0 | 計画の改訂が同じ id の WorkUnit の行を続きの run 用の文に書き換える（prompt-audit.md） | 提案 7（run の開始時の `execution_plans` の `units[]` で監査する。run ごとの spec を残すか決める） |
+| 判定経路: prompt の試験の範囲 | `prompt_boundary_` が 3,000 文字の objective の末尾を確かめるのは worker の prompt だけ（未達ではない） | planner・design review・final review の prompt の試験は objective の末尾を見ていない（[gate.md](gate.md) §2・§8） | 提案 8（planner と reviewer の prompt に長い objective を入れて末尾を確かめる試験を足すか決める） |
+| 安全不変条件: userns の 9 件 | sqlite_source の `db_guard` 7 件と credential の `injection_peer_uid` 2 件は、env が無いと検査の前に return して pass に数えられた（実質は未検査） | `CELERIS_USERNS_TESTS` などの env を付けていない。release gate（`userns: true`）で検査まで進んだかは、gate log が試験を 1 件ずつ出さないので未確認（[safety.md](safety.md)） | H の統合の後の release gate の log で確かめるか、人が決める。提案 9（gate.json に nextest の件数を入れる）は件数だけで、9 件の個別の結果は出さない |
+| リリースゲート: B・C・D の最初の release | 3 release（B・C・D を最初に含んだもの）の gate・verify は未確認。昇格は promote ログで確かめた | release の dir と `.build` の dir が `release.sh` の掃除で消えた（safety.md の「release gate」節）。B・C・D は後の 4 release にも含まれ、その gate・verify は ok | 提案 10（gate・verify・昇格の要約を消えない場所へ 1 行ずつ残す） |
+| リリースゲート: H | H を含む release は無い（gate・verify・昇格とも未実施） | H の commit は docs だけで、いまの current の release より後 | H の統合の後に人が `release.sh` を回す |
 
 ## 提案
 
-<!-- fill: conclude -->
+どれも提案で、H は起票していない。起票するかは人が決める。出所の D・E・F は [D の進捗](../2026-11-18-arch-v4-d.md)・[E の進捗](../2026-11-18-arch-v4-e.md)・
+[F の進捗](../2026-11-18-arch-v4-f.md) の「提案」の節。struct-deps の提案 3 と prompt-audit の提案 3 は回帰条件なので「回帰条件」の節に入れた。
+F の提案 4（org-write の ADR の付記の表を今の関数に合わせる）は H の struct-store が済ませた（[struct-store.md](struct-store.md) の「4. ADR の付記の表の修正」）。
+
+| # | 提案 | 出所 | 関係する項目 |
+|---|---|---|---|
+| 1 | `cos/ops/admin.rs` → `handlers::accounts` の 9 行（`crate::` 5 行と `super::` 4 行。`pool_adapter`・`create_account_op` ほか）を、org と同じ形（plan と transaction の中の apply を SCC の外の module に置く）へ移す | D の次の候補、struct-deps.md の提案 2 | (1) task-api の SCC の組、(3) handlers ⇄ cos |
+| 2 | `cos/operations.rs` → handlers の HTTP の道具（`ApiResult`・`Params`・`json_response`・`no_query`・`read_json`・`cluster_ids`）を SCC に入らない module に置く | D の次の候補、struct-deps.md の提案 2 | 同上 |
+| 3 | dispatcher の参照を同じ手で減らす次の file: `review_verdict.rs`（store 32・config 3。先に review の順序の設計が要る）、`tree_units.rs`（store 56・config 19）、cos_chat の `root_done.rs`・`triage.rs`・`fallback.rs`（13〜24 の参照）。`work_units.rs` は本体の行が閾値 2000 を超えるので、先に WorkUnit の遷移と commit の副作用を分ける設計が要る | E の次の候補 | (2) #9 dispatcher の参照 |
+| 4 | `chat/attachments.rs` と `cos/inbox.rs`（`triage_db`、`cos/triage_view.rs` の `Connection::open`）の自前の接続を、`SqliteStore` の `write_tx`・読み取りの接続へ移す（`ChatAttachmentStore` の設計と合わせる） | F の提案 1、struct-store.md の提案 | (2) `rusqlite` を書く file |
+| 5 | 4 が済んだ時点で、`knowledge.rs` の有無の旗の用途と合わせて `state.chat.attachment_db_path` を `ChatState` の欄ごと消す。有無の旗は添付の保存の設定（`attachment_data_dir`）から導く | F の提案 2 | 同じ DB の file を指す値が 2 つある状態をなくす |
+| 6 | planner の prompt に task の受入条件の節を足すか決める。owner は `crates/task-worker/src/claude_code/prompt.rs` の `build_plan_prompt`。守る不変条件は「planner の prompt に task の `acceptance[].text` が全部入る」 | prompt-audit.md の提案 1 | 実 prompt: planner の受入条件 0/126 |
+| 7 | 過去の WorkUnit の run の監査は、run の開始時に有効だった `execution_plans` の `units[]` で行う。run ごとの spec を残すか（例: request.json の work_unit の写しを正本にする）を決める | prompt-audit.md の提案 2 | 実 prompt: 7 run の見かけの cut、prompt の無い 4 run |
+| 8 | planner と reviewer（design review・final review）の prompt に長い objective を入れ、末尾まで載ることを確かめる試験を足す | gate.md の提案 | 判定経路: prompt の試験の範囲 |
+| 9 | `release.sh` の gate.json の `cargo_test` に nextest の passed・skipped を入れる（いまの `passed`・`ignored` は doc test の値と nextest の skipped の和に見える） | safety.md の提案 | リリースゲートの記録の読み取り |
+| 10 | release の掃除で消える gate.json・verify.json・promoted.json の要約を、promote ログのように消えない場所へ 1 行ずつ残す | safety.md の提案 | リリースゲート: B・C・D の最初の release |
+| 11 | `docs/architecture-map.md:67` の `#[path]` の説明に check_item・review_limits・inventory の 3 file を足す（文書だけ） | struct-deps.md の提案 1 | (1) #14 `#[path]` と地図の抜け |
+| 12 | A の C4 の正規表現に、「接続を開く行」（`Connection::open`・`TransactionBehavior`・`busy_timeout`）を持つ file の数を補助の指標として並べる（次の計測の規則の変更。H は規則を変えていない） | struct-store.md の提案 | (2) `rusqlite` を書く file |
+| 13 | 修正の波及（A §7 C10）の snippet を、通常の修正が数十件たまった窓（例: B0 の後の 2 週間）に当てる | loc-cost.md §3 の次の候補 | (4) #13 修正の波及 |
+| 14 | 2026-11-25T06:00Z の後（その窓に始まった reviewer run が全部終わった後）に、[review-prod.md](review-prod.md) §7.1 の手順で A と同じ長さの窓の reviewer run と設計 review を比べ、C の見積もりと並べる。誰が比べるかは決定 unmet で人が決める | review-prod.md §7 | (5) review の時間と費用、昇格後の設計 review |
+| 15 | 知識の `knowledge.rs` の `accept_op`・`reject_op`・`put_page_op` を org_write の形へ移す | 「Applied の形の残数と領域ごとの移行の提案」の節、F の提案 3 | `Applied` の形の残数 |
+| 16 | task-api の `lifecycle.rs` の `task_pause_op` を org_write の形へ移す（知識と別の 1 件） | 同上、F の提案 3 | 同上 |
+| 17 | `skills.rs` の `put_skill_op`・`delete_skill_op` を org_write の形へ移す | 同上 | 同上 |
 
 ## 回帰条件
 
-<!-- fill: conclude -->
+後の変更で次の条件が崩れたら、原因を調べる。数値が変わったら、各 md の再現コマンドを新しい `git merge-base HEAD main` と HEAD に当て直す。
+
+`Applied` の形（D の ADR の付記、[struct-store.md](struct-store.md) §3）:
+
+- 広い command `git grep -lE "Option<&('[a-z_]+ )?(crate::cos::operations::)?OperationAudit>" crates/task-api/src` の file の数（applied_wide）が **18 以下**であること（いまは 18）。
+  新しい操作をこの形で足さない。狭い command `git grep -l 'Option<&OperationAudit>' crates/task-api/src` は いま 14。
+- その領域の共有の操作を変える task は、同じ変更で org_write の形へ移す（ADR の付記の撤去の条件）。
+
+G の回帰条件（health・build・test-affected の上限。[G の進捗](../2026-11-19-arch-v4-g.md)「回帰条件」、上限は [G の compare.md](../2026-11-19-arch-v4-g/compare.md) §1 の「A の +10 %」の列）:
+
+- build・test-affected: A の baseline.md §7 の手順（G の [rules.md](../2026-11-19-arch-v4-g/rules.md)）で測った中央値が下の上限を超えたら、before（B0）を同じ host で
+  3 回測り直して原因を絞る（rules.md の ## BEFORE）。
+- health: 同時に並べた before と after の health の wall の差が before の +10 % を超えたら、rule ごとの計時（G の cause の手順、cause.md §5）で rule を絞る。
+  `deps.violation` が原因なら cause.md §3 の修正案を policy の別 review で入れる。health:S2 はいま A の上限を超えている（96.09 s。人の決定 h1 で keep）ので、
+  health は A の上限でなく、この同時に並べた差で見る。
+- 変更波及: S1・S2 の file を選び直したとき、変える crate・再 build される crate・`test-affected.sh --list` の対象が (4) の表より増えたら原因を調べる
+  （import する単位は b0 で S1 92 / 369・S2 6 / 14、head で S1 93 / 365・S2 6 / 14。[loc-cost.md](loc-cost.md) §7）。
+- HEAD の crates/・scripts/・web/・Cargo.lock が G の測定の tree と変わったら、(5) の after は G の値として写せない。health の S1・S2 を G の rules.md の手順で
+  3 回ずつ測り直す（loc-cost.md §7）。
+
+| metric | A の中央値（s） | after の中央値（s） | 上限 = A の +10 %（s） |
+|---|---|---|---|
+| `check_cold` | 53.65 | 53.90 | 59.02 |
+| `check_warm_s1` | 42.47 | 42.64 | 46.72 |
+| `check_warm_s2` | 14.67 | 15.56 | 16.14 |
+| `test_build_cold` | 142.39 | 147.03 | 156.63 |
+| `test_build_warm_s1` | 138.69 | 138.10 | 152.56 |
+| `test_build_warm_s2` | 77.64 | 81.60 | 85.40 |
+| `health_s1` | 86.56 | 93.58 | 95.22 |
+| `health_s2` | 81.92 | 96.09 | 90.11（いま超えている。上の health の条件で見る） |
+| `test_affected_s1` | 893.41 | 906.03 | 982.75 |
+| `test_affected_s2` | 655.59 | 707.76 | 721.15 |
+
+構造（(1)〜(4)。head の検査器で数える）:
+
+- module の循環 17、task-core の SCC の組 210、task-api の SCC の組 261 を超えないこと（struct-deps.md の提案 3）。repo-health の `deps.cycle` は SCC の中の新しい組を
+  fail にする（判定経路の probe a）。
+- handlers → cos の 19 行と、A の C5 の式の cos → handlers の 50 行を超えないこと。`git grep -nE 'handlers::org|handlers::load_org_node|org_commit' -- crates/task-api/src` が
+  空のこと（D の回帰条件）。
+- health の既存負債（`size.responsibility-growth` 94・`dup.contract` 210・owner 不一致 31）が増えないこと。
+- F の境界: `git grep -nE 'Connection::open|TransactionBehavior|busy_timeout' -- crates/task-api/src/knowledge.rs` と
+  `git grep -nE 'Fn(Once|Mut)?\(&(rusqlite::)?(Connection|Transaction)' -- crates/task-ops/src/lifecycle.rs` が 0 件のこと（1 件でも出たら F の境界が戻った印。F の回帰条件）。
+- LoC: 同じ規則（B0 の source-size-report）で production が 375921 行を超えて増えたら、増えた区分と file を調べる（loc-cost.md §7）。
+
+判定経路・実 prompt・安全不変条件:
+
+- `boundary_case_` の 6 件、`prompt_boundary_` の 3 件、`test_repo_health_*.py` の 126 件が通り続けること。本物の検査器に gate.md §3.1 の probe を当てると
+  `deps.cycle` の new の組の finding が出て exit 1、§3.2 の probe（comment 1 行）は exit 0 のままであること（main で `lifecycle -> knowledge` の組が SCC の中にできたら、
+  §3 の手順で、まだ無い組を選び直す。[gate.md](gate.md) §6）。
+- prompt-audit を H と同じ規則で再実行し、worker・reviewer の `objective_tail` の cut が 0 件、prompt のある run の受入条件の欠けが 0 件であること（prompt-audit.md の提案 3）。
+- safety.tsv の 11 の command が pass のままであること（D・E・F の反例試験 `org_write_contract`・`tx_boundary_contract`・`cex_`・`structure_guard`・`write_set_` を含む）。
+  F の `tx_boundary_contract` の 8 件ほかが落ちたら、落ちた経路の commit を git の revert で戻す（F の回帰条件）。
+- review の query: A の窓の再現が 165 run・wall の中央値 1137.5 s・cost の中央値 $2.047・合計 $280.17 に一致すること（query の条件が A と同じことの確認。review-prod.md）。
 
 ## リリースゲート
 

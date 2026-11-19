@@ -497,7 +497,11 @@ impl CosChatLaunch {
     /// One fallback pass. Errors are logged per item and retried next tick;
     /// they never create a new wait.
     pub(crate) fn triage_fallback(&mut self, dispatcher: &Dispatcher, now: OffsetDateTime) {
-        if self.config.enabled && self.config.unavailable_reason.is_none() {
+        let enabled = self.config.enabled;
+        // D4: CoS writes the summary later, once it runs again (capacity wait, a slow run). Not
+        // when CoS is disabled or its launch is known to fail: a request would only fail too.
+        let summary_on = enabled && self.config.unavailable_reason.is_none();
+        if summary_on {
             self.retry_failed_summary_requests(now);
         }
         let found = match candidates(&self.config.db_path) {
@@ -507,7 +511,6 @@ impl CosChatLaunch {
                 return;
             }
         };
-        let enabled = self.config.enabled;
         let after_secs = self.config.triage.fallback_after_secs;
         let due: Vec<(FallbackCandidate, String)> = found
             .into_iter()
@@ -543,17 +546,15 @@ impl CosChatLaunch {
         };
         let mut handed = Vec::new();
         for (c, reason) in due {
-            match self.fallback_one(dispatcher, &mut inbox, &c, &reason, now) {
-                Ok(Some(report)) => handed.push((c, report)),
-                Ok(None) => {}
+            match self.fallback_one(dispatcher, &mut inbox, &c, &reason, summary_on, now) {
+                Ok(Some(report)) if summary_on => handed.push((c, report)),
+                Ok(_) => {}
                 Err(error) => tracing::warn!(%error, item_id = %c.item_id, "CoS fallback failed"),
             }
         }
         // D4: one summary request per pass (at most a triage batch each), not one run per item.
-        if self.config.enabled && self.config.unavailable_reason.is_none() {
-            for chunk in handed.chunks(task_core::chat::triage::COS_TRIAGE_BATCH_MAX) {
-                self.queue_summary_request(chunk, now);
-            }
+        for chunk in handed.chunks(task_core::chat::triage::COS_TRIAGE_BATCH_MAX) {
+            self.queue_summary_request(chunk, now);
         }
     }
 
@@ -563,6 +564,7 @@ impl CosChatLaunch {
         inbox: &mut FallbackInbox,
         c: &FallbackCandidate,
         reason: &str,
+        summary_requested: bool,
         now: OffsetDateTime,
     ) -> Result<Option<CosTriageItemReport>, String> {
         if c.route.is_none() {
@@ -604,7 +606,7 @@ impl CosChatLaunch {
         self.store
             .cos_triage_resolve(&c.item_id, "fallback", None, Some(reason), now)
             .map_err(|e| e.to_string())?;
-        Ok(self.handoff_message(c, reason, now))
+        Ok(self.handoff_message(c, reason, summary_requested, now))
     }
 
     fn notice_source(&self, c: &FallbackCandidate) -> FallbackSource {
@@ -624,6 +626,7 @@ impl CosChatLaunch {
         &mut self,
         c: &FallbackCandidate,
         reason: &str,
+        summary_requested: bool,
         now: OffsetDateTime,
     ) -> Option<CosTriageItemReport> {
         // ADR 2026-10-22-cos-fixed-threads D3: the hand-off line goes to the item's CoS thread.
@@ -636,9 +639,6 @@ impl CosChatLaunch {
             }
         };
         let thread = report.thread_id.clone();
-        // D4: CoS writes the summary later, once it runs again (capacity wait, a slow run). Not
-        // when CoS is disabled or its launch is known to fail: a request would only fail too.
-        let summary_requested = self.config.enabled && self.config.unavailable_reason.is_none();
         let (text, card) = handoff_text(c, reason, Some(&report), summary_requested);
         if let Err(error) = self.store.chat_system_message_add_once(
             &thread,

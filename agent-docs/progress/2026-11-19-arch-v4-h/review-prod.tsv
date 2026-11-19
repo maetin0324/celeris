@@ -1,0 +1,124 @@
+metric	window	value	unit	note
+window_days	A[2026-11-10T00:00Z,2026-11-17T15:00Z)	7.625	day	
+review_runs	A[2026-11-10T00:00Z,2026-11-17T15:00Z)	165	run	A §7 C11: role=reviewer・agent-platform・finished_at not null・started_at が窓の中
+review_runs_with_wall	A[2026-11-10T00:00Z,2026-11-17T15:00Z)	130	run	metrics_json.wall_ms のある run
+review_wall_median	A[2026-11-10T00:00Z,2026-11-17T15:00Z)	1137.5	s	線形補間
+review_wall_p90	A[2026-11-10T00:00Z,2026-11-17T15:00Z)	1887.0	s	線形補間
+review_wall_sum	A[2026-11-10T00:00Z,2026-11-17T15:00Z)	141489.2	s	
+review_runs_with_cost	A[2026-11-10T00:00Z,2026-11-17T15:00Z)	127	run	usage_json.cost_usd のある run
+review_cost_median	A[2026-11-10T00:00Z,2026-11-17T15:00Z)	2.047	USD	線形補間
+review_cost_p90	A[2026-11-10T00:00Z,2026-11-17T15:00Z)	4.247	USD	線形補間
+review_cost_sum	A[2026-11-10T00:00Z,2026-11-17T15:00Z)	280.17	USD	
+review_runs_per_day	A[2026-11-10T00:00Z,2026-11-17T15:00Z)	21.64	run/day	
+review_cost_per_day	A[2026-11-10T00:00Z,2026-11-17T15:00Z)	36.74	USD/day	
+window_days	after[2026-11-17T15:00Z,2026-11-19T12:00Z)	1.875	day	
+review_runs	after[2026-11-17T15:00Z,2026-11-19T12:00Z)	30	run	A §7 C11: role=reviewer・agent-platform・finished_at not null・started_at が窓の中
+review_runs_with_wall	after[2026-11-17T15:00Z,2026-11-19T12:00Z)	27	run	metrics_json.wall_ms のある run
+review_wall_median	after[2026-11-17T15:00Z,2026-11-19T12:00Z)	514.4	s	線形補間
+review_wall_p90	after[2026-11-17T15:00Z,2026-11-19T12:00Z)	1415.9	s	線形補間
+review_wall_sum	after[2026-11-17T15:00Z,2026-11-19T12:00Z)	19025.8	s	
+review_runs_with_cost	after[2026-11-17T15:00Z,2026-11-19T12:00Z)	27	run	usage_json.cost_usd のある run
+review_cost_median	after[2026-11-17T15:00Z,2026-11-19T12:00Z)	2.167	USD	線形補間
+review_cost_p90	after[2026-11-17T15:00Z,2026-11-19T12:00Z)	4.073	USD	線形補間
+review_cost_sum	after[2026-11-17T15:00Z,2026-11-19T12:00Z)	53.62	USD	
+review_runs_per_day	after[2026-11-17T15:00Z,2026-11-19T12:00Z)	16.00	run/day	
+review_cost_per_day	after[2026-11-17T15:00Z,2026-11-19T12:00Z)	28.59	USD/day	
+window_days	promo[2026-11-18T12:18:40Z,2026-11-19T12:00Z)	0.987	day	
+review_runs	promo[2026-11-18T12:18:40Z,2026-11-19T12:00Z)	17	run	A §7 C11: role=reviewer・agent-platform・finished_at not null・started_at が窓の中
+review_runs_with_wall	promo[2026-11-18T12:18:40Z,2026-11-19T12:00Z)	16	run	metrics_json.wall_ms のある run
+review_wall_median	promo[2026-11-18T12:18:40Z,2026-11-19T12:00Z)	434.5	s	線形補間
+review_wall_p90	promo[2026-11-18T12:18:40Z,2026-11-19T12:00Z)	1614.2	s	線形補間
+review_wall_sum	promo[2026-11-18T12:18:40Z,2026-11-19T12:00Z)	11704.0	s	
+review_runs_with_cost	promo[2026-11-18T12:18:40Z,2026-11-19T12:00Z)	16	run	usage_json.cost_usd のある run
+review_cost_median	promo[2026-11-18T12:18:40Z,2026-11-19T12:00Z)	2.036	USD	線形補間
+review_cost_p90	promo[2026-11-18T12:18:40Z,2026-11-19T12:00Z)	2.924	USD	線形補間
+review_cost_sum	promo[2026-11-18T12:18:40Z,2026-11-19T12:00Z)	26.57	USD	
+review_runs_per_day	promo[2026-11-18T12:18:40Z,2026-11-19T12:00Z)	17.22	run/day	
+review_cost_per_day	promo[2026-11-18T12:18:40Z,2026-11-19T12:00Z)	26.92	USD/day	
+window_days	pre_promo[2026-11-17T15:00Z,2026-11-18T12:18:40Z)	0.888	day	
+review_runs	pre_promo[2026-11-17T15:00Z,2026-11-18T12:18:40Z)	13	run	A §7 C11: role=reviewer・agent-platform・finished_at not null・started_at が窓の中
+review_runs_with_wall	pre_promo[2026-11-17T15:00Z,2026-11-18T12:18:40Z)	11	run	metrics_json.wall_ms のある run
+review_wall_median	pre_promo[2026-11-17T15:00Z,2026-11-18T12:18:40Z)	669.1	s	線形補間
+review_wall_p90	pre_promo[2026-11-17T15:00Z,2026-11-18T12:18:40Z)	1238.4	s	線形補間
+review_wall_sum	pre_promo[2026-11-17T15:00Z,2026-11-18T12:18:40Z)	7321.8	s	
+review_runs_with_cost	pre_promo[2026-11-17T15:00Z,2026-11-18T12:18:40Z)	11	run	usage_json.cost_usd のある run
+review_cost_median	pre_promo[2026-11-17T15:00Z,2026-11-18T12:18:40Z)	2.312	USD	線形補間
+review_cost_p90	pre_promo[2026-11-17T15:00Z,2026-11-18T12:18:40Z)	4.238	USD	線形補間
+review_cost_sum	pre_promo[2026-11-17T15:00Z,2026-11-18T12:18:40Z)	27.05	USD	
+review_runs_per_day	pre_promo[2026-11-17T15:00Z,2026-11-18T12:18:40Z)	14.64	run/day	
+review_cost_per_day	pre_promo[2026-11-17T15:00Z,2026-11-18T12:18:40Z)	30.46	USD/day	
+design_reviews	A[2026-11-10T00:00Z,2026-11-17T15:00Z)	27	event	design_review_requested（agent-platform の task）
+design_review_tasks	A[2026-11-10T00:00Z,2026-11-17T15:00Z)	6	task	
+design_reviews_failed	A[2026-11-10T00:00Z,2026-11-17T15:00Z)	11	event	design_reviewed の pass=false
+design_review_runs	A[2026-11-10T00:00Z,2026-11-17T15:00Z)	27	run	design_reviewed.review_run の run（role=reviewer。review_runs に含まれる）
+design_review_wall_median	A[2026-11-10T00:00Z,2026-11-17T15:00Z)	240.8	s	線形補間
+design_review_wall_p90	A[2026-11-10T00:00Z,2026-11-17T15:00Z)	429.7	s	線形補間
+design_review_cost_median	A[2026-11-10T00:00Z,2026-11-17T15:00Z)	1.666	USD	線形補間
+design_review_cost	A[2026-11-10T00:00Z,2026-11-17T15:00Z)	44.77	USD	設計 review の run の cost_usd の合計（cost のある run 26）
+design_reviews_per_day	A[2026-11-10T00:00Z,2026-11-17T15:00Z)	3.541	event/day	
+design_review_cost_per_day	A[2026-11-10T00:00Z,2026-11-17T15:00Z)	5.87	USD/day	
+design_reason_path_class	A[2026-11-10T00:00Z,2026-11-17T15:00Z)	75	reason	risk.reasons の種類ごとの個数
+design_reviews	after[2026-11-17T15:00Z,2026-11-19T12:00Z)	11	event	design_review_requested（agent-platform の task）
+design_review_tasks	after[2026-11-17T15:00Z,2026-11-19T12:00Z)	4	task	
+design_reviews_failed	after[2026-11-17T15:00Z,2026-11-19T12:00Z)	5	event	design_reviewed の pass=false
+design_review_runs	after[2026-11-17T15:00Z,2026-11-19T12:00Z)	11	run	design_reviewed.review_run の run（role=reviewer。review_runs に含まれる）
+design_review_wall_median	after[2026-11-17T15:00Z,2026-11-19T12:00Z)	300.0	s	線形補間
+design_review_wall_p90	after[2026-11-17T15:00Z,2026-11-19T12:00Z)	514.4	s	線形補間
+design_review_cost_median	after[2026-11-17T15:00Z,2026-11-19T12:00Z)	2.312	USD	線形補間
+design_review_cost	after[2026-11-17T15:00Z,2026-11-19T12:00Z)	25.22	USD	設計 review の run の cost_usd の合計（cost のある run 11）
+design_reviews_per_day	after[2026-11-17T15:00Z,2026-11-19T12:00Z)	5.867	event/day	
+design_review_cost_per_day	after[2026-11-17T15:00Z,2026-11-19T12:00Z)	13.45	USD/day	
+design_reviews	promo[2026-11-18T12:18:40Z,2026-11-19T12:00Z)	7	event	design_review_requested（agent-platform の task）
+design_review_tasks	promo[2026-11-18T12:18:40Z,2026-11-19T12:00Z)	3	task	
+design_reviews_failed	promo[2026-11-18T12:18:40Z,2026-11-19T12:00Z)	3	event	design_reviewed の pass=false
+design_review_runs	promo[2026-11-18T12:18:40Z,2026-11-19T12:00Z)	7	run	design_reviewed.review_run の run（role=reviewer。review_runs に含まれる）
+design_review_wall_median	promo[2026-11-18T12:18:40Z,2026-11-19T12:00Z)	300.0	s	線形補間
+design_review_wall_p90	promo[2026-11-18T12:18:40Z,2026-11-19T12:00Z)	418.6	s	線形補間
+design_review_cost_median	promo[2026-11-18T12:18:40Z,2026-11-19T12:00Z)	2.301	USD	線形補間
+design_review_cost	promo[2026-11-18T12:18:40Z,2026-11-19T12:00Z)	14.33	USD	設計 review の run の cost_usd の合計（cost のある run 7）
+design_reviews_per_day	promo[2026-11-18T12:18:40Z,2026-11-19T12:00Z)	7.092	event/day	
+design_review_cost_per_day	promo[2026-11-18T12:18:40Z,2026-11-19T12:00Z)	14.52	USD/day	
+design_reason_declared	promo[2026-11-18T12:18:40Z,2026-11-19T12:00Z)	1	reason	risk.reasons の種類ごとの個数
+design_reason_invariant	promo[2026-11-18T12:18:40Z,2026-11-19T12:00Z)	16	reason	risk.reasons の種類ごとの個数
+design_reason_path_class	promo[2026-11-18T12:18:40Z,2026-11-19T12:00Z)	18	reason	risk.reasons の種類ごとの個数
+design_reviews	pre_promo[2026-11-17T15:00Z,2026-11-18T12:18:40Z)	4	event	design_review_requested（agent-platform の task）
+design_review_tasks	pre_promo[2026-11-17T15:00Z,2026-11-18T12:18:40Z)	1	task	
+design_reviews_failed	pre_promo[2026-11-17T15:00Z,2026-11-18T12:18:40Z)	2	event	design_reviewed の pass=false
+design_review_runs	pre_promo[2026-11-17T15:00Z,2026-11-18T12:18:40Z)	4	run	design_reviewed.review_run の run（role=reviewer。review_runs に含まれる）
+design_review_wall_median	pre_promo[2026-11-17T15:00Z,2026-11-18T12:18:40Z)	329.1	s	線形補間
+design_review_wall_p90	pre_promo[2026-11-17T15:00Z,2026-11-18T12:18:40Z)	616.3	s	線形補間
+design_review_cost_median	pre_promo[2026-11-17T15:00Z,2026-11-18T12:18:40Z)	3.131	USD	線形補間
+design_review_cost	pre_promo[2026-11-17T15:00Z,2026-11-18T12:18:40Z)	10.89	USD	設計 review の run の cost_usd の合計（cost のある run 4）
+design_reviews_per_day	pre_promo[2026-11-17T15:00Z,2026-11-18T12:18:40Z)	4.505	event/day	
+design_review_cost_per_day	pre_promo[2026-11-17T15:00Z,2026-11-18T12:18:40Z)	12.27	USD/day	
+design_reason_path_class	pre_promo[2026-11-17T15:00Z,2026-11-18T12:18:40Z)	11	reason	risk.reasons の種類ごとの個数
+window_days	old_rules[2026-11-09T01:36:42Z,2026-11-18T12:18:40Z)	9.446	day	最初の design_review_requested から C を含む release の昇格まで
+design_reviews	old_rules[2026-11-09T01:36:42Z,2026-11-18T12:18:40Z)	43	event	design_review_requested（agent-platform の task）
+design_review_tasks	old_rules[2026-11-09T01:36:42Z,2026-11-18T12:18:40Z)	10	task	
+design_reviews_failed	old_rules[2026-11-09T01:36:42Z,2026-11-18T12:18:40Z)	18	event	design_reviewed の pass=false
+design_review_runs	old_rules[2026-11-09T01:36:42Z,2026-11-18T12:18:40Z)	43	run	design_reviewed.review_run の run（role=reviewer。review_runs に含まれる）
+design_review_wall_median	old_rules[2026-11-09T01:36:42Z,2026-11-18T12:18:40Z)	238.1	s	線形補間
+design_review_wall_p90	old_rules[2026-11-09T01:36:42Z,2026-11-18T12:18:40Z)	461.2	s	線形補間
+design_review_cost_median	old_rules[2026-11-09T01:36:42Z,2026-11-18T12:18:40Z)	1.674	USD	線形補間
+design_review_cost	old_rules[2026-11-09T01:36:42Z,2026-11-18T12:18:40Z)	75.37	USD	設計 review の run の cost_usd の合計（cost のある run 42）
+design_reviews_per_day	old_rules[2026-11-09T01:36:42Z,2026-11-18T12:18:40Z)	4.552	event/day	
+design_review_cost_per_day	old_rules[2026-11-09T01:36:42Z,2026-11-18T12:18:40Z)	7.98	USD/day	
+design_reason_new_fallback	old_rules[2026-11-09T01:36:42Z,2026-11-18T12:18:40Z)	2	reason	risk.reasons の種類ごとの個数
+design_reason_path_class	old_rules[2026-11-09T01:36:42Z,2026-11-18T12:18:40Z)	142	reason	risk.reasons の種類ごとの個数
+design_reviews_without_new_decl	promo[2026-11-18T12:18:40Z,2026-11-19T12:00Z)	6	event	declared:new_* の無い要求。旧い規則（high_risk path かつ new_*）では High にならなかったと推定（旧い規則での再判定はしていない）
+design_review_cost_without_new_decl	promo[2026-11-18T12:18:40Z,2026-11-19T12:00Z)	12.43	USD	上の 6 件の設計 review の run の cost_usd の合計
+design_reviews_per_day_delta	promo-A	3.551	event/day	見方 1: 昇格後の日あたり − A の窓の日あたり
+design_review_cost_per_day_delta	promo-A	8.65	USD/day	見方 1
+design_reviews_delta_20_9d	promo-A	74.2	event/20.9day	見方 1 を C の見積もりの期間（20.9 日）に直した値
+design_review_cost_delta_20_9d	promo-A	180.77	USD/20.9day	見方 1
+design_reviews_without_new_decl_20_9d	promo[2026-11-18T12:18:40Z,2026-11-19T12:00Z)	127.0	event/20.9day	見方 2: new_* の宣言の無い要求の日あたり × 20.9
+design_review_cost_without_new_decl_20_9d	promo[2026-11-18T12:18:40Z,2026-11-19T12:00Z)	263.20	USD/20.9day	見方 2
+estimate_design_reviews_low	C metrics §5.2	14	event/20.9day	C の見積もり（commit の単位、1 回 $2.047・1,137.5 s）
+estimate_design_reviews_high	C metrics §5.2	94	event/20.9day	C の見積もり（commit の単位、1 回 $2.047・1,137.5 s）
+estimate_design_review_cost_low	C metrics §5.2	28.66	USD/20.9day	C の見積もり（commit の単位、1 回 $2.047・1,137.5 s）
+estimate_design_review_cost_high	C metrics §5.2	192.42	USD/20.9day	C の見積もり（commit の単位、1 回 $2.047・1,137.5 s）
+estimate_design_reviews_per_day_low	C metrics §5.2	0.670	event/day	C の見積もり（commit の単位、1 回 $2.047・1,137.5 s）
+estimate_design_reviews_per_day_high	C metrics §5.2	4.498	event/day	C の見積もり（commit の単位、1 回 $2.047・1,137.5 s）
+estimate_design_review_cost_per_day_low	C metrics §5.2	1.37	USD/day	C の見積もり（commit の単位、1 回 $2.047・1,137.5 s）
+estimate_design_review_cost_per_day_high	C metrics §5.2	9.21	USD/day	C の見積もり（commit の単位、1 回 $2.047・1,137.5 s）
+c_release_promoted_at	release f85df0209504	2026-11-18T12:18:40Z	UTC	promote-20261118-121753.log の handoff done（開始 12:17:53Z）

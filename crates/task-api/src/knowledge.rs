@@ -660,7 +660,7 @@ fn candidate_provenance(
     if !attachments {
         return Ok(Vec::new());
     }
-    let rows = store.attachment_provenance("knowledge_inbox", id)?;
+    let rows = task_core::chat::attachments::attachment_provenance(store, "knowledge_inbox", id)?;
     Ok(rows.into_iter().map(Into::into).collect())
 }
 

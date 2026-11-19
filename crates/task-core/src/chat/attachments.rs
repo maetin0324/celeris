@@ -692,22 +692,21 @@ pub struct AttachmentProvenance {
     pub pinned_at: String,
 }
 
-impl crate::store::SqliteStore {
-    /// Provenance of every attachment pinned to one owner (`task` or `knowledge_inbox`), oldest
-    /// pin first, read on the store's read connection (ADR 2026-11-18
-    /// knowledge-lifecycle-tx-boundary D2). The caller does not hold an SQLite connection.
-    pub fn attachment_provenance(
-        &self,
-        owner_kind: &str,
-        owner_id: &str,
-    ) -> Result<Vec<AttachmentProvenance>, crate::store::StoreError> {
-        self.with_read_conn(|conn| {
-            provenance_for_owner(conn, owner_kind, owner_id).map_err(|e| match e {
-                AttachmentError::Db(e) => crate::store::StoreError::Sqlite(e),
-                other => crate::store::StoreError::Invalid(other.to_string()),
-            })
+/// Provenance of every attachment pinned to one owner (`task` or `knowledge_inbox`), oldest pin
+/// first, read on the store's read connection (ADR 2026-11-18 knowledge-lifecycle-tx-boundary D2).
+/// The caller does not hold an SQLite connection. A free function, not a `SqliteStore` method, so
+/// the attachment SQL stays in this module and the store type does not grow.
+pub fn attachment_provenance(
+    store: &crate::store::SqliteStore,
+    owner_kind: &str,
+    owner_id: &str,
+) -> Result<Vec<AttachmentProvenance>, crate::store::StoreError> {
+    store.with_read_conn(|conn| {
+        provenance_for_owner(conn, owner_kind, owner_id).map_err(|e| match e {
+            AttachmentError::Db(e) => crate::store::StoreError::Sqlite(e),
+            other => crate::store::StoreError::Invalid(other.to_string()),
         })
-    }
+    })
 }
 
 /// Provenance of every attachment pinned to one owner, oldest pin first. Unlike

@@ -161,3 +161,29 @@ measure.snippet の before の辺から、D1 で HTTP の道具だけの行、D2
 
 単位の数は減らない見込み（HTTP の道具を外しても、各単位は route の登録で `handlers` から呼ばれ、別の辺で `handlers` へ戻る）。
 after の値は WorkUnit `after` が測り、行の減りを移動の分（D1〜D3 の移動）と削除の分（D2 の limit_set の解決のまとめなど）に分けて書く。
+
+## 付記（2026-11-19、WorkUnit `accounts`）: D2・D3 の実装で ADR と違えた点
+
+1. `account_write` は ADR の挙げた module に加えて `crate::stats`（`AccountStatsState`・`StatsState`。SCC の外）を使う。一覧
+   （`account_items`）が `spawn_blocking` の中で集計の帳簿を進めるためで、`Inner.account_stats` と `Inner.stats` を
+   `Mutex<…>` から `Arc<Mutex<…>>` にした（使うのは一覧だけ。値と lock の仕方は同じ）。
+2. 引数は field だけの struct `account_write::AccountEnv`（`accounts_roots`・`admin_tx`・`max_runs_per_account`・`store`・
+   daemon の snapshot の受け口 `daemon`・`account_stats`・`stats` の参照）で受ける。値を写すのは `ApiState::account_env`
+   （`state.rs`）。snapshot は値でなく受け口を渡し、作用の後の一覧は今と同じく作用の後の snapshot を読む。
+3. `ApiState::blocking` の本体を `crate::problem::blocking(store, f)` に移し、`ApiState::blocking` と `account_write` の両方が
+   それを呼ぶ（同じ処理を 2 つ書かない）。
+4. D2 が許した `account.limit_set` の解決のまとめを行った。`account_write::limit_adapter` が adapter の名前を返し、解けなければ
+   見つからなかった id（`source_id` か `account_id`）を `Err` で返す。HTTP は `account_not_found(id)`、CoS は同じ problem を
+   `audit.reject` の対象 id に使う（拒否の status・code・文と監査の対象 id は今と同じ）。HTTP の `patch_account_limit_inner` は
+   `patch_account_limit` にまとめた（順序は 解決 → `no_query` → `require_admin` → 本文 → `require_active` → 作用 のまま）。
+5. `require_active` は作用から外し、HTTP は作用の直前に `?` で、CoS は `external` の closure の中で `Ok(Err(standby))` として
+   返す（`crate::middleware::require_active`。cos → middleware の組は `cos/override_op.rs` で既にある）。
+6. `check_account_effect` の `checked_at` は `handlers::now_rfc3339` と同じ書式（`Rfc3339`、失敗時は `to_string`）を
+   `account_write` の中で作る（`account_write` は `handlers` を use しない。`now_rfc3339` は D1 のとおり `handlers.rs` に残した）。
+7. `Effect`・`effect_result` の呼び出し元は D3 の一覧の他に `chat/attachments.rs`・`model_catalog.rs`・`notify.rs`・
+   `releases.rs`・`cos/ops/admin.rs` があり、すべて `crate::problem` に直した。`releases.rs` は selfdeploy の高 risk path だが、
+   変えたのは型の path 2 行だけ。これで notify → cos と releases → cos の組も消えた。
+8. `pool_source_id`・`account_items`・`account_admin_error` は HTTP の一覧と login の route も使うので `pub(crate)` にした。
+
+after（HEAD、head の検査器）: task-api の SCC の組 261 → 230（消えた 31・増えた 0）、ta_scc_lines 622 → 538、
+handlers → cos 19 → 14、cos → handlers 50 → 29（`super::` 4 → 0）、単位 49 → 49。値の正本は WorkUnit `after` の metrics.tsv。

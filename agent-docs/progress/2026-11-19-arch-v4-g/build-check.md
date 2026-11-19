@@ -43,7 +43,7 @@ after は `git merge-base HEAD main`（この WorkUnit の `$CELERIS_WU_BASE` �
 - 測った時刻は 2026-11-19T05:38Z〜05:46Z（UTC）。host home-dev、24 core、cargo 1.98.1 / rustc 1.98.1（A と同じ版）。
 - `CARGO_TARGET_DIR` は Celeris が渡した値、`CARGO_INCREMENTAL=0`・`CARGO_PROFILE_DEV_DEBUG=line-tables-only`、rustc-wrapper は host の sccache（A と同じ。
   したがって cold は「target dir が空で sccache の cache は host のまま」）。
-- 全 9 回の `src_tree`（`git rev-parse HEAD:crates`）は `a4f737a01c6040dd1761648a19c6aaa38c1383e0` で、scenarios.env の `AFTER_CRATES_TREE` と一致した。
+- 全 9 回の `src_tree`（`git rev-parse HEAD:crates` の tree の id。値は TSV の列）は scenarios.env の `AFTER_CRATES_TREE` と一致した（note に書くことは無い）。
 
 ## 2. A と条件が違う点
 

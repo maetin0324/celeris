@@ -1,0 +1,4 @@
+metric	scenario	rev	run	seconds	user_s	sys_s	exit	load1_start	valid	src_tree	note
+health	S2	after	1	88.38	70.75	8.45	1	1.35	yes	a4f737a01c6040dd1761648a19c6aaa38c1383e0	attempt=1 waited=0s load=1.35 1.56 4.21 rss_kb=645812 fail_rules=size.responsibility-growth;source-size; findings=699 new=4 worsened=2 existing=693 base=HEAD(9dbef4eb) checker=after same_window_reference
+health	S2	after	2	93.50	71.62	8.92	1	2.54	yes	a4f737a01c6040dd1761648a19c6aaa38c1383e0	attempt=2 waited=0s load=2.54 1.83 3.80 rss_kb=645956 fail_rules=size.responsibility-growth;source-size; findings=699 new=4 worsened=2 existing=693 base=HEAD(9dbef4eb) checker=after same_window_reference
+health	S2	after	3	88.89	70.90	8.49	1	1.92	yes	a4f737a01c6040dd1761648a19c6aaa38c1383e0	attempt=3 waited=0s load=1.92 2.06 3.55 rss_kb=646084 fail_rules=size.responsibility-growth;source-size; findings=699 new=4 worsened=2 existing=693 base=HEAD(9dbef4eb) checker=after same_window_reference

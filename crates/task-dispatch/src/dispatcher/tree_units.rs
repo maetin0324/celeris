@@ -356,7 +356,8 @@ impl Dispatcher {
 
     /// ADR-0079 D7（Phase R3a）: 木の節点の worker の run の `result.json` の `decisions` を読み、検証して
     /// （`task_core::decision::prepare_worker_decisions`: 形・指す先・key の重複・`max_open_decisions` の残りを超えた分の
-    /// 束ね）、記録する event と止める unit を組み立てる。書き込みはしない。木が無効・木の節点でない・ファイルが
+    /// 束ね・受け付けなかった要求のまとめ〈ADR 2026-11-18-rejected-worker-decisions-reach-human〉）、記録する event と
+    /// 止める unit を組み立てる。書き込みはしない。木が無効・木の節点でない・ファイルが
     /// 無い・`decisions` が無ければ `None`（従来と 1 バイトも変わらない）。
     pub(super) fn worker_decisions(
         &self,
@@ -394,10 +395,10 @@ impl Dispatcher {
             units.iter().filter_map(|u| u.phase.clone()).collect();
         let root_id = task_core::tree::root_id_of(task);
         let rows = self.store.decisions_list(Some(root_id))?;
-        let taken: std::collections::BTreeSet<String> = rows
+        let taken: std::collections::BTreeMap<String, String> = rows
             .iter()
             .filter(|r| r.task_id == task.id)
-            .map(|r| r.key.clone())
+            .map(|r| (r.key.clone(), r.request.question.clone()))
             .collect();
         let open_tree = rows
             .iter()
@@ -431,7 +432,10 @@ impl Dispatcher {
                 ),
             ));
         }
-        if batch.accepted.is_empty() {
+        // ADR 2026-11-18-rejected-worker-decisions-reach-human D1: 受け付けなかった要求は 1 件の決定（`needed_before:
+        // self`）にまとめて受け付けた決定と同じく記録する（受信箱・通知に出て、要求を出した仕事を止める）。
+        let recorded: Vec<&task_core::DecisionSpec> = batch.recorded().collect();
+        if recorded.is_empty() {
             return Ok(Some(WorkerDecisions {
                 events,
                 held_rows: Vec::new(),
@@ -460,11 +464,10 @@ impl Dispatcher {
             origin: task_core::DecisionOrigin::Worker,
         };
         let self_target = self_key.unwrap_or(task_core::decision::NEEDED_BEFORE_SELF);
-        let self_hold = batch
-            .accepted
+        let self_hold = recorded
             .iter()
             .any(|d| d.needed_before.iter().any(|n| n == self_target));
-        for spec in &batch.accepted {
+        for spec in &recorded {
             events.push(Event::DecisionRequested {
                 decision: Box::new(task_core::decision::request_from_spec(
                     spec,
@@ -489,7 +492,7 @@ impl Dispatcher {
                 .phase
                 .as_deref()
                 .map(|p| format!("{}{p}", task_core::decision::NEEDED_BEFORE_STAGE_PREFIX));
-            let named = batch.accepted.iter().any(|d| {
+            let named = recorded.iter().any(|d| {
                 d.needed_before
                     .iter()
                     .any(|n| n == &u.key || stage_ref.as_deref() == Some(n.as_str()))
@@ -515,7 +518,7 @@ impl Dispatcher {
             events,
             held_rows,
             self_hold,
-            count: batch.accepted.len(),
+            count: recorded.len(),
         }))
     }
 

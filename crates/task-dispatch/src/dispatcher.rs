@@ -238,7 +238,7 @@ struct WorkerDecisions {
     held_rows: Vec<task_core::WorkUnitRow>,
     /// `needed_before: self` の決定がある（leaf なら done にせず止める、atomic なら節点を止める）。
     self_hold: bool,
-    /// 記録する決定の数（束ねた後）。
+    /// 記録する決定の数（束ねた後。受け付けなかった要求のまとめを含む）。
     count: usize,
 }
 

@@ -229,7 +229,7 @@ fn raw(key: &str, needed_before: &[&str]) -> serde_json::Value {
 fn worker_decisions_are_validated_and_self_is_resolved() {
     let units: BTreeSet<String> = ["a", "b"].iter().map(|s| s.to_string()).collect();
     let stages: BTreeSet<String> = ["s1"].iter().map(|s| s.to_string()).collect();
-    let taken: BTreeSet<String> = ["h0"].iter().map(|s| s.to_string()).collect();
+    let taken: BTreeMap<String, String> = [("h0".to_string(), "question h0?".to_string())].into();
     let items = vec![
         raw("w1", &["self"]),
         raw("w2", &["b", "stage:s1"]),
@@ -258,7 +258,7 @@ fn worker_decisions_are_validated_and_self_is_resolved() {
         None,
         &BTreeSet::new(),
         &BTreeSet::new(),
-        &BTreeSet::new(),
+        &BTreeMap::new(),
         8,
     );
     assert_eq!(atomic.accepted.len(), 1);
@@ -274,7 +274,7 @@ fn worker_decisions_are_validated_and_self_is_resolved() {
 #[test]
 fn worker_decisions_beyond_the_cap_are_bundled() {
     let units: BTreeSet<String> = ["a", "b", "c"].iter().map(|s| s.to_string()).collect();
-    let taken: BTreeSet<String> = [BUNDLE_KEY].iter().map(|s| s.to_string()).collect();
+    let taken: BTreeMap<String, String> = [(BUNDLE_KEY.to_string(), "q".to_string())].into();
     let mut high = spec("w3", &["c"]);
     high.cost_of_reversal = CostOfReversal::High;
     let items = vec![
@@ -303,7 +303,7 @@ fn worker_decisions_beyond_the_cap_are_bundled() {
         None,
         &units,
         &BTreeSet::new(),
-        &BTreeSet::new(),
+        &BTreeMap::new(),
         0,
     );
     assert_eq!(zero.accepted.len(), 1);
@@ -313,7 +313,7 @@ fn worker_decisions_beyond_the_cap_are_bundled() {
         None,
         &units,
         &BTreeSet::new(),
-        &BTreeSet::new(),
+        &BTreeMap::new(),
         1,
     );
     assert_eq!(
@@ -324,6 +324,109 @@ fn worker_decisions_beyond_the_cap_are_bundled() {
             .collect::<Vec<_>>(),
         vec![BUNDLE_KEY]
     );
+}
+
+/// ADR 2026-11-18-rejected-worker-decisions-reach-human D1・D3: 受け付けなかった要求は 1 件の決定 `rejected` に
+/// まとまり、`needed_before` は要求を出した仕事（leaf の key / atomic なら `self`）。本番の事象と同じく integrate の
+/// unit 名（`needed_before: ["integrate-s1"]`）を指した要求、形の誤り・読めない要素・問いの違う key の重複が入り、
+/// 問いが同じ key の重複（読み直し）は入らない。同じ問いのまとめが記録済みなら出し直さない。守る不変条件は
+/// 「受け付けなかった要求が人に届く決定になる」こと。既存の 2 試験は `rejected` の数しか見ないので、これを検出できない。
+#[test]
+fn rejected_worker_decisions_become_one_self_decision() {
+    // 計画の unit（Integrate の unit は呼び出し側が除く）と段階。
+    let units: BTreeSet<String> = ["a", "b"].iter().map(|s| s.to_string()).collect();
+    let stages: BTreeSet<String> = ["s1"].iter().map(|s| s.to_string()).collect();
+    let taken: BTreeMap<String, String> = [
+        ("h0".to_string(), "question h0?".to_string()),
+        ("h1".to_string(), "an older question".to_string()),
+        (REJECTED_KEY.to_string(), "an older summary".to_string()),
+    ]
+    .into();
+    let mut high = spec("w2", &["b"]);
+    high.options = vec![opt("a")];
+    high.cost_of_reversal = CostOfReversal::High;
+    let items = vec![
+        raw("ok", &["b"]),
+        raw("trim", &["integrate-s1"]),
+        serde_json::to_value(high).unwrap(),
+        serde_json::json!({"key": "w5", "question": "q5"}),
+        raw("h0", &["b"]),
+        raw("h1", &["b"]),
+    ];
+    let batch = prepare_worker_decisions(&items, Some("a"), &units, &stages, &taken, 8);
+    assert_eq!(
+        batch
+            .accepted
+            .iter()
+            .map(|d| d.key.as_str())
+            .collect::<Vec<_>>(),
+        vec!["ok"]
+    );
+    assert_eq!(batch.rejected.len(), 5, "{:?}", batch.rejected);
+    let e = batch
+        .escalated
+        .as_ref()
+        .expect("the rejected ones reach a human");
+    assert_eq!(e.key, "rejected-2", "the plain key is taken");
+    assert_eq!(
+        e.needed_before,
+        vec!["a".to_string()],
+        "holds the leaf itself"
+    );
+    assert_eq!(e.cost_of_reversal, CostOfReversal::High);
+    assert!(validate_shape(e).is_empty(), "{:?}", validate_shape(e));
+    assert_eq!(
+        batch.recorded().map(|d| d.key.as_str()).collect::<Vec<_>>(),
+        vec!["ok", "rejected-2"]
+    );
+    for needle in [
+        "決定の要求 4 件",
+        "1) trim question trim?（選択肢: a=label a / b=label b。推奨: label a）",
+        r#"needed_before names an unknown unit "integrate-s1""#,
+        "2) w2 question w2?",
+        "3) #4 w5 q5。受け付けなかった理由: decision #4:",
+        "4) h1 question h1?",
+    ] {
+        assert!(e.question.contains(needle), "{needle:?} in {}", e.question);
+    }
+    assert!(
+        !e.question.contains("h0 question h0?"),
+        "the same key with the same question is a re-read: {}",
+        e.question
+    );
+    assert_eq!(
+        e.cost_note.as_deref(),
+        Some("受け付けなかった決定: trim, w2, #4, h1")
+    );
+    // atomic の run: `self` のまま。
+    let atomic = prepare_worker_decisions(
+        &items[1..2],
+        None,
+        &BTreeSet::new(),
+        &BTreeSet::new(),
+        &BTreeMap::new(),
+        8,
+    );
+    let ae = atomic.escalated.expect("atomic run");
+    assert_eq!(ae.key, REJECTED_KEY);
+    assert_eq!(ae.needed_before, vec![NEEDED_BEFORE_SELF.to_string()]);
+    assert_eq!(ae.cost_of_reversal, CostOfReversal::Medium);
+    // 同じ問いのまとめが記録済み（古い `result.json` の読み直し）なら出し直さない。
+    let recorded: BTreeMap<String, String> = [(ae.key.clone(), ae.question.clone())].into();
+    let again = prepare_worker_decisions(
+        &items[1..2],
+        None,
+        &BTreeSet::new(),
+        &BTreeSet::new(),
+        &recorded,
+        8,
+    );
+    assert_eq!(again.rejected.len(), 1);
+    assert!(again.escalated.is_none());
+    // 拒否が無ければ（受け付けた・束ねただけなら）まとめは無い。
+    let clean = prepare_worker_decisions(&items[..1], Some("a"), &units, &stages, &taken, 0);
+    assert!(clean.escalated.is_none());
+    assert!(clean.rejected.is_empty());
 }
 
 /// D7 / R1a (e): `decision.schema.json` の生成スキーマとコミット済みファイルの一致。

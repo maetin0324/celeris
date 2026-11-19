@@ -685,11 +685,7 @@ async fn worker_declared_decisions() {
         DecisionAdapter::new(vec![plan])
             .declaring(
                 "a",
-                serde_json::json!([
-                    decision_spec("w1", &["self"]),
-                    decision_spec("w2", &["c"]),
-                    {"key": "broken"},
-                ]),
+                serde_json::json!([decision_spec("w1", &["self"]), decision_spec("w2", &["c"]),]),
             )
             .declaring("k", serde_json::json!([decision_spec("wk", &["self"])])),
     );
@@ -729,13 +725,9 @@ async fn worker_declared_decisions() {
     }
     assert!(
         store.decisions_list(Some(root_id)).unwrap().len() == 2,
-        "the malformed one is dropped"
+        "w1 and w2 only"
     );
     let events = store.events_for(root_id).unwrap();
-    assert!(events.iter().any(|(_, e)| matches!(
-        e,
-        Event::WorkerProgress { msg, .. } if msg.contains("worker の決定の要求を記録できませんでした")
-    )));
     assert_eq!(unit_reasons(&events, "a"), vec!["dispatch", "decision"]);
     assert_eq!(store.get(root_id).unwrap().unwrap().status, Status::Ready);
     no_questions(&store, root_id);
@@ -791,6 +783,114 @@ async fn worker_declared_decisions() {
     assert_eq!(unit(&units, "c").status, task_core::WorkUnitStatus::Done);
     assert_eq!(store.get(root_id).unwrap().unwrap().status, Status::Done);
     no_questions(&store, root_id);
+    assert_replay_is_clean(&store);
+}
+
+/// ADR 2026-11-18-rejected-worker-decisions-reach-human: 本番の事象（01M7Q5ZABN9NFQCH6QBTTP3EZ8 の target-leaf）と
+/// 同じく、leaf が `needed_before` に integrate の unit 名（`integrate-s1`）を書いた決定の要求を出す。要求は受け付け
+/// られないが、黙って進まない: decisions に `rejected` の行（open・origin worker・`needed_before = [leaf]`、問いに元の
+/// 問いと拒否の理由）ができて受信箱の未回答の決定に出て、leaf は done にならず `blocked(decision)`、integrate も進まない。
+/// 答えると leaf が走り直し、前置きの「人の決定」節に答えが入り、木が終わる。修正の前は decisions が空で leaf は done、
+/// 木は done まで進んだ（`worker_declared_decisions` は受け付けた要求しか見ないので、これを検出できない）。
+#[tokio::test]
+async fn rejected_worker_decision_reaches_the_inbox_and_holds_the_leaf() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let root = root_task(dir.path());
+    let root_id = root.id;
+    store.create_task(&root, vec![]).unwrap();
+    let plan = v3_plan(
+        vec![stage("s1", false)],
+        vec![leaf("a", "s1", &[]), leaf("b", "s1", &[])],
+    );
+    let adapter = Arc::new(DecisionAdapter::new(vec![plan]).declaring(
+        "a",
+        serde_json::json!([decision_spec("trim", &["integrate-s1"])]),
+    ));
+    let mut d = tree_dispatcher(&store, adapter.clone());
+    run_until_quiet(&mut d, &store, 1500).await;
+
+    // run の結果: leaf は done にならず止まり、integrate も root も進まない。
+    let units = store.work_units_for(root_id).unwrap();
+    assert!(blocked_by_decision(&units, "a"), "{units:?}");
+    assert_eq!(unit(&units, "b").status, task_core::WorkUnitStatus::Done);
+    assert_ne!(
+        unit(&units, "integrate-s1").status,
+        task_core::WorkUnitStatus::Done
+    );
+    assert_eq!(store.get(root_id).unwrap().unwrap().status, Status::Ready);
+    // decisions の行: 拒否した要求をまとめた 1 件だけ。
+    let rows = store.decisions_list(Some(root_id)).unwrap();
+    assert_eq!(
+        rows.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(),
+        vec![task_core::decision::REJECTED_KEY]
+    );
+    let row = &rows[0];
+    assert_eq!(row.status, task_core::DecisionStatus::Open);
+    assert_eq!(row.needed_before, vec!["a".to_string()]);
+    assert_eq!(
+        row.request.raised_by.origin,
+        task_core::DecisionOrigin::Worker
+    );
+    assert_eq!(
+        row.request.raised_by.run_id.as_deref(),
+        unit(&units, "a").last_run_id.as_deref()
+    );
+    for needle in [
+        "question trim",
+        "org-vault=org vault / manual=manual entry",
+        r#"needed_before names an unknown unit "integrate-s1""#,
+    ] {
+        assert!(
+            row.request.question.contains(needle),
+            "{needle:?} in {}",
+            row.request.question
+        );
+    }
+    // 受信箱: 未回答の決定（受信箱・通知の対象）に出る。
+    let inbox = task_ops::decision::open_rows(store.as_ref()).unwrap();
+    assert_eq!(
+        inbox.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+        vec![row.id.as_str()]
+    );
+    // 進行の 1 行（理由）は今までどおり残る。
+    let events = store.events_for(root_id).unwrap();
+    assert!(events.iter().any(|(_, e)| matches!(
+        e,
+        Event::WorkerProgress { msg, .. } if msg.contains("worker の決定の要求を記録できませんでした")
+            && msg.contains("integrate-s1")
+    )));
+    assert_eq!(unit_reasons(&events, "a"), vec!["dispatch", "decision"]);
+    no_questions(&store, root_id);
+
+    // 答える → a が走り直し、前置きに答え（元の問いと理由を含む）が入り、木が終わる。
+    let outcome = answer(
+        &store,
+        &row.id,
+        Some("see-note"),
+        Some("trim は別 task にする"),
+    );
+    assert_eq!(outcome.resumed, vec!["a".to_string()]);
+    let report = run_until_idle(&mut d, 1500).await;
+    assert!(report.idle, "{report:?}");
+    let units = store.work_units_for(root_id).unwrap();
+    assert_eq!(unit(&units, "a").status, task_core::WorkUnitStatus::Done);
+    assert_eq!(unit(&units, "a").runs, 2);
+    let a_contexts = adapter.work_unit_contexts("a");
+    assert_eq!(a_contexts.len(), 2);
+    assert_eq!(a_contexts[1].human_decisions.len(), 1);
+    let line = &a_contexts[1].human_decisions[0];
+    assert!(
+        line.starts_with("- rejected worker が出した決定の要求 1 件")
+            && line.contains("question trim")
+            && line.ends_with("note に書いた答えで進める（推奨と異なる） — trim は別 task にする"),
+        "{line}"
+    );
+    assert_eq!(
+        unit(&units, "integrate-s1").status,
+        task_core::WorkUnitStatus::Done
+    );
+    assert_eq!(store.get(root_id).unwrap().unwrap().status, Status::Done);
     assert_replay_is_clean(&store);
 }
 

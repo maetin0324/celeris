@@ -9,7 +9,7 @@
 //!
 //! 回答の流れ（API・MCP・受信箱・通知）は R3a。ここは型と形の検証だけ。
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -389,6 +389,10 @@ pub const BUNDLE_KEY: &str = "bundle";
 /// R3a: 束ねた決定の選択肢。
 pub const BUNDLE_OPTION_RECOMMENDED: &str = "all-recommended";
 pub const BUNDLE_OPTION_NOTE: &str = "see-note";
+/// ADR 2026-11-18-rejected-worker-decisions-reach-human D1: 受け付けられなかった worker の決定の要求をまとめた決定の
+/// key（衝突すれば `rejected-2`, `rejected-3`, …）。選択肢は束ねと同じ key（[`BUNDLE_OPTION_RECOMMENDED`] /
+/// [`BUNDLE_OPTION_NOTE`]）。
+pub const REJECTED_KEY: &str = "rejected";
 
 /// R3a: 回答（または人の取り下げ）が daemon に対して持つ効き目。**決定の種類と選択肢の key だけから決まる**
 /// （[`answer_effect`]。ADR-0079 付記「R3a 実装時の逸脱・明確化」の表）。
@@ -569,47 +573,90 @@ pub struct WorkerDecisionBatch {
     pub rejected: Vec<String>,
     /// 束ねた決定の元の key（束ねなければ空）。
     pub bundled: Vec<String>,
+    /// ADR 2026-11-18-rejected-worker-decisions-reach-human D1: 受け付けられなかった要求を 1 件にまとめた決定
+    /// （key [`REJECTED_KEY`]、`needed_before` は `self`〈leaf の run なら leaf の key〉）。人に出すものが無ければ `None`
+    /// （拒否が無い・key の重複が同じ問いの読み直しだけ・同じ問いのまとめが記録済み。D3）。上限 `cap` は数えない。
+    pub escalated: Option<DecisionSpec>,
+}
+
+impl WorkerDecisionBatch {
+    /// 記録する決定: 受け付けた決定（束ねを含む）と、受け付けなかった要求のまとめ（D1）。
+    pub fn recorded(&self) -> impl Iterator<Item = &DecisionSpec> {
+        self.accepted.iter().chain(self.escalated.iter())
+    }
+}
+
+/// ADR 2026-11-18-rejected-worker-decisions-reach-human D1: 受け付けなかった要求 1 件（まとめの問いの 1 行の材料）。
+struct RejectedRequest {
+    /// 元の要求の 1 行（読めた要求は [`spec_summary`]、読めなかった要素は位置 `#n`）。
+    summary: String,
+    reason: String,
+    /// 読めた要求の後戻りの大きさ（読めなければ `None` = 分からない）。
+    cost: Option<CostOfReversal>,
 }
 
 /// R3a: worker の決定を検証する（形・`needed_before` の指す先・key の重複）。`self_key` は leaf（WU）の run
 /// ならその key（`self` をこれに書き換える）、atomic の run なら `None`（`self` のまま = 節点を止める）。
 /// `units` / `stages` は計画の unit と段階の key（atomic なら空: `self` 以外は指せない）。`taken` は
-/// この節点で既に使われている決定の key。`cap` は新しく開ける決定の数（D3 の `max_open_decisions`
+/// この節点で既に使われている決定の key とその問い。`cap` は新しく開ける決定の数（D3 の `max_open_decisions`
 /// の残り）: 超えれば先頭 `cap − 1` 件を残し、残りを 1 件の決定に束ねる（`cap = 0` でも 1 件には束ねる）。
+/// 受け付けなかった要求は `rejected`（進行の 1 行の理由）に入れ、人に出すものを 1 件の決定 `escalated` にまとめる
+/// （ADR 2026-11-18-rejected-worker-decisions-reach-human）。
 pub fn prepare_worker_decisions(
     raw: &[serde_json::Value],
     self_key: Option<&str>,
     units: &BTreeSet<String>,
     stages: &BTreeSet<String>,
-    taken: &BTreeSet<String>,
+    taken: &BTreeMap<String, String>,
     cap: usize,
 ) -> WorkerDecisionBatch {
     let mut out = WorkerDecisionBatch::default();
-    let mut used: BTreeSet<String> = taken.clone();
+    // key → 問い（記録済みと、この run で受け付けたもの）。
+    let mut used: BTreeMap<String, String> = taken.clone();
+    let mut lost: Vec<RejectedRequest> = Vec::new();
     for (i, item) in raw.iter().enumerate() {
         let mut spec: DecisionSpec = match serde_json::from_value(item.clone()) {
             Ok(s) => s,
             Err(e) => {
-                out.rejected.push(format!("decision #{}: {e}", i + 1));
+                let reason = format!("decision #{}: {e}", i + 1);
+                lost.push(RejectedRequest {
+                    summary: raw_summary(i, item),
+                    reason: reason.clone(),
+                    cost: None,
+                });
+                out.rejected.push(reason);
                 continue;
             }
         };
         let errors = validate_shape(&spec);
         if !errors.is_empty() {
-            out.rejected.push(
-                errors
-                    .iter()
-                    .map(|e| e.to_string())
-                    .collect::<Vec<_>>()
-                    .join("; "),
-            );
+            let reason = errors
+                .iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join("; ");
+            lost.push(RejectedRequest {
+                summary: spec_summary(&spec),
+                reason: reason.clone(),
+                cost: Some(spec.cost_of_reversal),
+            });
+            out.rejected.push(reason);
             continue;
         }
-        if used.contains(&spec.key) {
-            out.rejected.push(format!(
+        if let Some(question) = used.get(&spec.key) {
+            let reason = format!(
                 "decision {}: the key is already used on this node",
                 spec.key
-            ));
+            );
+            // D3: 同じ key・同じ問いは同じ要求の読み直し（記録済み）。問いが違えば別の要求なので人に出す。
+            if *question != spec.question {
+                lost.push(RejectedRequest {
+                    summary: spec_summary(&spec),
+                    reason: reason.clone(),
+                    cost: Some(spec.cost_of_reversal),
+                });
+            }
+            out.rejected.push(reason);
             continue;
         }
         let mut targets: Vec<String> = Vec::new();
@@ -635,14 +682,20 @@ pub fn prepare_worker_decisions(
             }
         }
         if let Some(why) = bad {
-            out.rejected.push(format!(
+            let reason = format!(
                 "decision {}: needed_before names an {why} (use self, a unit key of the plan or stage:<key>)",
                 spec.key
-            ));
+            );
+            lost.push(RejectedRequest {
+                summary: spec_summary(&spec),
+                reason: reason.clone(),
+                cost: Some(spec.cost_of_reversal),
+            });
+            out.rejected.push(reason);
             continue;
         }
         spec.needed_before = targets;
-        used.insert(spec.key.clone());
+        used.insert(spec.key.clone(), spec.question.clone());
         out.accepted.push(spec);
     }
     if out.accepted.len() > cap {
@@ -651,17 +704,121 @@ pub fn prepare_worker_decisions(
         if rest.len() == 1 {
             out.accepted.extend(rest);
         } else {
-            let mut key = BUNDLE_KEY.to_string();
-            let mut n = 2;
-            while used.contains(&key) {
-                key = format!("{BUNDLE_KEY}-{n}");
-                n += 1;
-            }
+            let key = free_key(BUNDLE_KEY, &used);
             out.bundled = rest.iter().map(|d| d.key.clone()).collect();
-            out.accepted.push(bundle_decisions(&key, &rest, cap));
+            let bundle = bundle_decisions(&key, &rest, cap);
+            used.insert(bundle.key.clone(), bundle.question.clone());
+            out.accepted.push(bundle);
+        }
+    }
+    if !lost.is_empty() {
+        let key = free_key(REJECTED_KEY, &used);
+        let target = self_key.unwrap_or(NEEDED_BEFORE_SELF);
+        let escalated = rejected_decision(&key, &lost, target);
+        // D3: 同じ問いのまとめがこの節点に記録済みなら（古い `result.json` の読み直し）出し直さない。
+        if !taken.values().any(|q| *q == escalated.question) {
+            out.escalated = Some(escalated);
         }
     }
     out
+}
+
+/// `base`、衝突すれば `base-2`, `base-3`, … のうち `used` に無い最初の key。
+fn free_key(base: &str, used: &BTreeMap<String, String>) -> String {
+    let mut key = base.to_string();
+    let mut n = 2;
+    while used.contains_key(&key) {
+        key = format!("{base}-{n}");
+        n += 1;
+    }
+    key
+}
+
+/// 決定 1 件の 1 行の要約（`<key> <問い>（選択肢: <key>=<label> / …。推奨: <label>）`）。束ねと拒否のまとめの問いが使う。
+fn spec_summary(d: &DecisionSpec) -> String {
+    let recommended = d
+        .options
+        .iter()
+        .find(|o| o.key == d.recommended)
+        .map(|o| o.label.as_str())
+        .unwrap_or(d.recommended.as_str());
+    let options = d
+        .options
+        .iter()
+        .map(|o| format!("{}={}", o.key, o.label))
+        .collect::<Vec<_>>()
+        .join(" / ");
+    format!(
+        "{} {}（選択肢: {options}。推奨: {recommended}）",
+        d.key, d.question
+    )
+}
+
+/// 読めなかった要素の 1 行の要約（位置 `#n` と、読めれば文字列の `key` と `question`）。
+fn raw_summary(i: usize, item: &serde_json::Value) -> String {
+    let mut out = format!("#{}", i + 1);
+    for field in ["key", "question"] {
+        if let Some(v) = item.get(field).and_then(|v| v.as_str()) {
+            out.push(' ');
+            out.push_str(v);
+        }
+    }
+    out
+}
+
+/// 後戻りの大きさの大きい方。
+fn max_cost(a: CostOfReversal, b: CostOfReversal) -> CostOfReversal {
+    match (a, b) {
+        (_, CostOfReversal::High) | (CostOfReversal::High, _) => CostOfReversal::High,
+        (_, CostOfReversal::Medium) | (CostOfReversal::Medium, _) => CostOfReversal::Medium,
+        _ => CostOfReversal::Low,
+    }
+}
+
+/// ADR 2026-11-18-rejected-worker-decisions-reach-human D1: 受け付けなかった要求を 1 件の `choice` にまとめる。問いに
+/// 各要求の要約と拒否の理由を列挙し、選択肢は束ねと同じ、`needed_before` は `target`（要求を出した仕事そのもの）、
+/// 後戻りは読めた要求の最大（読めない要求があれば `high`）。
+fn rejected_decision(key: &str, lost: &[RejectedRequest], target: &str) -> DecisionSpec {
+    let mut question = format!(
+        "worker が出した決定の要求 {} 件を受け付けられなかったため、この仕事を答えが出るまで止めました。答えは次の run の前置きに入ります。note に各問いへの答えを書くか、推奨どおりに進めてください。",
+        lost.len()
+    );
+    let mut cost = CostOfReversal::Low;
+    for (i, r) in lost.iter().enumerate() {
+        question.push_str(&format!(
+            "\n{}) {}。受け付けなかった理由: {}",
+            i + 1,
+            r.summary,
+            r.reason
+        ));
+        cost = max_cost(cost, r.cost.unwrap_or(CostOfReversal::High));
+    }
+    DecisionSpec {
+        key: key.to_string(),
+        question,
+        options: vec![
+            DecisionOption {
+                key: BUNDLE_OPTION_RECOMMENDED.to_string(),
+                label: "推奨どおりに進める（推奨の無い要求は worker に任せる）".to_string(),
+                consequence: None,
+            },
+            DecisionOption {
+                key: BUNDLE_OPTION_NOTE.to_string(),
+                label: "note に書いた答えで進める".to_string(),
+                consequence: None,
+            },
+        ],
+        recommended: BUNDLE_OPTION_RECOMMENDED.to_string(),
+        cost_of_reversal: cost,
+        cost_note: Some(format!(
+            "受け付けなかった決定: {}",
+            lost.iter()
+                .map(|r| r.summary.split_whitespace().next().unwrap_or(""))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+        needed_before: vec![target.to_string()],
+    }
 }
 
 /// R3a: 上限を超えた worker の決定を 1 件（`choice`）に束ねる。問いに元の問い・選択肢・推奨を列挙し、
@@ -674,34 +831,13 @@ fn bundle_decisions(key: &str, rest: &[DecisionSpec], cap: usize) -> DecisionSpe
     let mut needed_before: Vec<String> = Vec::new();
     let mut cost = CostOfReversal::Low;
     for (i, d) in rest.iter().enumerate() {
-        let recommended = d
-            .options
-            .iter()
-            .find(|o| o.key == d.recommended)
-            .map(|o| o.label.as_str())
-            .unwrap_or(d.recommended.as_str());
-        let options = d
-            .options
-            .iter()
-            .map(|o| format!("{}={}", o.key, o.label))
-            .collect::<Vec<_>>()
-            .join(" / ");
-        question.push_str(&format!(
-            "\n{}) {} {}（選択肢: {options}。推奨: {recommended}）",
-            i + 1,
-            d.key,
-            d.question
-        ));
+        question.push_str(&format!("\n{}) {}", i + 1, spec_summary(d)));
         for n in &d.needed_before {
             if !needed_before.contains(n) {
                 needed_before.push(n.clone());
             }
         }
-        cost = match (cost, d.cost_of_reversal) {
-            (_, CostOfReversal::High) | (CostOfReversal::High, _) => CostOfReversal::High,
-            (_, CostOfReversal::Medium) | (CostOfReversal::Medium, _) => CostOfReversal::Medium,
-            _ => CostOfReversal::Low,
-        };
+        cost = max_cost(cost, d.cost_of_reversal);
     }
     DecisionSpec {
         key: key.to_string(),

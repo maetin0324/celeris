@@ -29,7 +29,7 @@ use task_core::store::SqliteStore;
 use time::{Duration, OffsetDateTime};
 use ulid::Ulid;
 
-use crate::handlers::{ApiResult, Params, json_response, no_query};
+use crate::http_io::{ApiResult, Params, json_response, no_query};
 use crate::problem::ApiProblem;
 use crate::state::ApiState;
 
@@ -256,7 +256,7 @@ async fn checkpoint(
             "checkpoint accepts only the CoS run credential of the current run",
         ));
     };
-    let value: serde_json::Value = crate::handlers::read_json(body, false).await?;
+    let value: serde_json::Value = crate::http_io::read_json(body, false).await?;
     reject_identity_claims(&value)?;
     let req: CheckpointRequest = serde_json::from_value(value).map_err(|error| {
         let detail = error.to_string();

@@ -9,7 +9,7 @@ use crate::problem::ApiProblem;
 use crate::state::ApiState;
 use crate::types::ReloadResult;
 
-use super::{ApiResult, json_response, no_query};
+use crate::http_io::{ApiResult, json_response, no_query};
 
 pub(super) async fn reload(
     State(state): State<ApiState>,

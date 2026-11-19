@@ -10,7 +10,7 @@ use crate::query::{QueryParams, event_type_name, parse_task_id};
 use crate::state::ApiState;
 use crate::types::{ArtifactList, EventsPage, RunList, WorkUnitCheckLog};
 
-use super::{ApiResult, Params, json_response, no_query};
+use crate::http_io::{ApiResult, Params, json_response, no_query};
 
 fn load_task(store: &SqliteStore, id: TaskId) -> Result<Task, ApiProblem> {
     store

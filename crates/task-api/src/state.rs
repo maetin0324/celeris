@@ -374,6 +374,16 @@ impl ApiState {
         self.inner.shutdown.send_replace(true);
     }
 
+    /// 設定された cluster の id の一覧（blocking の区間の前に写す。例: CoS の dispatch）。
+    pub(crate) fn cluster_ids(&self) -> Vec<String> {
+        self.inner
+            .config_view
+            .clusters
+            .iter()
+            .map(|c| c.id.clone())
+            .collect()
+    }
+
     pub(crate) fn snapshot(&self) -> Option<DaemonSnapshot> {
         self.inner.daemon.borrow().clone()
     }

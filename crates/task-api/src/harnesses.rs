@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use axum::extract::{Path, RawQuery, State};
 
-use crate::handlers::{ApiResult, json_response};
+use crate::http_io::{ApiResult, json_response};
 use crate::problem::ApiProblem;
 use crate::state::ApiState;
 use crate::types::HarnessView;
@@ -18,7 +18,7 @@ pub trait HarnessesReader: Send + Sync + 'static {
 pub type SharedHarnessesReader = Arc<dyn HarnessesReader>;
 
 async fn list(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> ApiResult {
-    crate::handlers::no_query(&raw)?;
+    crate::http_io::no_query(&raw)?;
     let Some(reader) = state.inner.harnesses.clone() else {
         return Err(ApiProblem::harnesses_unavailable());
     };
@@ -33,7 +33,7 @@ async fn detail(
     Path(id): Path<String>,
     RawQuery(raw): RawQuery,
 ) -> ApiResult {
-    crate::handlers::no_query(&raw)?;
+    crate::http_io::no_query(&raw)?;
     let Some(reader) = state.inner.harnesses.clone() else {
         return Err(ApiProblem::harnesses_unavailable());
     };

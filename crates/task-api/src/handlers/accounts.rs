@@ -16,7 +16,8 @@ use crate::types::{
     AccountLoginStart, AccountStats, AccountView, ValidationError,
 };
 
-use super::{ApiResult, Params, json_response, no_query, now_rfc3339, read_json};
+use super::now_rfc3339;
+use crate::http_io::{ApiResult, Params, json_response, no_query, read_json};
 
 // ---- Phase 13/14（ADR-0024, ADR-0025）: アカウントのプール（claude-code / codex） ----
 

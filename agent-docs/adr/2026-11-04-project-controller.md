@@ -528,7 +528,7 @@ A1 の実装（migration `0112_project_controller.sql`、`SCHEMA_VERSION` 112。
    | 経路（API） | 数える principal | 同じ transaction の書き込み口 | 試験 |
    |---|---|---|---|
    | `PATCH /projects/{id}` | Human | `SqliteStore::write_tx` の 1 tx（全欄。`project_set_{status,slug,workspace,auto_integrate}_tx`） | `project_wake_api_human_patch_bumps_human_epoch`・`…_each_route_bumps_once` |
-   | `POST /projects/{id}/{pause,resume,cancel,archive,unarchive}` | Human | `lifecycle::project_action_op` → `task_ops::lifecycle::apply_project_action` | `…_each_route_bumps_once`、task-dispatch `project_wake_human_races_pause` |
+   | `POST /projects/{id}/{pause,resume,cancel,archive,unarchive}` | Human | handler `lifecycle::project_action` の `SqliteStore::write_tx` の 1 tx（`task_ops::lifecycle::apply_project_change_tx` → `HumanEpoch::bump_tx`。付記 F） | `…_each_route_bumps_once`、task-dispatch `project_wake_human_races_pause` |
    | 案件つきの `POST /tasks`・integrate task の起票 | Human | `create_task_with` の tx | `…_each_route_bumps_once`（`POST /tasks`）、`…_inbox_each_answer_bumps_once`（integrate task） |
    | `POST /tasks/{id}/cancel` | Human | `task_ops::gate::cancel_with` | `…_each_route_bumps_once`、task-dispatch `project_wake_human_races_cancel` |
    | `POST /tasks/{id}/retry` | Human | `retry_op`（`retry_task_claimed_tx` と routing_override を 1 tx） | `…_each_route_bumps_once` |
@@ -560,6 +560,8 @@ A1 の実装（migration `0112_project_controller.sql`、`SCHEMA_VERSION` 112。
    | 統括 thread・review thread への人の発言 | 数えない | 案件を持たない。案件へは forward で届いたときに数える |
    | operator・MCP が `…/messages` に書く自分の発言 | 数えない | 人の発言でない |
    | CoS の発言（`/cos/operations` の `chat.message_post`）・CoS の run の出力 | 数えない | controller と同じ側の判断。数えると CoS が自分の発言で controller を止める |
+   | `POST /projects/{id}/{pause,resume,cancel,archive,unarchive}`（`Principal::Human`） | 数える | handler が `SqliteStore::write_tx` の 1 tx で `apply_project_change_tx` の後に `HumanEpoch::bump_tx` を呼ぶ。変化の無い archive・unarchive と検査で断られた要求は書かず数えない（付記 F） |
+   | CoS の `project.*`（`/cos/operations`） | 数えない | 腕（`cos/ops/projects.rs`）が `OperationAudit::reject`・`apply` を直接呼び、監査の tx で `apply_project_change_tx` だけを書く。`HumanEpoch` を参照しない（付記 F） |
    | `POST /inbox/items/{id}/answer`（`Principal::Human`） | 数える | 委ね先の route が自分の書き込みの tx で 1 回数える（受信箱の handler は数えない。二重に数えない）。下の 10 行 |
    | 　質問 → `POST /tasks/{id}/answer` | 数える | `gate::answer_via` の遷移の tx |
    | 　決定 → `POST /decisions/{id}/answer`（`withdraw`・`revise` も同じ） | 数える | `decision::apply_plan_also` の tx |
@@ -829,3 +831,21 @@ Outcome の状態・root との対応の履歴が無く、CoS は request を書
    `scripts/dev/test-long-horizon-pilot.sh` が両方と stub の実 daemon の試行を検査する。
 6. **人が取り消した root は controller が作り直さない**。依頼文を元に戻して mode を置き直しても、取り消された Outcome の root は
    `pc/root-ended` で人に 1 回聞いて止まる。続けるのは人の起票（または人の発言を引いた CoS の起票）。
+
+## 付記 F（2026-11-19、task 01M7MZTKB8A4NJQEEA35Q4G5JV）: 案件の lifecycle の transaction の境界
+[ADR 2026-11-18 knowledge-lifecycle-tx-boundary](2026-11-18-knowledge-lifecycle-tx-boundary.md) の D4 で案件の lifecycle の経路を変えた。付記 A1 の 7 の表の
+`POST /projects/{id}/…` の行と、9 の表の案件の操作の 2 行は、この付記の経路で書いた。証拠は
+`agent-docs/progress/2026-11-18-arch-v4-f/lifecycle-tx.md`。
+1. **HTTP**: `POST /projects/{id}/{pause,resume,cancel,archive,unarchive}` の handler（`crates/task-api/src/lifecycle.rs` の `project_action`）が
+   `task_ops::lifecycle::plan_project_action` で検査し、`ProjectChange::Unchanged` でなければ `SqliteStore::write_tx` の 1 つの transaction で
+   `apply_project_change_tx` の後に `HumanEpoch::bump_tx(tx, Some(project_id))` を呼ぶ。応答は `project_action_result` が書いた後に読んで作る。
+   加算の規則（`HumanEpoch::of`・`COALESCE_SECS = 30`・`now_utc`）は `crates/task-api/src/human_epoch.rs` のまま。Unchanged と拒否では数えない。
+   応答・状態 code・problem の type は変えていない。
+2. **task-ops**: transaction を開かず、human epoch を加算しない。`apply_project_change_tx` の `tx` は `&rusqlite::Transaction<'_>` で、transaction の
+   外の接続では呼べない。closure を受けて transaction を開いていた共有の関数と、task-api の共有の操作は消した（一覧は F の ADR の §5）。
+3. **CoS**: `project.*` は `crates/task-api/src/cos/ops/projects.rs` の腕が `plan_project_action` の拒否を `OperationAudit::reject`、変更を
+   `OperationAudit::apply` の監査の transaction で書く。`HumanEpoch` を参照せず、数えない（7 の本文の「`*_op` の `audit = Some`」はこの腕も含めて読む）。
+   監査の行の中身（target `project`・action 名・result の `project_id`・`cancelled_tasks`）は変えていない。
+4. **試験**: `project_wake_api_human_*`・`tx_boundary_contract`・`cos_ops_projects_cron_project_lifecycle_is_audited` は変えずに通る。task-dispatch の
+   `project_wake_human_races_pause` は `plan_project_action` → `write_tx`（`apply_project_change_tx` の後に coalesce 0 の
+   `SqliteStore::project_controller_human_bump_tx`）に呼び出しを移した。assert は変えていない。

@@ -10,7 +10,10 @@ fn act(
     action: ProjectAction,
     now: OffsetDateTime,
 ) -> Result<ProjectLifecycle, OpsError> {
-    apply_project_action(store, id, action, now, |_| Ok(()))
+    let change = plan_project_action(store, id, action, now)?;
+    let cancelled = store
+        .write_tx::<_, task_core::StoreError, _>(|tx| apply_project_change_tx(tx, id, &change))?;
+    project_action_result(store, id, change, cancelled)
 }
 
 fn cancel_project(store: &SqliteStore, id: ProjectId) -> Result<ProjectLifecycle, OpsError> {

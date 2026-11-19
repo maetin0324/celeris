@@ -2,7 +2,8 @@
 //!
 //! 数えるのは `Principal::Human` の要求と、人の発言を運ぶ `…/relays`・`chat.relay_forward`（[`HumanEpoch::Counted`]
 //! を直接渡す）。それ以外の `Operator`・`Mcp`・`Cos`・daemon の呼び出しと、`/cos/operations` の監査経路
-//! （`*_op` の `audit = Some`）は数えない。増やすのは書き込みと同じ transaction の中（[`HumanEpoch::bump_tx`]）で、
+//! （`OperationAudit` の transaction。`*_op` の `audit = Some` と、`project.*` のように腕が
+//! `reject`・`apply` を直接呼ぶもの）は数えない。増やすのは書き込みと同じ transaction の中（[`HumanEpoch::bump_tx`]）で、
 //! 片方だけ残ることはない。表は ADR の付記 A1 の 9。
 
 use task_core::chat::{ChatError, ChatMessagePosted};

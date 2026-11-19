@@ -650,31 +650,18 @@ async fn put_page(
 // GET /knowledge/inbox
 // ---------------------------------------------------------------------------
 
-/// 添付の表（チャットと同じ SQLite）を読み取り専用で開く。添付の保存が無効なら `None`。
-fn open_attachment_index(
-    db: Option<&std::path::Path>,
-) -> Result<Option<rusqlite::Connection>, ApiProblem> {
-    let Some(db) = db else {
-        return Ok(None);
-    };
-    let conn =
-        rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .map_err(|e| ApiProblem::internal(format!("attachment index: {e}")))?;
-    conn.busy_timeout(std::time::Duration::from_secs(10))
-        .map_err(|e| ApiProblem::internal(format!("attachment index: {e}")))?;
-    Ok(Some(conn))
-}
-
+/// 候補に pin された添付の出所（ADR 2026-10-05 cos-chat-home D4）を store の読み取りの接続で読む
+/// （ADR 2026-11-18 knowledge-lifecycle-tx-boundary D2）。添付の保存が無効なら空。
 fn candidate_provenance(
-    conn: Option<&rusqlite::Connection>,
+    store: &task_core::SqliteStore,
+    attachments: bool,
     id: &str,
 ) -> Result<Vec<KnowledgeCandidateProvenance>, ApiProblem> {
-    let Some(conn) = conn else {
+    if !attachments {
         return Ok(Vec::new());
-    };
-    task_core::chat::attachments::provenance_for_owner(conn, "knowledge_inbox", id)
-        .map(|rows| rows.into_iter().map(Into::into).collect())
-        .map_err(|e| ApiProblem::internal(format!("attachment provenance: {e}")))
+    }
+    let rows = store.attachment_provenance("knowledge_inbox", id)?;
+    Ok(rows.into_iter().map(Into::into).collect())
 }
 
 fn candidate_view(
@@ -706,16 +693,15 @@ async fn inbox(
 ) -> ApiResult {
     no_query(&raw)?;
     let root = root_of(&state)?;
-    let db = state.chat.attachment_db_path.clone();
+    let attachments = state.chat.attachment_db_path.is_some();
     let view = state
-        .blocking(move |_| {
+        .blocking(move |store| {
             let initialized = ops_kb::exists(&root);
             let items = if initialized {
-                let conn = open_attachment_index(db.as_deref())?;
                 ops_kb::inbox_list(&root)
                     .into_iter()
                     .map(|item| {
-                        let provenance = candidate_provenance(conn.as_ref(), &item.id)?;
+                        let provenance = candidate_provenance(store, attachments, &item.id)?;
                         Ok(candidate_view(&root, item, provenance))
                     })
                     .collect::<Result<_, ApiProblem>>()?
@@ -913,14 +899,13 @@ async fn inbox_detail(
 ) -> ApiResult {
     no_query(&raw)?;
     let root = root_of(&state)?;
-    let db = state.chat.attachment_db_path.clone();
+    let attachments = state.chat.attachment_db_path.is_some();
     let view = state
-        .blocking(move |_| {
+        .blocking(move |store| {
             // id の境界（`/`・`..` は 403。accept / reject と同じ）。
             ops_kb::inbox_path(&id).map_err(path_problem)?;
             let item = ops_kb::inbox_get(&root, &id).ok_or_else(|| candidate_not_found(&id))?;
-            let conn = open_attachment_index(db.as_deref())?;
-            let provenance = candidate_provenance(conn.as_ref(), &item.id)?;
+            let provenance = candidate_provenance(store, attachments, &item.id)?;
             Ok(candidate_view(&root, item, provenance))
         })
         .await?;

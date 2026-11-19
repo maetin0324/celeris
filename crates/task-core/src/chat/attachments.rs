@@ -692,10 +692,28 @@ pub struct AttachmentProvenance {
     pub pinned_at: String,
 }
 
+impl crate::store::SqliteStore {
+    /// Provenance of every attachment pinned to one owner (`task` or `knowledge_inbox`), oldest
+    /// pin first, read on the store's read connection (ADR 2026-11-18
+    /// knowledge-lifecycle-tx-boundary D2). The caller does not hold an SQLite connection.
+    pub fn attachment_provenance(
+        &self,
+        owner_kind: &str,
+        owner_id: &str,
+    ) -> Result<Vec<AttachmentProvenance>, crate::store::StoreError> {
+        self.with_read_conn(|conn| {
+            provenance_for_owner(conn, owner_kind, owner_id).map_err(|e| match e {
+                AttachmentError::Db(e) => crate::store::StoreError::Sqlite(e),
+                other => crate::store::StoreError::Invalid(other.to_string()),
+            })
+        })
+    }
+}
+
 /// Provenance of every attachment pinned to one owner, oldest pin first. Unlike
 /// [`ChatAttachmentStore::list_for_owner`] this keeps rows whose blob was deleted: the hash and
 /// origin stay a record even without the bytes.
-pub fn provenance_for_owner(
+fn provenance_for_owner(
     conn: &Connection,
     owner_kind: &str,
     owner_id: &str,

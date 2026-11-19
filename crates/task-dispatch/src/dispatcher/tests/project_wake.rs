@@ -811,17 +811,15 @@ async fn project_wake_human_races_pause() {
     let clock = env.clock.clone();
     let human = Box::new(move || {
         let now = *clock.lock().unwrap();
-        task_ops::lifecycle::apply_project_action(
-            &human_store,
-            id,
-            task_ops::lifecycle::ProjectAction::Pause,
-            now,
-            |tx| {
+        let pause = task_ops::lifecycle::ProjectAction::Pause;
+        let change =
+            task_ops::lifecycle::plan_project_action(&human_store, id, pause, now).unwrap();
+        human_store
+            .write_tx::<_, task_core::StoreError, _>(|tx| {
+                task_ops::lifecycle::apply_project_change_tx(tx, id, &change)?;
                 SqliteStore::project_controller_human_bump_tx(tx, &id.to_string(), now, 0)
-                    .map(|_| ())
-            },
-        )
-        .unwrap();
+            })
+            .unwrap();
     });
     human_race(&env, &store, &p, &mut d, human);
     assert_eq!(

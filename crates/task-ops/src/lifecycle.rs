@@ -96,29 +96,15 @@ fn milestone_is_cancellable(status: MilestoneStatus) -> bool {
 
 // ---- 案件 ----
 
-/// `POST /projects/{id}/{cancel|pause|resume|archive|unarchive}` の本体。[`plan_project_action`] で検証し、
-/// 変更と `also` を同じ transaction で書く（ADR 2026-11-04-project-controller D12: 人の操作と `human_epoch`）。
-/// 既にその状態の archive・unarchive（[`ProjectChange::Unchanged`]）は何も書かず、`also` も呼ばない。
-pub fn apply_project_action<F>(
-    store: &task_core::store::SqliteStore,
+/// 案件の操作を書いた後の結果（API がそのまま返す。書いた後に読むだけ）。`change` は [`plan_project_action`] の計画、
+/// `cancelled` はそれを書いた [`apply_project_change_tx`] の戻り値（[`ProjectChange::Unchanged`] なら空）。
+/// transaction を開くのは呼び手（ADR 2026-11-18-knowledge-lifecycle-tx-boundary D4）。
+pub fn project_action_result(
+    store: &SqliteStore,
     id: ProjectId,
-    action: ProjectAction,
-    now: OffsetDateTime,
-    also: F,
-) -> Result<ProjectLifecycle, OpsError>
-where
-    F: FnOnce(&rusqlite::Connection) -> Result<(), task_core::StoreError>,
-{
-    let change = plan_project_action(store, id, action, now)?;
-    let cancelled = if change == ProjectChange::Unchanged {
-        Vec::new()
-    } else {
-        store.write_tx::<_, task_core::StoreError, _>(|tx| {
-            let cancelled = apply_project_change_tx(tx, id, &change)?;
-            also(tx)?;
-            Ok(cancelled)
-        })?
-    };
+    change: ProjectChange,
+    cancelled: Vec<task_core::TaskId>,
+) -> Result<ProjectLifecycle, OpsError> {
     let mut cancelled_tasks = Vec::with_capacity(cancelled.len());
     for task in cancelled {
         if let Some(task) = store.get(task)? {
@@ -324,8 +310,9 @@ pub enum ProjectAction {
 }
 
 /// The checked write of one project action (ADR 2026-10-09-cos-operations-all-mutations D3):
-/// computed from the store with the same 404/409 rules as the direct functions above, then applied
-/// on a caller-owned transaction by [`apply_project_change_tx`].
+/// computed by [`plan_project_action`] with the 404/409 rules, then applied by
+/// [`apply_project_change_tx`] on the transaction the adapter opens (HTTP: `SqliteStore::write_tx`
+/// with the human epoch bump; CoS: the audit transaction).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ProjectChange {
     Cancel {
@@ -408,7 +395,7 @@ pub fn plan_project_action(
 /// Apply a [`ProjectChange`] on `tx`. Returns the tasks the cancel cascade moved to `cancelled`
 /// (each re-checked inside the transaction, so a task cancelled by an earlier cascade is skipped).
 pub fn apply_project_change_tx(
-    tx: &rusqlite::Connection,
+    tx: &rusqlite::Transaction<'_>,
     id: ProjectId,
     change: &ProjectChange,
 ) -> Result<Vec<task_core::TaskId>, task_core::StoreError> {

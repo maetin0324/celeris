@@ -7,7 +7,9 @@
 //! どれも**管理系**（`token_file` 未設定でも 401。ADR-0044 §5 Phase 53 追記「変更を伴う API は
 //! すべて管理系に揃える」）。本文は取らない（`{}` でも空でもよい）。
 //!
-//! ハンドラは HTTP への写像だけで、判断と連鎖は `task_ops::lifecycle` が行う（DESIGN 原則 1〜4）。
+//! ハンドラは HTTP への写像だけで、判断と連鎖は `task_ops::lifecycle` が行う（DESIGN 原則 1〜4）。案件の操作の
+//! transaction はハンドラが `SqliteStore::write_tx` で開き、変更と `HumanEpoch::bump_tx` を同じ tx で書く
+//! （ADR 2026-11-18-knowledge-lifecycle-tx-boundary D4。CoS の `project.*` は `cos/ops/projects.rs` が監査の tx で書く）。
 //! 応答は 200 で、`cancel` は連鎖で `cancelled` になったタスク（と途中目標）を添える。
 //! 404（知らない id）／409（その状態ではできない）／401（トークン無し）。
 
@@ -42,7 +44,8 @@ pub(crate) struct EmptyBody {}
 
 use lifecycle::ProjectAction;
 
-fn project_trigger(action: ProjectAction) -> &'static str {
+/// The `trigger` of a refused project lifecycle operation (HTTP and the CoS `project.*` arm).
+pub(crate) fn project_trigger(action: ProjectAction) -> &'static str {
     match action {
         ProjectAction::Cancel => "project_cancel",
         ProjectAction::Pause => "project_pause",
@@ -50,57 +53,6 @@ fn project_trigger(action: ProjectAction) -> &'static str {
         ProjectAction::Archive => "project_archive",
         ProjectAction::Unarchive => "project_unarchive",
     }
-}
-
-/// The CoS action name of a project lifecycle operation.
-pub(crate) fn project_action_name(action: ProjectAction) -> &'static str {
-    match action {
-        ProjectAction::Cancel => "project.cancel",
-        ProjectAction::Pause => "project.pause",
-        ProjectAction::Resume => "project.resume",
-        ProjectAction::Archive => "project.archive",
-        ProjectAction::Unarchive => "project.unarchive",
-    }
-}
-
-/// `POST /projects/{id}/{cancel|pause|resume|archive|unarchive}` shared by the handler
-/// (`audit = None`) and `/cos/operations` (ADR 2026-10-09-cos-operations-all-mutations D3). The
-/// CoS form checks with `plan_project_action` and writes the project change, the cancel cascade
-/// and the audit record in one transaction.
-pub(crate) fn project_action_op(
-    store: &task_core::store::SqliteStore,
-    project_id: task_core::ProjectId,
-    action: ProjectAction,
-    human: HumanEpoch,
-    audit: Option<&OperationAudit>,
-) -> Result<Applied<lifecycle::ProjectLifecycle>, ApiProblem> {
-    let trigger = project_trigger(action);
-    let now = OffsetDateTime::now_utc();
-    let Some(audit) = audit else {
-        return lifecycle::apply_project_action(store, project_id, action, now, |tx| {
-            human.bump_tx(tx, Some(project_id))
-        })
-        .map(Applied::Direct)
-        .map_err(|e| ops_problem(store, e, Some(trigger)));
-    };
-    let target_id = project_id.to_string();
-    let change = lifecycle::plan_project_action(store, project_id, action, now).map_err(|e| {
-        audit.reject(
-            store,
-            "project",
-            &target_id,
-            ops_problem(store, e, Some(trigger)),
-        )
-    })?;
-    let name = project_action_name(action);
-    let operation = audit.apply(store, "project", &target_id, name, |tx| {
-        let cancelled = lifecycle::apply_project_change_tx(tx, project_id, &change)?;
-        Ok(serde_json::json!({
-            "project_id": target_id,
-            "cancelled_tasks": cancelled.iter().map(ToString::to_string).collect::<Vec<_>>(),
-        }))
-    })?;
-    Ok(Applied::Audited(Box::new(operation)))
 }
 
 async fn project_action(
@@ -119,7 +71,23 @@ async fn project_action(
     let trigger = project_trigger(action);
     let human = HumanEpoch::of(&caller);
     let result = state
-        .blocking(move |store| project_action_op(store, project_id, action, human, None)?.direct())
+        .blocking(move |store| {
+            let now = OffsetDateTime::now_utc();
+            let change = lifecycle::plan_project_action(store, project_id, action, now)
+                .map_err(|e| ops_problem(store, e, Some(trigger)))?;
+            // 変更・cancel の連鎖と human epoch の加算を同じ transaction で書く（D12）。Unchanged は何も書かず数えない。
+            let cancelled = if change == lifecycle::ProjectChange::Unchanged {
+                Vec::new()
+            } else {
+                store.write_tx::<_, ApiProblem, _>(|tx| {
+                    let cancelled = lifecycle::apply_project_change_tx(tx, project_id, &change)?;
+                    human.bump_tx(tx, Some(project_id))?;
+                    Ok(cancelled)
+                })?
+            };
+            lifecycle::project_action_result(store, project_id, change, cancelled)
+                .map_err(|e| ops_problem(store, e, Some(trigger)))
+        })
         .await?;
     tracing::info!(who = "admin", op = trigger, project_id = %project_id, status = %result.project.status.as_str(), "admin: project lifecycle");
     Ok(json_response(StatusCode::OK, &result))

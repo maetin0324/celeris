@@ -2,7 +2,7 @@
 
 use super::super::operations::{DispatchEnv, Matched, OperationAudit};
 use super::super::operations::{audited, decode_optional, decode_problem};
-use crate::problem::ApiProblem;
+use crate::problem::{ApiProblem, ops_problem};
 use serde_json::Value;
 use task_core::chat::CosOperation;
 use task_core::store::SqliteStore;
@@ -235,13 +235,20 @@ pub(crate) fn dispatch(
             let id = crate::handlers::parse_project_id(&raw_id)
                 .map_err(|problem| audit.reject(store, "project", &raw_id, problem))?;
             let crate::lifecycle::EmptyBody {} = decode_optional(body).map_err(decode)?;
-            audited(crate::lifecycle::project_action_op(
-                store,
-                id,
-                action,
-                crate::human_epoch::HumanEpoch::NotCounted,
-                Some(audit),
-            )?)
+            // The audit transaction holds the change and the cascade; CoS does not bump the human epoch.
+            let target_id = id.to_string();
+            let trigger = Some(crate::lifecycle::project_trigger(action));
+            let now = time::OffsetDateTime::now_utc();
+            let change = task_ops::lifecycle::plan_project_action(store, id, action, now)
+                .map_err(|e| ops_problem(store, e, trigger))
+                .map_err(|problem| audit.reject(store, "project", &target_id, problem))?;
+            audit.apply(store, "project", &target_id, matched.action, |tx| {
+                let cancelled = task_ops::lifecycle::apply_project_change_tx(tx, id, &change)?;
+                Ok(serde_json::json!({
+                    "project_id": target_id,
+                    "cancelled_tasks": cancelled.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                }))
+            })
         }
         "standing_rule.create" => {
             let input = serde_json::from_value(body).map_err(decode)?;

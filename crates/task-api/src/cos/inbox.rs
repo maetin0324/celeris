@@ -18,9 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use task_core::TaskId;
 use task_core::chat::{AuditContext, ChatActor, ChatError};
-use task_core::cos_inbox::{
-    CosInboxItem, cos_inbox_fallback_unsent, cos_inbox_item, cos_inbox_items, cos_inbox_superseded,
-};
+use task_core::cos_inbox::{CosInboxItem, cos_inbox_item, cos_inbox_items, cos_inbox_superseded};
 use task_core::store::SqliteStore;
 use task_ops::human_inbox::{InboxItem, InboxKind};
 use time::OffsetDateTime;
@@ -30,7 +28,7 @@ use super::basis::{self, BasisTarget, DelegatedBasis};
 use super::operations::{
     DispatchEnv, ItemMark, Matched, OperationAudit, OperationView, dispatch, request_hash,
 };
-use super::{CosCaller, cos_only, reject_identity_claims};
+use super::{CosCaller, cos_only, reject_identity_claims, triage_view};
 use crate::http_io::{ApiResult, Params, json_response};
 use crate::inbox_notifications::{InboxAnswerBody, delegated_request, human_feed};
 use crate::problem::{ApiProblem, store_problem};
@@ -160,7 +158,7 @@ fn unprocessable(code: &'static str, detail: impl Into<String>) -> ApiProblem {
     ApiProblem::new(StatusCode::UNPROCESSABLE_ENTITY, code, detail)
 }
 
-fn revision_conflict(detail: impl Into<String>) -> ApiProblem {
+pub(super) fn revision_conflict(detail: impl Into<String>) -> ApiProblem {
     ApiProblem::new(StatusCode::CONFLICT, "cos_inbox_revision_conflict", detail)
 }
 
@@ -550,7 +548,7 @@ async fn resolve(
                     id: i.clone(),
                 })));
             };
-            if let Some(problem) = terminal_conflict(store, &item).map_err(chat_problem)? {
+            if let Some(problem) = triage_view::terminal_conflict(store, &item).map_err(chat_problem)? {
                 return Err(reject(problem));
             }
             if item.source_revision != req.expected_revision {
@@ -700,29 +698,6 @@ async fn resolve(
             notification_id,
         },
     ))
-}
-
-/// Why `resolve` refuses an item that already has an outcome, or `None` when CoS may still judge it.
-/// ADR 2026-11-11-cos-fallback-timing D2: a fallback the notifier has not sent yields to CoS's
-/// judgment; a sent one stays with the person (this judgment is recorded as rejected and nothing
-/// is sent again).
-fn terminal_conflict(
-    store: &SqliteStore,
-    item: &CosInboxItem,
-) -> Result<Option<ApiProblem>, ChatError> {
-    if !item.is_terminal()
-        || (item.state == "fallback" && cos_inbox_fallback_unsent(store, &item.id)?)
-    {
-        return Ok(None);
-    }
-    let i = &item.id;
-    Ok(Some(revision_conflict(if item.state == "fallback" {
-        format!(
-            "triage item {i} was already sent to the person by the fallback; this judgment is recorded and nothing is sent again"
-        )
-    } else {
-        format!("triage item {i} is already {}", item.state)
-    })))
 }
 
 /// ADR 2026-11-12-cos-triage-scope D1/D3: the basis of a CoS answer to `wait` without a human

@@ -263,3 +263,18 @@ script と設定は base の commit から `git show <base>:<path>` で取り出
 - 成果に数えない物: SQL の文と `CosInboxItem` の task-core への移動。`rusqlite_prod_files`・`sql_string_prod_files` の減りは記録するが、
   note に内訳（接続を開く行を消して外れた file と、SQL を既に数えられた task-core の file へ移して外れた file）を分けて書き、移動の分を成果に入れない。
   新しい file・型・trait の追加と分母の増加も成果に数えない。
+
+## 付記 2026-11-19（WorkUnit `triage`）: D2 の置き場所を `task_core::cos_inbox` にする
+
+- 事実: D2 の 4 つの読み取りの関数と `CosInboxItem` を `chat/triage.rs` に置くと、repo health の `size.responsibility-growth` の
+  module の本体の行（単位 `crates/task-core/src/chat`）が 8026 になり、閾値 8000 を超えて新しい fail になった
+  （base 7904、WorkUnit `attach` の後 7944、D2 で +82）。`chat` の中で file を分けても同じ単位に数えられる。
+- 決定: `CosInboxItem`・`item_row`・`cos_inbox_item`・`cos_inbox_items`・`cos_inbox_fallback_unsent`・`cos_inbox_superseded` を
+  新しい top-level module `crates/task-core/src/cos_inbox.rs` に置く。`cos_fallback`・`cos_revision` と同じく `cos_inbox_items`・
+  `cos_notification_routes` の SQL だけを持つ module で、書き込み（`cos_triage_resolve_tx`）は `chat::triage` に残る。
+  error は D2 のとおり `ChatError`、関数の中身・§3 の規則・§5 の試験は変えない。
+- 採らなかった案: `chat` の既存の読み取り（`cos_triage_cursor`・`cos_triage_route_version` を `feed_cursor_get` に寄せる等）を
+  削って 8000 に収める案。D2 の範囲の外の dispatcher の読み取りの接続を変え、それでも余裕が数行しか残らない。
+- 測定への影響: `rusqlite_prod_files`・`sql_string_prod_files` は `cos/triage_view.rs` の −1 と `cos_inbox.rs` の +1 で
+  この WorkUnit の分は増減 0。`conn_open_files` は `cos/triage_view.rs` の −1（`cos_inbox.rs` は `Connection::open`・
+  `busy_timeout` を持たない）。§7 の見込みのうち「新しい file を作れば増える」に当たる。

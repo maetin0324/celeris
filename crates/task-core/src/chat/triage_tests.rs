@@ -829,9 +829,9 @@ fn cos_triage_withdrawn_fallback_closes_its_item() {
 // ---- ADR 2026-11-19-chat-attachment-store-connection §5: `triage_conn_` (the CoS inbox API reads
 // the triage table through `with_read_conn` instead of its own connection). ----
 
-use super::triage::{
+use super::triage::cos_triage_resolve_tx;
+use crate::cos_inbox::{
     cos_inbox_fallback_unsent, cos_inbox_item, cos_inbox_items, cos_inbox_superseded,
-    cos_triage_resolve_tx,
 };
 
 fn triage_conn_store(dir: &tempfile::TempDir, read_pool_size: usize) -> SqliteStore {

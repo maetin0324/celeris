@@ -17,10 +17,10 @@ use axum::routing::{get, post};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use task_core::TaskId;
-use task_core::chat::triage::{
+use task_core::chat::{AuditContext, ChatActor, ChatError};
+use task_core::cos_inbox::{
     CosInboxItem, cos_inbox_fallback_unsent, cos_inbox_item, cos_inbox_items, cos_inbox_superseded,
 };
-use task_core::chat::{AuditContext, ChatActor, ChatError};
 use task_core::store::SqliteStore;
 use task_ops::human_inbox::{InboxItem, InboxKind};
 use time::OffsetDateTime;

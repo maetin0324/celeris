@@ -29,8 +29,11 @@ H R1（task 01M7T5KM1VYFDW1RD0B90YHAZ6）の WorkUnit `planner-prompt` の記録
   - `planner_acceptance_section` を足し、planner の 4 builder の `prompt_header` の直後に出した。`prompt_header` には入れていない。
   - 木でない WU の run の `## Acceptance criteria`（check ごとの説明を足す形）は書式が違うので変えていない。
 - `crates/task-worker/src/claude_code/planner_prompt_tests.rs`（新規）: 下の 5 件。`claude_code/tests.rs` から `#[path]` で読む。
-- `crates/task-worker/src/change_rules.rs`・`change_rules/tests.rs`: fixture（`planner_context`・`tree_planner`・`prompt_for`）を
-  `claude_code` の試験から使うため、試験 module と 3 関数の可視性を `pub(super)` から `pub(crate)` にした（試験の code だけ）。
+- fixture: objective は `change_rules::tests` の `planner_context`・`tree_planner`・`prompt_for` を使うよう書くが、あの試験 module は
+  `change_rules` の中だけに見え（`mod tests;` と `pub(super)`）、この WU の範囲の check は `change_rules` の変更を許さない。1 回目の run は
+  可視性を `pub(crate)` に変えて範囲の check で落ちたので、2 回目の run で `change_rules.rs`・`change_rules/tests.rs` を base に戻し、
+  `planner_prompt_tests.rs` の中に同じ形の `tree_planner`（深さ 1・上限 3・`max_work_units` 8）と `planner_context`
+  （`execution_planner` だけを持つ `RunContext`）を置いた。task は `protocol::tests::sample_task` から作る（`task_with`）。
 - `agent-docs/adr/2026-11-19-planner-reviewer-prompt-coverage.md`（新規）: D1〜D4。
 
 harness の経路（ADR D3）: codex は `build_prompt`（`crates/task-worker/src/codex.rs:723`）、acp は `build_prompt_with_skill_list`
@@ -56,8 +59,9 @@ Claude Code は `build_prompt`（`crates/task-worker/src/claude_code.rs:471`）�
 
 基準は `$CELERIS_WU_BASE`（この WU の開始時の base）。
 
-- 修正前: `cargo nextest run -p task-worker --lib -E 'test(/planner_prompt_acceptance_|prompt_full_objective_planner|acceptance_lines_keep/)' --no-fail-fast`
-  → `error: test run failed`、`5 tests run: 1 passed, 4 failed`（落ちたのは上の表の 4 件）。
+- 修正前: `prompt.rs` だけを `$CELERIS_WU_BASE` の版に戻し、
+  `cargo nextest run -p task-worker --lib -E 'test(/planner_prompt_acceptance_|prompt_full_objective_planner|acceptance_lines_keep/)' --no-fail-fast`
+  → exit 100、`5 tests run: 1 passed, 4 failed`（落ちたのは上の表の 4 件）。確かめた後で `prompt.rs` を HEAD に戻した。
 - 修正後: `cargo nextest run -p task-worker -p task-dispatch --status-level pass -E 'test(/planner_prompt_|prompt_full_objective_|prompt_boundary_|boundary_case_|acceptance_lines_keep/)'`
   → exit 0、`20 tests run: 20 passed`（`prompt_boundary_` 3 件、C の `boundary_case_` 6 件、既存の `planner_prompt_*` を含む）。
 - `bash scripts/dev/test-affected.sh` → exit 0、`6127 tests run: 6127 passed (9 slow), 21 skipped`（対象 crate: celeris・

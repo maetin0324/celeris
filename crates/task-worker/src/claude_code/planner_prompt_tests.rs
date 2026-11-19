@@ -1,12 +1,15 @@
 //! ADR 2026-11-19-planner-reviewer-prompt-coverage D1〜D3 の試験（prefix `planner_prompt_acceptance_`・
-//! `prompt_full_objective_planner`）。fixture は `change_rules::tests` の `planner_context`・`tree_planner`・`prompt_for` と
-//! `protocol::tests::sample_task`。design review と final review の `prompt_full_objective_*` は別の試験 file にある。
+//! `prompt_full_objective_planner`）。task は `protocol::tests::sample_task` から作る。planner の run の context は
+//! `change_rules::tests` の `tree_planner`・`planner_context` と同じ形をここで組む（あちらの試験 module は `change_rules` の
+//! 中だけに見え、この WorkUnit は `change_rules` を変えない）。design review と final review の `prompt_full_objective_*` は
+//! 別の試験 file にある。
 
 use task_core::{Check, Criterion, Task, TaskKind};
 
-use crate::change_rules::tests::{planner_context, prompt_for, tree_planner};
 use crate::claude_code::{build_prompt, build_prompt_with_skill_list};
-use crate::protocol::{ExecutionPlannerContext, ReviewRequest, RunContext, WorkUnitPromptContext};
+use crate::protocol::{
+    ExecutionPlannerContext, ReviewRequest, RunContext, TreePlannerContext, WorkUnitPromptContext,
+};
 
 const HEADING: &str = "## Task acceptance criteria (checked by the final review)\n";
 
@@ -44,6 +47,28 @@ fn task_with(kind: TaskKind, labels: &[&str], acceptance: Vec<Criterion>) -> Tas
     task.labels = labels.iter().map(|l| l.to_string()).collect();
     task.acceptance = acceptance;
     task
+}
+
+/// 木の planner（/3）の context。深さ 1・上限 3。
+fn tree_planner() -> ExecutionPlannerContext {
+    ExecutionPlannerContext {
+        max_work_units: 8,
+        tree: Some(TreePlannerContext {
+            depth: 1,
+            max_depth: 3,
+            remaining_depth: 2,
+            ..TreePlannerContext::default()
+        }),
+        ..ExecutionPlannerContext::default()
+    }
+}
+
+/// `context.execution_planner` を持つ run の context（`build_prompt` が `build_execution_plan_prompt` を選ぶ）。
+fn planner_context(planner: ExecutionPlannerContext) -> RunContext {
+    RunContext {
+        execution_planner: Some(planner),
+        ..RunContext::default()
+    }
 }
 
 fn flat_planner(parallel: bool) -> ExecutionPlannerContext {
@@ -86,16 +111,21 @@ fn assert_section_once_before_instructions(prompt: &str, section: &str, label: &
 #[test]
 fn planner_prompt_acceptance_tree_planner_lists_every_criterion() {
     let task = task_with(TaskKind::Execute, &[], criteria());
-    let context = planner_context(tree_planner(), None);
+    let context = planner_context(tree_planner());
     let prompt = build_prompt(&task, &context, "run-planner-acceptance", "artifacts");
     assert!(
         prompt.contains("\"schema\":\"celeris.execution-plan/3\""),
         "fixture must select the tree planner"
     );
     assert_section_once_before_instructions(&prompt, &expected_section(), "tree planner");
-    // fixture の task（受入条件 1 件 `c`）でも同じ節が出る。
-    let fixture = prompt_for(TaskKind::Execute, &[], &context);
-    assert!(fixture.contains(&format!("{HEADING}0. c\n\n")), "{fixture}");
+    // `sample_task` の受入条件（1 件 `c`）のままでも同じ節が出る。
+    let sample = task_with(
+        TaskKind::Execute,
+        &[],
+        crate::protocol::tests::sample_task().acceptance,
+    );
+    let prompt = build_prompt(&sample, &context, "run-planner-acceptance", "artifacts");
+    assert!(prompt.contains(&format!("{HEADING}0. c\n\n")), "{prompt}");
 }
 
 /// 不変条件（D1）: 木でない execution planner（/1 と並列の /2）、`TaskKind::Plan`（`plan.json`）、案件の計画
@@ -112,13 +142,13 @@ fn planner_prompt_acceptance_flat_planner_and_plan_kinds_list_every_criterion() 
             "execution planner /1",
             TaskKind::Execute,
             vec![],
-            planner_context(flat_planner(false), None),
+            planner_context(flat_planner(false)),
         ),
         (
             "execution planner /2",
             TaskKind::Execute,
             vec![],
-            planner_context(flat_planner(true), None),
+            planner_context(flat_planner(true)),
         ),
         ("plan", TaskKind::Plan, vec![], RunContext::default()),
         (
@@ -138,10 +168,15 @@ fn planner_prompt_acceptance_flat_planner_and_plan_kinds_list_every_criterion() 
         let task = task_with(kind, &labels, criteria());
         let prompt = build_prompt(&task, &context, "run-planner-acceptance", "artifacts");
         assert_section_once_before_instructions(&prompt, &expected_section(), label);
-        let fixture = prompt_for(kind, &labels, &context);
+        let sample = task_with(
+            kind,
+            &labels,
+            crate::protocol::tests::sample_task().acceptance,
+        );
+        let prompt = build_prompt(&sample, &context, "run-planner-acceptance", "artifacts");
         assert!(
-            fixture.contains(&format!("{HEADING}0. c\n\n")),
-            "{label}: fixture task:\n{fixture}"
+            prompt.contains(&format!("{HEADING}0. c\n\n")),
+            "{label}: sample task:\n{prompt}"
         );
         let empty = task_with(kind, &labels, Vec::new());
         let prompt = build_prompt(&empty, &context, "run-planner-acceptance", "artifacts");
@@ -159,7 +194,7 @@ fn planner_prompt_acceptance_reaches_every_harness_input() {
         (
             "tree planner",
             TaskKind::Execute,
-            planner_context(tree_planner(), None),
+            planner_context(tree_planner()),
         ),
         ("plan", TaskKind::Plan, RunContext::default()),
     ];
@@ -197,7 +232,7 @@ fn prompt_full_objective_planner_keeps_objective_and_acceptance_tails() {
         (
             "tree planner",
             TaskKind::Execute,
-            planner_context(tree_planner(), None),
+            planner_context(tree_planner()),
         ),
         ("plan", TaskKind::Plan, RunContext::default()),
     ];

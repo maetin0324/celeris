@@ -33,7 +33,7 @@ pub(super) fn policy() -> ReviewPolicy {
     }
 }
 
-pub(crate) fn tree_planner() -> ExecutionPlannerContext {
+pub(super) fn tree_planner() -> ExecutionPlannerContext {
     ExecutionPlannerContext {
         max_work_units: 8,
         tree: Some(TreePlannerContext {
@@ -54,7 +54,7 @@ pub(super) fn workspace_with(review_policy: Option<ReviewPolicy>) -> Option<RunW
     })
 }
 
-pub(crate) fn planner_context(
+pub(super) fn planner_context(
     planner: ExecutionPlannerContext,
     policy: Option<ReviewPolicy>,
 ) -> RunContext {
@@ -65,7 +65,7 @@ pub(crate) fn planner_context(
     }
 }
 
-pub(crate) fn prompt_for(kind: TaskKind, labels: &[&str], context: &RunContext) -> String {
+pub(super) fn prompt_for(kind: TaskKind, labels: &[&str], context: &RunContext) -> String {
     let mut task = crate::protocol::tests::sample_task();
     task.kind = kind;
     task.labels = labels.iter().map(|l| l.to_string()).collect();

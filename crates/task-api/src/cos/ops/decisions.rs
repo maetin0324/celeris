@@ -200,10 +200,28 @@ pub(crate) fn dispatch(
                 .clone()
                 .map_err(|problem| audit.reject(store, "knowledge", "new", problem))?;
             let input = serde_json::from_value(body).map_err(decode)?;
-            let recorded = crate::knowledge::record_op(store, &root, None, input, Some(audit));
-            audited(super::super::knowledge_use::counted_record(
-                store, audit, recorded,
-            )?)
+            // 候補を git に書き、pin と監査を同じ transaction で書く。失敗したら候補を消す
+            // （ADR 2026-11-18 knowledge-lifecycle-tx-boundary D3）。
+            let recorded = crate::knowledge::record_candidate(store, &root, true, input)
+                .map_err(|problem| audit.reject(store, "knowledge", "new", problem))
+                .and_then(|result| {
+                    let thread = audit.ctx.thread_id.as_str();
+                    audit
+                        .apply_checked(store, "knowledge", &result.id, "knowledge.record", |tx| {
+                            crate::knowledge::pin_candidate_tx(
+                                tx,
+                                &result.attachment_ids,
+                                &result.id,
+                                Some(thread),
+                            )?;
+                            serde_json::to_value(&result)
+                                .map_err(|e| ApiProblem::internal(e.to_string()))
+                        })
+                        .map_err(|problem| {
+                            crate::knowledge::discard_candidate(&root, &result.id, problem)
+                        })
+                });
+            super::super::knowledge_use::counted_record(store, audit, recorded)
         }
         "inbox.answer" => {
             let raw_id = matched.id.unwrap_or_default();

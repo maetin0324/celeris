@@ -732,9 +732,20 @@ async fn record(
     require_admin(&state, &headers)?;
     let request: KnowledgeRecordBody = read_json(body, false).await?;
     let root = root_of(&state)?;
-    let db = state.chat.attachment_db_path.clone();
+    let attachment_storage = state.chat.attachment_db_path.is_some();
     let result = state
-        .blocking(move |store| record_op(store, &root, db.as_deref(), request, None)?.direct())
+        .blocking(move |store| {
+            let recorded = record_candidate(store, &root, attachment_storage, request)?;
+            if !recorded.attachment_ids.is_empty() {
+                store
+                    .write_tx(|tx| {
+                        pin_candidate_tx(tx, &recorded.attachment_ids, &recorded.id, None)
+                    })
+                    .map_err(|problem| discard_candidate(&root, &recorded.id, problem))?;
+            }
+            tracing::info!(who = "admin", op = "knowledge_record", id = %recorded.id, "admin: knowledge candidate recorded");
+            Ok(recorded)
+        })
         .await?;
     Ok(json_response(StatusCode::CREATED, &result))
 }
@@ -754,9 +765,10 @@ fn record_problem(e: ops_kb::RecordError) -> ApiProblem {
     }])
 }
 
-/// 候補に添付を pin する（呼び手の transaction の中）。検査は D1 の task 作成と同じ
+/// 候補に添付を pin する（呼び手の transaction の中。HTTP は `SqliteStore::write_tx`、CoS は監査の
+/// `apply_checked`）。検査は D1 の task 作成と同じ
 /// （`task_pin_problem_tx`: 形式・重複・件数・`ready`・期限・CoS なら自分の thread）。
-fn pin_candidate_tx(
+pub(crate) fn pin_candidate_tx(
     tx: &rusqlite::Transaction<'_>,
     ids: &[String],
     candidate: &str,
@@ -792,36 +804,33 @@ fn attachments_unavailable() -> ApiProblem {
     )
 }
 
-/// `POST /knowledge/inbox` の本体。handler（`audit = None`）と CoS の `/cos/operations`
-/// （action `knowledge.record`）が共有する。候補を `record_in` で `_inbox/<id>.md` に書いて git commit
-/// し、添付の pin と監査（CoS）を SQLite に commit する。pin か監査が失敗すれば候補を
-/// `inbox_reject` で消す（git の履歴には残るが、`_inbox` には残らない）。
-pub(crate) fn record_op(
+/// `POST /knowledge/inbox` と CoS の `knowledge.record` が共有する候補の記録（ADR 2026-11-18
+/// knowledge-lifecycle-tx-boundary D3）。検査（KB・path・添付の保存）の後、候補を `record_in` で
+/// `_inbox/<id>.md` に書いて git commit し、結果を返す。SQLite は読むだけ（案件の一覧）。
+/// 添付の pin（[`pin_candidate_tx`]）と監査は呼び手が自分の transaction で書き、失敗したら
+/// [`discard_candidate`] で候補を消す。`attachment_storage` は添付の保存の有無で、無いのに
+/// `attachment_ids` があれば 503 `attachments_unavailable`（HTTP だけが渡す。CoS は監査の
+/// transaction の検査に任せて `true` を渡す）。
+pub(crate) fn record_candidate(
     store: &task_core::SqliteStore,
     root: &std::path::Path,
-    attachment_db: Option<&std::path::Path>,
+    attachment_storage: bool,
     body: KnowledgeRecordBody,
-    audit: Option<&OperationAudit>,
-) -> Result<Applied<KnowledgeRecordResult>, ApiProblem> {
-    let reject = |problem: ApiProblem| match audit {
-        Some(audit) => audit.reject(store, "knowledge", "new", problem),
-        None => problem,
-    };
-    require_kb(root).map_err(reject)?;
+) -> Result<KnowledgeRecordResult, ApiProblem> {
+    require_kb(root)?;
     if let Some(path) = body
         .path
         .as_deref()
         .map(str::trim)
         .filter(|p| !p.is_empty())
     {
-        page_path(path).map_err(reject)?;
+        page_path(path)?;
     }
-    let attachment_ids = body.attachment_ids;
-    if audit.is_none() && !attachment_ids.is_empty() && attachment_db.is_none() {
+    if !attachment_storage && !body.attachment_ids.is_empty() {
         return Err(attachments_unavailable());
     }
     let projects = ops_kb::project_refs(store)
-        .map_err(|e| reject(ApiProblem::internal(format!("project list: {e}"))))?;
+        .map_err(|e| ApiProblem::internal(format!("project list: {e}")))?;
     let layout = ops_kb::layout(root, Some(projects));
     let request = ops_kb::RecordRequest {
         title: body.title,
@@ -833,59 +842,30 @@ pub(crate) fn record_op(
         path: body.path,
         op: None,
     };
-    let recorded =
-        ops_kb::record_in(root, &request, &layout).map_err(|e| reject(record_problem(e)))?;
-    // pin か監査が失敗したら、書いた候補を消してから問題を返す。
-    let discard = |problem: ApiProblem| {
-        if let ops_kb::InboxOutcome::Failed { detail } = ops_kb::inbox_reject(root, &recorded.id) {
-            tracing::warn!(id = %recorded.id, %detail, "knowledge: could not discard candidate after failed pin");
-        }
-        problem
-    };
+    let recorded = ops_kb::record_in(root, &request, &layout).map_err(record_problem)?;
     let scope = ops_kb::inbox_get(root, &recorded.id).and_then(|item| item.scope);
-    let result = KnowledgeRecordResult {
-        id: recorded.id.clone(),
-        path: recorded.path.clone(),
-        target: recorded.target.clone(),
+    Ok(KnowledgeRecordResult {
+        id: recorded.id,
+        path: recorded.path,
+        target: recorded.target,
         scope,
         op: recorded.op.map(|o| o.as_str().to_string()),
-        attachment_ids: attachment_ids.clone(),
-        sha: recorded.sha.clone(),
-    };
-    let Some(audit) = audit else {
-        if let Some(db) = attachment_db.filter(|_| !attachment_ids.is_empty()) {
-            let pin = || -> Result<(), ApiProblem> {
-                let db_error =
-                    |e: rusqlite::Error| ApiProblem::internal(format!("attachment pin: {e}"));
-                let mut conn = rusqlite::Connection::open(db).map_err(db_error)?;
-                conn.busy_timeout(std::time::Duration::from_secs(10))
-                    .map_err(db_error)?;
-                let tx = conn
-                    .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-                    .map_err(db_error)?;
-                pin_candidate_tx(&tx, &attachment_ids, &recorded.id, None)?;
-                tx.commit().map_err(db_error)
-            };
-            pin().map_err(discard)?;
-        }
-        tracing::info!(who = "admin", op = "knowledge_record", id = %recorded.id, "admin: knowledge candidate recorded");
-        return Ok(Applied::Direct(result));
-    };
-    let thread = audit.ctx.thread_id.clone();
-    let mut failure = None;
-    let outcome = audit.apply(store, "knowledge", &recorded.id, "knowledge.record", |tx| {
-        if let Err(problem) = pin_candidate_tx(tx, &attachment_ids, &recorded.id, Some(&thread)) {
-            let detail = problem.detail().to_string();
-            failure = Some(problem);
-            return Err(task_core::chat::ChatError::Invalid(detail));
-        }
-        serde_json::to_value(&result)
-            .map_err(|e| task_core::chat::ChatError::Invalid(e.to_string()))
-    });
-    let operation = outcome
-        .map_err(|problem| failure.take().unwrap_or(problem))
-        .map_err(discard)?;
-    Ok(Applied::Audited(Box::new(operation)))
+        attachment_ids: body.attachment_ids,
+        sha: recorded.sha,
+    })
+}
+
+/// pin か監査が失敗したとき、[`record_candidate`] が書いた候補を `inbox_reject` で消してから
+/// `problem` を返す（cos-live-fixes 付記 D2-a。git の履歴には残るが、`_inbox` には残らない）。
+pub(crate) fn discard_candidate(
+    root: &std::path::Path,
+    id: &str,
+    problem: ApiProblem,
+) -> ApiProblem {
+    if let ops_kb::InboxOutcome::Failed { detail } = ops_kb::inbox_reject(root, id) {
+        tracing::warn!(%id, %detail, "knowledge: could not discard candidate after failed pin");
+    }
+    problem
 }
 
 // ---------------------------------------------------------------------------

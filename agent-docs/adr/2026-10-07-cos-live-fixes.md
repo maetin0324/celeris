@@ -132,7 +132,7 @@ branch tree `5664ef5fb20e`、2026-10-07）で、(d) screenshot の task への�
 | 決定 | 実装 | 試験 |
 |---|---|---|
 | D1 | `crates/task-api/src/handlers/tasks.rs` の `NewTaskBody.attachment_ids: Vec<String>`（`serde(default)`）。`create_task_op` が 1 transaction で task 行・`Created` event・書き込み範囲の予告・pin を書く（`SqliteStore::create_task_with`、`crates/task-core/src/store/tasks.rs`）。検証 `task_pin_problem_tx`（`crates/task-core/src/chat/attachments.rs`。ULID 形・重複・上限 `MAX_TASK_CREATE_ATTACHMENTS = 20`・`ready`・未期限切れ・CoS は thread 一致）。不正は 422 `invalid_attachment` で task も作らない。CoS は `/cos/operations` の `task.create`（`ALLOWED` の `("POST", "/api/v1/tasks", "task.create")` は既存）で、`cos_operations.result` は `{"task_id","attachment_ids"}` | `crates/task-api/tests/cos_live_fix_d1.rs`: `cos_live_fix_d1_created_task_already_has_its_pins`・`..._invalid_attachment_creates_no_task`・`..._cos_task_create_pins_and_audits` |
-| D2 | `crates/task-api/src/knowledge.rs` の `POST /api/v1/knowledge/inbox`（201 `KnowledgeRecordResult`、本文 `KnowledgeRecordBody`、`deny_unknown_fields`）。本体 `record_op` を handler と CoS operation が共有。`crates/task-api/src/cos/operations.rs` の `ALLOWED` の行 `("POST", "/api/v1/knowledge/inbox", "knowledge.record")`。CLI は `crates/celerisctl/src/commands/knowledge.rs` が CoS credential のとき `/cos/operations` 経由。scope は `project:<slug>`（`projects/<slug>` は受けて正規化） | `crates/task-api/tests/cos_live_fix_d2.rs`: `cos_live_fix_d2_api_creates_candidate_with_provenance`・`..._invalid_scope_is_422_and_writes_nothing`・`..._cos_operation_records_audit_row`、`crates/celerisctl/src/commands/knowledge_tests.rs`: `cos_live_fix_d2_cli_record_with_cos_credential_calls_the_api`・`..._cli_idempotency_key_is_stable`・`..._cli_direct_record_refuses_attachment_ids` |
+| D2 | `crates/task-api/src/knowledge.rs` の `POST /api/v1/knowledge/inbox`（201 `KnowledgeRecordResult`、本文 `KnowledgeRecordBody`、`deny_unknown_fields`）。共有の `record_candidate`（検査と候補の git commit）・`pin_candidate_tx`・`discard_candidate` を handler と CoS operation が使う。handler は `SqliteStore::write_tx` の中で pin し、CoS は `OperationAudit::reject`・`apply_checked` で pin と監査を同じ transaction に書く（末尾の付記「record の pin と監査の transaction を既存の owner へ寄せる」）。`crates/task-api/src/cos/operations.rs` の `ALLOWED` の行 `("POST", "/api/v1/knowledge/inbox", "knowledge.record")`。CLI は `crates/celerisctl/src/commands/knowledge.rs` が CoS credential のとき `/cos/operations` 経由。scope は `project:<slug>`（`projects/<slug>` は受けて正規化） | `crates/task-api/tests/cos_live_fix_d2.rs`: `cos_live_fix_d2_api_creates_candidate_with_provenance`・`..._invalid_scope_is_422_and_writes_nothing`・`..._cos_operation_records_audit_row`、`crates/celerisctl/src/commands/knowledge_tests.rs`: `cos_live_fix_d2_cli_record_with_cos_credential_calls_the_api`・`..._cli_idempotency_key_is_stable`・`..._cli_direct_record_refuses_attachment_ids` |
 | D3 | `crates/task-api/src/cos/inbox.rs` の `ResolveBody.confidence: Option<f64>`（範囲外・非有限は 422 `validation`、`deny_unknown_fields` は維持）。本文が `cos_operations.payload` に入り、observe / escalate の `result` にも `confidence` が入る | `crates/task-api/tests/cos_triage.rs`: `cos_live_fix_d3_confidence_is_recorded_in_the_operation`・`..._out_of_range_is_422`・`..._omitted_keeps_working` |
 | D4 | `crates/task-core/src/chat/run_store.rs` の `chat_run_takeover`（非終端の確認・続きの message 投入・interrupted 化を 1 write transaction。終端なら `Ok(None)`）。`cos_chat/control.rs` の `recover_orphan` は終端なら何もしない。原因は `cos_chat/sink.rs` の `ChatRunSink::write` が Conflict を「終端」と誤読して `chat_run_finish` を呼ばなかったこと（triage run は出力 message が無い）。Conflict 後に store で状態を読み、終端のときだけ止める | `crates/task-dispatch/src/dispatcher/tests/cos_live_fix_d4.rs`: `cos_live_fix_d4_finished_triage_run_is_not_taken_over`・`..._terminal_run_with_expired_lease_is_left_alone`・`..._takeover_of_terminal_run_writes_nothing`・`..._true_orphan_is_still_taken_over_once`・`..._terminal_is_recorded_before_slot_release` |
 | D5 | `scripts/dev/cos-chat-live.sh`、`docs/ops/cos-chat.md`「実機確認の再実行」節 | 構文・usage のみ確認（dry / full は未実行） |
@@ -145,3 +145,23 @@ branch tree `5664ef5fb20e`、2026-10-07）で、(d) screenshot の task への�
   終端を書かず、次の tick で takeover に回る（DB が読めない時の回収経路として残した）。
 - `crates/task-worker/src/cos_chat.rs` の `attachment_pin_rules`（CoS run の前置き）は旧手順（owner を先に作って references で pin）の
   ままで、skill §3a の新しい形と食い違う。別 task で直す（進捗ファイルの提案）。
+
+## 付記: record の pin と監査の transaction を既存の owner へ寄せる（2026-11-19）
+
+この付記は D2・付記 D2-a・close の表の D2 の行の実装の記述を上書きする。判断と理由は
+[ADR 2026-11-18-knowledge-lifecycle-tx-boundary](2026-11-18-knowledge-lifecycle-tx-boundary.md) の D1・D3。
+
+- `knowledge.rs` の `record_op`（`Option<&OperationAudit>` を受けて `Applied` を返す 1 つの関数）を消した。共有の操作は 3 つになった。
+  - `record_candidate(store, root, attachment_storage, body)`: KB・path・添付の保存の有無を検査し、`task_ops::knowledge::record_in` で
+    `_inbox/<id>.md` を書いて git commit し、`KnowledgeRecordResult` を返す。監査を受けず、SQLite は読むだけ（案件の一覧）。
+  - `pin_candidate_tx(tx, ids, candidate, thread)`: 呼び手の transaction の中で添付を検査して pin する（今までと同じ検査）。
+  - `discard_candidate(root, id, problem)`: `inbox_reject` で候補を消して `problem` を返す。
+- HTTP の `POST /knowledge/inbox` は `record_candidate` の後、`attachment_ids` があれば `SqliteStore::write_tx` の中で `pin_candidate_tx` を呼ぶ。
+  task-api は SQLite の接続を自分で開かない。添付の保存が無効で `attachment_ids` があるときの 503 `attachments_unavailable` は保つ
+  （`record_candidate` の `attachment_storage` が偽のとき）。
+- CoS の `knowledge.record`（`cos/ops/decisions.rs`）は、`record_candidate` の失敗を `OperationAudit::reject` で rejected の行にし、成功したら
+  `OperationAudit::apply_checked` の transaction の中で `pin_candidate_tx` と結果の JSON を書く（監査の行と pin が同じ transaction）。失敗したら
+  `discard_candidate` で候補を消す。添付が無くても `apply_checked` を通る（監査の行は毎回書く）。
+- 「どちらかが失敗したら候補ファイルを残さない」（付記 D2-a）と、候補の commit と pin の commit の間に process が落ちたときの隙は変わらない。
+- 応答の違い: HTTP で書き込みの接続を取れないときの失敗が、500 `internal`（`attachment pin: …`）から store の写像（`SQLITE_BUSY` は 503 `db_busy`）
+  になる。成功・検証の拒否（422 `invalid_attachment`）・pin の書き込みの失敗の応答は変わらない。

@@ -825,3 +825,254 @@ fn cos_triage_withdrawn_fallback_closes_its_item() {
     );
     assert_eq!(item_state(&s, &id), "resolved");
 }
+
+// ---- ADR 2026-11-19-chat-attachment-store-connection §5: `triage_conn_` (the CoS inbox API reads
+// the triage table through `with_read_conn` instead of its own connection). ----
+
+use super::triage::{
+    cos_inbox_fallback_unsent, cos_inbox_item, cos_inbox_items, cos_inbox_superseded,
+    cos_triage_resolve_tx,
+};
+
+fn triage_conn_store(dir: &tempfile::TempDir, read_pool_size: usize) -> SqliteStore {
+    SqliteStore::open_with(
+        &dir.path().join("celeris.db"),
+        crate::StoreOptions {
+            read_pool_size,
+            ..crate::StoreOptions::default()
+        },
+    )
+    .expect("store")
+}
+
+fn triage_conn_ctx(thread: &str) -> crate::chat::AuditContext {
+    crate::chat::AuditContext {
+        actor: crate::chat::ChatActor::Cos,
+        thread_id: thread.to_owned(),
+        run_id: "run-triage-conn".into(),
+        operation_id: ulid::Ulid::new().to_string(),
+        reason: "triage_conn".into(),
+        policy_version: "v1".into(),
+    }
+}
+
+fn operation_states(s: &SqliteStore) -> Vec<String> {
+    let conn = s.lock().expect("lock");
+    let mut stmt = conn
+        .prepare("SELECT state FROM cos_operations ORDER BY created_at,id")
+        .expect("prepare");
+    stmt.query_map([], |r| r.get(0))
+        .expect("query")
+        .collect::<Result<_, _>>()
+        .expect("rows")
+}
+
+/// 不変条件（`task-state-in-sqlite`、ADR 2026-11-19-chat-attachment-store-connection §1.7・D2）: CoS の
+/// 受信箱の読み取り（`cos_inbox_item`・`cos_inbox_items`）は store の読み取りの接続（file DB では read pool）で
+/// commit 済みの行だけを返す。`cos_operation_apply` の closure が `cos_triage_resolve_tx` で item を
+/// `observed` にした後に失敗すると、読み取りは `pending` と元の一覧を返し、操作の記録は拒否の 1 行だけになる。
+/// 既存の試験（`cos_chat_triage_mark_and_audit_commit_together` など）は rollback の後の状態を試験自身の
+/// 接続で読み、API が使う store の読み取りの関数が rollback した行を見せないことを確かめていなかった。
+#[test]
+fn triage_conn_rollback_keeps_item_state() {
+    let dir = tempfile::tempdir().expect("dir");
+    let s = triage_conn_store(&dir, 2);
+    let thread = general(&s);
+    s.cos_triage_ingest_batch("decision", "1", &[item("a", "1")], at(0))
+        .expect("ingest");
+    let id = item_of(&s, "a", "1");
+    let listed = cos_inbox_items(&s, None, 10).expect("list");
+    assert_eq!(listed.len(), 1);
+    let readers = s.lock_counts().reader;
+
+    let ctx = triage_conn_ctx(&thread);
+    let error = s
+        .cos_operation_apply(
+            &ctx,
+            "k-rollback",
+            "hash",
+            "cos_inbox_item",
+            &id,
+            Some("1"),
+            "inbox.observe",
+            &serde_json::json!({}),
+            |tx, ctx| {
+                assert!(cos_triage_resolve_tx(
+                    tx,
+                    &id,
+                    "observed",
+                    Some(&ctx.operation_id),
+                    Some("rolled back"),
+                    at(1),
+                )?);
+                Err(crate::chat::ChatError::Conflict(
+                    "refused after the mark".into(),
+                ))
+            },
+        )
+        .expect_err("failed apply");
+    assert_eq!(error.http_status(), 409);
+
+    let after = cos_inbox_item(&s, &id).expect("read").expect("row");
+    assert_eq!(after.state, "pending");
+    assert_eq!(after.operation_id, None);
+    assert_eq!(after.reason, None);
+    assert!(!after.is_terminal());
+    assert_eq!(cos_inbox_items(&s, None, 10).expect("list"), listed);
+    assert!(
+        cos_inbox_items(&s, Some("observed"), 10)
+            .expect("observed")
+            .is_empty()
+    );
+    // The three reads went through `with_read_conn` (the read pool of the file DB).
+    assert_eq!(s.lock_counts().reader, readers + 3);
+    // The failure is kept only as the rejection record (the existing audit contract); no
+    // `applied` row exists for the rolled-back mark.
+    assert_eq!(operation_states(&s), ["rejected"]);
+}
+
+/// 不変条件（`events-append-only`・`cos-audit-same-tx`、ADR 2026-11-19-chat-attachment-store-connection
+/// §1.7）: 失敗した書き込みの transaction（`write_tx` の中で item の mark・`events` の追記・`cos_operations`
+/// の行を書いてから `Err`）は `events` と `cos_operations` の行を増やさず、その後の 4 つの読み取りの関数
+/// （`cos_inbox_item`・`cos_inbox_items`・`cos_inbox_fallback_unsent`・`cos_inbox_superseded`）も行を増やさない。
+/// 既存の試験は読み取りの経路を移したときに書き込みが混ざらないことを行の数で見ていなかった。
+#[test]
+fn triage_conn_failed_write_and_reads_append_no_event() {
+    let dir = tempfile::tempdir().expect("dir");
+    let s = triage_conn_store(&dir, 2);
+    let thread = general(&s);
+    s.cos_triage_ingest_batch("decision", "1", &[item("a", "1")], at(0))
+        .expect("ingest");
+    let id = item_of(&s, "a", "1");
+    let rows = || (count(&s, "events"), count(&s, "cos_operations"));
+    let before = rows();
+    let operation_id = ulid::Ulid::new().to_string();
+    let stream: crate::TaskId = operation_id.parse().expect("task id");
+
+    let failed: Result<(), crate::chat::ChatError> = s.write_tx(|tx| {
+        assert!(cos_triage_resolve_tx(
+            tx,
+            &id,
+            "answered",
+            Some(&operation_id),
+            Some("rolled back"),
+            at(1),
+        )?);
+        SqliteStore::append_event_tx_at(
+            tx,
+            stream,
+            &crate::Event::CosOperation {
+                actor: "cos".into(),
+                thread_id: thread.clone(),
+                run_id: "run-triage-conn".into(),
+                operation_id: operation_id.clone(),
+                reason: "rolled back".into(),
+                policy_version: "v1".into(),
+                state: "applied".into(),
+                target_kind: "cos_inbox_item".into(),
+                target_id: id.clone(),
+            },
+            at(1),
+        )?;
+        tx.execute(
+            "INSERT INTO cos_operations(id,thread_id,run_id,idempotency_key,request_hash,\
+             target_kind,target_id,action,payload_json,reason,policy_version,state,created_at,updated_at) \
+             VALUES(?1,?2,'run-triage-conn','k-failed','hash','cos_inbox_item',?3,'inbox.answer','{}',\
+             'rolled back','v1','applied','t','t')",
+            params![operation_id, thread, id],
+        )?;
+        Err(crate::chat::ChatError::Conflict("refused".into()))
+    });
+    assert!(failed.is_err());
+    assert_eq!(rows(), before, "the failed transaction left no row");
+
+    let item = cos_inbox_item(&s, &id).expect("read").expect("row");
+    assert_eq!(item.state, "pending");
+    assert_eq!(cos_inbox_items(&s, None, 10).expect("list"), [item]);
+    assert!(!cos_inbox_fallback_unsent(&s, &id).expect("fallback"));
+    assert!(!cos_inbox_superseded(&s, &id).expect("superseded"));
+    assert_eq!(rows(), before, "the reads appended nothing");
+}
+
+/// The answer path of `POST /cos/inbox/{i}/resolve` in the order `cos/inbox.rs` makes its store calls:
+/// the reads (`item`, `terminal_conflict`'s fallback check, `superseded`) before `audit.apply`, the
+/// mark inside it, and the response's read after it. Returns the final state and how many reads
+/// went through `with_read_conn`.
+fn triage_conn_answer_path(s: &SqliteStore) -> (String, u64) {
+    let thread = general(s);
+    s.cos_triage_ingest_batch("decision", "1", &[item("a", "1")], at(0))
+        .expect("ingest");
+    let id = item_of(s, "a", "1");
+    let readers = s.lock_counts().reader;
+    let item = cos_inbox_item(s, &id).expect("read").expect("row");
+    assert!(!item.is_terminal());
+    assert!(!cos_inbox_fallback_unsent(s, &id).expect("fallback"));
+    assert!(!cos_inbox_superseded(s, &id).expect("superseded"));
+    let ctx = triage_conn_ctx(&thread);
+    let op = s
+        .cos_operation_apply(
+            &ctx,
+            "k-answer",
+            "hash",
+            "cos_inbox_item",
+            &id,
+            Some("1"),
+            "inbox.answer",
+            &serde_json::json!({}),
+            |tx, ctx| {
+                assert!(cos_triage_resolve_tx(
+                    tx,
+                    &id,
+                    "answered",
+                    Some(&ctx.operation_id),
+                    Some("answer"),
+                    at(1),
+                )?);
+                Ok(serde_json::json!({"item_id": id}))
+            },
+        )
+        .expect("apply");
+    assert_eq!(op.state, "applied");
+    let after = cos_inbox_item(s, &id).expect("read").expect("row");
+    assert_eq!(after.operation_id.as_deref(), Some(op.id.as_str()));
+    assert_eq!(
+        cos_inbox_items(s, Some("answered"), 10).expect("list"),
+        [after.clone()]
+    );
+    (after.state, s.lock_counts().reader - readers)
+}
+
+/// 不変条件（ADR 2026-11-19-chat-attachment-store-connection §3）: read pool の無い store（in-memory と
+/// `read_pool_size = 0`）では `with_read_conn` が書き込みの接続の Mutex を取る。受信箱の 4 つの読み取りの
+/// 関数は Mutex を返してから戻り、answer の経路（読み取り → `cos_operation_apply` の中の mark → 応答の読み取り）は
+/// deadlock せず終わる。別 thread で走らせ、channel の受信を待つ（60 秒は止まったときに試験を落とすための上限で、
+/// 合否は経路が返るかだけで決まる）。API の store（`ApiState::new` の file DB）は常に read pool を持つので、
+/// 既存の HTTP の試験は書き込みの接続へ切り替える経路を通らず、この deadlock を検出できなかった。
+#[test]
+fn triage_conn_no_read_pool_store_answer_path_does_not_deadlock() {
+    let dir = tempfile::tempdir().expect("dir");
+    let stores = [
+        ("in-memory", SqliteStore::open_in_memory().expect("store")),
+        ("read_pool_size=0", triage_conn_store(&dir, 0)),
+    ];
+    for (name, s) in stores {
+        let (done, wait) = std::sync::mpsc::channel();
+        let path = std::thread::spawn(move || {
+            let _ = done.send(triage_conn_answer_path(&s));
+        });
+        let (state, reads) = match wait.recv_timeout(std::time::Duration::from_secs(60)) {
+            Ok(result) => result,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => match path.join() {
+                Err(panic) => std::panic::resume_unwind(panic),
+                Ok(()) => panic!("{name}: the answer path ended without a result"),
+            },
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                panic!(
+                    "{name}: the answer path did not return (waits on the write connection mutex)"
+                )
+            }
+        };
+        assert_eq!(state, "answered", "{name}");
+        assert_eq!(reads, 5, "{name}: every read went through with_read_conn");
+    }
+}

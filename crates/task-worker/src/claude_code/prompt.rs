@@ -661,9 +661,7 @@ fn build_execute_prompt(
         }
         out.push('\n');
         out.push_str("## 最終レビューで確かめる Task の受け入れ条件（参考）\n");
-        for (i, c) in task.acceptance.iter().enumerate() {
-            out.push_str(&format!("{}. {}\n", i, c.text));
-        }
+        out.push_str(&acceptance_lines(&task.acceptance));
         out.push('\n');
     } else {
         out.push_str("## Acceptance criteria\n");
@@ -740,10 +738,37 @@ pub(crate) fn direct_route_section(context: &RunContext) -> String {
     out
 }
 
+/// task の受入条件の text を `{i}. {text}` の行で並べる（ADR 2026-11-19-planner-reviewer-prompt-coverage D1）。
+/// review の受入条件の節・WU の run の参考の節・planner の受入条件の節が同じ行を出す。木でない WU の run の
+/// `## Acceptance criteria`（check ごとの説明を足す形）は書式が違うのでここを使わない。
+fn acceptance_lines(acceptance: &[task_core::Criterion]) -> String {
+    acceptance
+        .iter()
+        .enumerate()
+        .map(|(i, c)| format!("{i}. {}\n", c.text))
+        .collect()
+}
+
+/// planner（木と木でない execution planner・`TaskKind::Plan`・案件の計画と replan）の prompt に出す task の受入条件の節
+/// （ADR 2026-11-19-planner-reviewer-prompt-coverage D1）。planner は WorkUnit の `done_when` と check をこの条件から書く。
+/// 受入条件が空なら節を消さず「無し」の 1 行を出す。`prompt_header` には入れない（worker・review の prompt は自分の
+/// 受入条件の節を持つ）。
+fn planner_acceptance_section(task: &Task) -> String {
+    let mut out = String::from("## Task acceptance criteria (checked by the final review)\n");
+    if task.acceptance.is_empty() {
+        out.push_str("無し\n");
+    } else {
+        out.push_str(&acceptance_lines(&task.acceptance));
+    }
+    out.push('\n');
+    out
+}
+
 /// `Plan` kind 用プロンプト（DESIGN §5.6, ADR-0007 D7）。目標を独立に検証可能な受け入れ条件を持つ
 /// 子タスク群に分解させ、`artifacts/plan.json` に `PlanOutput` を書かせる。
 fn build_plan_prompt(task: &Task, context: &RunContext, run_id: &str, artifacts: &str) -> String {
     let mut out = prompt_header(task, context, run_id, artifacts);
+    out.push_str(&planner_acceptance_section(task));
     out.push_str(
         "## Instructions\n\
          Decompose this goal into a set of child tasks, each with an independently verifiable \
@@ -810,6 +835,7 @@ fn build_project_plan_prompt(
     artifacts: &str,
 ) -> String {
     let mut out = prompt_header(task, context, run_id, artifacts);
+    out.push_str(&planner_acceptance_section(task));
     out.push_str(
         "## Instructions\n\
          Design this project's milestones as a DAG: break the request into 1 to 12 milestones, each a \
@@ -865,6 +891,7 @@ fn build_project_replan_prompt(
     artifacts: &str,
 ) -> String {
     let mut out = prompt_header(task, context, run_id, artifacts);
+    out.push_str(&planner_acceptance_section(task));
     out.push_str(
         "## Instructions\n\
          This project already has an approved milestone plan (a DAG of milestones; the objective above lists \
@@ -941,6 +968,7 @@ fn build_execution_plan_prompt(
     artifacts: &str,
 ) -> String {
     let mut out = prompt_header(task, context, run_id, artifacts);
+    out.push_str(&planner_acceptance_section(task));
     out.push_str(
         "## Instructions\n\
          This task was judged too large or too broad for a single session (ADR-0072 Complexity Gate). \
@@ -1683,9 +1711,7 @@ fn build_review_prompt(task: &Task, context: &RunContext, run_id: &str, artifact
     );
     out.push_str(commit_refs::REVIEW_SECTION);
     out.push_str("## Acceptance criteria of the task under review\n");
-    for (i, c) in task.acceptance.iter().enumerate() {
-        out.push_str(&format!("{}. {}\n", i, c.text));
-    }
+    out.push_str(&acceptance_lines(&task.acceptance));
     out.push('\n');
     out.push_str(&harness_artifacts_section_for_review(context));
     match &context.review {

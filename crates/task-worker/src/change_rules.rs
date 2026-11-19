@@ -133,7 +133,7 @@ pub fn design_brief_section(context: &RunContext) -> String {
 
 #[cfg(test)]
 #[path = "change_rules/tests.rs"]
-mod tests;
+pub(crate) mod tests;
 
 #[cfg(test)]
 #[path = "change_rules/worker_profile_tests.rs"]

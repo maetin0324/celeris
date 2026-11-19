@@ -9,6 +9,9 @@ use crate::protocol::{GenreContext, PROTOCOL_VERSION, RunContext};
 #[path = "cos_chat_tests.rs"]
 mod cos_chat_tests;
 
+#[path = "planner_prompt_tests.rs"]
+mod planner_prompt_tests;
+
 #[derive(Default)]
 struct RecordingSink {
     progress: Mutex<Vec<String>>,

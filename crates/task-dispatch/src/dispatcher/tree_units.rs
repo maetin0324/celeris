@@ -926,7 +926,7 @@ impl Dispatcher {
                 self.human_gate_hold(&parent, &plan, &events)
             };
             // 1. 子の状態の写し。
-            let units = self.store.work_units_for(task_id)?;
+            let mut units = self.store.work_units_for(task_id)?;
             let mut changed = false;
             for u in units.iter().filter(|u| {
                 u.kind == task_core::WorkUnitKind::Task
@@ -991,17 +991,15 @@ impl Dispatcher {
                 tracing::info!(%task_id, work_unit = %u.key, %child_id, child_status = ?child.status, to = ?to, "task unit mirrors its child task (ADR-0079 D4 (5))");
                 changed = true;
             }
-            let units = if changed && hold.is_some() {
+            if changed {
+                units = self.store.work_units_for(task_id)?;
                 // R6-1: 止めている間は引き上げない（解けた後の dispatch の `promote_newly_ready` が上げる）。
-                self.store.work_units_for(task_id)?
-            } else if changed {
-                let units = self.store.work_units_for(task_id)?;
-                // 子の done で依存が満たされた unit を ready に（段階の障壁は `newly_ready` が見る）。
-                self.promote_newly_ready(task_id, &units)?;
-                self.store.work_units_for(task_id)?
-            } else {
-                units
-            };
+                if hold.is_none() {
+                    // 子の done で依存が満たされた unit を ready に（段階の障壁は `newly_ready` が見る）。
+                    self.promote_newly_ready(task_id, &units)?;
+                    units = self.store.work_units_for(task_id)?;
+                }
+            }
             // 2. 子 task の生成。ADR-0079 D8（Phase R3b）: root の計画が承認を待つ間は子を作らない
             // （承認までは unit を 1 つも起こさない）。ADR-0079 付記「R6-1」D1 / D2: 承認待ちで止まっている間だけで
             // なく、承認待ちの版に人が replan を求めて task が `ready` に戻った後（次の版が承認されるまで）と、

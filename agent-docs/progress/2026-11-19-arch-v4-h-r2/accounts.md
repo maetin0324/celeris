@@ -27,6 +27,9 @@ commit（件名）:
 
 - `arch-v4 H R2 accounts: account の plan と作用を account_write.rs へ、Effect を problem.rs へ移す`
 - `arch-v4 H R2 accounts: architecture-map・ADR 付記・進捗 accounts.md を書く`
+- `arch-v4 H R2 accounts: architecture-map の account_write の行の呼び出し元を相対 path にする`（前回の run の check で
+  repo-health の `arch-map.wrong_path` が 2 件 fail した。全角括弧の中の backtick path は直前の path の dir からの相対として
+  展開される（`scripts/dev/check-architecture-map.py` の `collect_backtick_paths`）ので、`crates/task-api/src/` を外した）
 
 ### 1.1 file ごとの差分（基準は `$CELERIS_WU_BASE`、`git diff --numstat`、crates/ だけ）
 
@@ -106,7 +109,9 @@ closure の中で呼ぶ（今までは作用の中で呼んでいた。拒否は
   cos_to_handlers_lines 50 → 29（crate:: 46 → 29、super:: 4 → 0）。http-tools の後の HEAD（232 組）からこの WorkUnit で消えた組は
   notify → cos と releases → cos の 2 つ（`Effect` の移動）
 - `cargo nextest run -p task-api --test llm_accounts_admin --test cos_delivery_suite --test cos_operations --test auth_and_guards` → exit 0（74 passed）
-- `bash scripts/dev/test-affected.sh` → exit 0（nextest 6132 passed・21 skipped、web の tsc -b と unit 705 passed、repo_health_gate all checks passed）
+- `bash scripts/dev/test-affected.sh` → exit 0（nextest 6132 passed・21 skipped、web の tsc -b と unit 705 passed、repo_health_gate all checks passed、
+  repo-health verdict=pass new=0 worsened=0、`arch-map.wrong_path` findings=0、`deps.cycle` pass）
+- `python3 -I scripts/dev/check-architecture-map.py --root .` → exit 0（1103 件の path を確認）
 - `cargo clippy --workspace -- -D warnings` → exit 0
 - `cargo fmt --all -- --check` → exit 0
 

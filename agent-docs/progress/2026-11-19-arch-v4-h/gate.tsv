@@ -1,0 +1,11 @@
+case	result	command	note
+case1	pass	cargo nextest run -p task-dispatch -E 'test(/boundary_case_/)'	boundary_case_1_authz_one_line_is_high PASS（認可の 1 行 → High）。6 tests run: 6 passed, 1912 skipped、exit 0
+case2	pass	cargo nextest run -p task-dispatch -E 'test(/boundary_case_/)'	boundary_case_2_equivalent_plain_change_is_low PASS（同等の普通の変更 → Low）
+case3	pass	cargo nextest run -p task-dispatch -E 'test(/boundary_case_/)'	boundary_case_3_move_cannot_escape PASS（移動で回避できない）
+case4	pass	cargo nextest run -p task-dispatch -E 'test(/boundary_case_/)'	boundary_case_4_worsening_dependency_blocks PASS（依存の悪化を止める）
+case5	pass	cargo nextest run -p task-dispatch -E 'test(/boundary_case_/)'	boundary_case_5_policy_self_approval_impossible PASS（policy の自己承認ができない）
+case6	pass	cargo nextest run -p task-dispatch -E 'test(/boundary_case_/)'	boundary_case_6_fail_closed PASS（fail-closed）
+prompt_boundary	pass	cargo nextest run -p task-worker -E 'test(/prompt_boundary_/)'	3 tests run: 3 passed, 1311 skipped、exit 0。3,000 文字の objective の末尾（END-OF-OBJECTIVE）を確かめるのは worker の prompt だけ（gate.md §2）
+repo_health_tests	pass	python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health_*.py'	Ran 126 tests in 51.6s OK、exit 0（test_repo_health_scc_edges.py の内部辺 5 件を含む）
+probe_scc_edge	pass	python3 scripts/dev/repo-health/repo_health.py --repo . --base "$(git merge-base HEAD main)" --head worktree --policy-version 1 --out <report.json>	crates/task-api/src/lifecycle.rs に use crate::knowledge::KnowledgeItem; を 1 行足した。期待どおり exit 1・verdict=fail。deps.cycle fail（new 1）fingerprint=deps.cycle:a10675aac992c815 symbol=crates/task-api/src/lifecycle -> crates/task-api/src/knowledge。deps.violation pass（0 件）
+probe_plain	pass	python3 scripts/dev/repo-health/repo_health.py --repo . --base "$(git merge-base HEAD main)" --head worktree --policy-version 1 --out <report.json>	同じ file に comment を 1 行足した。期待どおり exit 0・verdict=pass。deps.cycle pass（existing 17、new・worsened 0）、deps.violation pass（0 件）

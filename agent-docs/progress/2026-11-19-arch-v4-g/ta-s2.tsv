@@ -1,0 +1,3 @@
+metric	scenario	rev	run	seconds	user_s	sys_s	exit	load1_start	valid	src_tree	note
+test_affected	S2	after	2	707.76	3093.42	744.41	0	3.48	yes	a4f737a01c6040dd1761648a19c6aaa38c1383e0	attempt=1 waited=110s load=3.48 7.32 8.25 prev_state=warmup test build (not measured) nextest=3938 passed/11 skipped/0 failed/454.890s doctest=14 crates 3 passed 2 ignored health=pass new=0 worsened=0 findings=695 build=1m22s compiling=5 rss_kb=3558748
+test_affected	S2	after	3	653.34	2990.88	728.69	0	3.86	yes	a4f737a01c6040dd1761648a19c6aaa38c1383e0	attempt=2 waited=30s load=3.86 9.17 9.17 prev_state=S2 run 2 nextest=3938 passed/11 skipped/0 failed/407.091s doctest=14 crates 3 passed 2 ignored health=pass new=0 worsened=0 findings=695 build=1m25s compiling=5 rss_kb=3626596

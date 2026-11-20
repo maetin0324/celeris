@@ -9,8 +9,7 @@
 # 偽の cargo / pnpm / 生成器 / agent-browser / celerisctl を使い、本番の ~/.config/celeris・~/.local/celeris・/local には触れない。
 [ -n "${BASH_VERSION:-}" ] || exec bash "$0" "$@"
 set -euo pipefail
-# 本番の paths.env の CELERIS_BACKUPS_DIR・CELERIS_LOGS_DIR を環境から継がない。継ぐと台本が要約の行を本番の
-# $SD_LOGS/release-records.jsonl に足す（ADR 2026-11-20-release-record-summary-log D2）。log は一時の state の下へ。
+# 理由: worker の環境は本番の CELERIS_LOGS_DIR を継ぎ、継いだままだと台本が偽の要約の行を本番の release-records.jsonl に足す。
 unset CELERIS_BACKUPS_DIR CELERIS_LOGS_DIR
 
 here="$(cd "$(dirname "$0")/.." && pwd)"
@@ -154,6 +153,8 @@ printf 'pub const SCHEMA_VERSION: u32 = 7;\n' >"$repo/crates/task-core/src/store
 printf '[package]\nname = "celeris"\nversion = "0.1.0"\n' >"$repo/crates/celeris/Cargo.toml"
 printf '// v0\n' >"$repo/crates/x/src/lib.rs"
 cp "$here"/*.sh "$here"/*.py "$repo/scripts/selfdeploy/"
+# release.sh は cos-skills.txt の CoS skill を梱包する（sd_bundle_cos_skills）。偽の木は skill を持たないので空の一覧を置く。
+printf '# fixture: no CoS skills\n' >"$repo/scripts/selfdeploy/cos-skills.txt"
 chmod +x "$repo/scripts/selfdeploy/"*.sh
 mkdir -p "$repo/scripts/dev" "$repo/tools/nextest"
 cp "$here/../dev/test-parallel.sh" "$repo/scripts/dev/"
@@ -161,7 +162,7 @@ cp "$here/../dev/source-size-report.py" "$repo/scripts/dev/"
 # test-parallel.sh が読む helper と、release.sh が同梱する検査器（sd_bundle_repo_health は repo_health.py と
 # source-size-report.py の無い build を失敗にする）。
 mkdir -p "$repo/scripts/dev/lib" "$repo/scripts/dev/repo-health"
-cp "$here/../dev/lib/test-tmp-lifecycle.sh" "$repo/scripts/dev/lib/"
+cp "$here/../dev/lib/test-tmp-lifecycle.sh" "$here/../dev/lib/check-slot.sh" "$repo/scripts/dev/lib/"
 cp "$here/../dev/repo-health/repo_health.py" "$repo/scripts/dev/repo-health/"
 cp "$here/../../tools/nextest/VERSION" "$repo/tools/nextest/"
 . "$here/tests/fixtures/web-release.sh"
@@ -177,6 +178,8 @@ printf 'pub const SCHEMA_VERSION: u32 = 7;\n' >"$repo/crates/task-core/src/store
 printf '[package]\nname = "celeris"\nversion = "0.1.0"\n' >"$repo/crates/celeris/Cargo.toml"
 printf '// v0\n' >"$repo/crates/x/src/lib.rs"
 cp "$here"/*.sh "$here"/*.py "$repo/scripts/selfdeploy/"
+# release.sh は cos-skills.txt の CoS skill を梱包する（sd_bundle_cos_skills）。偽の木は skill を持たないので空の一覧を置く。
+printf '# fixture: no CoS skills\n' >"$repo/scripts/selfdeploy/cos-skills.txt"
 chmod +x "$repo/scripts/selfdeploy/"*.sh
 mkdir -p "$repo/scripts/dev" "$repo/tools/nextest"
 cp "$here/../dev/test-parallel.sh" "$repo/scripts/dev/"
@@ -184,7 +187,7 @@ cp "$here/../dev/source-size-report.py" "$repo/scripts/dev/"
 # test-parallel.sh が読む helper と、release.sh が同梱する検査器（sd_bundle_repo_health は repo_health.py と
 # source-size-report.py の無い build を失敗にする）。
 mkdir -p "$repo/scripts/dev/lib" "$repo/scripts/dev/repo-health"
-cp "$here/../dev/lib/test-tmp-lifecycle.sh" "$repo/scripts/dev/lib/"
+cp "$here/../dev/lib/test-tmp-lifecycle.sh" "$here/../dev/lib/check-slot.sh" "$repo/scripts/dev/lib/"
 cp "$here/../dev/repo-health/repo_health.py" "$repo/scripts/dev/repo-health/"
 cp "$here/../../tools/nextest/VERSION" "$repo/tools/nextest/"
 . "$here/tests/fixtures/web-release.sh"

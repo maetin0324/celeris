@@ -15,7 +15,8 @@
 # prune_tests_stay_in_tmp.sh）は cargo の target の掃除を見るもので、release dir の掃除の後に要約が残るかを見ない。
 # release_parallel_test_gate.sh 等の release の試験は SD_RELEASE_PRUNE=0 で掃除を飛ばす。なので、この試験を足す。
 #
-# 偽の cargo / pnpm / node / celerisctl と一時 dir の fixture だけを使い、本番の path・DB・network・systemd に触れない。
+# 偽の cargo / pnpm / node / celerisctl と一時 dir の偽の木（共有の fixture tests/fixtures/release-gate-tree.sh）だけを使い、
+# 本番の path・DB・network・systemd に触れない。
 # verify と昇格は本物の台本を回さず（systemd と本番 API の偽物が大量に要る）、lib.sh の sd_release_record を fixture の
 # verify.json と、audit.sh の sd_audit begin/finish で作った本物の形の promoted.json に当てる。台本が正本を書いた後に
 # 呼ぶことは、台本の行の順で確かめる。
@@ -26,7 +27,6 @@ unset CELERIS_BACKUPS_DIR CELERIS_LOGS_DIR CELERIS_CONFIG SD_LOG_FILE
 
 here="$(cd "$(dirname "$0")/.." && pwd)"
 top="$(cd "$here/../.." && pwd)"
-export SD_SCRIPT_BUNDLE_GATE="$here/tests/fixtures/fake-script-bundle-gate.sh"
 root="$(mktemp -d)"
 trap 'rm -rf "$root"' EXIT
 mkdir -p "$root/bin" "$root/config" "$root/state/releases" "$root/logs"
@@ -40,96 +40,15 @@ fail() {
   exit 1
 }
 
-# ---- 偽の道具（release_parallel_test_gate.sh と同じ形） ----
-cat >"$root/bin/cargo" <<'EOF'
-#!/usr/bin/env bash
-case "$1" in
-  metadata) printf '{"workspace_members":["x 0.1.0"],"packages":[{"id":"x 0.1.0","name":"x"}]}\n' ;;
-  nextest)
-    case "$2" in
-      --version) echo 'cargo-nextest 0.9.146 (fake)' ;;
-      run)
-        printf '    Starting 7 tests across 2 binaries (2 tests skipped)\n'
-        if [ "${FAKE_NEXTEST_FAIL:-0}" = 1 ]; then
-          printf '        FAIL [   0.004s] x tests::b\n'
-          printf '     Summary [   0.020s] 7 tests run: 6 passed (1 slow), 1 failed, 2 skipped\n'
-          exit 100
-        fi
-        printf '     Summary [   0.020s] 7 tests run: 7 passed (1 slow), 2 skipped\n'
-        ;;
-    esac
-    ;;
-  test)
-    printf '   Doc-tests x\n'
-    printf 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n'
-    ;;
-  build)
-    mkdir -p "$CARGO_TARGET_DIR/release"
-    for b in celeris celerisctl celeris-credentiald; do printf '#!/bin/sh\nexit 0\n' >"$CARGO_TARGET_DIR/release/$b"; chmod +x "$CARGO_TARGET_DIR/release/$b"; done
-    ;;
-esac
-exit 0
-EOF
-cat >"$root/bin/pnpm" <<'EOF'
-#!/usr/bin/env bash
-case "$1" in
-  --version) echo 11.27.0 ;;
-  install) mkdir -p node_modules && : >node_modules/.modules.yaml ;;
-  build) mkdir -p build && echo ok >build/index.html ;;
-esac
-exit 0
-EOF
-cat >"$root/bin/node" <<'EOF'
-#!/usr/bin/env bash
-[ "${1:-}" = --version ] && echo v24.0.0
-exit 0
-EOF
-cat >"$root/bin/celerisctl" <<'EOF'
-#!/usr/bin/env bash
-if [ "$1 $2" = "scratch lease" ]; then
-  owner=""
-  while [ $# -gt 0 ]; do
-    [ "$1" = "--owner" ] && owner="$2"
-    shift
-  done
-  printf '%s\n' "$FAKE_SCRATCH/targets/$owner/target"
-fi
-exit 0
-EOF
-chmod +x "$root/bin/"*
-
-# ---- 偽の木（release.sh・test-parallel.sh が読む file を写す。release_parallel_test_gate.sh と同じ） ----
-repo="$root/repo"
-mkdir -p "$repo/crates/task-core/src/store" "$repo/crates/celeris" "$repo/crates/x/src" "$repo/scripts/selfdeploy"
-cp "$here"/*.sh "$here"/*.py "$repo/scripts/selfdeploy/"
-printf '# fixture: no CoS skills\n' >"$repo/scripts/selfdeploy/cos-skills.txt"
-chmod +x "$repo/scripts/selfdeploy/"*.sh
-mkdir -p "$repo/scripts/dev/lib" "$repo/scripts/dev/repo-health" "$repo/tools/nextest"
-cp "$top/scripts/dev/test-parallel.sh" "$top/scripts/dev/source-size-report.py" "$repo/scripts/dev/"
-cp "$top/scripts/dev/lib/test-tmp-lifecycle.sh" "$top/scripts/dev/lib/check-slot.sh" "$repo/scripts/dev/lib/"
-cp "$top/scripts/dev/repo-health/repo_health.py" "$repo/scripts/dev/repo-health/"
-cp "$top/tools/nextest/VERSION" "$repo/tools/nextest/"
-printf 'pub const SCHEMA_VERSION: u32 = 7;\n' >"$repo/crates/task-core/src/store/migrations.rs"
-printf '[package]\nname = "celeris"\nversion = "0.1.0"\n' >"$repo/crates/celeris/Cargo.toml"
-. "$here/tests/fixtures/web-release.sh"
-git init -q "$repo"
-echo 0 >"$root/n"
-new_commit() {
-  local n
-  n=$(($(cat "$root/n") + 1))
-  echo "$n" >"$root/n"
-  printf '// v%s\n' "$n" >"$repo/crates/x/src/lib.rs"
-  git -C "$repo" add -A
-  git -C "$repo" -c user.email=t@example.invalid -c user.name=t commit -q -m "c$n"
-  git -C "$repo" rev-parse HEAD
-}
+# ---- 偽の道具・偽の木・new_commit（release_parallel_test_gate.sh と共有の fixture） ----
+. "$here/tests/fixtures/release-gate-tree.sh"
 
 # 掃除を飛ばさない（SD_RELEASE_PRUNE を立てない）。LOGS は呼び出しごとに変えられる（場合 6 の書けない置き場）。
 LOGS="$root/logs"
 sd_env() {
   env CELERIS_STATE_DIR="$root/state" CELERIS_CONFIG_DIR="$root/config" CELERIS_CONFIG="$root/config/config.toml" \
     CELERIS_LOGS_DIR="$LOGS" SD_REPO="$repo" SD_CELERISCTL="$root/bin/celerisctl" SD_PNPM_SHIM_DIR="$root/bin" \
-    FAKE_SCRATCH="$root/scratch" PATH="$root/bin:$PATH" "$@"
+    CARGO_LOG="$root/cargo.log" FAKE_SCRATCH="$root/scratch" PATH="$root/bin:$PATH" "$@"
 }
 run_release() { sd_env bash "$here/release.sh" "$1" >"$root/release.out" 2>&1; }
 # `record <kind> <path>` — 台本と同じ lib.sh の関数を、同じ置き場の env で呼ぶ。

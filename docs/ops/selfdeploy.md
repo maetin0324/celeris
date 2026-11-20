@@ -51,6 +51,9 @@ release.sh <ref>  →  verify.sh <sha12>  →  promote.sh <sha12>        （戻�
   staging/              verify.sh の作業場所（毎回作り直す。`.lock` だけは残る）
   staging/.lock         verify.sh を 1 本に直列化する flock（ADR-0041 D2）
   backups/              昇格前の DB のコピーと promote-<ts>.log
+  $SD_LOGS/release-records.jsonl  gate・verify・昇格の要約の写し（1 行 1 JSON の追記だけ。release の掃除で消えない。
+                        正本は release dir の gate.json・verify.json・promoted.json。§「gate・verify・昇格の要約の写し」）。
+                        `$SD_LOGS` は `CELERIS_LOGS_DIR`（本番の `paths.env` では `/local/celeris/state/logs`）、未設定なら backups/
   backups/pre-celeris/  改名の移行（ADR-0045。済み）で残した旧い設定と unit
   workspaces/  memory/  claude-accounts/  codex-accounts/  logs/
   tools/{ldr,paperqa,opencode}/   アダプタが使う venv と設定
@@ -708,3 +711,28 @@ rollback も同じ環境変数を指定する。`--restore-db` のデータ復�
 成功時は `promoted.json` / `rolled_back.json` にも写す。`status=started` のままなら正常終了の証拠は無い。
 `GET /api/v1/releases` と `status.sh --json` の `items[].deployment_audit` / `releases[].deployment_audit`
 で履歴を読める。過去の release の欠けている実行者は推測で補わない。
+
+### gate・verify・昇格の要約の写し（`release-records.jsonl`。ADR 2026-11-20-release-record-summary-log）
+
+`release.sh` の掃除（`prune_releases`）は release dir を消し、gate.json・verify.json・promoted.json も一緒に消える。
+後から gate・verify・昇格の結果を確かめられるよう、台本はその要約を `$SD_LOGS/release-records.jsonl` に 1 行ずつ追記する。
+
+- 置き場: `$SD_LOGS/release-records.jsonl`。`$SD_LOGS` は `CELERIS_LOGS_DIR`（本番の `paths.env` では `/local/celeris/state/logs`）、
+  未設定なら `CELERIS_BACKUPS_DIR`（既定 `~/.local/celeris/backups`）。promote の log と同じ dir で、release の掃除の対象外。
+- 追記する時点: `release.sh` が gate.json を書いた後（通れば release dir ができた後、落ちれば `.build/<sha12>/gate.json` の後）、
+  `verify.sh` が verify.json を書いた後（`ok` が偽でも）、`promote.sh` が promoted.json を書いた後（`promote.sh` を通る rollback も）。
+- 形: 1 行 1 JSON。共通の欄は `at`（追記の時刻）・`kind`（`gate`・`verify`・`promoted`）・`sha12`・`ok`・`file`（正本の path）。
+  - `gate`: `sha`・`failed_step`・`step_count`（段の数）・`steps`（`step` と `exit`）・`cargo_test`（`runner`・`passed`・`failed`・
+    `ignored`・`nextest_passed`・`nextest_skipped`・`doc_passed`・`doc_ignored`・`nextest_exit`・`doctest_exit`・`userns`）
+  - `verify`: `live_ok`・`schema_version`・`checks`（`id`・`name`・`ok`）
+  - `promoted`: `operation`・`status`（`ok` は `status` が `succeeded`）・`mode`・`from`・`promoted_at`・`actor`・`policy_ref`・
+    `included_tasks`
+- 追記だけで、既存の行の書き換え・削除・回転はしない。
+- **正本は release dir の file**（gate.json・verify.json・promoted.json。落ちた gate は `.build/<sha12>/gate.json`）。この file は
+  書いた時点の写しで、再 verify などで正本が変わっても前の行は直さない。食い違えば release dir の file を信じる。
+  昇格・takeover・引き渡し・release notes の判断（`crates/celeris` の `releases.rs`・`delivery.rs`・`release_notes.rs` と台本）は
+  この file を読まない（`unpromoted-release-no-takeover`）。役に立つのは、release dir が消えた後に人が結果を確かめるときだけ。
+- 追記に失敗しても（置き場に書けない・正本が読めない）log に `warning: release-records: …` を出すだけで、release・verify・promote の
+  exit code と正本の file は変わらない。
+- 見方の例: `grep '"sha12":"<sha12>"' /local/celeris/state/logs/release-records.jsonl`
+- 試験: `scripts/selfdeploy/tests/release_record_summary_survives_prune.sh`

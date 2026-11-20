@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # ADR-0135 D4: verify records web app probe success/failure as a mandatory check.
 set -euo pipefail
+# 本番の paths.env の CELERIS_BACKUPS_DIR・CELERIS_LOGS_DIR を環境から継がない。継ぐと台本が要約の行を本番の
+# $SD_LOGS/release-records.jsonl に足す（ADR 2026-11-20-release-record-summary-log D2）。log は一時の state の下へ。
+unset CELERIS_BACKUPS_DIR CELERIS_LOGS_DIR
 
 here="$(cd "$(dirname "$0")/.." && pwd)"
 root="$(mktemp -d)"

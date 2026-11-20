@@ -93,7 +93,7 @@ G の rules.md の driver（`c1-health-tsv.sh`・`build-check.sh`・`probe-const
 - 1 回だけなので、H の値との差（−9.7 %〜+6.0 %）がコードによるのか host の負荷によるのかは区別できない。health は A の +10 % を超えたままで、
   G の回帰条件（A の +10 % を超えたら before を同じ host で 3 回測り直す）に当たる状態は H の replan と変わらない。
 
-## 5. 再現コマンド
+## 再現コマンド
 
 repo の root で実行する。`ART` はこの WorkUnit の成果物 dir の `raw/`（`/local/celeris/data/workspaces/01M7MZT8KX547464YYS76QNP4G/wu/loc/artifacts/raw`。
 driver の写し、`static.sh`、`build_loc_tsv.py`、生の出力がある）。driver の元は H の rc-loc の raw（`/local/celeris/data/workspaces/01M7MZTKBPZPQE4XN451F8X84F/wu/rc-loc/artifacts/raw`）。
@@ -132,6 +132,7 @@ python3 -I $ART/build_loc_tsv.py
 
 - `arch-v4 親 closeout loc: H の (4)(5)(6) を HEAD で測り直し、loc.tsv と loc.md を書く`
 - `arch-v4 親 closeout loc: 提出時の HEAD で回した検査の結果を loc.md に書く`
+- `arch-v4 親 closeout loc: loc.md の再現コマンドの見出しを「## 再現コマンド」にする`
 
 ## 8. 検査（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 

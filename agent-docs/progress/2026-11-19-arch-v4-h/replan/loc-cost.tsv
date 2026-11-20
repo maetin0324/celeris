@@ -1,0 +1,37 @@
+metric	scope	before	after	checker	note
+loc_prod_all	production 全言語（views.product_only.lines）	375921	376018	ssr@bc665168	+97。HEAD に B0 の source-size-report を当てた。before は H の measure の after（1680de5c に当て直して同じ値）。差はすべて Rust
+loc_prod_rust	production Rust（views.product_only.rust_lines）	331230	331327	ssr@bc665168	+97。ほかの言語の production の差は 0 行
+loc_test	試験 = class_totals.external_test + inline_test	481514	484793	ssr@bc665168	+3279。external_test 460106→463385（Rust 410773→413950 +3177、shell 8229→8331 +102）、inline_test 21408→21408
+loc_own_total	own_total_with_tests 全言語（views.own_total_with_tests.lines）	1031506	1034966	ssr@bc665168	+3460。Rust 884431→887705（+3274）。tooling 25517→25601（+84）と fixture shell 747→882（+135）を含む
+loc_own_total_rust	own_total_with_tests Rust（views.own_total_with_tests.rust_lines）	884431	887705	ssr@bc665168	+3274（production +97、external_test +3177）
+loc_tooling	tooling（class_totals.tooling）	25517	25601	ssr@bc665168	+84（shell 13041→13125。R6 の selfdeploy の台本）
+s1_files	S1 で変える production file	4	4	-	G の scenarios.env の S1_FILES の 4 file はすべて HEAD にある。R2 は cos/ops/admin.rs（+75 −87）と handlers/org.rs（+1 −1）を変えたが、同じ意味の変更で変える file は同じ
+s1_units	S1 で変える単位（repo-health の単位 crates/<c>/src/<第 1 要素>）	4	4	-	task-api の org_write・handlers・cos と task-core の store
+s1_crates	S1 で変える crate	2	2	-	task-api・task-core
+s2_files	S2 で変える production file	4	4	-	G の S2_FILES の 4 file。R の変更はこの 4 file を変えていない
+s2_units	S2 で変える単位	2	2	-	task-dispatch の dispatcher・run_settlement
+s2_crates	S2 で変える crate	1	1	-	task-dispatch
+s1_direct_importers	S1 の単位を直接 import する単位（C7b）	92	76	b0	−16。b0 の検査器・profile は bc665168・測る tree は HEAD。消えた単位 17 は R2 で HTTP の道具を http_io へ移した task-api の module、足された単位 1 は R4 の task-core の cos_inbox（head の集合の差）
+s1_direct_importers	S1 の単位を直接 import する単位（C7b）	93	77	head	−16。HEAD の検査器（H の measure から scripts/dev/repo-health の差分 0）。消えた 17・足された 1 は b0 の行と同じ
+s1_transitive_importers	S1 の単位を推移的に import する単位（C7b）	369	372	b0	+3。package 12 → 12。足された単位は task-api の http_io・account_write（R2）と task-core の cos_inbox（R4）、消えた単位 0（head の集合の差）
+s1_transitive_importers	S1 の単位を推移的に import する単位（C7b）	365	368	head	+3。package 12 → 12。足された 3 単位は b0 の行と同じ
+s2_direct_importers	S2 の単位を直接 import する単位（C7b）	6	6	b0	head の検査器でも 6 → 6
+s2_transitive_importers	S2 の単位を推移的に import する単位（C7b）	14	14	b0	package 4 → 4。head の検査器でも 14 → 14
+s1_ta_crates	S1 の test-affected --list の crate（comment の probe）	14	14	-	＋ web: typecheck+unit ＋ ts-verify: test-ts-verify。H の measure と同じ集合（comment の probe、4 file・4 行）
+s2_ta_crates	S2 の test-affected --list の crate（comment の probe）	5	5	-	celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。H の measure と同じ集合
+fix_commits	修正の波及 C10 no-merges（production を変えた first-parent の非 merge commit）	1	1	ssr@bc665168	bc665168..HEAD（SINCE 2026-11-17T00:00Z）: commits 12 のうち production を変えたのは H の measure と同じ C の PathClass の 1 件。R の変更はすべて integrate の merge で入るので no-merges に出ない
+fix_commits	修正の波及 C10 with-merges（merge commit を first-parent の差分で含める）	9	14	ssr@bc665168	commits 56 のうち 14 件。H の measure の 9 件に R1〜R5 の integrate の 5 件が足された（R6 は scripts/selfdeploy だけで production でない。R7 は docs だけ）。件数が少なく比較不能
+fix_region_pct	C10 no-merges の複数 region（crate か top-level の dir）の割合 %	0.0	0.0	ssr@bc665168	1 件中 0 件（比較不能）
+fix_region_pct	C10 with-merges の複数 region の割合 %	55.6	42.9	ssr@bc665168	14 件中 6 件。R で足されたのは R4（task-api・task-core）の 1 件。子 task の WU 単位の merge を 1 件と数えるので A の窓と比べられない
+fix_module_pct	C10 no-merges の複数 module の割合 %	0.0	0.0	ssr@bc665168	1 件中 0 件（比較不能）
+fix_module_pct	C10 with-merges の複数 module の割合 %	55.6	57.1	ssr@bc665168	14 件中 8 件。R で足されたのは R2・R4・R5 の 3 件（R1・R3 は 1 module）。比較不能（理由は fix_region_pct と同じ）
+check_cold	cargo check --workspace の cold の wall 中央値 s	53.90	53.90	-	H の値（G の中央値）を写した。測り直していない（この WorkUnit の objective が測り直す key を health と check_warm の 4 つに限った）。R1〜R6 で crates/ が変わったので G の tree の値である
+check_warm_s1	cargo check の warm S1（const の probe）の wall 中央値 s	42.64	43.08	-	測り直した（HEAD、G の rules.md・build-check.sh の手順、const の probe）。3 回 43.02・43.18・43.08（開始時の 1 分 load 2.68・1.93・1.77、待ち 0 s）、user 中央値 58.76 s。A の +1.4 %、H の値 42.64 の +1.0 %
+check_warm_s2	cargo check の warm S2 の wall 中央値 s	15.56	14.76	-	測り直した（同上）。3 回 14.76・15.96・14.56（開始時の 1 分 load 2.05・2.34・2.35、待ち 0 s）、user 中央値 18.90 s。A の +0.6 %、H の値 15.56 の −5.1 %
+test_build_cold	cargo nextest run --workspace --no-run の cold の wall 中央値 s	147.03	147.03	-	H の値（G の中央値）を写した。測り直していない（この WorkUnit の objective が測り直す key を health と check_warm の 4 つに限った）。R1〜R6 で crates/ が変わったので G の tree の値である
+test_build_warm_s1	test build の warm S1 の wall 中央値 s	138.10	138.10	-	H の値（G の中央値）を写した。測り直していない（この WorkUnit の objective が測り直す key を health と check_warm の 4 つに限った）。R1〜R6 で crates/ が変わったので G の tree の値である
+test_build_warm_s2	test build の warm S2 の wall 中央値 s	81.60	81.60	-	H の値（G の中央値）を写した。測り直していない（この WorkUnit の objective が測り直す key を health と check_warm の 4 つに限った）。R1〜R6 で crates/ が変わったので G の tree の値である
+health_s1	repo-health S1（const の probe、--head worktree）の wall 中央値 s	93.58	98.74	head	測り直した（HEAD、G の rules.md・c1-health-tsv.sh の手順、--base HEAD --head worktree、const の probe）。3 回 98.74・99.39・96.31（開始時の 1 分 load 1.71・2.07・2.77、待ち 0 s）、user 中央値 74.95 s（H の値の G の 71.19 s の +5.3 %）。A の +14.1 %（印あり）、H の値 93.58 の +5.5 %。fail は size.responsibility-growth（findings 698・new 3・worsened 1）
+health_s2	repo-health S2 の wall 中央値 s	96.09	100.68	head	測り直した（同上）。3 回 91.47・109.87・100.68（開始時の 1 分 load 1.73・1.35・2.40、待ち 0 s）、user 中央値 74.77 s（G の 71.86 s の +4.0 %）。A の +22.9 %（印あり）、H の値 96.09 の +4.8 %。fail は size.responsibility-growth・source-size（findings 699・new 4・worsened 2）。before の同じ host の測り直しはしていない
+test_affected_s1	bash scripts/dev/test-affected.sh S1（comment の probe）の wall 中央値 s	906.03	906.03	-	H の値（G の中央値）を写した。測り直していない（規則: test-affected の時間は測り直さない）。R1〜R6 で crates/ が変わったので G の tree の値である
+test_affected_s2	test-affected S2 の wall 中央値 s	707.76	707.76	-	H の値（G の中央値）を写した。測り直していない（規則: test-affected の時間は測り直さない）。R1〜R6 で crates/ が変わったので G の tree の値である

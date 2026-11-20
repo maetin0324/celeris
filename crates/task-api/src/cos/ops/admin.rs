@@ -7,7 +7,7 @@ use super::super::operations::{
 use crate::account_write;
 use crate::org_write::{self, OrgWritten};
 use crate::problem::ApiProblem;
-use crate::skills::{OrgSkillMountBody, plan_skill_mount};
+use crate::skills::{self, OrgSkillMountBody, plan_skill_mount};
 use serde_json::Value;
 use task_core::chat::CosOperation;
 use task_core::store::SqliteStore;
@@ -278,6 +278,36 @@ fn empty_body(body: &Value) -> Result<(), ApiProblem> {
     }
 }
 
+/// CoS `skill.put`・`skill.delete`. The KB write is a git commit: the plan's refusal is audited as
+/// rejected, and the effect runs once as an external effect (C, as `knowledge.page_put`).
+fn skill_write(
+    store: &SqliteStore,
+    env: &DispatchEnv,
+    audit: &OperationAudit,
+    action: &str,
+    path: &str,
+    body: Value,
+) -> Result<CosOperation, ApiProblem> {
+    let name = path_param(SKILL, path, "{name}");
+    let reject = |p| audit.reject(store, "skill", &name, p);
+    let root = env.kb_root.clone().map_err(reject)?;
+    if action == "skill.put" {
+        let input =
+            serde_json::from_value(body).map_err(|e| decode_problem(store, audit, path, e))?;
+        skills::plan_skill_put(&root).map_err(reject)?;
+        external(store, audit, ("skill", &name), action, || {
+            skills::skill_put_effect(&root, &name, input, "cos")
+        })
+    } else {
+        require_empty_body(store, audit, "skill", path, &body)?;
+        skills::plan_skill_delete(store, &root, &name).map_err(reject)?;
+        external(store, audit, ("skill", &name), action, || {
+            skills::skill_delete_effect(&root, &name)
+                .map(|deleted| deleted.map(|()| serde_json::json!({"name": name, "deleted": true})))
+        })
+    }
+}
+
 pub(crate) fn dispatch(
     store: &SqliteStore,
     env: &DispatchEnv,
@@ -343,31 +373,7 @@ pub(crate) fn dispatch(
                 }
             })
         }
-        "skill.put" | "skill.delete" => {
-            let name = path_param(SKILL, path, "{name}");
-            let root = env
-                .kb_root
-                .clone()
-                .map_err(|p| audit.reject(store, "skill", &name, p))?;
-            if matched.action == "skill.put" {
-                let input = serde_json::from_value(body).map_err(decode)?;
-                audited(crate::skills::put_skill_op(
-                    store,
-                    &root,
-                    &name,
-                    input,
-                    Some(audit),
-                )?)
-            } else {
-                require_empty_body(store, audit, "skill", path, &body)?;
-                audited(crate::skills::delete_skill_op(
-                    store,
-                    &root,
-                    &name,
-                    Some(audit),
-                )?)
-            }
-        }
+        "skill.put" | "skill.delete" => skill_write(store, env, audit, matched.action, path, body),
         "repo.create" => {
             let id = matched.id.unwrap_or_default();
             let repo = decode_repo_body(body)

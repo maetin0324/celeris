@@ -25,12 +25,11 @@ use task_core::OrgNode;
 use task_ops::knowledge::{self as ops_kb, SkillError};
 use time::OffsetDateTime;
 
-use crate::cos::operations::{Applied, OperationAudit};
 use crate::http_io::{ApiResult, Params, json_response, no_query, read_json};
 use crate::knowledge::{require_kb, root_of};
 use crate::middleware::require_admin;
 use crate::org_write::{self, OrgWrite, load_org_node};
-use crate::problem::{ApiProblem, store_problem};
+use crate::problem::{ApiProblem, Effect, store_problem};
 use crate::state::ApiState;
 use crate::types::ValidationError;
 
@@ -262,67 +261,54 @@ async fn put_skill(
     let request: SkillPutBody = read_json(body, false).await?;
     let root = root_of(&state)?;
     let result = state
-        .blocking(move |store| put_skill_op(store, &root, &name, request, None)?.direct())
+        .blocking(move |_store| {
+            plan_skill_put(&root)?;
+            // GUI からの書き込みは人の操作だが、`source` は「どこから来たか」を frontmatter に残す
+            // ADR-0056 D3 の趣旨（MCP は `mcp:<client_id>`）に合わせ、GUI は `gui` を残す（冪等: 既に
+            // `source:` があれば `skills_put` が触らない）。
+            let result = skill_put_effect(&root, &name, request, "gui")??;
+            tracing::info!(who = "admin", op = "skill_put", name = %name, "admin: skill written");
+            Ok(result)
+        })
         .await?;
     Ok(json_response(StatusCode::OK, &result))
 }
 
-/// The KB write of a skill is a git commit, so CoS runs it as an external-effect operation (C, as
-/// `knowledge.page_put`): a failure the KB reports as invalid input is `rejected`; an I/O failure
-/// leaves the record pending for remediation.
-fn skill_effect<T: Serialize>(
-    result: Result<T, SkillError>,
-) -> Result<Result<serde_json::Value, ApiProblem>, ApiProblem> {
+/// The KB write of a skill is a git commit, so its outcome is an [`Effect`]: a [`SkillError`] the
+/// KB reports as invalid input is refused before any change (422); an I/O failure
+/// (`SkillError::Failed`) leaves the outcome unknown. `PUT` and `DELETE` effects both map this way.
+fn skill_effect<T>(result: Result<T, SkillError>) -> Effect<T> {
     match result {
-        Ok(value) => serde_json::to_value(value)
-            .map(Ok)
-            .map_err(|e| ApiProblem::internal(e.to_string())),
+        Ok(value) => Ok(Ok(value)),
         Err(SkillError::Failed(detail)) => Err(ApiProblem::internal(detail)),
         Err(other) => Ok(Err(skill_error_to_problem(other))),
     }
 }
 
-/// `PUT /skills/{name}`, shared by the handler and CoS (`skill.put`).
-pub(crate) fn put_skill_op(
-    store: &task_core::store::SqliteStore,
+/// The plan of `PUT /skills/{name}` (HTTP and CoS `skill.put`): the KB must be initialized. It
+/// writes nothing; the caller wraps the refusal and then runs [`skill_put_effect`].
+pub(crate) fn plan_skill_put(root: &std::path::Path) -> Result<(), ApiProblem> {
+    require_kb(root)
+}
+
+/// The effect of `PUT /skills/{name}`: `skills_put` with the frontmatter `source` of the caller
+/// (`gui` for HTTP, `cos` for CoS; an existing `source:` is kept). Validation of the frontmatter
+/// and the files is `skills_put`'s, refused as 422 before the KB changes.
+pub(crate) fn skill_put_effect(
     root: &std::path::Path,
     name: &str,
     request: SkillPutBody,
-    audit: Option<&OperationAudit>,
-) -> Result<Applied<SkillPutResult>, ApiProblem> {
+    source: &str,
+) -> Effect<SkillPutResult> {
     let files: Vec<(String, String)> = request
         .files
         .into_iter()
         .map(|f| (f.path, f.content))
         .collect();
-    let Some(audit) = audit else {
-        require_kb(root)?;
-        // GUI からの書き込みは人の操作だが、`source` は「どこから来たか」を frontmatter に残す
-        // ADR-0056 D3 の趣旨（MCP は `mcp:<client_id>`）に合わせ、GUI は `gui` を残す（冪等: 既に
-        // `source:` があれば `skills_put` が触らない）。
-        return match ops_kb::skills_put(root, name, &request.skill_md, &files, Some("gui")) {
-            Ok(path) => {
-                tracing::info!(who = "admin", op = "skill_put", name = %name, "admin: skill written");
-                Ok(Applied::Direct(SkillPutResult { path }))
-            }
-            Err(e) => Err(skill_error_to_problem(e)),
-        };
-    };
-    require_kb(root).map_err(|p| audit.reject(store, "skill", name, p))?;
-    let operation = audit.external(
-        store,
-        "skill",
-        name,
-        "skill.put",
-        OffsetDateTime::now_utc(),
-        || {
-            skill_effect(
-                ops_kb::skills_put(root, name, &request.skill_md, &files, Some("cos"))
-                    .map(|path| SkillPutResult { path }),
-            )
-        },
-    )?;
-    Ok(Applied::Audited(Box::new(operation)))
+    skill_effect(
+        ops_kb::skills_put(root, name, &request.skill_md, &files, Some(source))
+            .map(|path| SkillPutResult { path }),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -339,56 +325,39 @@ async fn delete_skill(
     require_admin(&state, &headers)?;
     let root = root_of(&state)?;
     state
-        .blocking(move |store| delete_skill_op(store, &root, &name, None)?.direct())
+        .blocking(move |store| {
+            plan_skill_delete(store, &root, &name)?;
+            skill_delete_effect(&root, &name)??;
+            tracing::info!(who = "admin", op = "skill_delete", name = %name, "admin: skill deleted");
+            Ok(())
+        })
         .await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// `DELETE /skills/{name}`, shared by the handler and CoS (`skill.delete`). A missing skill is 404
-/// and a mounted one 409, refused before the KB is touched.
-pub(crate) fn delete_skill_op(
+/// The plan of `DELETE /skills/{name}` (HTTP and CoS `skill.delete`): a missing skill is 404 and
+/// one mounted by an org node (inherited mounts included) 409, refused before the KB is touched.
+/// It writes nothing; the caller wraps the refusal and then runs [`skill_delete_effect`].
+pub(crate) fn plan_skill_delete(
     store: &task_core::store::SqliteStore,
     root: &std::path::Path,
     name: &str,
-    audit: Option<&OperationAudit>,
-) -> Result<Applied<()>, ApiProblem> {
-    let checked = (|| {
-        require_kb(root)?;
-        if ops_kb::skills_get(root, name).is_none() {
-            return Err(skill_not_found(name));
-        }
-        let nodes = store.org_list().map_err(store_problem)?;
-        let mounted_by = mounted_by_map(&nodes).remove(name).unwrap_or_default();
-        if !mounted_by.is_empty() {
-            return Err(skill_mounted(name, &mounted_by));
-        }
-        Ok(())
-    })();
-    let Some(audit) = audit else {
-        checked?;
-        return match ops_kb::skills_delete(root, name) {
-            Ok(_) => {
-                tracing::info!(who = "admin", op = "skill_delete", name = %name, "admin: skill deleted");
-                Ok(Applied::Direct(()))
-            }
-            Err(e) => Err(skill_error_to_problem(e)),
-        };
-    };
-    checked.map_err(|p| audit.reject(store, "skill", name, p))?;
-    let operation = audit.external(
-        store,
-        "skill",
-        name,
-        "skill.delete",
-        OffsetDateTime::now_utc(),
-        || {
-            skill_effect(
-                ops_kb::skills_delete(root, name)
-                    .map(|_| serde_json::json!({"name": name, "deleted": true})),
-            )
-        },
-    )?;
-    Ok(Applied::Audited(Box::new(operation)))
+) -> Result<(), ApiProblem> {
+    require_kb(root)?;
+    if ops_kb::skills_get(root, name).is_none() {
+        return Err(skill_not_found(name));
+    }
+    let nodes = store.org_list().map_err(store_problem)?;
+    let mounted_by = mounted_by_map(&nodes).remove(name).unwrap_or_default();
+    if !mounted_by.is_empty() {
+        return Err(skill_mounted(name, &mounted_by));
+    }
+    Ok(())
+}
+
+/// The effect of `DELETE /skills/{name}`: `skills_delete` (one KB commit).
+pub(crate) fn skill_delete_effect(root: &std::path::Path, name: &str) -> Effect<()> {
+    skill_effect(ops_kb::skills_delete(root, name).map(|_| ()))
 }
 
 // ---------------------------------------------------------------------------

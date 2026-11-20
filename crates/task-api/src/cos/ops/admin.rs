@@ -7,7 +7,7 @@ use super::super::operations::{
 use crate::account_write;
 use crate::org_write::{self, OrgWritten};
 use crate::problem::ApiProblem;
-use crate::skills::{OrgSkillMountBody, plan_skill_mount};
+use crate::skills::{self, OrgSkillMountBody, plan_skill_mount};
 use serde_json::Value;
 use task_core::chat::CosOperation;
 use task_core::store::SqliteStore;
@@ -349,23 +349,24 @@ pub(crate) fn dispatch(
                 .kb_root
                 .clone()
                 .map_err(|p| audit.reject(store, "skill", &name, p))?;
+            // The KB write is a git commit: the plan's refusal is audited as rejected, and the
+            // effect runs once as an external effect (C, as `knowledge.page_put`).
             if matched.action == "skill.put" {
                 let input = serde_json::from_value(body).map_err(decode)?;
-                audited(crate::skills::put_skill_op(
-                    store,
-                    &root,
-                    &name,
-                    input,
-                    Some(audit),
-                )?)
+                skills::plan_skill_put(&root)
+                    .map_err(|p| audit.reject(store, "skill", &name, p))?;
+                external(store, audit, ("skill", &name), matched.action, || {
+                    skills::skill_put_effect(&root, &name, input, "cos")
+                })
             } else {
                 require_empty_body(store, audit, "skill", path, &body)?;
-                audited(crate::skills::delete_skill_op(
-                    store,
-                    &root,
-                    &name,
-                    Some(audit),
-                )?)
+                skills::plan_skill_delete(store, &root, &name)
+                    .map_err(|p| audit.reject(store, "skill", &name, p))?;
+                external(store, audit, ("skill", &name), matched.action, || {
+                    skills::skill_delete_effect(&root, &name).map(|deleted| {
+                        deleted.map(|()| serde_json::json!({"name": name, "deleted": true}))
+                    })
+                })
             }
         }
         "repo.create" => {

@@ -58,16 +58,28 @@ deadlock の試験は、`triage_conn_answer_path` の `cos_operation_apply` の 
 - `cargo clippy --workspace -- -D warnings` → exit 0
 - `cargo fmt --all -- --check` → exit 0
 
+
+### 3.1 計画の修正の後の再実行（2026-11-20、提出時の HEAD。基準は `$CELERIS_WU_BASE`）
+
+- 範囲 check（`sh "$CELERIS_WU_SCOPE_PATHS"` の path を許可の正規表現に当てる。`crates/task-core/src/cos_inbox\.rs$` を含む）→ 範囲外の path なし
+- 受け入れ条件 0 の `grep -nE "Connection::open|busy_timeout|attachment_db_path|fn triage_db"`（`cos/inbox.rs`・`cos/triage_view.rs`）→ 該当なし（exit 1）
+- `cargo nextest run -p task-core -p task-api --no-tests=fail -E 'test(triage_conn_) | binary(cos_triage)'` → exit 0、21 passed
+- `bash scripts/dev/test-affected.sh` → exit 0（nextest 8498 passed・22 skipped、web の vitest 705 passed、ts-verify 20 passed）
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
+
 ## 4. commit（件名）
 
 - arch-v4 H R4 triage: CoS 受信箱の 4 つの読み取りを task-core の store 読み取りの関数へ移し、triage_view.rs と triage_db を消す
 - arch-v4 H R4 triage: 受信箱の読み取りを task_core::cos_inbox に置き（chat module の行の上限）、ADR に付記、architecture-map の triage_view を直す
 - arch-v4 H R4 triage: triage_view.rs を接続を持たない resolve の判定（terminal_conflict）の置き場にし、capability の根拠 path を保つ
 - arch-v4 H R4 triage: 進捗 triage.md と ADR の付記を書く
+- arch-v4 H R4 triage: 範囲 check と chat module の行の上限の食い違いを進捗に書く
+- arch-v4 H R4 triage: 計画の修正の後に範囲 check・fmt・clippy・test-affected を走らせ直した結果を書く
 
 ## 5. 未解決事項・提案
 
-- 未解決（attempt 2、2026-11-20）: 計画の範囲 check（WorkUnit `triage` の 1 つ目の check）が `crates/task-core/src/cos_inbox.rs` を範囲の外として exit 1 にする。check が許す `crates/task-core/src/chat/` に置くと `size.responsibility-growth` の単位 `crates/task-core/src/chat` が閾値 8000 を超える（今 7944、空きは 56 行。読み取りを詰めた案でも 68 行で 8012）。`plan_issue` で計画に返し、check の正規表現に `crates/task-core/src/cos_inbox\.rs$` を足すよう申告した。
+- 解決（2026-11-20）: 計画の範囲 check が `crates/task-core/src/cos_inbox.rs` を範囲の外にしていた件は、`plan_issue` の申告の後の計画の修正で許可の対象に入った（置き場所は ADR の付記のとおり `cos_inbox.rs`。`chat` module は空き 56 行なので本体を足さない）。
 - 測定への影響（after の WorkUnit が数える）: `cos_inbox.rs` が新しく `rusqlite`・SQL 文字列の file になり、`cos/triage_view.rs` が
   外れるので、この WorkUnit の分の `rusqlite_prod_files`・`sql_string_prod_files` は増減 0 の見込み。`conn_open_files` は −1 の見込み（未測定）。
 - 提案: `capability-map.json` の `cos-inbox-triage-operations-audit` の owner と根拠 path を、`cos/triage_view.rs` から

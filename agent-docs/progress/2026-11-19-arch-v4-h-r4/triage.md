@@ -67,6 +67,7 @@ deadlock の試験は、`triage_conn_answer_path` の `cos_operation_apply` の 
 
 ## 5. 未解決事項・提案
 
+- 未解決（attempt 2、2026-11-20）: 計画の範囲 check（WorkUnit `triage` の 1 つ目の check）が `crates/task-core/src/cos_inbox.rs` を範囲の外として exit 1 にする。check が許す `crates/task-core/src/chat/` に置くと `size.responsibility-growth` の単位 `crates/task-core/src/chat` が閾値 8000 を超える（今 7944、空きは 56 行。読み取りを詰めた案でも 68 行で 8012）。`plan_issue` で計画に返し、check の正規表現に `crates/task-core/src/cos_inbox\.rs$` を足すよう申告した。
 - 測定への影響（after の WorkUnit が数える）: `cos_inbox.rs` が新しく `rusqlite`・SQL 文字列の file になり、`cos/triage_view.rs` が
   外れるので、この WorkUnit の分の `rusqlite_prod_files`・`sql_string_prod_files` は増減 0 の見込み。`conn_open_files` は −1 の見込み（未測定）。
 - 提案: `capability-map.json` の `cos-inbox-triage-operations-audit` の owner と根拠 path を、`cos/triage_view.rs` から

@@ -310,15 +310,26 @@ pub(crate) fn dispatch(
                     let input = serde_json::from_value(body).map_err(decode)?;
                     crate::execution::put_plan_audited(store, id, input, env.tree_limits, audit)
                 }
-                pause => {
+                // task.pause・task.resume: plan の拒否は前段の `reject`、task の行・`Edited` event（`by` は
+                // `cos:<thread_id>`）と監査の行は `apply` の 1 つの transaction で書く（cos-audit-same-tx）。
+                action => {
                     let _: crate::lifecycle::EmptyBody = decode_optional(body).map_err(decode)?;
-                    audited(crate::lifecycle::task_pause_op(
+                    let target_id = id.to_string();
+                    let (next, event) = crate::lifecycle::plan_task_pause(
                         store,
                         id,
-                        pause == "task.pause",
+                        action == "task.pause",
                         &audit.by(),
-                        Some(audit),
-                    )?)
+                        time::OffsetDateTime::now_utc(),
+                    )
+                    .map_err(|problem| audit.reject(store, "task", &target_id, problem))?;
+                    audit.apply(store, "task", &target_id, action, |tx| {
+                        let updated = SqliteStore::edit_task_tx(tx, &next, &event)?;
+                        Ok(serde_json::json!({
+                            "task_id": target_id,
+                            "paused": updated.paused_at.is_some(),
+                        }))
+                    })
                 }
             }
         }

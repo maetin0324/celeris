@@ -66,7 +66,7 @@ completed: 2026-11-20
 - `cargo nextest run --no-tests=fail -p task-api -E 'test(applied_contract_skill_)'` → exit 0、`4 tests run: 4 passed, 904 skipped`。
 - `cargo fmt --all -- --check` → exit 0。
 - `cargo clippy --workspace -- -D warnings` → exit 0。
-- `bash scripts/dev/test-affected.sh` → 4 節。
+- `bash scripts/dev/test-affected.sh` → exit 0（4 節）。
 - 否定の grep（`OperationAudit|Applied`・`audit = None|audit.is_some()|shared by the handler and CoS` が `skills.rs` に無い、
   `audited(crate::skills::` が `cos/` に無い）→ exit 0。
 - 新しい `crate::(cos|handlers)` の path が `skills.rs` に無い（base は `crate::cos::operations` の 1 つ、HEAD は 0）→ exit 0。
@@ -76,4 +76,10 @@ completed: 2026-11-20
 
 ## 4. test-affected
 
-（下に追記）
+`bash scripts/dev/test-affected.sh`（crate の選び方の基準は `$CELERIS_WU_BASE`。対象は celeris・celeris-campaign・celerisctl・llm-proxy・
+task-api・task-dispatch・task-worker と web の typecheck+unit）→ exit 0。
+
+- repo-health: `verdict=pass`、`fail_grade=0`、`new=0`、`worsened=0`。`repo_health_gate: all checks passed`。
+- nextest: `6158 tests run: 6158 passed (9 slow), 21 skipped`。
+- web: `Test Files 101 passed (101)`、`Tests 705 passed (705)`。
+- 最後に scratch の一時 dir の `rm` が `Permission denied` を 3 行出したが、exit は 0 で、試験の結果とは関係しない。

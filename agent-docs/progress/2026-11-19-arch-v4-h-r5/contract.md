@@ -64,12 +64,19 @@ completed: 2026-11-20
 - `cargo fmt --all -- --check` → exit 0。
 - `cargo clippy --workspace -- -D warnings` → exit 0。
 - `cargo clippy -p task-api --tests -- -D warnings` → exit 0（試験の file も lint する）。
-- `bash scripts/dev/test-affected.sh` → 結果は 4 節。
+- `bash scripts/dev/test-affected.sh` → exit 0（4 節）。
 - 範囲: `git diff --name-only $CELERIS_WU_BASE HEAD` と未追跡の file は、上の 3 つの file だけ（`crates/task-api/src` を含まない）。
 
 ## 4. test-affected
 
-`bash scripts/dev/test-affected.sh` の結果は result.json の evidence にある（基準は `$CELERIS_WU_BASE`）。
+`bash scripts/dev/test-affected.sh`（基準は `$CELERIS_WU_BASE`。対象は celeris・celeris-campaign・celerisctl・llm-proxy・
+task-api・task-dispatch・task-worker と web の typecheck+unit）→ exit 0。
+
+- repo-health: `verdict=pass`、`new=0`、`worsened=0`。
+- nextest: `6158 tests run: 6158 passed (9 slow), 21 skipped`（`applied_contract_` の 12 本を含む）。
+- web: `Test Files 101 passed (101)`、`Tests 705 passed (705)`。
+- 1 回目は repo-health の `doc.links` で落ちた。試験の doc comment に、まだこの branch に無い ADR の path
+  （WorkUnit `adr` が書く file）を書いていたため。ADR を path ではなく名前で書くように直し、2 回目で pass した。
 
 ## 5. 未解決事項
 

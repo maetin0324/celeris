@@ -47,3 +47,8 @@ completed: 2026-11-20
 ## 検査
 
 検査の結果は下に追記する。
+- `sh scripts/dev/check-doc-links.sh <ADR と adr.md>` → exit 0（`check-doc-links: ok`）。`sh scripts/dev/check-adr-numbers.sh` → exit 0（`ok (468 files)`）。
+  `sh scripts/dev/progress-index.sh --check` → exit 0（`progress-index --check: ok`）。
+- `git diff --name-only $CELERIS_WU_BASE -- crates scripts web | wc -l` → 0。`sh "$CELERIS_WU_SCOPE_PATHS"` → ADR と adr.md の 2 path だけ。
+- `cargo fmt --all -- --check` → exit 0。`bash scripts/dev/test-affected.sh` → exit 0（`試験対象の変更なし（docs のみ等）`、repo-health は verdict=pass・new 0・worsened 0）。
+- `cargo clippy --workspace -- -D warnings` は実行していない（`crates/` を変えていないため。実装の WorkUnit と統合で走る）。

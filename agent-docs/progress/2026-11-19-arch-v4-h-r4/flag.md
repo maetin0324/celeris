@@ -79,6 +79,10 @@ commit（件名）:
 
 - arch-v4 H R4 flag: ChatState.attachment_db_path を消し、knowledge.rs の旗を attachment_data_dir から導く（attachment_flag_ の反例試験）
 - arch-v4 H R4 flag: 進捗 flag.md と ADR の付記を書く
+- arch-v4 H R4 flag: 反例試験の doc comment から消した欄の名前を外す（grep の check）
+
+最初の提出前の確認で、条件 0 の grep が新しい試験の doc comment に書いた旧い欄の名前に当たって落ちた。comment から識別子を
+外した後、上の表の検査（grep・2 つの試験・fmt・clippy・test-affected・範囲 check）をすべて走らせ直し、同じ結果を得た。
 
 ## 5. 未解決事項
 

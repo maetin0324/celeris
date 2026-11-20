@@ -283,29 +283,20 @@ impl CosChatLaunch {
                     .chat_run_list(thread_id, None, Some(50))
                     .map_err(|e| e.to_string())?;
                 let run = runs.items.iter().find(|r| &r.input_message_id == input_id);
-                match run.map(|r| (r.state, r)) {
-                    Some((ChatRunState::Completed, run)) => {
-                        let text = match &run.output_message_id {
-                            Some(id) => self
-                                .store
-                                .chat_message_get(thread_id, id)
-                                .map(|m| m.text)
-                                .map_err(|e| e.to_string())?,
-                            None => String::new(),
-                        };
-                        let facts = collect_facts(&self.store, row.task_id, probe)?;
-                        if text.trim().is_empty() {
-                            return self.root_done_fallback(row, &facts, Some(thread_id), now);
-                        }
-                        self.root_done_notify_summary(row, &facts, thread_id, &text, now)
-                    }
+                // まとめの文（Completed で出力が有ればその文、他は空 = fallback）。待つ間は facts を読まずに戻る。
+                let text = match run.map(|r| (r.state, r)) {
+                    Some((ChatRunState::Completed, run)) => match &run.output_message_id {
+                        Some(id) => self
+                            .store
+                            .chat_message_get(thread_id, id)
+                            .map(|m| m.text)
+                            .map_err(|e| e.to_string())?,
+                        None => String::new(),
+                    },
                     Some((
                         ChatRunState::Failed | ChatRunState::Stopped | ChatRunState::Interrupted,
                         _,
-                    )) => {
-                        let facts = collect_facts(&self.store, row.task_id, probe)?;
-                        self.root_done_fallback(row, &facts, Some(thread_id), now)
-                    }
+                    )) => String::new(),
                     live => {
                         // ADR 2026-11-11-cos-fallback-timing D4: while CoS writes the summary (its run
                         // is live) the safety net counts from the run's start; an input not yet
@@ -338,10 +329,14 @@ impl CosChatLaunch {
                             // 拾える状態のまま安全網を超えた（容量待ち・停止）: 入力を取り下げて決定的な短文に切り替える。
                             let _ = self.store.chat_message_cancel(thread_id, input_id, now);
                         }
-                        let facts = collect_facts(&self.store, row.task_id, probe)?;
-                        self.root_done_fallback(row, &facts, Some(thread_id), now)
+                        String::new()
                     }
+                };
+                let facts = collect_facts(&self.store, row.task_id, probe)?;
+                if text.trim().is_empty() {
+                    return self.root_done_fallback(row, &facts, Some(thread_id), now);
                 }
+                self.root_done_notify_summary(row, &facts, thread_id, &text, now)
             }
             RootDoneState::Notified | RootDoneState::Fallback => Ok(()),
         }

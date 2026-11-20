@@ -65,3 +65,20 @@ binary ごとの件数（`cargo nextest list` の同じ引数で数えた。igno
 | `chat_api` | 19 | 全件 |
 | `cos_chat_attach_pin` | 1 | 全件 |
 | 計 | 316 | |
+
+## 4. repair の申告
+
+無し。試験と差分の形の check はどちらも通った。
+
+## 5. 文書・範囲・repo の検査（提出時の HEAD で実行）
+
+- `sh scripts/dev/check-doc-links.sh`（ok）・`sh scripts/dev/check-adr-numbers.sh`（ok、464 files）・`sh scripts/dev/progress-index.sh --check`（ok）→ いずれも exit 0。
+- 範囲の検査（`sh "$CELERIS_WU_SCOPE_PATHS"`）→ 変更は ADR・進捗・この file の 3 path だけ。範囲外は 0 件。`crates/` の変更は 0。
+- `bash scripts/dev/test-affected.sh` → exit 0（WorkUnit の範囲は docs だけなので「試験対象の変更なし（docs のみ等）」、repo_health_gate: all checks passed）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- release gate は未実施（R4 の進捗の「リリースゲート」のとおり。本番へは昇格していない）。
+
+## 6. commit（件名）
+
+- arch-v4 H R4 boundary: 高 risk の 5 file の変更と不変条件を ADR 付記と boundary.md に書く
+- arch-v4 H R4 boundary: 検査の結果を boundary.md と進捗に書く

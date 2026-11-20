@@ -39,7 +39,23 @@ cargo nextest --version    # → cargo-nextest 0.9.146 (...)
 - 版が違う: test-parallel.sh が `cargo-nextest X is installed but tools/nextest/VERSION pins Y` で落ちる（gate の `cargo-test` 段）。
   一時的に許すなら `CELERIS_NEXTEST_ANY_VERSION=1`。
 - 非常用: `SD_GATE_TEST_RUNNER=cargo-test scripts/selfdeploy/release.sh <ref>` で従来の直列の `cargo test --workspace` に戻る
-  （gate.json の `cargo_test.runner` が `cargo-test` になる）。
+  （gate.json の `cargo_test.runner` が `cargo-test` になり、`cargo_test` は `binaries`・`passed`・`failed`・`ignored` だけで
+  nextest と doc-test の内訳の欄を持たない）。
+
+## 件数の集計（`CELERIS_TEST_SUMMARY`）
+
+`test-parallel.sh` は最後に `CELERIS_TEST_SUMMARY {json}` を 1 行出し、release.sh はそれを gate.json の `cargo_test` に写す。
+nextest の数は `Summary [...] N tests run: …` の行から取る。本物の nextest は `8525 passed (3 slow), 22 skipped` のように
+数の後へ括弧の注記（`slow`・`leaky`・`flaky` など）を付けるので、注記を外してから `passed`・`failed`（`timed out`・`exec failed` を含む）・
+`skipped` を数える（[ADR 2026-11-20-release-record-summary-log](../../agent-docs/adr/2026-11-20-release-record-summary-log.md) D1）。
+
+| 欄 | 意味 |
+|---|---|
+| `passed` / `failed` / `ignored` | nextest と doc-test の和（`passed = nextest_passed + doc_passed`、`ignored = nextest_skipped + doc_ignored`） |
+| `nextest_passed` / `nextest_skipped` | nextest の Summary 行の `passed` / `skipped` |
+| `doc_passed` / `doc_ignored` | `cargo test --doc` の `test result:` 行の `passed` / `ignored` の和（`CELERIS_TEST_SKIP_DOC=1` なら 0） |
+
+この形は `scripts/selfdeploy/tests/release_parallel_test_gate.sh` が注記付きの Summary 行で固定している。
 
 ## 並列数
 

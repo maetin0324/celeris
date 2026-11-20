@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # ADR-0135 D4: verify records web app probe success/failure as a mandatory check.
 set -euo pipefail
+# 理由: worker の環境は本番の CELERIS_LOGS_DIR を継ぎ、継いだままだと台本が偽の要約の行を本番の release-records.jsonl に足す。
+unset CELERIS_BACKUPS_DIR CELERIS_LOGS_DIR
 
 here="$(cd "$(dirname "$0")/.." && pwd)"
 root="$(mktemp -d)"

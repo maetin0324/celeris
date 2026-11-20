@@ -131,8 +131,15 @@ printf '// fake\n' >"$repo/control-ts/scripts/build-bundle.mjs"
 printf '{"name":"celeris-web","version":"0.1.0","packageManager":"pnpm@12.6.0"}\n' >"$repo/web/package.json"
 printf 'lockfileVersion: 9.0\n' >"$repo/web/pnpm-lock.yaml"
 printf '// gateway\n' >"$repo/web/server/index.js"
-cp "$sd"/*.sh "$repo/scripts/selfdeploy/"
+cp "$sd"/*.sh "$sd"/*.py "$repo/scripts/selfdeploy/"
+# release.sh は cos-skills.txt の CoS skill を梱包する（sd_bundle_cos_skills）。偽の木は skill を持たないので空の一覧を置く。
+printf '# fixture: no CoS skills\n' >"$repo/scripts/selfdeploy/cos-skills.txt"
 cp "$src/scripts/dev/test-parallel.sh" "$src/scripts/dev/source-size-report.py" "$repo/scripts/dev/"
+# test-parallel.sh が読む helper（check-slot.sh は ADR 2026-11-12-host-check-slots の後に読む）。release_parallel_test_gate.sh と同じ。
+mkdir -p "$repo/scripts/dev/lib" "$repo/scripts/dev/repo-health"
+cp "$src/scripts/dev/lib/test-tmp-lifecycle.sh" "$src/scripts/dev/lib/check-slot.sh" "$repo/scripts/dev/lib/"
+# release.sh が同梱する検査器（sd_bundle_repo_health は repo_health.py の無い build を失敗にする）。
+cp "$src/scripts/dev/repo-health/repo_health.py" "$repo/scripts/dev/repo-health/"
 cp "$src/tools/nextest/VERSION" "$repo/tools/nextest/"
 git init -q "$repo"
 git -C "$repo" -c user.email=t@example.invalid -c user.name=t add -A
@@ -140,9 +147,12 @@ git -C "$repo" -c user.email=t@example.invalid -c user.name=t commit -q -m base
 c1="$(git -C "$repo" rev-parse HEAD)"
 c1_12="${c1:0:12}"
 
+# 本番の CELERIS_LOGS_DIR・CELERIS_BACKUPS_DIR を継がない。継ぐと release.sh が偽の gate の要約の行を本番の
+# release-records.jsonl に足す（ADR 2026-11-20-release-record-summary-log D2）。log は一時の state の下へ。
 run_release() {
   : >"$root/cargo.log"
   env -u SD_SCRIPT_BUNDLE_GATE -u CELERIS_SCRIPT_REQUIRE_BUNDLE -u CELERIS_SCRIPT_BUNDLE_DIR \
+    -u CELERIS_LOGS_DIR -u CELERIS_BACKUPS_DIR \
     CELERIS_STATE_DIR="$root/state" CELERIS_CONFIG_DIR="$root/config" CELERIS_CONFIG="$root/config/config.toml" \
     SD_REPO="$repo" SD_CELERISCTL="$root/bin/celerisctl" SD_PNPM_SHIM_DIR="$root/bin" SD_RELEASE_PRUNE=0 \
     FAKE_CARGO_LOG="$root/cargo.log" FAKE_SCRATCH="$root/scratch" \

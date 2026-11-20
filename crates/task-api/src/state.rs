@@ -176,10 +176,6 @@ impl ApiState {
         let db_mount = detect_db_mount(&settings.db_path);
         let (shutdown, _) = watch::channel(false);
         let browser = Arc::new(settings.browser.clone());
-        let chat = crate::chat::ChatState {
-            attachment_db_path: Some(settings.db_path.clone()),
-            ..Default::default()
-        };
         let inner = Inner {
             store: Arc::new(store),
             token_digests: settings
@@ -244,7 +240,7 @@ impl ApiState {
             live_sessions: None,
             script_generations: None,
             project_controller: Arc::default(),
-            chat: Arc::new(chat),
+            chat: Arc::new(crate::chat::ChatState::default()),
             live_grants: Arc::new(Mutex::new(HashMap::new())),
             clock: system_clock(),
         })

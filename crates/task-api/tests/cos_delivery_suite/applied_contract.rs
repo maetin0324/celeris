@@ -2,7 +2,7 @@
 //! （`knowledge.rs` の `accept_op`・`reject_op`・`put_page_op`、`lifecycle.rs` の `task_pause_op`、
 //! `skills.rs` の `put_skill_op`・`delete_skill_op`）を org_write の形へ移す前に、HTTP の handler と
 //! `/api/v1/cos/operations` の 2 つの入口の契約を移す前のコードで固定する
-//! （`agent-docs/adr/2026-11-20-applied-shape-migration.md`）。
+//! （ADR 2026-11-20 applied-shape-migration。WorkUnit `adr` が書く）。
 //!
 //! 名前は `applied_contract_<op>_<http|cos>_<内容>`。既存の試験が見ている点は重ねない:
 //! - `knowledge.rs`: accept の 404・`page_exists`・`path`/`etag`、reject の 403、PUT の etag 409・403・422・

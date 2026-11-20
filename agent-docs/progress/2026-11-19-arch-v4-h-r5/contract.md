@@ -18,7 +18,7 @@ completed: 2026-11-20
 - 12 本とも移す前のコード（WorkUnit の base `$CELERIS_WU_BASE`）で pass（提出時の HEAD で実行。下の 3 節）。
 - `crates/task-api/src` は変えていない。変えたのは `crates/task-api/tests/cos_delivery_suite/applied_contract.rs`（新規）・
   `crates/task-api/tests/cos_delivery_suite/main.rs`（1 行）とこの file だけ。policy の file も変えていない。
-- 設計は `agent-docs/adr/2026-11-20-applied-shape-migration.md`（WorkUnit `adr` が書く）。impl の 3 つの WorkUnit
+- 設計は ADR 2026-11-20 applied-shape-migration（WorkUnit `adr` が書く）。impl の 3 つの WorkUnit
   （knowledge・pause・skills）は、移した後もこの 12 本が無修正で通ることを確かめる。
 
 ## 1. 試験の一覧

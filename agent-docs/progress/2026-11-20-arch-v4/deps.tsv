@@ -1,0 +1,30 @@
+metric	scope	checker	h_after	remeasured	match	note
+cargo_edges	workspace の Cargo 宣言（normal+dev、cargo metadata）	-	49	49	yes	cargo metadata --offline（exit 0）で members 15、normal 35・dev 14。H の測った commit..HEAD で Cargo.toml・Cargo.lock・crates/*/Cargo.toml の差分 0
+crate_cycles	workspace の通常依存の crate の SCC	-	0	0	yes	cargo metadata の normal の辺の強連結成分（2 crate 以上）が 0
+module_cycles	repo-health deps.cycle（C2 の SCC の数）	b0	17	17	yes	C2 b0×HEAD（profile は B0）の edges json の cycles が H の edges-b0-HEAD と完全に一致（json の比較）。HEAD の profile では H と同じ profile_invalid で止まる（exit 1、error 文も同じ）
+module_cycles	repo-health deps.cycle（C1 の findings）	head	17	17	yes	C1 head×HEAD の findings が H の c1-head-HEAD と同じ（snapshot の rev を除いて finding の json が一致。scope の集合の差 0）。C2 head の SCC の数も 17
+tc_scc_units	task-core の SCC（C2）	b0	55	55	yes	C2 b0×HEAD（profile は B0）の edges json の cycles が H の edges-b0-HEAD と完全に一致（json の比較）
+tc_scc_units	task-core の SCC（C2）	head	55	55	yes	C2 head×HEAD の edges json の cycles が H の edges-head-HEAD と完全に一致（json の比較）
+tc_scc_pairs	task-core の SCC の単位の組（C2）	b0	210	210	yes	組の集合も H と同じ（消えた 0・増えた 0）
+tc_scc_pairs	task-core の SCC の単位の組（C2）	head	210	210	yes	組の集合も H と同じ（消えた 0・増えた 0）
+tc_scc_lines	task-core の SCC の行の辺（C2）	b0	627	627	yes	(src, dst_unit) ごとの行の差 0
+tc_scc_lines	task-core の SCC の行の辺（C2）	head	627	627	yes	(src, dst_unit) ごとの行の差 0
+ta_scc_units	task-api の SCC（C2）	b0	49	49	yes	C2 b0×HEAD（profile は B0）の edges json の cycles が H の edges-b0-HEAD と完全に一致（json の比較）
+ta_scc_units	task-api の SCC（C2）	head	49	49	yes	C2 head×HEAD の edges json の cycles が H の edges-head-HEAD と完全に一致（json の比較）
+ta_scc_pairs	task-api の SCC の単位の組（C2）	b0	228	228	yes	組の集合も H と同じ（消えた 0・増えた 0）
+ta_scc_pairs	task-api の SCC の単位の組（C2）	head	228	228	yes	組の集合も H と同じ（消えた 0・増えた 0）
+ta_scc_lines	task-api の SCC の行の辺（C2）	b0	535	535	yes	(src, dst_unit) ごとの行の差 0
+ta_scc_lines	task-api の SCC の行の辺（C2）	head	535	535	yes	(src, dst_unit) ごとの行の差 0
+handlers_to_cos_lines	git grep crate::cos::（C5、handlers/ と handlers.rs）	-	14	14	yes	9 file（A §7 C5 の式。B0 は 22 行・13 file）
+handlers_to_cos_lines	repo-health の辺（C2 の task-api の SCC、handlers→cos）	b0	14	14	yes	C2 b0×HEAD（profile は B0）の edges json の cycles が H の edges-b0-HEAD と完全に一致（json の比較）
+handlers_to_cos_lines	repo-health の辺（C2 の task-api の SCC、handlers→cos）	head	14	14	yes	C2 head×HEAD の edges json の cycles が H の edges-head-HEAD と完全に一致（json の比較）
+cos_to_handlers_lines	git grep crate::handlers（C5、cos/）	-	29	29	yes	3 file（cos/ops/admin.rs 4・projects.rs 17・tasks.rs 8）。B0 は 48 行
+cos_to_handlers_lines	git grep (crate|super(::super)*)::handlers（A の C5 の式）	-	29	29	yes	crate:: 29・super:: 0。B0 は 52 行
+cos_to_handlers_lines	repo-health の辺（C2 の task-api の SCC、cos→handlers）	b0	29	29	yes	C2 b0×HEAD（profile は B0）の edges json の cycles が H の edges-b0-HEAD と完全に一致（json の比較）
+cos_to_handlers_lines	repo-health の辺（C2 の task-api の SCC、cos→handlers）	head	29	29	yes	C2 head×HEAD の edges json の cycles が H の edges-head-HEAD と完全に一致（json の比較）
+cos_to_handlers_super_lines	git grep super(::super)*::handlers（C5、cos/）	-	0	0	yes	B0 は 4 行
+responsibility_growth	repo-health size.responsibility-growth（C1）	head	94	94	yes	C1 head×HEAD の findings が H の c1-head-HEAD と同じ（snapshot の rev を除いて finding の json が一致。scope の集合の差 0）
+dup_contract	repo-health dup.contract（C1）	head	210	210	yes	C1 head×HEAD の findings が H の c1-head-HEAD と同じ（snapshot の rev を除いて finding の json が一致。scope の集合の差 0）
+owner_mismatch	repo-health arch-map.wrong_owner（C1）	head	31	31	yes	C1 head×HEAD の findings が H の c1-head-HEAD と同じ（snapshot の rev を除いて finding の json が一致。scope の集合の差 0）
+path_attr_files	task-dispatch の production の #[path]（A §3.2）	-	9	9	yes	#[path] の一覧（行番号を除く）が H と同じ。tools/path_units.py の数え直しも 9（B0 も 9）
+path_attr_files	workspace の production の #[path]（単位の食い違い、H の追加）	-	15	15	yes	task-dispatch 9・task-worker 5・task-core 1。一覧は H と同じ（B0 も 15）

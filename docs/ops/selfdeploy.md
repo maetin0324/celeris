@@ -51,6 +51,9 @@ release.sh <ref>  →  verify.sh <sha12>  →  promote.sh <sha12>        （戻�
   staging/              verify.sh の作業場所（毎回作り直す。`.lock` だけは残る）
   staging/.lock         verify.sh を 1 本に直列化する flock（ADR-0041 D2）
   backups/              昇格前の DB のコピーと promote-<ts>.log
+  $SD_LOGS/release-records.jsonl  gate・verify・昇格の要約の写し（1 行 1 JSON の追記だけ。release の掃除で消えない。
+                        正本は release dir の gate.json・verify.json・promoted.json。§「gate・verify・昇格の要約の写し」）。
+                        `$SD_LOGS` は `CELERIS_LOGS_DIR`（本番の `paths.env` では `/local/celeris/state/logs`）、未設定なら backups/
   backups/pre-celeris/  改名の移行（ADR-0045。済み）で残した旧い設定と unit
   workspaces/  memory/  claude-accounts/  codex-accounts/  logs/
   tools/{ldr,paperqa,opencode}/   アダプタが使う venv と設定
@@ -137,10 +140,16 @@ scripts/selfdeploy/release.sh celeris/01M2XXX # 自己改善の案件の実装�
   `cargo test --doc --workspace`（nextest は doc-test を回さない）。範囲は `cargo test --workspace` と同じ。直列が要るテストは
   **ビルドする sha の** `.config/nextest.toml` の test-group で縛る。gate.json の `cargo_test` は
   `{runner: "nextest", nextest_version, jobs, binaries（nextest のバイナリ数 + doc-test の crate 数）, nextest_binaries, doc_binaries,
-  passed, failed, ignored, nextest_exit, doctest_exit, nextest_secs, doctest_secs, summary_parsed, userns}`。どちらかが落ちる・nextest の
+  passed, failed, ignored, nextest_passed, nextest_skipped, doc_passed, doc_ignored, prepare_exit, nextest_exit, doctest_exit,
+  nextest_secs, doctest_secs, tmp_leftovers, summary_parsed, userns}`。`passed`・`failed`・`ignored` は nextest と doc-test の和で、
+  内訳は `passed = nextest_passed + doc_passed`、`ignored = nextest_skipped + doc_ignored`（`CELERIS_TEST_SKIP_DOC=1` なら doc の欄は 0）。
+  nextest の数は `Summary …` の行から取り、`8525 passed (3 slow), 22 skipped` のような括弧の注記は外して数える
+  （[ADR 2026-11-20-release-record-summary-log](../../agent-docs/adr/2026-11-20-release-record-summary-log.md) D1。それより前の release の
+  gate.json は注記付きの行で nextest の通過数を取りこぼし、`passed` が doc-test の数だけになっている）。どちらかが落ちる・nextest の
   `Starting … across N binaries` / `Summary …` の行が読めない（全部走った証拠が無い）ときは段が落ちる。
   - `cargo-nextest` が要る（版は `tools/nextest/VERSION` で固定。入れ方は `docs/ops/nextest.md`）。無ければ作業ツリーを作る前に
-    入れ方を示して落ちる。非常用に `SD_GATE_TEST_RUNNER=cargo-test` で従来の直列の `cargo test --workspace`（`runner: "cargo-test"`）。
+    入れ方を示して落ちる。非常用に `SD_GATE_TEST_RUNNER=cargo-test` で従来の直列の `cargo test --workspace`（`runner: "cargo-test"`。
+    `cargo_test` は `{runner, binaries, passed, failed, ignored}` だけで、nextest と doc-test の内訳の欄を持たない）。
   - 開発・WU・phase 完了では全体の試験を回さない（`scripts/dev/test-affected.sh`。ADR 2026-10-20-full-tests-at-release-only）。並列で絞って回すなら
     `scripts/dev/test-parallel.sh [-p <crate> …]`。
 - 成功時は `bin/` と `web/app/`、web tarball、manifest.json、gate.json を梱包する。
@@ -157,7 +166,8 @@ scripts/selfdeploy/release.sh celeris/01M2XXX # 自己改善の案件の実装�
   `.gate-<step>.log` を残す（作業ツリーから写したもの。次に同じ sha で `release.sh` を回すと消える）。
 - 掃除: `current` / `previous` / いま作った版 / 検証済み（`verify.json.ok`）の新しい 3 件だけを残す。
 - gate.json の追加の欄（Phase SD-1。読む側は無視してよい）: `build`（`tree` / `tree_reused` / `cargo_target` / `scratch_owner` /
-  `workspace_clean`）、`cargo_test`（`binaries` / `passed` / `failed` / `ignored`）、`bundle`（`secs` /
+  `workspace_clean`）、`cargo_test`（`binaries` / `passed` / `failed` / `ignored`、nextest の runner では内訳の `nextest_passed` /
+  `nextest_skipped` / `doc_passed` / `doc_ignored` も。欄の全体は上の `cargo-test` の項）、`bundle`（`secs` /
   `web_bundle_secs` / `release_total_secs`）、`steps[].skipped` / `steps[].reason`。
 
 `manifest.json`:
@@ -701,3 +711,28 @@ rollback も同じ環境変数を指定する。`--restore-db` のデータ復�
 成功時は `promoted.json` / `rolled_back.json` にも写す。`status=started` のままなら正常終了の証拠は無い。
 `GET /api/v1/releases` と `status.sh --json` の `items[].deployment_audit` / `releases[].deployment_audit`
 で履歴を読める。過去の release の欠けている実行者は推測で補わない。
+
+### gate・verify・昇格の要約の写し（`release-records.jsonl`。ADR 2026-11-20-release-record-summary-log）
+
+`release.sh` の掃除（`prune_releases`）は release dir を消し、gate.json・verify.json・promoted.json も一緒に消える。
+後から gate・verify・昇格の結果を確かめられるよう、台本はその要約を `$SD_LOGS/release-records.jsonl` に 1 行ずつ追記する。
+
+- 置き場: `$SD_LOGS/release-records.jsonl`。`$SD_LOGS` は `CELERIS_LOGS_DIR`（本番の `paths.env` では `/local/celeris/state/logs`）、
+  未設定なら `CELERIS_BACKUPS_DIR`（既定 `~/.local/celeris/backups`）。promote の log と同じ dir で、release の掃除の対象外。
+- 追記する時点: `release.sh` が gate.json を書いた後（通れば release dir ができた後、落ちれば `.build/<sha12>/gate.json` の後）、
+  `verify.sh` が verify.json を書いた後（`ok` が偽でも）、`promote.sh` が promoted.json を書いた後（`promote.sh` を通る rollback も）。
+- 形: 1 行 1 JSON。共通の欄は `at`（追記の時刻）・`kind`（`gate`・`verify`・`promoted`）・`sha12`・`ok`・`file`（正本の path）。
+  - `gate`: `sha`・`failed_step`・`step_count`（段の数）・`steps`（`step` と `exit`）・`cargo_test`（`runner`・`passed`・`failed`・
+    `ignored`・`nextest_passed`・`nextest_skipped`・`doc_passed`・`doc_ignored`・`nextest_exit`・`doctest_exit`・`userns`）
+  - `verify`: `live_ok`・`schema_version`・`checks`（`id`・`name`・`ok`）
+  - `promoted`: `operation`・`status`（`ok` は `status` が `succeeded`）・`mode`・`from`・`promoted_at`・`actor`・`policy_ref`・
+    `included_tasks`
+- 追記だけで、既存の行の書き換え・削除・回転はしない。
+- **正本は release dir の file**（gate.json・verify.json・promoted.json。落ちた gate は `.build/<sha12>/gate.json`）。この file は
+  書いた時点の写しで、再 verify などで正本が変わっても前の行は直さない。食い違えば release dir の file を信じる。
+  昇格・takeover・引き渡し・release notes の判断（`crates/celeris` の `releases.rs`・`delivery.rs`・`release_notes.rs` と台本）は
+  この file を読まない（`unpromoted-release-no-takeover`）。役に立つのは、release dir が消えた後に人が結果を確かめるときだけ。
+- 追記に失敗しても（置き場に書けない・正本が読めない）log に `warning: release-records: …` を出すだけで、release・verify・promote の
+  exit code と正本の file は変わらない。
+- 見方の例: `grep '"sha12":"<sha12>"' /local/celeris/state/logs/release-records.jsonl`
+- 試験: `scripts/selfdeploy/tests/release_record_summary_survives_prune.sh`

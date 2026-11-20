@@ -769,4 +769,6 @@ counts_or_null() { if sd_json_valid "$1"; then cat "$1"; else printf 'null'; fi;
 rm -f "$CHECKS_TSV"
 
 sd_log "verify.json: $REL/verify.json (ok=$OK live_ok=$LIVE_OK, ${TOTAL_SECS}s)"
+# ok が偽でも要約を $SD_LOGS/release-records.jsonl に写す（ADR 2026-11-20-release-record-summary-log D2。失敗は警告だけ）。
+sd_release_record verify "$REL/verify.json"
 [ "$OK" = true ] || exit 1

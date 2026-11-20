@@ -417,6 +417,8 @@ if [ "$GATE_OK" != true ]; then
   # 作業ツリーは次のリリースが作り直すので、記録は `.build/<sha12>/` に写して残す。
   mkdir -p "$FAILED_DIR"
   write_gate_json "$FAILED_DIR/gate.json"
+  # 落ちた gate の要約も $SD_LOGS/release-records.jsonl に写す（ADR 2026-11-20-release-record-summary-log D2。失敗は警告だけ）。
+  sd_release_record gate "$FAILED_DIR/gate.json"
   for log in "$BUILD"/.gate-*.log; do
     [ -f "$log" ] || continue
     cp -p "$log" "$FAILED_DIR/$(basename "$log")"
@@ -487,6 +489,7 @@ if ! bundle_web; then
   GATE_FAILED_STEP=web-bundle
   mkdir -p "$FAILED_DIR"
   write_gate_json "$FAILED_DIR/gate.json"
+  sd_release_record gate "$FAILED_DIR/gate.json"
   cp -p "$BUILD"/.gate-*.log "$FAILED_DIR/"
   rm -rf "$STAGE"
   sd_die "web bundle failed; no release directory created"
@@ -633,6 +636,9 @@ done
 rm -rf "$REL"
 mv -T "$STAGE" "$REL"
 sd_log "release ready: $REL"
+# 通った gate の要約を $SD_LOGS/release-records.jsonl に写す（ADR 2026-11-20-release-record-summary-log D2）。release dir が
+# できた後に足す（ok の行があるのに release dir が無い写しを作らない）。下の掃除は release dir を消すが、この行は残る。
+sd_release_record gate "$REL/gate.json"
 
 # ---- ビルド用 worktree は消さない（Phase SD-1: 次のリリースが checkout し直して使い回す） ----
 

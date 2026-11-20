@@ -570,6 +570,9 @@ sd_log "browser_ledger: $BROWSER_LEDGER_JSON (not required to promote)"
 } >"$AUDIT_FILE.summary"
 sd_audit finish "$AUDIT_FILE" 0
 PROMOTED_RECORDED=true
+# promoted.json（promote と、promote.sh を通る rollback）の要約を $SD_LOGS/release-records.jsonl に写す
+# （ADR 2026-11-20-release-record-summary-log D2。失敗は警告だけで昇格の結果を変えない）。
+sd_release_record promoted "$REL/promoted.json"
 rm -f "$PREVIEW_JSON" 2>/dev/null || true
 sd_log "promoted.json: $REL/promoted.json (mode=$MODE from=${OLD:-<none>})"
 

@@ -16,6 +16,7 @@ completed: 2026-11-20
   `use crate::cos::operations::{Applied, OperationAudit};` の行が無くなった。
 - CoS の `skill.put`・`skill.delete`（`crates/task-api/src/cos/ops/admin.rs`）は、plan の拒否を `audit.reject` で、効果を
   `admin.rs` の既存の `external`（`audit.external` と `effect_value`）で包む。`audited(crate::skills::…)` の 2 か所が無くなった。
+  包みは `fn dispatch` の腕に書かず、`admin.rs` の private の `fn skill_write` に置いた（dispatch の腕は 1 行。§5）。
 - 契約試験 `applied_contract_skill_` の 4 本は、試験を変えずに通った。API・CLI・DB の契約は変えていない。
 - 変えた file は `skills.rs`・`cos/ops/admin.rs` とこの note だけ。`cos/operations.rs`・`crates/task-api/tests/`・policy の file は変えていない。
 
@@ -34,9 +35,9 @@ completed: 2026-11-20
 - HTTP の `put_skill`: `state.blocking` の中で `plan_skill_put` → `skill_put_effect(.., "gui")??` → `tracing::info!(op = "skill_put")` → 200。
 - HTTP の `delete_skill`: `plan_skill_delete` → `skill_delete_effect(..)??` → `tracing::info!(op = "skill_delete")` → 204。
   `require_admin`・`no_query`・`read_json`・`root_of` の順は変えていない。
-- CoS の `skill.put`: `kb_root` の拒否（今のまま）→ 本文の decode（今のまま）→ `plan_skill_put` の拒否を `audit.reject(store, "skill", name, p)` →
+- CoS の `skill.put`（`skill_write`）: `kb_root` の拒否（今のまま）→ 本文の decode（今のまま）→ `plan_skill_put` の拒否を `audit.reject(store, "skill", name, p)` →
   `external(store, audit, ("skill", name), "skill.put", || skill_put_effect(.., "cos"))`。
-- CoS の `skill.delete`: `require_empty_body`（今のまま）→ `plan_skill_delete` の拒否を `audit.reject` →
+- CoS の `skill.delete`（`skill_write`）: `require_empty_body`（今のまま）→ `plan_skill_delete` の拒否を `audit.reject` →
   `external(.., "skill.delete", || skill_delete_effect(..) を {"name", "deleted": true} に写す)`。
 - 旧い形を説明する doc comment（`shared by the handler and CoS`）は消し、plan と効果の doc comment を新しく書いた。`skills.rs` の
   doc comment に `OperationAudit`・`Applied` の語は無い。
@@ -69,6 +70,8 @@ completed: 2026-11-20
 - `bash scripts/dev/test-affected.sh` → exit 0（4 節）。
 - 否定の grep（`OperationAudit|Applied`・`audit = None|audit.is_some()|shared by the handler and CoS` が `skills.rs` に無い、
   `audited(crate::skills::` が `cos/` に無い）→ exit 0。
+- `sh scripts/dev/repo-health/ci.sh --base "$CELERIS_WU_BASE" --head HEAD` → exit 0、`verdict=pass`、`new=0`、`worsened=0`
+  （`cos::dispatch` の関数の行は 416、existing）。
 - 新しい `crate::(cos|handlers)` の path が `skills.rs` に無い（base は `crate::cos::operations` の 1 つ、HEAD は 0）→ exit 0。
 - 範囲 check（`sh "$CELERIS_WU_SCOPE_PATHS"`）→ 範囲外の path なし。
 - 参考（この WorkUnit だけの値。正式の after は WorkUnit `after`）: 広い command の file 数 18 → 17、狭い command 13（14 → 13）。
@@ -80,6 +83,18 @@ completed: 2026-11-20
 task-api・task-dispatch・task-worker と web の typecheck+unit）→ exit 0。
 
 - repo-health: `verdict=pass`、`fail_grade=0`、`new=0`、`worsened=0`。`repo_health_gate: all checks passed`。
-- nextest: `6158 tests run: 6158 passed (9 slow), 21 skipped`。
+- nextest: `6158 tests run: 6158 passed (20 slow), 21 skipped`。
 - web: `Test Files 101 passed (101)`、`Tests 705 passed (705)`。
-- 最後に scratch の一時 dir の `rm` が `Permission denied` を 3 行出したが、exit は 0 で、試験の結果とは関係しない。
+- test-affected の中の repo-health の base は `git merge-base HEAD main`で、WU の base ではない。
+- 最後に scratch の一時 dir の `rm` が `Permission denied` を出したが、exit は 0 で、試験の結果とは関係しない。
+
+## 5. 前回の run の check の不合格と直し方
+
+- 不合格: celeris の `celeris:repo-health/1` が `size.responsibility-growth`（`crates/task-api/src/cos/ops/admin.rs` の `fn dispatch`）で
+  fail した。関数の行の閾値は 200（`profiles/celeris.toml`）。WU の base（`$CELERIS_WU_BASE`）で `dispatch` は 440 行、前回の HEAD で 441 行
+  （skill の腕に注釈 2 行を足し、`map_err` の折り返しが増えた）で、existing の finding が worsened になった。前回の run の test-affected の
+  repo-health は base が `git merge-base HEAD main` なので、この悪化を拾わなかった。
+- 直し方: skill の腕の中身（`kb_root`・decode・plan の拒否・`external`）を `admin.rs` の private の `fn skill_write(store, env, audit,
+  action, path, body)` へ出し、`dispatch` の腕を `"skill.put" | "skill.delete" => skill_write(..)` の 1 行にした。`dispatch` は 416 行になり、
+  base の 440 行より少ない。拒否の順・target・action・source（`cos`）・応答の JSON は前回の HEAD と同じ。
+- 確認: `sh scripts/dev/repo-health/ci.sh --base "$CELERIS_WU_BASE" --head HEAD` → exit 0（§3）。

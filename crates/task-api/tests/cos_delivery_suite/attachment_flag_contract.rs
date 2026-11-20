@@ -10,8 +10,8 @@
 //!      一覧と詳細の `provenance` が空で、`attachment_ids` を渡す record は 503 `attachments_unavailable` になり、
 //!      `_inbox/` に候補を残さず、参照行も添付の `expires_at` も変えない（api.md §3.104 と `POST /knowledge/inbox` の
 //!      2 つの文）。`attachment_ids` の無い record は添付の保存に依らず 201 になる。
-//!      既存で検出できない理由: 旗は `ChatState.attachment_db_path` から読み、`ApiState::new` が常に `Some` を入れて
-//!      いたので、どの試験も無効の側を通らなかった。旗を常に真に戻す変更や、旗を DB の path から導き直す変更で、
+//!      既存で検出できない理由: 旗は R4 で消した `ChatState` の DB の path の欄から読み、`ApiState::new` が常に
+//!      `Some` を入れていたので、どの試験も無効の側を通らなかった。旗を常に真に戻す変更や、旗を DB の path から導き直す変更で、
 //!      provenance が出る・pin を試みる（201）ようになっても落ちる試験が無かった。
 //!
 //! (F2) `attachment_flag_data_dir_shows_provenance`

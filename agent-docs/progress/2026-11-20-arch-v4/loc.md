@@ -131,3 +131,12 @@ python3 -I $ART/build_loc_tsv.py
 ## 7. 変更（commit の件名）
 
 - `arch-v4 親 closeout loc: H の (4)(5)(6) を HEAD で測り直し、loc.tsv と loc.md を書く`
+- `arch-v4 親 closeout loc: 提出時の HEAD で回した検査の結果を loc.md に書く`
+
+## 8. 検査（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` と `git diff --name-only $CELERIS_WU_BASE HEAD` は loc.md・loc.tsv の 2 file だけ。`git status --porcelain -- crates` は空。
+- `sh scripts/dev/progress-index.sh --check` → ok（exit 0）。`bash scripts/dev/check-doc-links.sh` → ok（exit 0）。
+- `bash scripts/dev/test-affected.sh` → exit 0（docs のみ。repo-health verdict=pass new=0 worsened=0、試験対象の変更なし）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- 全体の試験は source を変えていないので走らせていない。リリースゲートの確認は gate の WorkUnit が行う。本番への昇格はしていない。

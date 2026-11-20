@@ -4,8 +4,8 @@ tasks: [01M7VJY8NZ5G84ACBNQTPVV3R4]
 # ADR 2026-11-20: knowledge・lifecycle・skills の 6 関数を `Applied` の形から org_write の形（共有の plan と効果、HTTP と CoS の adapter）へ移す（アーキv4 H R5）
 
 - 日付: 2026-11-20
-- 状態: Accepted（実装前。この ADR を書いた WorkUnit `adr` は `crates/` を変えていない。旧コードに当てる契約試験は WorkUnit `contract`、
-  測定の道具と before は `measure`、knowledge.rs は `knowledge`、lifecycle.rs は `pause`、skills.rs は `skills`、after と付記の表と進捗の完了は `after` が行う）
+- 状態: Accepted。2026-11-20 に WorkUnit `knowledge`・`pause`・`skills` が実装した（違いは末尾の「付記: 実装で分かった違い」）。書いた時点の状態は「実装前。この ADR を書いた WorkUnit `adr` は `crates/` を変えていない。旧コードに当てる契約試験は WorkUnit `contract`、
+  測定の道具と before は `measure`、knowledge.rs は `knowledge`、lifecycle.rs は `pause`、skills.rs は `skills`、after と付記の表と進捗の完了は `after` が行う」
 - task: 01M7VJY8NZ5G84ACBNQTPVV3R4（アーキv4 H 01M7MZTKBPZPQE4XN451F8X84F の子、人の決定 unmet b の R5。H の final-report の提案 15・16・17）
 - 進捗: `agent-docs/progress/2026-11-19-arch-v4-h-r5.md`（WorkUnit `measure` が置く）、この WorkUnit の要点は [adr.md](../progress/2026-11-19-arch-v4-h-r5/adr.md)、
   測定値は同じ dir の `metrics.tsv`
@@ -220,3 +220,38 @@ HTTP の成功の status と body、拒否の status と code、CoS の operatio
 - `knowledge`・`pause`・`skills`: D1〜D3 を自分の file と CoS の腕だけで行う（file が重ならない）。`pause` は architecture-map の lifecycle の行も直す。
   D1 の名前を変えたら進捗に書く。
 - `after`: §9 の after を測り、org-write の ADR の付記の表を今の関数に合わせ、進捗を done にする。
+
+## 付記: 実装で分かった違い（2026-11-20、WorkUnit `after`）
+
+WorkUnit `after` が、実装の 3 つの WorkUnit の note（[knowledge.md](../progress/2026-11-19-arch-v4-h-r5/knowledge.md) §4、
+[pause.md](../progress/2026-11-19-arch-v4-h-r5/pause.md) §2、[skills.md](../progress/2026-11-19-arch-v4-h-r5/skills.md) §2・§5）から写した。
+D1〜D5 の決定の意味を変える違いは無い。違いは次の 8 点。
+
+- `knowledge`: `plan_page_put` は `request` を参照（`&KnowledgePagePutBody`）で受ける。CoS の腕が、正規化の前の `input.path` を `audit.reject` に渡すため、
+  plan に渡した後も request を読む。D1 の表の引数の書き方（`request`）との違いはこれだけ。
+- `knowledge`: HTTP の 3 handler の tracing は `state.blocking` の closure の中（効果の直後）に置いた。D2 の順（plan → 効果 → tracing → 200）と同じ。
+  closure は store を使わない（`_store`）が、git の操作を blocking の thread で走らせるために `state.blocking` を残した。
+  CoS の `knowledge.page_put` の tracing の `path` は `result.path`（= `edit.path`）。
+- `knowledge`: D3・§6 の「`candidate_not_found` の code の `pub(crate) const`」の名前は `CANDIDATE_NOT_FOUND`（`knowledge.rs`）。
+  `candidate_not_found` と CoS の `knowledge.reject` の腕が使う。
+- `pause`: D1 に無い private の補助 `task_pause_trigger(pause)`（`task_pause`｜`task_resume`）を `lifecycle.rs` に足した。trigger の文字列を
+  `plan_task_pause` と HTTP の `task_action` の 2 か所で書かないため。`pub(crate)` ではない。
+- `pause`: CoS の包みは D3 の決定どおり `apply` で、objective の文面の `apply_checked` ではない（D3 と §5 の選択肢 3 のとおり）。
+  `docs/architecture-map.md` の lifecycle の行にもコードのとおり `apply` と書いた。
+- `skills`: §7 は「`skills.rs` の `skill_effect` を消す」と書いた。実装は名前 `skill_effect` を残し、中身を
+  「`Result<T, SkillError>` を `Effect<T>` に写す、2 つの効果が共有する private の関数」に変えた。CoS 専用の JSON への写し（旧い `skill_effect` の `to_value`）は消え、
+  `cos/ops/admin.rs` の既存の `external` の helper の `effect_value` が代わる。効果の戻り値は D1 の `Result<Result<T, ApiProblem>, ApiProblem>` と同じ意味の
+  既存の型 `crate::problem::Effect<T>`。
+- `skills`: D3 の CoS の包みは `audit.external` を直接呼ばず、`admin.rs` に既にある `external` の helper（`audit.external` と `effect_value` を呼ぶ）を使った。
+  監査の意味は同じ。
+- `skills`: `skill.put`・`skill.delete` の包みは `fn dispatch` の腕に書かず、`admin.rs` の private の `fn skill_write(store, env, audit, action, path, body)` に置いた。
+  腕に書いた 1 回目の run は、repo health の `size.responsibility-growth` で `dispatch` が WorkUnit の base の 440 行から 441 行に増えて落ちた
+  （関数の行の閾値 200 を超える existing の finding の悪化）。`skill_write` へ出した後の `dispatch` は 416 行。拒否の順・target・action・source・応答は同じ。
+
+§9 の「`lifecycle → cos`・`skills → cos` の組は消える見込み（未確認）」は、H の C2 の snippet（`deps.cycle` の `_components`）で確かめた。
+R5 の前（件名 `integrate wu/r7-rules (phase fix1)` の commit）と提出時の HEAD を比べ、task-api の強連結成分は 49 単位のまま、単位の組は 230 → 228。
+消えた組は `crates/task-api/src/lifecycle → crates/task-api/src/cos` と `crates/task-api/src/skills → crates/task-api/src/cos` の 2 つで、新しい組は 0。
+`knowledge → cos` は `CosCaller`・`knowledge_use::note` の参照で残る（§9 のとおり）。`lifecycle`・`skills` は他の辺で強連結成分に残る。
+
+§9 の計測の after（`agent-docs/progress/2026-11-19-arch-v4-h-r5/measure.sh HEAD`）: `applied_wide` 18 → 15、`applied_narrow` 14 → 11、
+`applied_functions` 55 → 49（目標どおり。減ったのは `knowledge.rs`・`lifecycle.rs`・`skills.rs` の 3 file と 6 関数だけ）。

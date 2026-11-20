@@ -1,13 +1,12 @@
 ---
 title: アーキ v4 H R6 summary — gate・verify・promoted の要約を $SD_LOGS/release-records.jsonl に追記し、掃除の後も残る試験を足す
 tasks: [01M7VJY8Q1MMAH87CSPQZWC7VY]
-status: done
+status: blocked
 updated: 2026-11-20
-completed: 2026-11-20
 ---
 # summary（WorkUnit）
 
-完了日: 2026-11-20
+完了日: 未完（範囲 check の不合格で計画の直しを申告した。下の「未解決」）
 
 ## 結論
 
@@ -23,12 +22,13 @@ completed: 2026-11-20
 - 新しい試験 `scripts/selfdeploy/tests/release_record_summary_survives_prune.sh` を足した（D5）。
 - `docs/ops/selfdeploy.md` §0 の置き場の図と「配備操作の監査情報」の新しい小節「gate・verify・昇格の要約の写し」に、置き場・形・
   「正本は release dir の file」・判断に読まないことを書いた。
-- 既存の release・verify の試験 11 本に `unset CELERIS_BACKUPS_DIR CELERIS_LOGS_DIR` を足した（下の「変えた既存の試験」）。
+- 既存の release・verify の試験 7 本に `unset CELERIS_BACKUPS_DIR CELERIS_LOGS_DIR` を足した（下の「変えた既存の試験」）。この 7 本は計画の範囲 check の外にあり、check が落ちる。計画の直しを申告した（「未解決」）。
 - `crates/`・policy の file は変えていない。本番の release.sh・verify.sh・promote.sh は走らせていない。要約の log を読む経路は足していない。
 
 ## commit（件名）
 
 - 「summary: gate・verify・promoted の要約を release-records.jsonl に追記し、掃除の後も残る試験を足す」
+- 「summary: 要約の行を書かない既存の試験 4 本の unset を戻し、範囲 check の不合格を記録する」
 
 ## 実装前 brief（ADR 1 節の要約）
 
@@ -59,15 +59,30 @@ completed: 2026-11-20
 
 ## 変えた既存の試験（`unset CELERIS_BACKUPS_DIR CELERIS_LOGS_DIR` の 3 行だけ）
 
-対象: bundle_includes_verify_helpers・browser_ledger_release_stages・release_web_required・release_lock_bundled_scripts・
-release_web_bundle_requires_deps・release_parallel_test_gate・verify_web_app_start・repo_health_bundle・
-release_prune_stale_test_binaries・release_target_settled_after_build・release_uses_scratch_lease。
+理由: worker の run の環境は本番の `CELERIS_LOGS_DIR=/local/celeris/state/logs` を export している。release・verify の既存の試験は
+`CELERIS_STATE_DIR` を一時 dir に向けるが `CELERIS_LOGS_DIR` を継ぐ。unset しないと、release.sh・verify.sh が偽の sha の要約の行を本番の
+`release-records.jsonl` に足してしまう。unset すれば `$SD_LOGS` は一時の state の下（`backups/`）になる。promote_authorization_marker.sh
+（159〜160 行）と promote_live_abort.sh（201〜202 行）が既に同じ unset をしている。試験の不変条件と期待値は変えていない。
 
-理由: worker の run の環境は本番の `CELERIS_LOGS_DIR=/local/celeris/state/logs` を export している。この 11 本は `CELERIS_STATE_DIR` を
-一時 dir に向けるが `CELERIS_LOGS_DIR` を継ぐので、unset しないと release.sh・verify.sh が偽の sha の要約の行を本番の
-`release-records.jsonl` に足してしまう。unset すれば `$SD_LOGS` は一時の state の下（`backups/`）になる。promote_live_abort.sh などが
-既に同じ unset をしている。試験の不変条件と期待値は変えていない。全部の試験を走らせた後も
-`/local/celeris/state/logs/release-records.jsonl` はできていない（`ls` で「No such file or directory」）。
+どの試験が行を書くかを測った。base の版の試験 11 本を、`CELERIS_LOGS_DIR`・`CELERIS_BACKUPS_DIR` を `$TMPDIR` の一時 dir に向けて走らせ、
+`release-records.jsonl` の行数を数えた（台本は HEAD の lib.sh・release.sh・verify.sh）:
+
+| 試験 | 書いた行 | unset |
+|---|---|---|
+| release_parallel_test_gate | 6 | 残す |
+| release_prune_stale_test_binaries | 6 | 残す |
+| release_web_required | 6 | 残す |
+| release_uses_scratch_lease | 2 | 残す |
+| verify_web_app_start | 2 | 残す |
+| browser_ledger_release_stages | 1 | 残す |
+| release_web_bundle_requires_deps | 1 | 残す |
+| bundle_includes_verify_helpers | 0 | 戻した |
+| release_lock_bundled_scripts | 0 | 戻した |
+| release_target_settled_after_build | 0 | 戻した |
+| repo_health_bundle | 0 | 戻した |
+
+行を書かない 4 本の unset は要らないので base に戻した。行を書く 7 本は unset を残した。
+全部の試験を走らせた後も `/local/celeris/state/logs/release-records.jsonl` はできていない（`ls` で「No such file or directory」）。
 
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 
@@ -118,6 +133,13 @@ release_prune_stale_test_binaries・release_target_settled_after_build・release
 
 ## 未解決
 
+- 範囲 check が落ちる（計画の直しを申告した）。この unit の範囲 check の正規表現は `scripts/selfdeploy/tests/` のうち
+  `release_record_summary_survives_prune.sh` と `fixtures/` しか許さない。上の 7 本の既存の試験の unset は範囲の外なので check が exit 1 になる。
+  unset を外せば check は通るが、worker の環境でその試験を走らせるたびに偽の行が本番の `/local/celeris/state/logs/release-records.jsonl` に
+  足される（`/local` の本番の state を試験が書き換える）。台本の側（lib.sh）では、試験が一時 dir に向けた `CELERIS_STATE_DIR` と本番の
+  `paths.env` から継いだ `CELERIS_LOGS_DIR` を見分ける決まりが無い。見分ける推測の分岐を足すと、承認の無い分岐になる。
+  直し方: この unit の範囲 check に次の 7 本を足す。
+  `scripts/selfdeploy/tests/(browser_ledger_release_stages|release_parallel_test_gate|release_prune_stale_test_binaries|release_uses_scratch_lease|release_web_bundle_requires_deps|release_web_required|verify_web_app_start)\.sh`
 - 上の 3 本の既存の試験（browser_ledger_credential_evidence・browser_ledger_release_stages・release_web_bundle_requires_deps）は、
   base の時点で fixture の不足（`check-slot.sh`）により落ちている。
 

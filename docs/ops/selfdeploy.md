@@ -137,10 +137,16 @@ scripts/selfdeploy/release.sh celeris/01M2XXX # 自己改善の案件の実装�
   `cargo test --doc --workspace`（nextest は doc-test を回さない）。範囲は `cargo test --workspace` と同じ。直列が要るテストは
   **ビルドする sha の** `.config/nextest.toml` の test-group で縛る。gate.json の `cargo_test` は
   `{runner: "nextest", nextest_version, jobs, binaries（nextest のバイナリ数 + doc-test の crate 数）, nextest_binaries, doc_binaries,
-  passed, failed, ignored, nextest_exit, doctest_exit, nextest_secs, doctest_secs, summary_parsed, userns}`。どちらかが落ちる・nextest の
+  passed, failed, ignored, nextest_passed, nextest_skipped, doc_passed, doc_ignored, prepare_exit, nextest_exit, doctest_exit,
+  nextest_secs, doctest_secs, tmp_leftovers, summary_parsed, userns}`。`passed`・`failed`・`ignored` は nextest と doc-test の和で、
+  内訳は `passed = nextest_passed + doc_passed`、`ignored = nextest_skipped + doc_ignored`（`CELERIS_TEST_SKIP_DOC=1` なら doc の欄は 0）。
+  nextest の数は `Summary …` の行から取り、`8525 passed (3 slow), 22 skipped` のような括弧の注記は外して数える
+  （[ADR 2026-11-20-release-record-summary-log](../../agent-docs/adr/2026-11-20-release-record-summary-log.md) D1。それより前の release の
+  gate.json は注記付きの行で nextest の通過数を取りこぼし、`passed` が doc-test の数だけになっている）。どちらかが落ちる・nextest の
   `Starting … across N binaries` / `Summary …` の行が読めない（全部走った証拠が無い）ときは段が落ちる。
   - `cargo-nextest` が要る（版は `tools/nextest/VERSION` で固定。入れ方は `docs/ops/nextest.md`）。無ければ作業ツリーを作る前に
-    入れ方を示して落ちる。非常用に `SD_GATE_TEST_RUNNER=cargo-test` で従来の直列の `cargo test --workspace`（`runner: "cargo-test"`）。
+    入れ方を示して落ちる。非常用に `SD_GATE_TEST_RUNNER=cargo-test` で従来の直列の `cargo test --workspace`（`runner: "cargo-test"`。
+    `cargo_test` は `{runner, binaries, passed, failed, ignored}` だけで、nextest と doc-test の内訳の欄を持たない）。
   - 開発・WU・phase 完了では全体の試験を回さない（`scripts/dev/test-affected.sh`。ADR 2026-10-20-full-tests-at-release-only）。並列で絞って回すなら
     `scripts/dev/test-parallel.sh [-p <crate> …]`。
 - 成功時は `bin/` と `web/app/`、web tarball、manifest.json、gate.json を梱包する。
@@ -157,7 +163,8 @@ scripts/selfdeploy/release.sh celeris/01M2XXX # 自己改善の案件の実装�
   `.gate-<step>.log` を残す（作業ツリーから写したもの。次に同じ sha で `release.sh` を回すと消える）。
 - 掃除: `current` / `previous` / いま作った版 / 検証済み（`verify.json.ok`）の新しい 3 件だけを残す。
 - gate.json の追加の欄（Phase SD-1。読む側は無視してよい）: `build`（`tree` / `tree_reused` / `cargo_target` / `scratch_owner` /
-  `workspace_clean`）、`cargo_test`（`binaries` / `passed` / `failed` / `ignored`）、`bundle`（`secs` /
+  `workspace_clean`）、`cargo_test`（`binaries` / `passed` / `failed` / `ignored`、nextest の runner では内訳の `nextest_passed` /
+  `nextest_skipped` / `doc_passed` / `doc_ignored` も。欄の全体は上の `cargo-test` の項）、`bundle`（`secs` /
   `web_bundle_secs` / `release_total_secs`）、`steps[].skipped` / `steps[].reason`。
 
 `manifest.json`:

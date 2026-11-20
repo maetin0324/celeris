@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Phase SD-2（ADR-0041 §8）: release.sh の `cargo-test` 段は `scripts/dev/test-parallel.sh`
 # （`cargo nextest run --workspace` + `cargo test --doc --workspace`）を回し、
-#   (1) 通れば gate.json の `cargo_test` に runner / バイナリ数（nextest + doc-test）/ 合格・失敗・無視 / 並列数が入る
+#   (1) 通れば gate.json の `cargo_test` に runner / バイナリ数（nextest + doc-test）/ 合格・失敗・無視 / 並列数と、
+#       合格・無視の内訳（nextest_passed・nextest_skipped・doc_passed・doc_ignored）が入る。nextest の Summary 行に
+#       `(1 slow)` のような括弧の注記が付いても nextest の通過数を数える（ADR 2026-11-20-release-record-summary-log D1）
 #   (2) nextest のテストが 1 つでも落ちたら gate が `cargo-test` で落ち、リリースを作らず、`.build/<sha12>/gate.json`
 #       の `cargo_test.failed` に数が残る（後の段は回らない）
 #   (3) doc-test が落ちても同じく落ちる
@@ -26,6 +28,10 @@ fail() {
 }
 
 # 偽の cargo。nextest は本物の出力の形（Starting / Summary 行）を真似る。
+# Summary 行には本物と同じく `passed` の後に括弧の注記（`(1 slow)`・`(1 slow, 1 leaky)`）を付ける。本物の nextest は遅い試験が
+# あると `8525 passed (3 slow), 22 skipped` と書くが、以前の fixture は注記の無い `7 passed, 2 skipped` だけを出していたので、
+# test-parallel.sh の解析が注記付きの行で `passed` の組を取りこぼし、gate.json の `passed` が doc-test の数だけになる誤りを
+# 検出できなかった（ADR 2026-11-20-release-record-summary-log 1.1）。注記付きの行を固定して、この取りこぼしを落とす。
 #   FAKE_NEXTEST_FAIL=1 → 1 つ落ちる（exit 100）、FAKE_DOC_FAIL=1 → doc-test が落ちる（exit 101）、
 #   FAKE_NEXTEST_NOSUMMARY=1 → exit 0 だが集計の行を出さない、FAKE_NO_NEXTEST=1 → `cargo nextest` が無い
 cat >"$root/bin/cargo" <<'EOF'
@@ -43,11 +49,11 @@ case "$1" in
         printf '        PASS [   0.004s] x tests::a\n'
         if [ "${FAKE_NEXTEST_FAIL:-0}" = 1 ]; then
           printf '        FAIL [   0.004s] x tests::b\n'
-          printf '     Summary [   0.020s] 7 tests run: 6 passed, 1 failed, 2 skipped\n'
+          printf '     Summary [   0.020s] 7 tests run: 6 passed (1 slow, 1 leaky), 1 failed, 2 skipped\n'
           printf 'error: test run failed\n' >&2
           exit 100
         fi
-        printf '     Summary [   0.020s] 7 tests run: 7 passed, 2 skipped\n'
+        printf '     Summary [   0.020s] 7 tests run: 7 passed (1 slow), 2 skipped\n'
         ;;
     esac
     ;;
@@ -104,15 +110,18 @@ chmod +x "$root/bin/"*
 repo="$root/repo"
 mkdir -p "$repo/crates/task-core/src/store" "$repo/crates/celeris" "$repo/crates/x/src" "$repo/scripts/selfdeploy"
 cp "$here"/*.sh "$here"/*.py "$repo/scripts/selfdeploy/"
+# release.sh は cos-skills.txt の CoS skill を梱包する（sd_bundle_cos_skills、ADR 2026-11-11-cos-skill-sync）。偽の木は skill を
+# 持たないので空の一覧を置く（release_web_required.sh と同じ）。
+printf '# fixture: no CoS skills\n' >"$repo/scripts/selfdeploy/cos-skills.txt"
 chmod +x "$repo/scripts/selfdeploy/"*.sh
 # runner はビルドする sha の中のものを使う（release.sh の隣ではない）。
 mkdir -p "$repo/scripts/dev" "$repo/tools/nextest"
 cp "$here/../dev/test-parallel.sh" "$repo/scripts/dev/"
 cp "$here/../dev/source-size-report.py" "$repo/scripts/dev/"
-# test-parallel.sh が読む helper と、release.sh が同梱する検査器（sd_bundle_repo_health は repo_health.py と
-# source-size-report.py の無い build を失敗にする）。
+# test-parallel.sh が読む helper（check-slot.sh は ADR 2026-11-12-host-check-slots の後に読む）と、release.sh が同梱する
+# 検査器（sd_bundle_repo_health は repo_health.py と source-size-report.py の無い build を失敗にする）。
 mkdir -p "$repo/scripts/dev/lib" "$repo/scripts/dev/repo-health"
-cp "$here/../dev/lib/test-tmp-lifecycle.sh" "$repo/scripts/dev/lib/"
+cp "$here/../dev/lib/test-tmp-lifecycle.sh" "$here/../dev/lib/check-slot.sh" "$repo/scripts/dev/lib/"
 cp "$here/../dev/repo-health/repo_health.py" "$repo/scripts/dev/repo-health/"
 cp "$here/../../tools/nextest/VERSION" "$repo/tools/nextest/"
 printf 'pub const SCHEMA_VERSION: u32 = 7;\n' >"$repo/crates/task-core/src/store/migrations.rs"
@@ -155,7 +164,8 @@ c12="${c:0:12}"
 CELERIS_TEST_JOBS=3 run_release "$c" || fail "release with passing tests failed"
 g="$root/state/releases/$c12/gate.json"
 gate_is "$g" "g['ok'] and steps['cargo-test']['exit'] == 0" || fail "cargo-test step did not pass"
-gate_is "$g" "{k: g['cargo_test'][k] for k in ('runner', 'binaries', 'nextest_binaries', 'doc_binaries', 'passed', 'failed', 'ignored', 'jobs')} == {'runner': 'nextest', 'binaries': 3, 'nextest_binaries': 2, 'doc_binaries': 1, 'passed': 8, 'failed': 0, 'ignored': 2, 'jobs': 3}" \
+# `passed` 8 = nextest_passed 7（注記 `(1 slow)` の付いた行から数える）+ doc_passed 1、`ignored` 2 = nextest_skipped 2 + doc_ignored 0。
+gate_is "$g" "{k: g['cargo_test'][k] for k in ('runner', 'binaries', 'nextest_binaries', 'doc_binaries', 'passed', 'failed', 'ignored', 'nextest_passed', 'nextest_skipped', 'doc_passed', 'doc_ignored', 'jobs')} == {'runner': 'nextest', 'binaries': 3, 'nextest_binaries': 2, 'doc_binaries': 1, 'passed': 8, 'failed': 0, 'ignored': 2, 'nextest_passed': 7, 'nextest_skipped': 2, 'doc_passed': 1, 'doc_ignored': 0, 'jobs': 3}" \
   || fail "cargo_test summary is wrong: $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["cargo_test"])' "$g")"
 grep -q -- '^nextest run --workspace --no-fail-fast .*--test-threads 3' "$root/cargo.log" || fail "nextest did not get --test-threads 3: $(cat "$root/cargo.log")"
 grep -qx 'test --doc --workspace --color never' "$root/cargo.log" || fail "doc-tests did not run"
@@ -175,7 +185,8 @@ if FAKE_NEXTEST_FAIL=1 run_release "$c"; then fail "release succeeded although a
 g="$root/state/releases/.build/$c12/gate.json"
 [ -f "$g" ] || fail "no gate.json for the failed gate"
 gate_is "$g" "not g['ok'] and g['failed_step'] == 'cargo-test' and steps['cargo-test']['exit'] != 0" || fail "gate did not fail at cargo-test"
-gate_is "$g" "g['cargo_test']['failed'] == 1 and g['cargo_test']['passed'] == 7 and g['cargo_test']['nextest_exit'] == 100" \
+# 失敗の Summary 行も注記付き（`6 passed (1 slow, 1 leaky), 1 failed, 2 skipped`）。`passed` 7 = nextest 6 + doc-test 1。
+gate_is "$g" "{k: g['cargo_test'][k] for k in ('passed', 'failed', 'ignored', 'nextest_passed', 'nextest_skipped', 'doc_passed', 'doc_ignored', 'nextest_exit')} == {'passed': 7, 'failed': 1, 'ignored': 2, 'nextest_passed': 6, 'nextest_skipped': 2, 'doc_passed': 1, 'doc_ignored': 0, 'nextest_exit': 100}" \
   || fail "failed count not recorded: $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["cargo_test"])' "$g")"
 gate_is "$g" "'cargo-clippy' not in steps" || fail "a step after cargo-test ran"
 # doc-test は nextest が落ちても回す（全部の失敗を 1 回で出す）。
@@ -204,6 +215,9 @@ grep -q 'cargo install cargo-nextest --locked --version 0.9.146' "$root/release.
 [ ! -e "$root/state/releases/.build/tree" ] || fail "build tree was created before the nextest check"
 
 # ---- 6. SD_GATE_TEST_RUNNER=cargo-test → 従来の cargo test --workspace ----
+# この runner は nextest を回さず、release.sh の cargo_test_summary_json が `cargo test` の `test result:` 行を数える
+# （test-parallel.sh を通らない）。nextest と doc-test を分けて数えないので nextest_passed などの内訳の欄を持たない。
+# dict の完全一致はそのまま残し、内訳の欄が無い形を固定する（ADR 2026-11-20-release-record-summary-log D1）。
 FAKE_NO_NEXTEST=1 SD_GATE_TEST_RUNNER=cargo-test run_release "$c" || fail "release with the cargo-test runner failed"
 c12="${c:0:12}"
 g="$root/state/releases/$c12/gate.json"

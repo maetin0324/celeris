@@ -21,7 +21,7 @@ use task_core::chat::{
 use time::OffsetDateTime;
 use tokio::sync::Notify;
 
-use crate::handlers::{ApiResult, Params, json_response, no_query};
+use crate::http_io::{ApiResult, Params, json_response, no_query};
 use crate::middleware::require_admin;
 use crate::principal::{Caller, Principal};
 use crate::problem::ApiProblem;
@@ -31,9 +31,8 @@ use crate::state::ApiState;
 /// Shared configuration reserved for the sibling attachment and SSE route modules.
 #[derive(Clone)]
 pub struct ChatState {
+    /// Where attachment blobs are stored; `None` means attachment storage is disabled.
     pub attachment_data_dir: Option<PathBuf>,
-    /// The migrated SQLite file used by the attachment store's separate connection.
-    pub attachment_db_path: Option<PathBuf>,
     pub attachment_limits: ChatAttachmentLimits,
     pub events: Arc<Notify>,
     /// Single decision point for cos-run to replace when `[cos]` is wired.
@@ -44,11 +43,18 @@ impl Default for ChatState {
     fn default() -> Self {
         Self {
             attachment_data_dir: None,
-            attachment_db_path: None,
             attachment_limits: ChatAttachmentLimits::default(),
             events: Arc::new(Notify::new()),
             enabled: true,
         }
+    }
+}
+
+impl ChatState {
+    /// Whether attachment storage is enabled, derived from `attachment_data_dir`: the same condition under
+    /// which the attachment routes answer 503 `attachments_unavailable` (api.md §3.104 and `POST /knowledge/inbox`).
+    pub(crate) fn attachments_enabled(&self) -> bool {
+        self.attachment_data_dir.is_some()
     }
 }
 
@@ -98,7 +104,7 @@ pub(crate) fn chat_problem(error: ChatError) -> ApiProblem {
 
 async fn chat_json<T: DeserializeOwned>(body: Body) -> Result<T, ApiProblem> {
     // Keep malformed JSON/unknown fields distinct from well-formed but invalid field values.
-    let value: serde_json::Value = crate::handlers::read_json(body, false).await?;
+    let value: serde_json::Value = crate::http_io::read_json(body, false).await?;
     serde_json::from_value(value).map_err(|error| {
         let detail = error.to_string();
         if detail.starts_with("unknown field") {

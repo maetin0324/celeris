@@ -5,17 +5,20 @@ use axum::body::Body;
 use axum::extract::{DefaultBodyLimit, Multipart, RawQuery, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::routing::{get, post};
-use rusqlite::{OptionalExtension, params};
-use task_core::chat::attachments::{AttachmentError, ChatAttachmentStore, StoredAttachment};
+use task_core::chat::attachments::{
+    AttachmentError, ChatAttachmentStore, StoredAttachment, attachment_expires_at,
+    attachment_ref_request_hash, upload_replayed,
+};
 use task_core::chat::{
     ChatAttachment, ChatAttachmentResponse, ChatAttachmentState, ChatError, ChatReferenceOwnerKind,
     ChatReferenceRequest, ChatReferenceResponse, ChatThreadKind,
 };
+use task_core::store::{SqliteStore, StoreError};
 use time::OffsetDateTime;
 use tokio::io::AsyncWriteExt;
 
 use crate::chat::{authorize, chat_json, chat_problem};
-use crate::handlers::{ApiResult, Params, json_response, no_query};
+use crate::http_io::{ApiResult, Params, json_response, no_query};
 use crate::problem::ApiProblem;
 use crate::state::ApiState;
 
@@ -48,6 +51,21 @@ fn error(err: AttachmentError) -> ApiProblem {
     ApiProblem::new(status, code, err.to_string())
 }
 
+/// The attachment reads on the store's read connection keep the code the route's own connection
+/// had: every failure, busy included, is 500 `attachment_store_error` (ADR
+/// 2026-11-19-chat-attachment-store-connection D1), not the shared `StoreError` mapping (busy is
+/// 503 `db_busy` there).
+fn read_error(err: StoreError) -> ApiProblem {
+    match err {
+        StoreError::Sqlite(e) => error(AttachmentError::Db(e)),
+        other => ApiProblem::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "attachment_store_error",
+            other.to_string(),
+        ),
+    }
+}
+
 /// The upload target must be an existing thread that takes input: the review thread (ADR
 /// 2026-10-28-cos-review-back-thread D1) is read-only, so an upload there is 403
 /// `chat_thread_read_only`.
@@ -77,14 +95,8 @@ fn open(state: &ApiState) -> Result<ChatAttachmentStore, ApiProblem> {
             "attachment storage is not configured",
         )
     })?;
-    let db = state.chat.attachment_db_path.as_ref().ok_or_else(|| {
-        ApiProblem::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "attachments_unavailable",
-            "attachment storage is not configured",
-        )
-    })?;
-    ChatAttachmentStore::open(dir, db, state.chat.attachment_limits).map_err(error)
+    ChatAttachmentStore::open(dir, &state.inner.db_path, state.chat.attachment_limits)
+        .map_err(error)
 }
 
 fn preview_bytes(store: &ChatAttachmentStore, row: &StoredAttachment) -> Option<Vec<u8>> {
@@ -115,25 +127,11 @@ fn preview_bytes(store: &ChatAttachmentStore, row: &StoredAttachment) -> Option<
 }
 
 fn representation(
-    state: &ApiState,
+    db: &SqliteStore,
     store: &ChatAttachmentStore,
     row: StoredAttachment,
 ) -> Result<ChatAttachment, ApiProblem> {
-    let db = state.chat.attachment_db_path.as_ref().ok_or_else(|| {
-        ApiProblem::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "attachments_unavailable",
-            "attachment storage is not configured",
-        )
-    })?;
-    let conn = rusqlite::Connection::open(db).map_err(|e| error(AttachmentError::Db(e)))?;
-    let expires_at: Option<String> = conn
-        .query_row(
-            "SELECT expires_at FROM chat_attachments WHERE id=?1",
-            [&row.id],
-            |r| r.get(0),
-        )
-        .map_err(|e| error(AttachmentError::Db(e)))?;
+    let expires_at = attachment_expires_at(db, &row.id).map_err(read_error)?;
     let preview_url =
         preview_bytes(store, &row).map(|_| format!("/api/v1/chat/attachments/{}/preview", row.id));
     Ok(ChatAttachment {
@@ -240,42 +238,29 @@ async fn upload(
     };
     file.seek(SeekFrom::Start(0))
         .map_err(|e| error(AttachmentError::Io(e)))?;
-    let db_path = state.chat.attachment_db_path.as_ref().ok_or_else(|| {
-        ApiProblem::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "attachments_unavailable",
-            "attachment storage is not configured",
-        )
-    })?;
-    let conn = rusqlite::Connection::open(db_path).map_err(|e| error(AttachmentError::Db(e)))?;
-    let replay: bool = conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM chat_client_requests WHERE kind='upload' AND scope_id=?1 AND key=?2)",
-        params![thread, key], |r| r.get(0),
-    ).map_err(|e| error(AttachmentError::Db(e)))?;
-    let (store, created) = tokio::task::spawn_blocking(move || {
-        let row = store
-            .upload(
-                &thread,
-                &key,
-                &name,
-                Some(size),
-                &mut file,
-                OffsetDateTime::now_utc(),
-            )
-            .map_err(error)?;
-        Ok::<_, ApiProblem>((store, row))
-    })
-    .await
-    .map_err(|e| ApiProblem::internal(format!("upload task failed: {e}")))??;
+    let (replay, attachment) = state
+        .blocking(move |db| {
+            let replay = upload_replayed(db, &thread, &key).map_err(read_error)?;
+            let row = store
+                .upload(
+                    &thread,
+                    &key,
+                    &name,
+                    Some(size),
+                    &mut file,
+                    OffsetDateTime::now_utc(),
+                )
+                .map_err(error)?;
+            Ok((replay, representation(db, &store, row)?))
+        })
+        .await?;
     Ok(json_response(
         if replay {
             StatusCode::OK
         } else {
             StatusCode::CREATED
         },
-        &ChatAttachmentResponse {
-            attachment: representation(&state, &store, created)?,
-        },
+        &ChatAttachmentResponse { attachment },
     ))
 }
 
@@ -288,12 +273,15 @@ async fn get_metadata(
     no_query(&raw)?;
     authorize(&state, &headers)?;
     let store = open(&state)?;
-    let row = store.get(&id).map_err(error)?;
+    let attachment = state
+        .blocking(move |db| {
+            let row = store.get(&id).map_err(error)?;
+            representation(db, &store, row)
+        })
+        .await?;
     Ok(json_response(
         StatusCode::OK,
-        &ChatAttachmentResponse {
-            attachment: representation(&state, &store, row)?,
-        },
+        &ChatAttachmentResponse { attachment },
     ))
 }
 
@@ -359,7 +347,7 @@ async fn delete(
 ) -> ApiResult {
     no_query(&raw)?;
     authorize(&state, &headers)?;
-    crate::cos::operations::effect_result(delete_effect(&state, &id))?;
+    crate::problem::effect_result(delete_effect(&state, &id))?;
     let mut response = axum::http::Response::new(Body::empty());
     *response.status_mut() = StatusCode::NO_CONTENT;
     Ok(response)
@@ -384,26 +372,23 @@ async fn add_reference(
         ChatReferenceOwnerKind::Task => "task",
         ChatReferenceOwnerKind::KnowledgeInbox => "knowledge_inbox",
     };
-    let db = state.chat.attachment_db_path.as_ref().ok_or_else(|| {
-        ApiProblem::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "attachments_unavailable",
-            "attachment storage is not configured",
-        )
-    })?;
-    let conn = rusqlite::Connection::open(db).map_err(|e| error(AttachmentError::Db(e)))?;
     let request_hash = format!("{kind}:{}", req.owner_id);
-    let prior: Option<String> = conn.query_row(
-        "SELECT request_hash FROM chat_client_requests WHERE kind='attachment_ref' AND scope_id=?1 AND key=?2",
-        params![id, req.idempotency_key], |r| r.get(0),
-    ).optional().map_err(|e| error(AttachmentError::Db(e)))?;
-    if prior.is_some_and(|hash| hash != request_hash) {
-        return Err(error(AttachmentError::Conflict));
-    }
     let kb_root = crate::knowledge::root_of(&state);
+    let (attachment, key, hash) = (
+        id.clone(),
+        req.idempotency_key.clone(),
+        request_hash.clone(),
+    );
     let (owner_kind, owner_id) = (req.owner_kind, req.owner_id.clone());
     state
-        .blocking(move |store| owner_checked(store, kb_root, owner_kind, &owner_id))
+        .blocking(move |store| {
+            let prior =
+                attachment_ref_request_hash(store, &attachment, &key).map_err(read_error)?;
+            if prior.is_some_and(|prior| prior != hash) {
+                return Err(error(AttachmentError::Conflict));
+            }
+            owner_checked(store, kb_root, owner_kind, &owner_id)
+        })
         .await?;
     open(&state)?
         .add_ref_request(
@@ -519,7 +504,7 @@ fn refused(err: &AttachmentError) -> bool {
 }
 
 /// The C effect result of an attachment store call (ADR 2026-10-09-cos-operations-external-effects).
-fn attachment_effect<T>(result: Result<T, AttachmentError>) -> crate::cos::operations::Effect<T> {
+fn attachment_effect<T>(result: Result<T, AttachmentError>) -> crate::problem::Effect<T> {
     match result {
         Ok(value) => Ok(Ok(value)),
         Err(err) if refused(&err) => Ok(Err(error(err))),
@@ -562,7 +547,7 @@ pub(crate) fn upload_effect(
     thread: &str,
     body: &CosUploadBody,
     bytes: Vec<u8>,
-) -> crate::cos::operations::Effect<ChatAttachmentResponse> {
+) -> crate::problem::Effect<ChatAttachmentResponse> {
     if let Err(problem) = upload_thread(db, thread) {
         return Ok(Err(problem));
     }
@@ -582,12 +567,11 @@ pub(crate) fn upload_effect(
         Ok(row) => row,
         Err(problem) => return Ok(Err(problem)),
     };
-    representation(state, &store, created)
-        .map(|attachment| Ok(ChatAttachmentResponse { attachment }))
+    representation(db, &store, created).map(|attachment| Ok(ChatAttachmentResponse { attachment }))
 }
 
 /// `DELETE /chat/attachments/{a}` effect, shared by the route and `chat.attachment_delete`.
-pub(crate) fn delete_effect(state: &ApiState, id: &str) -> crate::cos::operations::Effect<()> {
+pub(crate) fn delete_effect(state: &ApiState, id: &str) -> crate::problem::Effect<()> {
     let store = match open(state) {
         Ok(store) => store,
         Err(problem) => return Ok(Err(problem)),

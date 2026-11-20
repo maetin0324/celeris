@@ -1,0 +1,18 @@
+key	result	note
+case1	pass	boundary_case_1_authz_one_line_is_high PASS 3.77 秒（認可の 1 行 → High）。check 1 の nextest は 16 tests run: 16 passed、exit 0
+case2	pass	boundary_case_2_equivalent_plain_change_is_low PASS 3.00 秒（同等の普通の変更 → Low）
+case3	pass	boundary_case_3_move_cannot_escape PASS 2.84 秒（移動・別名・#[path] で class の判定を逃れられない）
+case4	pass	boundary_case_4_worsening_dependency_blocks PASS 2.09 秒（既存の循環への新しい組を health の関門が止める）
+case5	pass	boundary_case_5_policy_self_approval_impossible PASS 1.67 秒（候補自身の policy で class を外せない）
+case6	pass	boundary_case_6_fail_closed PASS 11.01 秒（方針・差分・判定が欠けると合格にしない）
+prompt_boundary	pass	task-worker change_rules::review::tests の prompt_boundary_ 3 件 PASS（worker・planner の規約の節、設計 review の理由の行、final review の finding）
+prompt_full_objective	pass	prompt_full_objective_ 4 件 PASS（R1 が足した試験）: planner の objective と受入条件の末尾（task-worker 1）、設計 review の objective の末尾（task-dispatch 1）、final review の objective の末尾と全条件・reviewer への受け渡し（task-dispatch 2）
+planner_prompt_acceptance	pass	planner_prompt_acceptance_ 3 件 PASS（R1 が足した試験。task-worker の planner_prompt_tests）: tree の planner・flat の planner と plan の種類・全 harness の入力に受入条件が全部載る
+repo_health_tests	pass	python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health_*.py': Ran 126 tests in 52.5s OK、exit 0（scripts/dev/repo-health は merge-base と同じ内容）
+probe_scc_edge	pass	crates/task-api/src/lifecycle.rs に use crate::knowledge::KnowledgeItem; を 1 行足して本物の検査器を走らせた。期待どおり exit 1・verdict=fail（findings 696、new 1、worsened 0、existing 695）。deps.cycle fail（existing 17 + new 1）、symbol crates/task-api/src/lifecycle -> crates/task-api/src/knowledge、fingerprint deps.cycle:a106-75aa-c992-c815（4 桁ずつ区切って書いた）。deps.violation pass（0 件）。probe は直後に git checkout で戻した
+probe_plain	pass	同じ file に comment を 1 行足した。期待どおり exit 0・verdict=pass（findings 695、new 0、worsened 0）。deps.cycle pass（existing 17）、deps.violation pass（0 件）。probe は直後に戻した。probe なしの run も exit 0・new 0（R1〜R7 の差分は merge-base に対して new の finding を出さない）
+org_write_contract	pass	cargo nextest run -p task-api --test cos_delivery_suite org_write_contract: 6 tests run: 6 passed、exit 0
+tx_boundary_contract	pass	cargo nextest run -p task-api --test cos_delivery_suite tx_boundary_contract: 8 tests run: 8 passed、exit 0
+dispatcher_cex	pass	cargo nextest run -p task-dispatch -E 'test(cex_) | test(write_set_) | test(store_access_guard) | test(structure_guard)': 67 tests run: 67 passed、exit 0（cex_ 40 = review_authority 19・lease_restart 12・late_completion 6・same_tick 3、write_set_ 13、structure_guard 14〈store_access_guard 3 を含む〉）
+clippy	pass	cargo clippy --workspace -- -D warnings: exit 0（53 秒）
+fmt	pass	cargo fmt --all -- --check: exit 0、出力 0 行

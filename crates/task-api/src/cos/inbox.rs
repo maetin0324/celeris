@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use task_core::TaskId;
 use task_core::chat::{AuditContext, ChatActor, ChatError};
+use task_core::cos_inbox::{CosInboxItem, cos_inbox_item, cos_inbox_items, cos_inbox_superseded};
 use task_core::store::SqliteStore;
 use task_ops::human_inbox::{InboxItem, InboxKind};
 use time::OffsetDateTime;
@@ -27,9 +28,8 @@ use super::basis::{self, BasisTarget, DelegatedBasis};
 use super::operations::{
     DispatchEnv, ItemMark, Matched, OperationAudit, OperationView, dispatch, request_hash,
 };
-use super::triage_view::{self, CosInboxItem};
-use super::{CosCaller, cos_only, reject_identity_claims};
-use crate::handlers::{ApiResult, Params, json_response};
+use super::{CosCaller, cos_only, reject_identity_claims, triage_view};
+use crate::http_io::{ApiResult, Params, json_response};
 use crate::inbox_notifications::{InboxAnswerBody, delegated_request, human_feed};
 use crate::problem::{ApiProblem, store_problem};
 use crate::query::QueryParams;
@@ -158,7 +158,7 @@ fn unprocessable(code: &'static str, detail: impl Into<String>) -> ApiProblem {
     ApiProblem::new(StatusCode::UNPROCESSABLE_ENTITY, code, detail)
 }
 
-fn revision_conflict(detail: impl Into<String>) -> ApiProblem {
+pub(super) fn revision_conflict(detail: impl Into<String>) -> ApiProblem {
     ApiProblem::new(StatusCode::CONFLICT, "cos_inbox_revision_conflict", detail)
 }
 
@@ -184,9 +184,10 @@ async fn list(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> ApiResu
             .filter(|n| (1..=MAX_LIMIT).contains(n))
             .ok_or_else(|| ApiProblem::bad_request(format!("limit must be 1..={MAX_LIMIT}")))?,
     };
-    let db = triage_db(&state)?;
     let items = state
-        .blocking(move |_| triage_view::items(&db, filter.as_deref(), limit).map_err(chat_problem))
+        .blocking(move |store| {
+            cos_inbox_items(store, filter.as_deref(), limit).map_err(chat_problem)
+        })
         .await?;
     Ok(json_response(StatusCode::OK, &CosInboxList { items }))
 }
@@ -463,13 +464,13 @@ async fn resolve(
     RawQuery(raw): RawQuery,
     body: Body,
 ) -> ApiResult {
-    crate::handlers::no_query(&raw)?;
+    crate::http_io::no_query(&raw)?;
     let Some(Extension(caller)) = caller else {
         return Err(cos_only(
             "/api/v1/cos/inbox/{i}/resolve accepts only a CoS run credential; people answer in /api/v1/inbox",
         ));
     };
-    let value: Value = crate::handlers::read_json(body, false).await?;
+    let value: Value = crate::http_io::read_json(body, false).await?;
     reject_identity_claims(&value)?;
     let req: ResolveBody = serde_json::from_value(value.clone()).map_err(body_problem)?;
     for (name, field) in [
@@ -520,8 +521,6 @@ async fn resolve(
     let env = DispatchEnv::of(&state);
     let item_key = i.clone();
     let lookup = i.clone();
-    let db = triage_db(&state)?;
-    let lookup_db = db.clone();
     let (operation, notification_id) = state
         .blocking(move |store| {
             if let Some(existing) = store
@@ -541,13 +540,15 @@ async fn resolve(
             let rejecter = audit.clone();
             let reject =
                 |problem: ApiProblem| rejecter.reject(store, "cos_inbox_item", &item_key, problem);
-            let Some(item) = triage_view::item_get(&db, &i).map_err(chat_problem)? else {
+            // Reads stay outside `audit.apply` / `dispatch` (ADR 2026-11-19-chat-attachment-store-
+            // connection §3): without a read pool they take the write connection's mutex.
+            let Some(item) = cos_inbox_item(store, &i).map_err(chat_problem)? else {
                 return Err(reject(chat_problem(ChatError::NotFound {
                     kind: "triage item",
                     id: i.clone(),
                 })));
             };
-            if let Some(problem) = terminal_conflict(&db, &item).map_err(chat_problem)? {
+            if let Some(problem) = triage_view::terminal_conflict(store, &item).map_err(chat_problem)? {
                 return Err(reject(problem));
             }
             if item.source_revision != req.expected_revision {
@@ -556,7 +557,7 @@ async fn resolve(
                     item.source_revision, req.expected_revision
                 ))));
             }
-            if triage_view::superseded(&db, &item).map_err(chat_problem)? {
+            if cos_inbox_superseded(store, &item.id).map_err(chat_problem)? {
                 return Err(reject(revision_conflict(format!(
                     "a newer revision of {}:{} was ingested; judge that one",
                     item.source_kind, item.source_key
@@ -687,7 +688,7 @@ async fn resolve(
         .await?;
     state.chat.events.notify_waiters();
     let item = state
-        .blocking(move |_| triage_view::item_get(&lookup_db, &lookup).map_err(chat_problem))
+        .blocking(move |store| cos_inbox_item(store, &lookup).map_err(chat_problem))
         .await?;
     Ok(json_response(
         StatusCode::OK,
@@ -697,29 +698,6 @@ async fn resolve(
             notification_id,
         },
     ))
-}
-
-/// Why `resolve` refuses an item that already has an outcome, or `None` when CoS may still judge it.
-/// ADR 2026-11-11-cos-fallback-timing D2: a fallback the notifier has not sent yields to CoS's
-/// judgment; a sent one stays with the person (this judgment is recorded as rejected and nothing
-/// is sent again).
-fn terminal_conflict(
-    db: &std::path::Path,
-    item: &CosInboxItem,
-) -> Result<Option<ApiProblem>, ChatError> {
-    if !item.is_terminal()
-        || (item.state == "fallback" && triage_view::fallback_unsent(db, &item.id)?)
-    {
-        return Ok(None);
-    }
-    let i = &item.id;
-    Ok(Some(revision_conflict(if item.state == "fallback" {
-        format!(
-            "triage item {i} was already sent to the person by the fallback; this judgment is recorded and nothing is sent again"
-        )
-    } else {
-        format!("triage item {i} is already {}", item.state)
-    })))
 }
 
 /// ADR 2026-11-12-cos-triage-scope D1/D3: the basis of a CoS answer to `wait` without a human
@@ -879,15 +857,4 @@ pub(crate) fn answer_target(found: &InboxItem, input: &InboxAnswerBody) -> Basis
             .then(|| found.id.strip_prefix("authorization-").map(str::to_owned))
             .flatten(),
     }
-}
-
-/// The daemon DB the triage view reads (the API's own connection; see [`triage_view`]).
-fn triage_db(state: &ApiState) -> Result<std::path::PathBuf, ApiProblem> {
-    state.chat.attachment_db_path.clone().ok_or_else(|| {
-        ApiProblem::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "cos_inbox_unavailable",
-            "the CoS inbox needs a file-backed database",
-        )
-    })
 }

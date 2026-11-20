@@ -20,7 +20,7 @@ use crate::types::{
     ValidationError,
 };
 
-use super::{ApiResult, Params, json_response, no_query, read_json};
+use crate::http_io::{ApiResult, Params, json_response, no_query, read_json};
 
 /// PATCH /tasks/{id}: omitted hint leaves it unchanged; null or [] clears it.
 #[derive(Deserialize, JsonSchema)]
@@ -312,7 +312,7 @@ pub(super) async fn retry(
         &raw,
     )?;
     let body: RetryBody = super::idempotency::decode(raw)?;
-    let clusters = super::cluster_ids(&state);
+    let clusters = state.cluster_ids();
     let by = caller.actor();
     let human = HumanEpoch::of(&caller);
     let (result, resent) = state
@@ -480,7 +480,7 @@ pub(super) async fn patch_task(
     let id = parse_task_id(&id)?;
     let body: TaskPatchBody = read_json(body, true).await?;
     let genres = state.inner.genres.clone();
-    let clusters = super::cluster_ids(&state);
+    let clusters = state.cluster_ids();
     let by = caller.actor();
     let human = HumanEpoch::of(&caller);
     let result = state

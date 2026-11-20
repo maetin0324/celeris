@@ -239,6 +239,61 @@ sd_require_json_tool() {
   return 0
 }
 
+# ---- gate・verify・昇格の要約を消えない場所に追記する（ADR 2026-11-20-release-record-summary-log D2〜D4）----
+# `sd_release_record <gate|verify|promoted> <正本の json の path>` — 正本の file（gate.json・verify.json・promoted.json）を
+# 読んで要約を 1 行の JSON にし、$SD_LOGS/release-records.jsonl に `>>` で追記する。release.sh の掃除（prune_releases）は
+# release dir と `.build/<sha12>/` を消すが $SD_LOGS は消さないので、消えた release の gate・verify・昇格の結果を人が後から確かめられる。
+# 正本は release dir の file で、この log は書いた時点の写し。昇格・takeover・引き渡し・release notes の判断には読まない（D3。
+# 不変条件 unpromoted-release-no-takeover）。既存の行は書き換えない。失敗は sd_log の warning だけで、呼び出し元の
+# exit code を変えない（D4。常に 0 を返す）。試験: scripts/selfdeploy/tests/release_record_summary_survives_prune.sh
+sd_release_record() {
+  local kind="$1" src="$2" out="$SD_LOGS/release-records.jsonl" line
+  if ! command -v python3 >/dev/null 2>&1; then
+    sd_log "warning: release-records: python3 is missing; no $kind summary of $src was appended to $out"
+    return 0
+  fi
+  if ! line="$(python3 - "$kind" "$src" "$(sd_ts)" <<'PY' 2>&1
+import json, os, sys
+kind, src, at = sys.argv[1:4]
+with open(src, encoding="utf-8") as fh:
+    d = json.load(fh)
+if not isinstance(d, dict):
+    raise SystemExit("not a JSON object: " + src)
+sha12 = d.get("sha12") or d.get("to") or os.path.basename(os.path.dirname(os.path.abspath(src)))
+row = {"at": at, "kind": kind, "sha12": sha12}
+if kind == "gate":
+    ct = d.get("cargo_test") if isinstance(d.get("cargo_test"), dict) else {}
+    steps = [s for s in d.get("steps") or [] if isinstance(s, dict)]
+    row.update(ok=d.get("ok") is True, file=src, sha=d.get("sha"), failed_step=d.get("failed_step") or None,
+               step_count=len(steps), steps=[{"step": s.get("step"), "exit": s.get("exit")} for s in steps],
+               cargo_test={k: ct.get(k) for k in ("runner", "passed", "failed", "ignored", "nextest_passed",
+                                                   "nextest_skipped", "doc_passed", "doc_ignored", "nextest_exit",
+                                                   "doctest_exit", "userns")} if ct else None)
+elif kind == "verify":
+    checks = [c for c in d.get("checks") or [] if isinstance(c, dict)]
+    row.update(ok=d.get("ok") is True, file=src, live_ok=d.get("live_ok"), schema_version=d.get("schema_version"),
+               checks=[{"id": c.get("id"), "name": c.get("name"), "ok": c.get("ok")} for c in checks])
+elif kind == "promoted":
+    inc = d.get("included") if isinstance(d.get("included"), dict) else {}
+    row.update(ok=d.get("status") == "succeeded", file=src, operation=d.get("operation"), status=d.get("status"),
+               mode=d.get("mode"), promoted_at=d.get("promoted_at"), **{"from": d.get("from")}, actor=d.get("actor"),
+               policy_ref=d.get("policy_ref"),
+               included_tasks=[t.get("task_id") for t in inc.get("tasks") or [] if isinstance(t, dict)])
+else:
+    raise SystemExit("unknown kind: " + kind)
+print(json.dumps(row, ensure_ascii=False, separators=(",", ":")))
+PY
+)"; then
+    sd_log "warning: release-records: could not summarize $src as $kind (not appended to $out): $(printf '%s' "$line" | tail -n 1)"
+    return 0
+  fi
+  if ! { mkdir -p "$SD_LOGS" && printf '%s\n' "$line" >>"$out"; } 2>/dev/null; then
+    sd_log "warning: release-records: could not append the $kind summary of $src to $out"
+    return 0
+  fi
+  return 0
+}
+
 # 文字列を JSON の文字列リテラルにする（前後の " 込み）。
 sd_json_str() {
   case "$SD_JSON_TOOL" in

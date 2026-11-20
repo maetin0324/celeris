@@ -1968,3 +1968,137 @@ fn review_risk_final_review_sets_diff_design_not_design() {
     assert_eq!(request.diff_design, Some(asked));
     assert_eq!(request.criteria, vec![0]);
 }
+
+/// `prompt_full_objective_*` の印。3,000 文字の objective の末尾に付ける。
+pub(crate) const FULL_OBJECTIVE_TAIL: &str = "END-OF-REVIEW-OBJECTIVE";
+/// `prompt_full_objective_*` の印。3,000 文字の受入条件の text の末尾に付ける。
+pub(crate) const FULL_ACCEPTANCE_TAIL: &str = "END-OF-REVIEW-ACCEPTANCE";
+
+/// `prompt_full_objective_*` の対象 task: 3,000 文字の objective の末尾に [`FULL_OBJECTIVE_TAIL`]、3 件の受入条件（最後は
+/// 3,000 文字の text の末尾に [`FULL_ACCEPTANCE_TAIL`]）。check は全て reviewer（決定的な検査を走らせない）。
+pub(crate) fn long_objective_subject(dir: &Path) -> Task {
+    let mut task = task_with(vec![Check::Reviewer, Check::Reviewer, Check::Reviewer], dir);
+    task.title = "long objective".into();
+    task.objective = format!("{}{FULL_OBJECTIVE_TAIL}", "あ".repeat(3000));
+    let texts = [
+        "ACC-ZERO test-affected と clippy と fmt が通る".to_string(),
+        "ACC-ONE 進捗の file が status: done".to_string(),
+        format!("{}{FULL_ACCEPTANCE_TAIL}", "い".repeat(3000)),
+    ];
+    for (criterion, text) in task.acceptance.iter_mut().zip(texts) {
+        criterion.text = text;
+    }
+    task
+}
+
+/// reviewer の prompt に対象 task の objective の全文（末尾の印まで）と、全受入条件の text が `{i}. {text}` の行で
+/// 「Acceptance criteria of the task under review」の節に載ることを確かめる。失敗の表示は prompt の全文でなく、
+/// 印の有無と objective の節の末尾だけにする（3,000 文字を 2 回出さない）。
+#[track_caller]
+pub(crate) fn assert_review_prompt_keeps_subject(prompt: &str, subject: &Task, label: &str) {
+    let objective_tail: String = prompt
+        .split_once("## Objective\n")
+        .map(|(_, rest)| rest.lines().next().unwrap_or_default())
+        .unwrap_or_default()
+        .chars()
+        .rev()
+        .take(40)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    assert!(
+        prompt.contains(FULL_OBJECTIVE_TAIL),
+        "{label}: the objective tail mark is missing (objective line ends with {objective_tail:?})"
+    );
+    assert!(
+        prompt.contains(&format!("## Objective\n{}\n", subject.objective)),
+        "{label}: the objective is not in the prompt in full (ends with {objective_tail:?})"
+    );
+    let lines: String = subject
+        .acceptance
+        .iter()
+        .enumerate()
+        .map(|(i, c)| format!("{i}. {}\n", c.text))
+        .collect();
+    assert!(
+        prompt.contains(&format!(
+            "## Acceptance criteria of the task under review\n{lines}\n"
+        )),
+        "{label}: an acceptance criterion is missing or truncated (tail mark present: {})",
+        prompt.contains(FULL_ACCEPTANCE_TAIL)
+    );
+}
+
+/// 不変条件（ADR 2026-11-19-planner-reviewer-prompt-coverage D2）: final review の reviewer の prompt
+/// （`synthetic_review_task` で対象 task の objective と acceptance を写した `Review` task を、design の無い
+/// `ReviewRequest` の `RunContext` で `claude_code::build_prompt` に渡したもの）に、3,000 文字の objective の末尾の印と、
+/// 全受入条件の text（3,000 文字の text の末尾の印を含む）が切れずに載る。reviewer は依頼の末尾まで読んで判定する。
+/// 既存の試験で検出できない理由: `prompt_boundary_worker_and_planner_get_class_rule_invariants_and_dependency_rule`
+/// （task-worker）は 3,000 文字の objective の末尾の印を worker の prompt にしか当てず、`synthetic_review_task` を通らない。
+/// review の既存の試験（`synthetic_review_task_inherits_the_subjects_project_milestone_and_assignee`・
+/// `reviewer_uses_department_identity_and_profile_in_the_same_run` など）は objective が 1 文字の `task_with` の task しか
+/// 使わないので、`synthetic_review_task` が objective や受入条件を途中で切っても落ちない。
+#[test]
+fn prompt_full_objective_final_review_keeps_objective_tail_and_every_criterion() {
+    let dir = tempfile::tempdir().unwrap();
+    let subject = long_objective_subject(dir.path());
+    let review = synthetic_review_task(&subject, "rev-tail", &reviewer_hint());
+    let context = RunContext {
+        review: Some(ReviewRequest::default()),
+        ..RunContext::default()
+    };
+    let prompt = task_worker::claude_code::build_prompt(&review, &context, "rev-tail", "artifacts");
+    assert_review_prompt_keeps_subject(&prompt, &subject, "final review");
+}
+
+/// 不変条件（ADR 2026-11-19-planner-reviewer-prompt-coverage D2）: final review の run（`review_task` →
+/// `run_reviewer_inner`）が reviewer の adapter に渡す `RunRequest` から組んだ prompt にも、3,000 文字の objective の末尾の
+/// 印と全受入条件の text が載る。`run_reviewer_inner` が `synthetic_review_task` の後で task を組み直しても、ここで落ちる。
+/// 既存の試験で検出できない理由: `reviewer_uses_department_identity_and_profile_in_the_same_run` などは同じ経路で
+/// `RunRequest` を捕まえるが、objective が 1 文字の task なので末尾の欠落を見ない。`prompt_boundary_` は review の
+/// 経路を通らない。
+#[tokio::test]
+async fn prompt_full_objective_final_review_run_passes_the_tail_to_the_reviewer() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = LocalWorkspace::new(dir.path());
+    let subject = long_objective_subject(dir.path());
+    let adapter = Arc::new(StubReviewer {
+        review_json: Some(
+            r#"{"verdicts":[{"criterion":0,"pass":true,"reason":"ok"},{"criterion":1,"pass":true,"reason":"ok"},{"criterion":2,"pass":true,"reason":"ok"}]}"#.into(),
+        ),
+        terminal: Terminal::Done {
+            summary: "reviewed".into(),
+            evidence: vec![],
+            usage: None,
+        },
+        seen: Mutex::new(vec![]),
+    });
+    let out = review_task(
+        &subject,
+        &ws,
+        dir.path(),
+        &dir.path().join("artifacts"),
+        &[],
+        Duration::from_secs(5),
+        ReviewExtras {
+            reviewer: Some(reviewer_run(adapter.clone())),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert!(out.all_pass(), "{:?}", out.verdicts);
+    let seen = adapter.seen.lock().unwrap();
+    assert_eq!(seen.len(), 1);
+    let req = &seen[0];
+    assert!(
+        req.context
+            .review
+            .as_ref()
+            .is_some_and(|review| review.design.is_none()),
+        "the final review request must not carry a plan design review"
+    );
+    let prompt =
+        task_worker::claude_code::build_prompt(&req.task, &req.context, "review", "artifacts");
+    assert_review_prompt_keeps_subject(&prompt, &subject, "final review run");
+}

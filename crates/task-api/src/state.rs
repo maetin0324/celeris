@@ -94,7 +94,8 @@ pub(crate) struct Inner {
     /// `None`。DB の絶対パス自体は `/health` に出さない（無認証のため。認証済みの `/config` が既に
     /// 返している）。
     pub(crate) db_mount: Option<task_core::mountinfo::MountInfo>,
-    /// 読み取り専用の view（`task_ops::routing_stage`）が別接続で開く DB の path。
+    /// store を開いた DB の path。読み取り専用の view（`task_ops::routing_stage`）が別接続で開き、chat 添付の
+    /// `ChatAttachmentStore::open` にも渡す（ADR 2026-11-19-chat-attachment-store-connection D1）。
     pub(crate) db_path: std::path::PathBuf,
     pub(crate) view: ViewContext,
     pub(crate) config_view: ConfigView,
@@ -138,7 +139,8 @@ pub(crate) struct Inner {
     pub(crate) llm_sources: Option<crate::llm_sources::SharedLlmSourcesReader>,
     pub(crate) harnesses: Option<crate::harnesses::SharedHarnessesReader>,
     pub(crate) model_discovery: Option<crate::model_catalog::SharedModelDiscoveryHook>,
-    pub(crate) account_stats: Mutex<crate::stats::AccountStatsState>,
+    /// `account_write` の一覧が `spawn_blocking` の中で使うので `Arc` で持つ。
+    pub(crate) account_stats: Arc<Mutex<crate::stats::AccountStatsState>>,
     /// ADR-0079 D3 / D11（Phase R4a）: `[execution.tree]`（木の view の上限の使用率）。
     pub(crate) tree_limits: task_core::TreeLimits,
     /// ADR 2026-11-06-budget-usd-caps D2: `[budget_rates]`。
@@ -152,7 +154,8 @@ pub(crate) struct Inner {
     pub(crate) streams: AtomicUsize,
     pub(crate) stream_polls: AtomicU64,
     pub(crate) replay_running: AtomicBool,
-    pub(crate) stats: Mutex<StatsState>,
+    /// `account_write` の一覧が `spawn_blocking` の中で使うので `Arc` で持つ。
+    pub(crate) stats: Arc<Mutex<StatsState>>,
 }
 
 impl ApiState {
@@ -173,10 +176,6 @@ impl ApiState {
         let db_mount = detect_db_mount(&settings.db_path);
         let (shutdown, _) = watch::channel(false);
         let browser = Arc::new(settings.browser.clone());
-        let chat = crate::chat::ChatState {
-            attachment_db_path: Some(settings.db_path.clone()),
-            ..Default::default()
-        };
         let inner = Inner {
             store: Arc::new(store),
             token_digests: settings
@@ -222,7 +221,7 @@ impl ApiState {
             tree_limits: settings.tree_limits,
             budget_rates: settings.budget_rates,
             local_machine: settings.local_machine,
-            account_stats: Mutex::new(crate::stats::AccountStatsState::default()),
+            account_stats: Arc::new(Mutex::new(crate::stats::AccountStatsState::default())),
             instance_id: settings.instance_id,
             started_at: settings.started_at,
             daemon,
@@ -230,7 +229,7 @@ impl ApiState {
             streams: AtomicUsize::new(0),
             stream_polls: AtomicU64::new(0),
             replay_running: AtomicBool::new(false),
-            stats: Mutex::new(StatsState::default()),
+            stats: Arc::new(Mutex::new(StatsState::default())),
         };
         Ok(Self {
             inner: Arc::new(inner),
@@ -241,7 +240,7 @@ impl ApiState {
             live_sessions: None,
             script_generations: None,
             project_controller: Arc::default(),
-            chat: Arc::new(chat),
+            chat: Arc::new(crate::chat::ChatState::default()),
             live_grants: Arc::new(Mutex::new(HashMap::new())),
             clock: system_clock(),
         })
@@ -374,6 +373,16 @@ impl ApiState {
         self.inner.shutdown.send_replace(true);
     }
 
+    /// 設定された cluster の id の一覧（blocking の区間の前に写す。例: CoS の dispatch）。
+    pub(crate) fn cluster_ids(&self) -> Vec<String> {
+        self.inner
+            .config_view
+            .clusters
+            .iter()
+            .map(|c| c.id.clone())
+            .collect()
+    }
+
     pub(crate) fn snapshot(&self) -> Option<DaemonSnapshot> {
         self.inner.daemon.borrow().clone()
     }
@@ -392,10 +401,20 @@ impl ApiState {
         T: Send + 'static,
         F: FnOnce(&SqliteStore) -> Result<T, ApiProblem> + Send + 'static,
     {
-        let store = Arc::clone(&self.inner.store);
-        tokio::task::spawn_blocking(move || f(&store))
-            .await
-            .map_err(|e| ApiProblem::internal(format!("blocking task failed: {e}")))?
+        crate::problem::blocking(Arc::clone(&self.inner.store), f).await
+    }
+
+    /// account の plan と作用（`account_write`）が読む欄を写す（ADR 2026-11-19-cos-handlers-remaining-edges D2）。
+    pub(crate) fn account_env(&self) -> crate::account_write::AccountEnv<'_> {
+        crate::account_write::AccountEnv {
+            accounts_roots: &self.inner.accounts_roots,
+            admin_tx: self.inner.admin_tx.as_ref(),
+            max_runs_per_account: self.inner.max_runs_per_account,
+            store: &self.inner.store,
+            daemon: &self.inner.daemon,
+            account_stats: &self.inner.account_stats,
+            stats: &self.inner.stats,
+        }
     }
 
     /// `POST /replay` の同時実行を 1 つに制限する。実行中なら `None`。

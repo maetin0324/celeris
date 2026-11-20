@@ -11,6 +11,7 @@
 //! path の `{id}` が `global` のときは全案件に効く台帳（ADR 2026-11-11-cos-standing-context D4。範囲は `global`、
 //! 分類は定型の代答だけ）。本文と token の規則は案件の台帳と同じ。
 
+use axum::body::Body;
 use axum::extract::{RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
@@ -28,8 +29,10 @@ use ulid::Ulid;
 
 use super::*;
 use crate::cos::operations::OperationAudit;
+use crate::http_io::{ApiResult, Params, json_response, no_query, read_json};
 use crate::middleware::require_admin;
 use crate::principal::{Caller, Principal};
+use crate::problem::store_problem;
 
 const AUTHORITY_HUMAN_ONLY: &str = "authority_human_only";
 const AUTHORITY_GRANT_INVALID: &str = "authority_grant_invalid";

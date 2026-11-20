@@ -31,8 +31,7 @@ use task_ops::docs::{self as ops_docs, DocCommit};
 use task_ops::knowledge::{self as ops_kb, InboxOutcome, PageEdit, WriteOutcome};
 
 use crate::cos::CosCaller;
-use crate::cos::operations::{Applied, OperationAudit};
-use crate::handlers::{ApiResult, Params, json_response, no_query, read_json};
+use crate::http_io::{ApiResult, Params, json_response, no_query, read_json};
 use crate::middleware::require_admin;
 use crate::problem::ApiProblem;
 use crate::query::QueryParams;
@@ -337,10 +336,13 @@ fn page_not_found(path: &str) -> ApiProblem {
     )
 }
 
+/// 候補が無いときの problem の code。CoS の `knowledge.reject` はこの code の失敗を `NotFound` に写す。
+pub(crate) const CANDIDATE_NOT_FOUND: &str = "candidate_not_found";
+
 fn candidate_not_found(id: &str) -> ApiProblem {
     ApiProblem::new(
         StatusCode::NOT_FOUND,
-        "candidate_not_found",
+        CANDIDATE_NOT_FOUND,
         format!("knowledge candidate not found: {id}"),
     )
 }
@@ -542,26 +544,19 @@ async fn page_view(state: &ApiState, raw: Option<String>) -> ApiResult {
 // PUT /knowledge/page（管理系）
 // ---------------------------------------------------------------------------
 
-/// `PUT /knowledge/page` shared by the handler and `/cos/operations` (`knowledge.page_put`, C:
-/// the KB is a git repository). Path checks happen before the effect; an etag mismatch or a
-/// missing page is git refusing before any change (`rejected`); other failures stay pending.
-pub(crate) fn put_page_op(
-    store: &task_core::SqliteStore,
+/// `PUT /knowledge/page` の plan（読み取りと検証だけ。git も DB も書かない）。KB が無い・パスの誤り・
+/// `_inbox/` の候補は拒否する。HTTP の `put_page` と CoS の `knowledge.page_put`（`cos/ops/decisions.rs`）が
+/// plan → [`page_put_effect`] の順に呼ぶ。監査の包みは CoS の側が持つ（ADR 2026-11-20 applied-shape-migration D1）。
+pub(crate) fn plan_page_put(
     root: &std::path::Path,
-    request: KnowledgePagePutBody,
-    audit: Option<&crate::cos::operations::OperationAudit>,
-) -> Result<crate::cos::operations::Applied<KnowledgePageResult>, ApiProblem> {
-    use crate::cos::operations::Applied;
-    let reject = |problem: ApiProblem| match audit {
-        Some(audit) => audit.reject(store, "knowledge_page", &request.path, problem),
-        None => problem,
-    };
-    require_kb(root).map_err(reject)?;
-    let path = page_path(&request.path).map_err(reject)?;
+    request: &KnowledgePagePutBody,
+) -> Result<PageEdit, ApiProblem> {
+    require_kb(root)?;
+    let path = page_path(&request.path)?;
     if kb::is_inbox(&path) {
-        return Err(reject(ApiProblem::path_forbidden(
+        return Err(ApiProblem::path_forbidden(
             "`_inbox/` の候補は編集できません（accept か reject を使う）",
-        )));
+        ));
     }
     let message = request
         .message
@@ -573,8 +568,8 @@ pub(crate) fn put_page_op(
     // ADR-0047 付記 H1: 人の編集は『人が書いた』印を付けて保存する（整理が保護する）。CoS の編集も
     // 人の依頼の中継なので同じ印を付ける（誰が中継したかは監査の記録に残る）。
     let body = kb::mark_human_authored(&path, &request.body);
-    let edit = PageEdit {
-        path: path.clone(),
+    Ok(PageEdit {
+        path,
         body: Some(body),
         etag: request.etag.clone().filter(|e| !e.trim().is_empty()),
         message,
@@ -582,52 +577,34 @@ pub(crate) fn put_page_op(
             kb::HUMAN_AUTHOR_NAME.to_string(),
             kb::HUMAN_AUTHOR_EMAIL.to_string(),
         ),
-    };
-    let commit = || -> Result<Result<KnowledgePageResult, ApiProblem>, ApiProblem> {
-        match ops_kb::commit_page(root, &edit) {
-            WriteOutcome::Written {
-                sha,
+    })
+}
+
+/// `PUT /knowledge/page` の効果（KB は git。1 件 1 コミットして索引を作り直す）。戻り値の内側の `Err` は
+/// git が変更の前に断ったこと（etag の不一致・ページが無い）、外側の `Err` は結果が分からない失敗。
+pub(crate) fn page_put_effect(
+    root: &std::path::Path,
+    edit: &PageEdit,
+) -> Result<Result<KnowledgePageResult, ApiProblem>, ApiProblem> {
+    match ops_kb::commit_page(root, edit) {
+        WriteOutcome::Written {
+            sha,
+            etag,
+            unchanged,
+        } => {
+            // ADR-0047 D3: 書いたら必ず索引を作り直す。
+            let _ = ops_kb::reindex(root);
+            Ok(Ok(KnowledgePageResult {
+                path: edit.path.clone(),
                 etag,
+                sha,
                 unchanged,
-            } => {
-                // ADR-0047 D3: 書いたら必ず索引を作り直す。
-                let _ = ops_kb::reindex(root);
-                tracing::info!(
-                    op = "knowledge_put",
-                    path = %edit.path,
-                    unchanged,
-                    cos = audit.is_some(),
-                    "knowledge page committed"
-                );
-                Ok(Ok(KnowledgePageResult {
-                    path: edit.path.clone(),
-                    etag,
-                    sha,
-                    unchanged,
-                }))
-            }
-            WriteOutcome::EtagMismatch { etag } => Ok(Err(etag_mismatch(etag))),
-            WriteOutcome::Missing => Ok(Err(page_not_found(&edit.path))),
-            WriteOutcome::Failed { detail } => Err(knowledge_unavailable(detail)),
+            }))
         }
-    };
-    let Some(audit) = audit else {
-        return commit()?.map(Applied::Direct);
-    };
-    let operation = audit.external(
-        store,
-        "knowledge_page",
-        &path,
-        "knowledge.page_put",
-        time::OffsetDateTime::now_utc(),
-        || match commit()? {
-            Ok(result) => serde_json::to_value(&result)
-                .map(Ok)
-                .map_err(|e| ApiProblem::internal(format!("knowledge result: {e}"))),
-            Err(refused) => Ok(Err(refused)),
-        },
-    )?;
-    Ok(Applied::Audited(Box::new(operation)))
+        WriteOutcome::EtagMismatch { etag } => Ok(Err(etag_mismatch(etag))),
+        WriteOutcome::Missing => Ok(Err(page_not_found(&edit.path))),
+        WriteOutcome::Failed { detail } => Err(knowledge_unavailable(detail)),
+    }
 }
 
 async fn put_page(
@@ -641,7 +618,18 @@ async fn put_page(
     let request: KnowledgePagePutBody = read_json(body, false).await?;
     let root = root_of(&state)?;
     let result = state
-        .blocking(move |store| put_page_op(store, &root, request, None)?.direct())
+        .blocking(move |_store| {
+            let edit = plan_page_put(&root, &request)?;
+            let result = page_put_effect(&root, &edit)??;
+            tracing::info!(
+                op = "knowledge_put",
+                path = %result.path,
+                unchanged = result.unchanged,
+                cos = false,
+                "knowledge page committed"
+            );
+            Ok(result)
+        })
         .await?;
     Ok(json_response(StatusCode::OK, &result))
 }
@@ -651,7 +639,8 @@ async fn put_page(
 // ---------------------------------------------------------------------------
 
 /// 候補に pin された添付の出所（ADR 2026-10-05 cos-chat-home D4）を store の読み取りの接続で読む
-/// （ADR 2026-11-18 knowledge-lifecycle-tx-boundary D2）。添付の保存が無効なら空。
+/// （ADR 2026-11-18 knowledge-lifecycle-tx-boundary D2）。添付の保存が無効（`ChatState::attachments_enabled` が
+/// 偽）なら空。
 fn candidate_provenance(
     store: &task_core::SqliteStore,
     attachments: bool,
@@ -693,7 +682,7 @@ async fn inbox(
 ) -> ApiResult {
     no_query(&raw)?;
     let root = root_of(&state)?;
-    let attachments = state.chat.attachment_db_path.is_some();
+    let attachments = state.chat.attachments_enabled();
     let view = state
         .blocking(move |store| {
             let initialized = ops_kb::exists(&root);
@@ -732,7 +721,7 @@ async fn record(
     require_admin(&state, &headers)?;
     let request: KnowledgeRecordBody = read_json(body, false).await?;
     let root = root_of(&state)?;
-    let attachment_storage = state.chat.attachment_db_path.is_some();
+    let attachment_storage = state.chat.attachments_enabled();
     let result = state
         .blocking(move |store| {
             let recorded = record_candidate(store, &root, attachment_storage, request)?;
@@ -808,9 +797,9 @@ fn attachments_unavailable() -> ApiProblem {
 /// knowledge-lifecycle-tx-boundary D3）。検査（KB・path・添付の保存）の後、候補を `record_in` で
 /// `_inbox/<id>.md` に書いて git commit し、結果を返す。SQLite は読むだけ（案件の一覧）。
 /// 添付の pin（[`pin_candidate_tx`]）と監査は呼び手が自分の transaction で書き、失敗したら
-/// [`discard_candidate`] で候補を消す。`attachment_storage` は添付の保存の有無で、無いのに
-/// `attachment_ids` があれば 503 `attachments_unavailable`（HTTP だけが渡す。CoS は監査の
-/// transaction の検査に任せて `true` を渡す）。
+/// [`discard_candidate`] で候補を消す。`attachment_storage` は添付の保存の有無（HTTP は
+/// `ChatState::attachments_enabled`）で、無いのに `attachment_ids` があれば 503
+/// `attachments_unavailable`（HTTP だけが渡す。CoS は監査の transaction の検査に任せて `true` を渡す）。
 pub(crate) fn record_candidate(
     store: &task_core::SqliteStore,
     root: &std::path::Path,
@@ -879,7 +868,7 @@ async fn inbox_detail(
 ) -> ApiResult {
     no_query(&raw)?;
     let root = root_of(&state)?;
-    let attachments = state.chat.attachment_db_path.is_some();
+    let attachments = state.chat.attachments_enabled();
     let view = state
         .blocking(move |store| {
             // id の境界（`/`・`..` は 403。accept / reject と同じ）。
@@ -908,77 +897,59 @@ async fn accept(
     let request: KnowledgeAcceptBody = read_json(body, true).await?;
     let root = root_of(&state)?;
     let result = state
-        .blocking(move |store| accept_op(store, &root, id, request, None)?.direct())
+        .blocking(move |_store| {
+            plan_accept(&root, &id, &request)?;
+            let result = accept_effect(&root, &id, &request)?;
+            tracing::info!(who = "admin", op = "knowledge_accept", id = %id, path = %result.path, "admin: knowledge candidate accepted");
+            Ok(result)
+        })
         .await?;
     Ok(json_response(StatusCode::OK, &result))
 }
 
-/// `POST /knowledge/inbox/{id}/accept` の本体。handler（`audit = None`）と CoS の `/cos/operations`
-/// （ADR 2026-10-09 D3/D5、`knowledge.accept`）が共有する。KB は SQLite の外（git）なので、監査ありでは
-/// 正本への取り込みを `cos_operation_apply` の transaction の中で行い、失敗すれば監査の行は rejected になる
-/// （`reject_op` と同じ形。git の commit は取り込みが成功したときだけ起きる）。
-pub(crate) fn accept_op(
-    store: &task_core::SqliteStore,
+/// `POST /knowledge/inbox/{id}/accept` の plan（読み取りと検証だけ）: KB があること、id の境界（`/`・`..` は 403）、
+/// 取り込み先 `path` を指定したならその境界。HTTP の `accept` と CoS の `knowledge.accept`（`cos/ops/decisions.rs`）が
+/// plan → [`accept_effect`] の順に呼ぶ（ADR 2026-11-20 applied-shape-migration D1）。
+pub(crate) fn plan_accept(
     root: &std::path::Path,
-    id: String,
-    request: KnowledgeAcceptBody,
-    audit: Option<&OperationAudit>,
-) -> Result<Applied<KnowledgePageResult>, ApiProblem> {
-    let reject = |problem: ApiProblem| match audit {
-        Some(audit) => audit.reject(store, "knowledge", &id, problem),
-        None => problem,
-    };
-    require_kb(root).map_err(reject)?;
-    // id の境界（`/`・`..` は 403）。
-    ops_kb::inbox_path(&id).map_err(|e| reject(path_problem(e)))?;
+    id: &str,
+    request: &KnowledgeAcceptBody,
+) -> Result<(), ApiProblem> {
+    require_kb(root)?;
+    ops_kb::inbox_path(id).map_err(path_problem)?;
     if let Some(path) = request
         .path
         .as_deref()
         .map(str::trim)
         .filter(|p| !p.is_empty())
     {
-        page_path(path).map_err(reject)?;
+        page_path(path)?;
     }
-    let accept =
-        || match ops_kb::inbox_accept(root, &id, request.path.as_deref(), request.overwrite) {
-            InboxOutcome::Accepted { path, sha, etag } => Ok(KnowledgePageResult {
-                path,
-                etag,
-                sha,
-                unchanged: false,
-            }),
-            InboxOutcome::Missing => Err(candidate_not_found(&id)),
-            InboxOutcome::Exists { path } => Err(ApiProblem::new(
-                StatusCode::CONFLICT,
-                "page_exists",
-                format!("page already exists: {path}（上書きするなら overwrite: true）"),
-            )),
-            InboxOutcome::Failed { detail } => Err(knowledge_unavailable(detail)),
-            InboxOutcome::Rejected { .. } => Err(knowledge_unavailable("unexpected outcome")),
-        };
-    let Some(audit) = audit else {
-        let result = accept()?;
-        tracing::info!(who = "admin", op = "knowledge_accept", id = %id, path = %result.path, "admin: knowledge candidate accepted");
-        return Ok(Applied::Direct(result));
-    };
-    let mut failure = None;
-    let outcome = audit.apply(
-        store,
-        "knowledge",
-        &id,
-        "knowledge.accept",
-        |_tx| match accept() {
-            Ok(page) => Ok(serde_json::json!({"id": id, "path": page.path, "sha": page.sha})),
-            Err(problem) => {
-                let detail = problem.detail().to_string();
-                failure = Some(problem);
-                Err(task_core::chat::ChatError::Conflict(detail))
-            }
-        },
-    );
-    match outcome {
-        Ok(operation) => Ok(Applied::Audited(Box::new(operation))),
-        Err(problem) => Err(failure.unwrap_or(problem)),
+    Ok(())
+}
+
+/// `POST /knowledge/inbox/{id}/accept` の効果: 候補を正本へ取り込む（KB は git。commit は取り込みが成功したときだけ
+/// 起きる）。CoS はこれを `cos_operation_apply` の transaction の中で呼び、失敗すれば監査の行は rejected になる。
+pub(crate) fn accept_effect(
+    root: &std::path::Path,
+    id: &str,
+    request: &KnowledgeAcceptBody,
+) -> Result<KnowledgePageResult, ApiProblem> {
+    match ops_kb::inbox_accept(root, id, request.path.as_deref(), request.overwrite) {
+        InboxOutcome::Accepted { path, sha, etag } => Ok(KnowledgePageResult {
+            path,
+            etag,
+            sha,
+            unchanged: false,
+        }),
+        InboxOutcome::Missing => Err(candidate_not_found(id)),
+        InboxOutcome::Exists { path } => Err(ApiProblem::new(
+            StatusCode::CONFLICT,
+            "page_exists",
+            format!("page already exists: {path}（上書きするなら overwrite: true）"),
+        )),
+        InboxOutcome::Failed { detail } => Err(knowledge_unavailable(detail)),
+        InboxOutcome::Rejected { .. } => Err(knowledge_unavailable("unexpected outcome")),
     }
 }
 
@@ -992,70 +963,41 @@ async fn reject(
     require_admin(&state, &headers)?;
     let root = root_of(&state)?;
     let result = state
-        .blocking(move |store| reject_op(store, &root, id, None)?.direct())
+        .blocking(move |_store| {
+            plan_reject(&root, &id)?;
+            let result = reject_effect(&root, &id)?;
+            tracing::info!(who = "admin", op = "knowledge_reject", id = %id, "admin: knowledge candidate rejected");
+            Ok(result)
+        })
         .await?;
     Ok(json_response(StatusCode::OK, &result))
 }
 
-/// `POST /knowledge/inbox/{id}/reject` の本体。handler（`audit = None`）と CoS の `/cos/operations`
-/// （ADR 2026-10-05 D3）が共有する。KB は SQLite の外（git）なので、監査ありでは候補の取り下げを
-/// `cos_operation_apply` の transaction の中で行い、失敗すれば `cos_operations`・監査 event・card は
-/// 書かない（取り下げの git commit の後に SQLite の commit が失敗したときだけ、監査の無い取り下げが残る）。
-pub(crate) fn reject_op(
-    store: &task_core::SqliteStore,
+/// `POST /knowledge/inbox/{id}/reject` の plan（読み取りと検証だけ）: KB があることと id の境界。HTTP の `reject` と
+/// CoS の `knowledge.reject`（`cos/ops/decisions.rs`。ADR 2026-10-05 D3）が plan → [`reject_effect`] の順に呼ぶ。
+pub(crate) fn plan_reject(root: &std::path::Path, id: &str) -> Result<(), ApiProblem> {
+    require_kb(root)?;
+    ops_kb::inbox_path(id).map_err(path_problem)?;
+    Ok(())
+}
+
+/// `POST /knowledge/inbox/{id}/reject` の効果: 候補を取り下げる（KB は git）。CoS はこれを `cos_operation_apply` の
+/// transaction の中で呼ぶので、失敗すれば `cos_operations`・監査 event・card は書かない（取り下げの git commit の後に
+/// SQLite の commit が失敗したときだけ、監査の無い取り下げが残る）。候補が無ければ [`CANDIDATE_NOT_FOUND`] の 404。
+pub(crate) fn reject_effect(
     root: &std::path::Path,
-    id: String,
-    audit: Option<&OperationAudit>,
-) -> Result<Applied<KnowledgeRejectResult>, ApiProblem> {
-    let reject = |problem: ApiProblem| match audit {
-        Some(audit) => audit.reject(store, "knowledge", &id, problem),
-        None => problem,
-    };
-    require_kb(root).map_err(reject)?;
-    ops_kb::inbox_path(&id).map_err(|e| reject(path_problem(e)))?;
-    let Some(audit) = audit else {
-        return match ops_kb::inbox_reject(root, &id) {
-            InboxOutcome::Rejected { sha } => {
-                tracing::info!(who = "admin", op = "knowledge_reject", id = %id, "admin: knowledge candidate rejected");
-                Ok(Applied::Direct(KnowledgeRejectResult { id, sha }))
-            }
-            InboxOutcome::Missing => Err(candidate_not_found(&id)),
-            InboxOutcome::Failed { detail } => Err(knowledge_unavailable(detail)),
-            other => Err(knowledge_unavailable(format!(
-                "unexpected outcome: {other:?}"
-            ))),
-        };
-    };
-    let mut failure = None;
-    let outcome =
-        audit.apply(
-            store,
-            "knowledge",
-            &id,
-            "knowledge.reject",
-            |_tx| match ops_kb::inbox_reject(root, &id) {
-                InboxOutcome::Rejected { sha } => Ok(serde_json::json!({"id": id, "sha": sha})),
-                InboxOutcome::Missing => {
-                    failure = Some(candidate_not_found(&id));
-                    Err(task_core::chat::ChatError::NotFound {
-                        kind: "knowledge candidate",
-                        id: id.clone(),
-                    })
-                }
-                InboxOutcome::Failed { detail } => {
-                    failure = Some(knowledge_unavailable(detail.clone()));
-                    Err(task_core::chat::ChatError::Conflict(detail))
-                }
-                other => {
-                    let detail = format!("unexpected outcome: {other:?}");
-                    failure = Some(knowledge_unavailable(detail.clone()));
-                    Err(task_core::chat::ChatError::Conflict(detail))
-                }
-            },
-        );
-    match outcome {
-        Ok(operation) => Ok(Applied::Audited(Box::new(operation))),
-        Err(problem) => Err(failure.unwrap_or(problem)),
+    id: &str,
+) -> Result<KnowledgeRejectResult, ApiProblem> {
+    match ops_kb::inbox_reject(root, id) {
+        InboxOutcome::Rejected { sha } => Ok(KnowledgeRejectResult {
+            id: id.to_string(),
+            sha,
+        }),
+        InboxOutcome::Missing => Err(candidate_not_found(id)),
+        InboxOutcome::Failed { detail } => Err(knowledge_unavailable(detail)),
+        other => Err(knowledge_unavailable(format!(
+            "unexpected outcome: {other:?}"
+        ))),
     }
 }
 

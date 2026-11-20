@@ -1,0 +1,7 @@
+metric	scope	before	after	checker	note
+fix_commits	修正の波及 C10 no-merges（production を変えた first-parent の非 merge commit）	194	1	ssr@bc665168	before は A の窓 [2026-10-28T00:00Z, bc665168]（この run の再現も commits 492・194 で A と一致）。after は B0 の後の窓 bc665168..main（SINCE 2026-11-17T00:00Z、main は件名「integrate wu/close (phase close)」の commit）: commits 11 のうち production を変えたのは 1 件。30 件に満たないので未達（窓の件数が不足）
+fix_commits	修正の波及 C10 with-merges（merge commit を first-parent の差分で含める）	246	9	ssr@bc665168	before は A の窓（再現も 653・246 で一致）。after は bc665168..main の commits 40 のうち 9 件。9 件はアーキ v4 C・E・F の変更の merge と、main を E・F の branch に取り込んだ merge で、通常の修正 1 件と粒度が違う
+fix_region_pct	C10 no-merges の複数 region（crate か top-level の dir）の割合 %	46.9	0.0	ssr@bc665168	after は 1 件中 0 件。1 件では割合として意味が無い（比較不能）
+fix_region_pct	C10 with-merges の複数 region の割合 %	49.6	55.6	ssr@bc665168	after は 9 件中 5 件。子 task・WorkUnit 単位の merge を 1 件と数えるので A の窓と比べられない（比較不能）
+fix_module_pct	C10 no-merges の複数 module の割合 %	69.1	0.0	ssr@bc665168	after は 1 件中 0 件（比較不能）
+fix_module_pct	C10 with-merges の複数 module の割合 %	71.1	55.6	ssr@bc665168	after は 9 件中 5 件（比較不能。理由は fix_region_pct と同じ）

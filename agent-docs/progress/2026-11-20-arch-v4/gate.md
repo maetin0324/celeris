@@ -124,7 +124,7 @@ sh "$CELERIS_WU_SCOPE_PATHS"                                     # gate.md・gat
   main で `lifecycle -> knowledge` の組が SCC の内部にできた後は probe a は使えない。そのときは H の前回の gate.md §3 の手順で、まだ無い組を選び直す。
 - H を含む以後の release の gate.json が `ok: true` であること。
 
-## 7. 再現コマンド
+## 再現コマンド
 
 ```sh
 cargo nextest run -p task-dispatch -p task-worker -E 'test(/boundary_case_|prompt_boundary_|prompt_full_objective_|planner_prompt_acceptance_/)' --status-level pass --final-status-level pass --no-tests=fail

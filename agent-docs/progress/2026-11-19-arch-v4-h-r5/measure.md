@@ -102,7 +102,13 @@ crates/task-api/src/skills.rs put_skill_op
 ```text
 $ sh scripts/dev/progress-index.sh --check   → progress-index --check: ok（exit 0）
 $ bash scripts/dev/check-doc-links.sh        → check-doc-links: ok（exit 0）
+$ bash scripts/dev/test-affected.sh          → 「試験対象の変更なし（docs のみ等）」、repo_health_gate: all checks passed（exit 0）
+$ cargo fmt --all -- --check                 → exit 0
+$ cargo clippy --workspace -- -D warnings    → exit 0
 ```
+
+範囲: `git diff --name-only $CELERIS_WU_BASE HEAD` と `sh "$CELERIS_WU_SCOPE_PATHS"` は、どちらも
+`agent-docs/progress/2026-11-19-arch-v4-h-r5.md` と `agent-docs/progress/2026-11-19-arch-v4-h-r5/` の 4 file だけ（`crates/` の変更 0）。
 
 `checkbashisms` はこの host に入っていないので走らせていない。dash で実行して上の値を得た。
 

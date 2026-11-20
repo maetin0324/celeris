@@ -300,3 +300,41 @@ script と設定は base の commit から `git show <base>:<path>` で取り出
   state（`with_chat_attachments` を呼ばない）と、その clone に `with_chat_attachments` を足した state の 2 つの router で、
   同じ DB・同じ KB を読む。upload・record の body・`_inbox` と参照行の読み取りは F の `tx_boundary_contract.rs` の helper を
   `pub(crate)` にして使った（試験の中身は変えていない）。既存の試験で `env_with_attachments` へ替える必要があった物は無かった。
+
+## 付記 2026-11-20（WorkUnit `boundary`）: 高 risk の 5 file の変更と不変条件
+
+- 経緯: この task の final review は health の `diff_design` だけで落ちた。v2 の計画は write path を dir（`crates/task-api/` など）で書いたので、
+  計画の設計 review は高 risk の class の path に当たらず、task の差分が変えた下の 5 file を覆わなかった（「reviewer run が無く判定できない」）。
+  v3 の計画は WorkUnit `boundary` の `context.paths` に 5 file を file 単位で書き、計画の設計 review に覆わせる。この WorkUnit は `crates/` を変えない。
+- 変更の出所: 差分は `git merge-base HEAD main` から HEAD まで。4 file（`cos/operations.rs`・`handlers/authority.rs`・`handlers/secrets.rs`・
+  `releases.rs`）の変更と `knowledge.rs` の import は、この task の base に入っている兄弟 R2（task 01M7T5KM3FW3430R5DT4QG5QKV）の
+  `crate::http_io`・`crate::problem::Effect` への移動で、R2 の [ADR 2026-11-19 cos-handlers-remaining-edges](2026-11-19-cos-handlers-remaining-edges.md)
+  の「付記（2026-11-19、WorkUnit `boundary`）」に行ごとの中身がある。R4 自身の変更は `knowledge.rs` の 3 か所の旗の読みと doc comment だけ（上の付記 WorkUnit `flag`）。
+- knowledge.rs の旗: `inbox`・`record`・`inbox_detail` は `ChatState::attachments_enabled`（`attachment_data_dir.is_some()`。添付の保存の設定から導く）
+  だけを読む。`record_candidate`・`pin_candidate_tx`・`discard_candidate` の本体と transaction の境界（`record` の `write_tx` の中の pin と、
+  失敗時の `discard_candidate`）は差分に無い。CoS の `knowledge.record` が `record_candidate` に渡す `true` も変えていない。
+
+| file | class | 不変条件 | 出所 | 変更の中身（`git diff --numstat`） | 確かめる試験 |
+|---|---|---|---|---|---|
+| `crates/task-api/src/cos/operations.rs` | authz | `api-principal-from-token`、`cos-audit-same-tx` | R2（http-tools・accounts） | +4 −13。import 2 行を `crate::http_io::…`・`crate::problem::{ApiProblem, Effect}` に替え、`Effect` 型と `effect_result` の定義（doc を含む 9 行）を `crate::problem` へ移した。`crate::handlers::read_json` → `crate::http_io::read_json`、`crate::handlers::cluster_ids(state)` → `state.cluster_ids()`。`OperationAudit` の transaction と principal の判定は差分に無い | `cos_operations`（8）、`cos_delivery_suite` の `tx_boundary_contract`（8）、`auth_and_guards`（11）、`authority_ledger`（22）、`llm_accounts_admin`（19） |
+| `crates/task-api/src/handlers/authority.rs` | authz | `api-principal-from-token`、`cos-audit-same-tx` | R2（http-tools） | +3 −0。`use axum::body::Body;`・`use crate::http_io::{…}`・`use crate::problem::store_problem;` の明示の import だけ。関数の本体は差分に無い | `authority_ledger`（22）、`auth_and_guards`（11）、`llm_accounts_admin`（19）、`cos_operations`（8）、`tx_boundary_contract`（8） |
+| `crates/task-api/src/handlers/secrets.rs` | credential | `credential-stays-in-broker` | R2（http-tools） | +2 −1。`use super::{…}` を `use super::now_rfc3339;` と `use crate::http_io::{…}` に分けただけ。秘密の値の扱いは差分に無い | `run_worker_suite` の `secrets_admin`（12）、lib の `secrets::tests`（7） |
+| `crates/task-api/src/releases.rs` | selfdeploy | `unpromoted-release-no-takeover` | R2（http-tools・accounts） | +9 −9。`crate::handlers::{ApiResult, json_response}`・`no_query`・`Params` → `crate::http_io::…`、`crate::cos::operations::{Effect, effect_result}` → `crate::problem::…` の path の書き換えだけ。`promote` の `require_admin` と昇格の判定は差分に無い | lib の `releases::tests`（2）、`cos_delivery_suite` の `cos_ops_admin_config`（6。`release.promote` が 1 回だけ走る） |
+| `crates/task-api/src/knowledge.rs` | transaction | `task-state-in-sqlite`、`lifecycle-human-epoch-same-tx` | R2（http-tools）の import +1 −1、R4（flag）の +8 −7 | 合計 +9 −8。R2: `crate::handlers::{…}` → `crate::http_io::{…}`。R4: 3 か所の `state.chat.attachment_db_path.is_some()` → `state.chat.attachments_enabled()` と、`candidate_provenance`・`record_candidate` の doc comment | `knowledge`（10）、`cos_delivery_suite` の `tx_boundary_contract`（8）と `attachment_flag_` の 2 件（`attachment_flag_contract`）、lib の `knowledge::`（1） |
+
+括弧の数は WorkUnit `boundary` の提出時の HEAD の試験数（`cargo nextest list` の同じ引数で数えた）。上の試験と、R4 の添付・triage・chat の試験は次の 1 行で走る
+（WorkUnit `boundary` の check と同じ。結果は [boundary.md](../progress/2026-11-19-arch-v4-h-r4/boundary.md)）:
+
+```sh
+cargo nextest run -p task-api --lib --test run_worker_suite --test authority_ledger --test knowledge --test cos_operations --test auth_and_guards --test cos_delivery_suite --test cos_delivery_suite_a --test llm_accounts_admin --test cos_triage --test chat_api --test cos_chat_attach_pin
+```
+
+差分の形の検査（WorkUnit `boundary` の check と同じ。出力が空なら import・型の path・`cluster_ids()`・旗の読み・doc comment だけ）:
+
+```sh
+mb=$(git merge-base HEAD main)
+git diff -U0 "$mb" HEAD -- crates/task-api/src/handlers/authority.rs crates/task-api/src/handlers/secrets.rs crates/task-api/src/releases.rs crates/task-api/src/knowledge.rs \
+  | grep -E '^[-+]' | grep -vE '^(\+\+\+|---) ' \
+  | grep -vE '^[-+]use |http_io::|handlers::(no_query|Params)|(cos::operations|problem)::(Effect|effect_result)|^[-+][[:space:]]*///|attachment_db_path\.is_some\(\)|attachments_enabled\(\)'
+git diff -U0 "$mb" HEAD -- crates/task-api/src/cos/operations.rs | grep -E '^\+' | grep -v '^+++ ' | grep -vE 'http_io::|problem::|cluster_ids\(\)'
+```

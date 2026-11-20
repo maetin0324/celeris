@@ -1,0 +1,37 @@
+metric	scope	checker	h_after	remeasured	match	note
+loc_prod_all	production 全言語（views.product_only.lines）	ssr@bc665168	376018	376018	yes	B0 の ssr を B0・H tree・HEAD に当て config_sha256 が 3 つで同じ。H が測った tree（件名 arch-v4 H R8a rc-deps の commit）と HEAD の crates/・scripts/・web/・Cargo.* の差分 0
+loc_prod_rust	production Rust（views.product_only.rust_lines）	ssr@bc665168	331327	331327	yes	B0 の ssr を B0・H tree・HEAD に当て config_sha256 が 3 つで同じ。ほかの言語の production は H tree と同じ
+loc_test	試験 = class_totals.external_test + inline_test	ssr@bc665168	484793	484793	yes	B0 の ssr を B0・H tree・HEAD に当て config_sha256 が 3 つで同じ。external_test 463385 + inline_test 21408
+loc_own_total	own_total_with_tests 全言語（views.own_total_with_tests.lines）	ssr@bc665168	1034966	1034966	yes	B0 の ssr を B0・H tree・HEAD に当て config_sha256 が 3 つで同じ。docs の差（H tree の後の進捗 file）はこの view に入らない
+loc_own_total_rust	own_total_with_tests Rust（views.own_total_with_tests.rust_lines）	ssr@bc665168	887705	887705	yes	B0 の ssr を B0・H tree・HEAD に当て config_sha256 が 3 つで同じ。
+loc_tooling	tooling（class_totals.tooling）	ssr@bc665168	25601	25601	yes	B0 の ssr を B0・H tree・HEAD に当て config_sha256 が 3 つで同じ。
+s1_files	S1 で変える production file	-	4	4	yes	scenarios.env の S1_FILES の 4 file が HEAD にあり、comment の probe で 4 file・各 1 行が変わった
+s1_units	S1 で変える単位（repo-health の単位 crates/<c>/src/<第 1 要素>）	-	4	4	yes	org_write・handlers・cos（task-api）・store（task-core）
+s1_crates	S1 で変える crate	-	2	2	yes	task-api・task-core
+s2_files	S2 で変える production file	-	4	4	yes	scenarios.env の S2_FILES の 4 file が HEAD にあり、probe で 4 file・各 1 行
+s2_units	S2 で変える単位	-	2	2	yes	dispatcher・run_settlement
+s2_crates	S2 で変える crate	-	1	1	yes	task-dispatch
+s1_direct_importers	S1 の単位を直接 import する単位（C7b）	b0	76	76	yes	c7b-b0.py（B0 の検査器・profile、測る tree は HEAD）の S1h。H が測った tree（件名 arch-v4 H R8a rc-deps の commit）と HEAD の crates/・scripts/・web/・Cargo.* の差分 0
+s1_direct_importers	S1 の単位を直接 import する単位（C7b）	head	77	77	yes	c7b.py（HEAD の検査器）の S1h。直接 import する単位の集合は H の c7b-sets-HEAD.txt の S1h の行と同じ
+s1_transitive_importers	S1 の単位を推移的に import する単位（C7b）	b0	372	372	yes	package 12。b0 の検査器
+s1_transitive_importers	S1 の単位を推移的に import する単位（C7b）	head	368	368	yes	package 12。HEAD の検査器。集合は H と同じ
+s2_direct_importers	S2 の単位を直接 import する単位（C7b）	b0	6	6	yes	b0 の検査器
+s2_transitive_importers	S2 の単位を推移的に import する単位（C7b）	b0	14	14	yes	package 4。b0 の検査器
+s1_ta_crates	S1 の test-affected --list の crate（comment の probe）	-	14	14	yes	＋ web: typecheck+unit ＋ ts-verify: test-ts-verify。H と同じ集合。probe の後 git checkout -- で戻し crates の差分 0
+s2_ta_crates	S2 の test-affected --list の crate（comment の probe）	-	5	5	yes	celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。H と同じ集合。戻した後 crates の差分 0
+fix_commits	修正の波及 C10 no-merges（production を変えた first-parent の非 merge commit）	ssr@bc665168	1	1	yes	B0..HEAD の no-merges の commit は 11（H は 12。H の branch の rc-deps の commit が HEAD の first-parent に無い）。production を変えたのは同じ C の PathClass の 1 件
+fix_commits	修正の波及 C10 with-merges（merge commit を first-parent の差分で含める）	ssr@bc665168	14	10	explained	HEAD の first-parent は親の branch で、H の R1〜R5 の 5 件の integrate が件名 integrate wu/sync (phase sync) の 1 件にまとまる（H の measure の 9 件 + 1 件）。B0..main に当てると 14 件で H と一致
+fix_region_pct	C10 no-merges の複数 region（crate か top-level の dir）の割合 %	ssr@bc665168	0.0	0.0	yes	1 件中 0 件
+fix_region_pct	C10 with-merges の複数 region の割合 %	ssr@bc665168	42.9	60.0	explained	10 件中 6 件（H の measure の 9 件のうち 5 件 + integrate wu/sync の 1 件。4 crate を変える）。B0..main では 14 件中 6 件・42.9 で H と一致
+fix_module_pct	C10 no-merges の複数 module の割合 %	ssr@bc665168	0.0	0.0	yes	1 件中 0 件
+fix_module_pct	C10 with-merges の複数 module の割合 %	ssr@bc665168	57.1	60.0	explained	10 件中 6 件（9 件のうち 5 件 + integrate wu/sync の 1 件）。B0..main では 14 件中 8 件・57.1 で H と一致
+check_cold	cargo check --workspace の cold の wall 中央値 s	-	53.90	55.75	timing	1 回（load1 2.75）。H の値の 1.034 倍。H の値は G の中央値の写し。G の tree（crates の tree が件名 integrate wu/close (phase close) と同じ）と HEAD の差は R1〜R6 の integrate（crates 95 file +4822 −1548、scripts 15 file +436 −115、web・Cargo 0）
+check_warm_s1	cargo check の warm S1（const の probe）の wall 中央値 s	-	43.08	42.90	timing	1 回（load1 3.86、待ち 70 s、prep 0.4 s）。H の値の 0.996 倍。H は HEAD と source が同じ tree で測った
+check_warm_s2	cargo check の warm S2 の wall 中央値 s	-	14.76	15.65	timing	1 回（load1 2.93、prep 43.8 s）。H の値の 1.060 倍
+test_build_cold	cargo nextest run --workspace --no-run の cold の wall 中央値 s	-	147.03	154.41	timing	1 回（load1 2.56）。H の値の 1.050 倍。H の値は G の中央値の写し。G の tree（crates の tree が件名 integrate wu/close (phase close) と同じ）と HEAD の差は R1〜R6 の integrate（crates 95 file +4822 −1548、scripts 15 file +436 −115、web・Cargo 0）
+test_build_warm_s1	test build の warm S1 の wall 中央値 s	-	138.10	140.33	timing	1 回（load1 3.71・load5 8.11、待ち 110 s、prep 3.0 s）。H の値の 1.016 倍。H の値は G の中央値の写し。G の tree（crates の tree が件名 integrate wu/close (phase close) と同じ）と HEAD の差は R1〜R6 の integrate（crates 95 file +4822 −1548、scripts 15 file +436 −115、web・Cargo 0）
+test_build_warm_s2	test build の warm S2 の wall 中央値 s	-	81.60	82.30	timing	1 回（load1 3.81・load5 11.83、待ち 120 s、prep 130.2 s）。H の値の 1.009 倍。H の値は G の中央値の写し。G の tree（crates の tree が件名 integrate wu/close (phase close) と同じ）と HEAD の差は R1〜R6 の integrate（crates 95 file +4822 −1548、scripts 15 file +436 −115、web・Cargo 0）
+health_s1	repo-health S1（const の probe、--head worktree）の wall 中央値 s	head	98.74	95.84	timing	1 回（load1 3.72、待ち 60 s）。H の値の 0.971 倍、A（86.56）の 1.107 倍。findings 698・new 3・worsened 1 で H と同じ
+health_s2	repo-health S2 の wall 中央値 s	head	100.68	90.92	timing	1 回（load1 3.96、待ち 0 s）。H の値の 0.903 倍、A（81.92）の 1.110 倍。findings 699・new 4・worsened 2 で H と同じ
+test_affected_s1	bash scripts/dev/test-affected.sh S1（comment の probe）の wall 中央値 s	-	906.03	-	timing	測っていない（H の規則: test-affected の時間は測り直さない。1 回で約 15 分）。H の値は G の中央値の写し。G の tree（crates の tree が件名 integrate wu/close (phase close) と同じ）と HEAD の差は R1〜R6 の integrate（crates 95 file +4822 −1548、scripts 15 file +436 −115、web・Cargo 0）
+test_affected_s2	test-affected S2 の wall 中央値 s	-	707.76	-	timing	測っていない（同上。1 回で約 12 分）。H の値は G の中央値の写し。G の tree（crates の tree が件名 integrate wu/close (phase close) と同じ）と HEAD の差は R1〜R6 の integrate（crates 95 file +4822 −1548、scripts 15 file +436 −115、web・Cargo 0）

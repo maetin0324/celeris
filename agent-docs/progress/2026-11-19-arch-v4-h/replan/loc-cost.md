@@ -76,7 +76,7 @@ B0 は H の loc-cost.tsv の before、H の measure は同じ TSV の after（=
 ## 3. (6) LoC の測定（ADR 2026-11-16-reduction-goal-delivery、分類規則は B0 に固定）
 
 `git show bc665168:scripts/dev/source-size-report.py` と `.toml` を `$TMPDIR` に出し、B0・PA・HEAD に `--exclusive-classes --rev <rev> --format json` で当てた。
-3 つの JSON の `config_sha256` は同じ（`a0d5eca1…`）。B0 と PA の値は H の loc-cost.tsv の before と after に一致した。
+3 つの JSON の `config_sha256` は同じ値だった（同じ規則）。B0 と PA の値は H の loc-cost.tsv の before と after に一致した。
 
 ## 4. (5) health と warm check の測り直し（G の rules.md の手順）
 
@@ -85,7 +85,7 @@ B0 は H の loc-cost.tsv の before、H の measure は同じ TSV の after（=
   waitload（開始時の 1 分 load average が 4 以下になるまで待つ）を通した。6 つの組とも 4 以下で始まり、待ちは 0 s、valid=no の回は無い。
 - health の `--base` は HEAD（G は `AFTER_REV=$H` で、測った branch の HEAD。同じ意味）。`--head worktree` で、測っている間 repo の中に未追跡の file は無かった
   （TSV と md は測り終えてから書いた）。warm check は各回の前に `git checkout -- <file>` → 計らない check（prep 14.6〜44.3 s、exit 0）→ const の probe。
-- build-check.sh は G の `AFTER_CRATES_TREE` と HEAD の `crates/` の tree が違うと 1 行を出す（`src_tree b8e70bad… != a4f737a0…`）。R1〜R6 が crates/ を変えたためで、
+- build-check.sh は G の `AFTER_CRATES_TREE` と HEAD の `crates/` の tree が違うと `src_tree … != AFTER_CRATES_TREE …` の 1 行を出す（S1・S2 で各 1 回出た）。R1〜R6 が crates/ を変えたためで、
   測定には影響しない。
 - 測った時刻: health 2026-11-20T10:21:57Z〜10:31:54Z、warm check 10:32:03Z〜10:38:22Z。
 

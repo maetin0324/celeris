@@ -85,7 +85,7 @@ task-api・task-dispatch・task-worker と web の typecheck+unit）→ exit 0�
 - repo-health: `verdict=pass`、`fail_grade=0`、`new=0`、`worsened=0`。`repo_health_gate: all checks passed`。
 - nextest: `6158 tests run: 6158 passed (20 slow), 21 skipped`。
 - web: `Test Files 101 passed (101)`、`Tests 705 passed (705)`。
-- test-affected の中の repo-health の base は `git merge-base HEAD main`で、WU の base ではない。
+- test-affected の中の repo-health の base は `git merge-base HEAD main` で、WU の base ではない。
 - 最後に scratch の一時 dir の `rm` が `Permission denied` を出したが、exit は 0 で、試験の結果とは関係しない。
 
 ## 5. 前回の run の check の不合格と直し方

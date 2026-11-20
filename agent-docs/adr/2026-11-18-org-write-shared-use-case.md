@@ -187,14 +187,18 @@ A の baseline §7 の command を同じ規則で before（`git merge-base HEAD 
 - 既存の `Applied` の形（ADR 2026-10-09 D5: 共有の操作が `Option<&OperationAudit>` を受け、`Applied::Direct`・`Applied::Audited` を返す）は、
   下の一覧の操作に残る。新しい操作をこの形で足さない。移すまで 2 つの形が並存するので、撤去の条件・期限・責任者を下に書く（変更の規約 7）。
 
-### `Applied` の形を残す file（この付記を書いた時点の HEAD。`usecase` の前）
+### `Applied` の形を残す file（2026-11-20、アーキv4 H R5 の後の HEAD に合わせた）
 
-WorkUnit の objective が指定した command:
+この表は初め、この付記を書いた時点の HEAD（`usecase` の前）で書いた。その後に形を移した file の行は表から消し、下の「移した file」に書いた。
+2026-11-20 に H R5（task 01M7VJY8NZ5G84ACBNQTPVV3R4）の WorkUnit `after` が、`git grep` の出力と H の補助の awk
+（`agent-docs/progress/2026-11-19-arch-v4-h-r5/measure.sh files applied_functions HEAD`）で表を今の関数に合わせた。
+
+WorkUnit の objective が指定した command（狭い数え）:
 
     git grep -l 'Option<&OperationAudit>' crates/task-api/src
 
-→ 14 file。`crates/task-api/src/cos/operations.rs` は型の定義側（`Applied`・`OperationAudit`・`audited` と、自身も `Option<&OperationAudit>` を受ける
-`file_op` の定義）で、操作の側は 13 file。
+→ 11 file（この付記を書いた時点は 14）。`crates/task-api/src/cos/operations.rs` は型の定義側（`Applied`・`OperationAudit`・`audited` と、
+自身も `Option<&OperationAudit>` を受ける `file_op` の定義）で、操作の側は 10 file。
 
 | file | `Option<&OperationAudit>` を受ける関数 |
 |---|---|
@@ -207,29 +211,33 @@ WorkUnit の objective が指定した command:
 | `crates/task-api/src/handlers/task_actions.rs` | `retry_op`・`patch_task_op`・`create_comment_op`・`reopen_op`・`rereview_op` |
 | `crates/task-api/src/handlers/tasks.rs` | `create_task_op`・`create_task_linked_op` |
 | `crates/task-api/src/integrate_task.rs` | `integrate_task_op` |
-| `crates/task-api/src/knowledge.rs` | `accept_op`・`reject_op`・`put_page_op`（`put_page_op` は下の完全修飾の書き方。2026-11-19 に子 H が子 F の後の関数に合わせた） |
-| `crates/task-api/src/lifecycle.rs` | `task_pause_op`（2026-11-19 に子 H が子 F の後の関数に合わせた） |
 | `crates/task-api/src/model_catalog.rs` | `put_override_op`・`delete_override_op` |
 | `crates/task-api/src/repos.rs` | `create_repo_op`・`patch_repo_op`・`delete_repo_op` |
-| `crates/task-api/src/skills.rs` | `put_skill_op`・`delete_skill_op` |
 
 この command は完全修飾の `Option<&crate::cos::operations::OperationAudit>` と、lifetime 付きの型の別名 `Option<&'a OperationAudit>` を拾わない。
-同じ形の file をすべて数える command（A と違う数え方なので両方の値を書く）:
+同じ形の file をすべて数える command（広い数え。A と違う数え方なので両方の値を書く）:
 
     git grep -lE "Option<&('[a-z_]+ )?(crate::cos::operations::)?OperationAudit>" crates/task-api/src
 
-→ 19 file（上の 14 と次の 5）。`git grep -lE '\bApplied\b' crates/task-api/src` も同じ 19 file を返す。
+→ 15 file（上の 11 と次の 4。この付記を書いた時点は 19）。`git grep -lE '\bApplied\b' crates/task-api/src` も同じ 15 file を返す。
 
 | file | 関数 |
 |---|---|
 | `crates/task-api/src/cron_jobs.rs` | `type Audit<'a> = Option<&'a OperationAudit>` を受ける `create_job_op`・`update_job_op`・`delete_job_op`・`pause_job_op`・`resume_job_op`・`run_job_op` と補助の `reject_with`・`resolve_for` |
 | `crates/task-api/src/execution.rs` | `execution_plan_adopt_op`・`tree_adopt_op`・`phase_gate_op`・`decompose_op` |
 | `crates/task-api/src/handlers/clusters.rs` | `put_local_settings_op`・`put_cluster_settings_op` |
-| `crates/task-api/src/handlers/org.rs` | `org_commit`（D の `usecase` が消した。2026-11-19 の main に無く、広い command に当たらない） |
 | `crates/task-api/src/inbox_notifications.rs` | `notice_read_op`・`notice_read_all_op` |
 
-`usecase` の後の予想（約束ではない。`metrics` か `close` が測る）: 狭い command は 14 のまま（`handlers/org.rs` はもともと入らない。`skills.rs` は
-`put_skill_op`・`delete_skill_op` が残る）、広い command は 19 → 18。
+移した file（表から消した行）:
+
+- `crates/task-api/src/handlers/org.rs` の `org_commit`: D の WorkUnit `usecase` が消した（広い数え 19 → 18。狭い数えにはもともと入らない）。
+- `crates/task-api/src/knowledge.rs` の `accept_op`・`reject_op`・`put_page_op`、`crates/task-api/src/lifecycle.rs` の `task_pause_op`、
+  `crates/task-api/src/skills.rs` の `put_skill_op`・`delete_skill_op`: H R5 が共有の plan と効果に分け、CoS の包みを `cos/ops/decisions.rs`・`tasks.rs`・
+  `admin.rs` に置いた（[ADR 2026-11-20 applied-shape-migration](2026-11-20-applied-shape-migration.md)）。広い数え 18 → 15、狭い数え 14 → 11、
+  補助の関数の数え 55 → 49。今の名前は `plan_page_put`・`page_put_effect`・`plan_accept`・`accept_effect`・`plan_reject`・`reject_effect`・`plan_task_pause`・
+  `plan_skill_put`・`skill_put_effect`・`plan_skill_delete`・`skill_delete_effect` で、どれも `OperationAudit` を受けず `Applied` を返さない。
+  CoS の包みは、下の撤去の条件の既定（`apply_checked`）ではなく、移す前と同じ監査の意味（`knowledge.accept`・`knowledge.reject`・`task.pause`・`task.resume` は
+  `apply`、`knowledge.page_put`・`skill.put`・`skill.delete` は `external`）を残した。拒否理由の文言と応答を変えないため（その ADR の D3）。
 
 ### 撤去の条件
 

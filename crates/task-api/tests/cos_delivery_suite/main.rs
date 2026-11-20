@@ -1,6 +1,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod applied_contract;
 mod attachment_flag_contract;
 mod cos_operations_domains;
 mod cos_ops_admin_config;

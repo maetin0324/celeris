@@ -1,6 +1,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod attach_conn_contract;
 mod chat_attachments;
 mod cos_answer_first_defer;
 mod cos_auth;

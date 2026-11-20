@@ -59,7 +59,13 @@ async fn setup(max_file_bytes: u64) -> (TestEnv, String) {
     )
 }
 
-async fn upload(app: &axum::Router, thread: &str, key: &str, name: &str, bytes: &[u8]) -> Resp {
+pub(crate) async fn upload(
+    app: &axum::Router,
+    thread: &str,
+    key: &str,
+    name: &str,
+    bytes: &[u8],
+) -> Resp {
     send(
         app,
         multipart(

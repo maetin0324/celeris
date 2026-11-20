@@ -14,7 +14,7 @@ pub mod operations;
 pub(crate) mod ops;
 pub mod override_op;
 pub mod review;
-pub mod triage_view;
+pub(crate) mod triage_view;
 
 use crate::chat::chat_problem;
 use axum::Extension;

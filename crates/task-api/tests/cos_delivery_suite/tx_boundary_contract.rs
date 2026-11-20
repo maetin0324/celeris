@@ -102,7 +102,7 @@ const MCP_TOKEN: &str = "tx-boundary-mcp-token";
 const MCP_CLIENT: &str = "01MCPCLIENTA";
 /// lock を持つ間の要求が早く諦めるための API の busy_timeout（合否は lock の有無で決まり、この値に依らない）。
 const SHORT_BUSY: Duration = Duration::from_millis(300);
-const INBOX: &str = "/api/v1/knowledge/inbox";
+pub(crate) const INBOX: &str = "/api/v1/knowledge/inbox";
 /// task の行に属する event の数（CoS の監査 event は数えない）。
 const TASK_EVENTS: &str = "SELECT COUNT(*) FROM events WHERE task_id IN (SELECT id FROM tasks)";
 
@@ -149,7 +149,7 @@ fn admin() -> String {
     format!("Bearer {TOKEN}")
 }
 
-async fn upload(app: &axum::Router, thread: &str, upload_id: &str) -> String {
+pub(crate) async fn upload(app: &axum::Router, thread: &str, upload_id: &str) -> String {
     let mut body = Vec::new();
     body.extend_from_slice(b"--boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"manual.pdf\"\r\nContent-Type: application/pdf\r\n\r\n");
     body.extend_from_slice(PDF);
@@ -171,7 +171,7 @@ async fn upload(app: &axum::Router, thread: &str, upload_id: &str) -> String {
         .to_owned()
 }
 
-fn record_body(attachment_ids: &[&str]) -> Value {
+pub(crate) fn record_body(attachment_ids: &[&str]) -> Value {
     json!({
         "title": "fern03 の使い方",
         "scope": "environment",
@@ -182,7 +182,7 @@ fn record_body(attachment_ids: &[&str]) -> Value {
     })
 }
 
-fn inbox_files(env: &TestEnv) -> Vec<String> {
+pub(crate) fn inbox_files(env: &TestEnv) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(env.knowledge_root.join("_inbox"))
         .map(|entries| {
             entries
@@ -197,7 +197,7 @@ fn inbox_files(env: &TestEnv) -> Vec<String> {
 }
 
 /// `knowledge_inbox` の参照行 `(attachment_id, owner_id, created_at)`（attachment_id 順）。
-fn inbox_refs(env: &TestEnv) -> Vec<(String, String, String)> {
+pub(crate) fn inbox_refs(env: &TestEnv) -> Vec<(String, String, String)> {
     let conn = db(env);
     let mut stmt = conn
         .prepare(
@@ -211,7 +211,7 @@ fn inbox_refs(env: &TestEnv) -> Vec<(String, String, String)> {
         .expect("rows")
 }
 
-fn expires_at(env: &TestEnv, attachment: &str) -> Option<String> {
+pub(crate) fn expires_at(env: &TestEnv, attachment: &str) -> Option<String> {
     db(env)
         .query_row(
             "SELECT expires_at FROM chat_attachments WHERE id=?1",

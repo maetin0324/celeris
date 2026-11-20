@@ -374,7 +374,7 @@ pub struct ApiV1Schema {
     pub cos_review_report_result: crate::cos::review::ReviewReportResult,
     // ---- ADR 2026-10-06-cos-inbox-triage: 受信箱の一次対応（resolve・override） ----
     /// `GET /cos/inbox` の 1 件（`cos_inbox_items` 行）。
-    pub cos_inbox_item: crate::cos::triage_view::CosInboxItem,
+    pub cos_inbox_item: task_core::cos_inbox::CosInboxItem,
     /// `GET /cos/inbox` の応答。
     pub cos_inbox_list: crate::cos::inbox::CosInboxList,
     /// `POST /cos/inbox/{i}/resolve` の本文（answer / observe / escalate）。

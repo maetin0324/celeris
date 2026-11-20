@@ -651,7 +651,8 @@ async fn put_page(
 // ---------------------------------------------------------------------------
 
 /// 候補に pin された添付の出所（ADR 2026-10-05 cos-chat-home D4）を store の読み取りの接続で読む
-/// （ADR 2026-11-18 knowledge-lifecycle-tx-boundary D2）。添付の保存が無効なら空。
+/// （ADR 2026-11-18 knowledge-lifecycle-tx-boundary D2）。添付の保存が無効（`ChatState::attachments_enabled` が
+/// 偽）なら空。
 fn candidate_provenance(
     store: &task_core::SqliteStore,
     attachments: bool,
@@ -693,7 +694,7 @@ async fn inbox(
 ) -> ApiResult {
     no_query(&raw)?;
     let root = root_of(&state)?;
-    let attachments = state.chat.attachment_db_path.is_some();
+    let attachments = state.chat.attachments_enabled();
     let view = state
         .blocking(move |store| {
             let initialized = ops_kb::exists(&root);
@@ -732,7 +733,7 @@ async fn record(
     require_admin(&state, &headers)?;
     let request: KnowledgeRecordBody = read_json(body, false).await?;
     let root = root_of(&state)?;
-    let attachment_storage = state.chat.attachment_db_path.is_some();
+    let attachment_storage = state.chat.attachments_enabled();
     let result = state
         .blocking(move |store| {
             let recorded = record_candidate(store, &root, attachment_storage, request)?;
@@ -808,9 +809,9 @@ fn attachments_unavailable() -> ApiProblem {
 /// knowledge-lifecycle-tx-boundary D3）。検査（KB・path・添付の保存）の後、候補を `record_in` で
 /// `_inbox/<id>.md` に書いて git commit し、結果を返す。SQLite は読むだけ（案件の一覧）。
 /// 添付の pin（[`pin_candidate_tx`]）と監査は呼び手が自分の transaction で書き、失敗したら
-/// [`discard_candidate`] で候補を消す。`attachment_storage` は添付の保存の有無で、無いのに
-/// `attachment_ids` があれば 503 `attachments_unavailable`（HTTP だけが渡す。CoS は監査の
-/// transaction の検査に任せて `true` を渡す）。
+/// [`discard_candidate`] で候補を消す。`attachment_storage` は添付の保存の有無（HTTP は
+/// `ChatState::attachments_enabled`）で、無いのに `attachment_ids` があれば 503
+/// `attachments_unavailable`（HTTP だけが渡す。CoS は監査の transaction の検査に任せて `true` を渡す）。
 pub(crate) fn record_candidate(
     store: &task_core::SqliteStore,
     root: &std::path::Path,
@@ -879,7 +880,7 @@ async fn inbox_detail(
 ) -> ApiResult {
     no_query(&raw)?;
     let root = root_of(&state)?;
-    let attachments = state.chat.attachment_db_path.is_some();
+    let attachments = state.chat.attachments_enabled();
     let view = state
         .blocking(move |store| {
             // id の境界（`/`・`..` は 403。accept / reject と同じ）。

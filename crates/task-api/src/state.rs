@@ -94,7 +94,8 @@ pub(crate) struct Inner {
     /// `None`。DB の絶対パス自体は `/health` に出さない（無認証のため。認証済みの `/config` が既に
     /// 返している）。
     pub(crate) db_mount: Option<task_core::mountinfo::MountInfo>,
-    /// 読み取り専用の view（`task_ops::routing_stage`）が別接続で開く DB の path。
+    /// store を開いた DB の path。読み取り専用の view（`task_ops::routing_stage`）が別接続で開き、chat 添付の
+    /// `ChatAttachmentStore::open` にも渡す（ADR 2026-11-19-chat-attachment-store-connection D1）。
     pub(crate) db_path: std::path::PathBuf,
     pub(crate) view: ViewContext,
     pub(crate) config_view: ConfigView,
@@ -175,10 +176,6 @@ impl ApiState {
         let db_mount = detect_db_mount(&settings.db_path);
         let (shutdown, _) = watch::channel(false);
         let browser = Arc::new(settings.browser.clone());
-        let chat = crate::chat::ChatState {
-            attachment_db_path: Some(settings.db_path.clone()),
-            ..Default::default()
-        };
         let inner = Inner {
             store: Arc::new(store),
             token_digests: settings
@@ -243,7 +240,7 @@ impl ApiState {
             live_sessions: None,
             script_generations: None,
             project_controller: Arc::default(),
-            chat: Arc::new(chat),
+            chat: Arc::new(crate::chat::ChatState::default()),
             live_grants: Arc::new(Mutex::new(HashMap::new())),
             clock: system_clock(),
         })

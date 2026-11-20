@@ -283,3 +283,20 @@ script と設定は base の commit から `git show <base>:<path>` で取り出
   不変条件「既に解決済みなら Conflict にする」の根拠にこの path を挙げ、消すと `arch-map.missing_invariant` が fail になる。
   この file には接続も SQL も持たない resolve の判定 `terminal_conflict`（`cos/inbox.rs` から移した 409 の判定）だけを置く。
   §1.6 の撤去（`open`・`Connection::open`・`busy_timeout`・4 つの読み取りの関数・SQL の定数・`item_row`）はそのまま行った。
+
+## 付記 2026-11-20（WorkUnit `flag`）: D4 の実装
+
+- 消した物: `crates/task-api/src/chat/mod.rs` の `ChatState.attachment_db_path`（欄・doc comment・`Default` の行）と、
+  `crates/task-api/src/state.rs` の `ApiState::new` の `attachment_db_path: Some(settings.db_path.clone())` の代入。
+  `ApiState::new` は `ChatState::default()` を入れる。同じ DB を指す値は `Inner.db_path` の 1 つになった。
+- 置き換えた判定: `ChatState::attachments_enabled()`（`pub(crate)`、`attachment_data_dir.is_some()`）を 1 つ置き、
+  `crates/task-api/src/knowledge.rs` の `inbox`・`record`・`inbox_detail` の 3 か所の `state.chat.attachment_db_path.is_some()` を
+  これに替えた。`chat/attachments.rs` は dir の値そのものが要るので、今どおり `attachment_data_dir` の `Option` を読んで 503 を返す
+  （判定の条件は同じ）。
+- 変えなかった物: `record` の `write_tx`（`pin_candidate_tx`）と `discard_candidate` の境界、CoS の `knowledge.record` が
+  `record_candidate` に渡す `true`。knowledge.rs に `Connection::open`・`TransactionBehavior`・`busy_timeout` を足していない。
+  API・CLI・DB の契約は変えていない。本番の daemon は `with_chat_wiring` が `attachment_data_dir` を必ず入れるので応答は変わらない。
+- 試験: §5 の 2 件を `crates/task-api/tests/cos_delivery_suite/attachment_flag_contract.rs` に置いた。env は `admin_env` の
+  state（`with_chat_attachments` を呼ばない）と、その clone に `with_chat_attachments` を足した state の 2 つの router で、
+  同じ DB・同じ KB を読む。upload・record の body・`_inbox` と参照行の読み取りは F の `tx_boundary_contract.rs` の helper を
+  `pub(crate)` にして使った（試験の中身は変えていない）。既存の試験で `env_with_attachments` へ替える必要があった物は無かった。

@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use axum::http::Request;
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
 use task_ops::view::ViewContext;
 use tower::ServiceExt;
 

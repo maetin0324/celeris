@@ -1014,3 +1014,310 @@ async fn implicit_accounts_are_listed_and_patchable_by_source_and_refused_otherw
     assert_eq!(resp.status, 200, "{}", resp.text());
     assert_eq!(resp.json()["max_runs_source"], json!("default"));
 }
+
+// ---- アーキv4 H R2 contract: handlers::accounts の処理を SCC の外へ移す前に、HTTP の契約を今の値で固定する ----
+
+const MCP_TOKEN: &str = "celeris-mcp.0123456789abcdef";
+
+/// 守る不変条件: token を設定した構成で、account の管理系 4 路（作成・削除・確認・上限）は bearer の無い
+/// 呼び出しと未知の bearer を 401 `unauthorized`、MCP 専用 token（読み取り専用）と `Origin` 付きの呼び出しを
+/// 403（`forbidden`・`origin_forbidden`）で拒み、ディレクトリも daemon も触らない。
+/// 既存の試験で検出できない理由: 既存の `management_routes_all_require_a_token` は token を設定しない構成
+/// （`require_admin` が Unauthenticated を 401 にする経路）だけを見る。token を設定した構成の未提示・未知の
+/// bearer・MCP token・Origin の拒否は account の路では試していないので、handler の入口（認可の呼び出し）を
+/// 移したときに抜けても既存の試験は通る。
+#[tokio::test]
+async fn management_routes_refuse_missing_unknown_mcp_and_origin_callers() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path().join("claude-accounts");
+    std::fs::create_dir_all(root.join("a")).unwrap();
+    let (admin_tx, mut admin_rx) = mpsc::channel::<AdminRequest>(4);
+    tokio::spawn(async move {
+        if admin_rx.recv().await.is_some() {
+            panic!("a refused caller must not reach the admin channel");
+        }
+    });
+    let env = TestEnv::with(EnvOptions {
+        token: Some(TOKEN.into()),
+        mcp_token: Some(MCP_TOKEN.into()),
+        accounts_root: Some(root.clone()),
+        max_runs_per_account: 2,
+        admin_tx: Some(admin_tx),
+        ..Default::default()
+    });
+    let app = env.router();
+    let unknown = "Bearer not-the-token".to_string();
+    let mcp = format!("Bearer {MCP_TOKEN}");
+    let admin = auth();
+    let callers = vec![
+        (vec![], 401, "unauthorized"),
+        (
+            vec![("authorization", unknown.as_str())],
+            401,
+            "unauthorized",
+        ),
+        (
+            vec![
+                ("authorization", mcp.as_str()),
+                ("x-celeris-mcp-client", "01MCPCLIENTA"),
+            ],
+            403,
+            "forbidden",
+        ),
+        (
+            vec![
+                ("authorization", admin.as_str()),
+                ("origin", "https://evil.example"),
+            ],
+            403,
+            "origin_forbidden",
+        ),
+    ];
+    for (headers, status, code) in &callers {
+        let requests = [
+            post_json_with(
+                "/api/v1/llm/sources/claude_oauth/accounts",
+                &json!({"id": "b"}),
+                headers,
+            ),
+            delete_with("/api/v1/llm/sources/claude_oauth/accounts/a", headers),
+            post_json_with(
+                "/api/v1/llm/sources/claude_oauth/accounts/a/check",
+                &json!({}),
+                headers,
+            ),
+            patch_json_with(
+                "/api/v1/llm/sources/claude_oauth/accounts/a",
+                &json!({"max_runs": 2}),
+                headers,
+            ),
+        ];
+        for request in requests {
+            let path = request.uri().path().to_string();
+            let method = request.method().clone();
+            let resp = send(&app, request).await;
+            assert_eq!(
+                resp.status.as_u16(),
+                *status,
+                "{method} {path}: {}",
+                resp.text()
+            );
+            assert_problem(&resp, *status, code);
+        }
+    }
+    assert!(!root.join("b").exists());
+    assert!(root.join("a").is_dir());
+}
+
+/// 守る不変条件: HTTP の成功の応答の形。作成は 201 と `Location` と `AccountView` の全欄（欄の集合と値）、
+/// 削除は 200 と空の object `{}`（CoS の `{id, adapter, removed}` とは違う）、確認は 200 と
+/// `{result, checked_at, detail}`（観測が無ければ `usage` の欄は出ない）。
+/// 既存の試験で検出できない理由: 既存の作成の試験は `source_id`・`account_id`・`logged_in`・`in_use` と
+/// `adapter`・`id` が無いことだけを見て、残りの欄（`dir`・`stats`・上限の 3 欄・`implicit`・`models` など）を
+/// 見ない。削除の試験は status とファイルの移動だけで本文を見ず、確認の成功の応答はどの試験も見ていない。
+/// 応答を組み立てる処理を CoS と共有の module へ移すと、HTTP の本文が CoS の形に変わっても既存の試験は通る。
+#[tokio::test]
+async fn management_success_responses_keep_their_shape() {
+    use task_api::AccountCheckOutcome;
+    use task_core::AccountCheckResult;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path().join("claude-accounts");
+    std::fs::create_dir_all(&root).unwrap();
+    let (admin_tx, mut admin_rx) = mpsc::channel::<AdminRequest>(8);
+    tokio::spawn(async move {
+        while let Some(req) = admin_rx.recv().await {
+            match req {
+                AdminRequest::AccountCheck { reply, .. } => {
+                    let _ = reply.send(Ok(AccountCheckOutcome {
+                        result: AccountCheckResult::Ok,
+                        detail: Some("fine".into()),
+                        observation: None,
+                    }));
+                }
+                AdminRequest::AccountRemove { reply, .. } => {
+                    let _ = reply.send(Ok(()));
+                }
+                AdminRequest::AccountLimitSet { reply, .. } => {
+                    let _ = reply.send(Ok(()));
+                }
+                _ => {}
+            }
+        }
+    });
+    let env = TestEnv::with(EnvOptions {
+        token: Some(TOKEN.into()),
+        accounts_root: Some(root.clone()),
+        max_runs_per_account: 2,
+        admin_tx: Some(admin_tx),
+        ..Default::default()
+    });
+    let app = env.router();
+    let auth = auth();
+    let headers = [("authorization", auth.as_str())];
+
+    let resp = send(
+        &app,
+        post_json_with(
+            "/api/v1/llm/sources/claude_oauth/accounts",
+            &json!({"id": "acct-c"}),
+            &headers,
+        ),
+    )
+    .await;
+    assert_eq!(resp.status, 201, "{}", resp.text());
+    assert_eq!(
+        resp.header("location"),
+        Some("/api/v1/llm/sources/claude_oauth/accounts/acct-c")
+    );
+    assert_eq!(
+        resp.json(),
+        json!({
+            "source_id": "claude_oauth",
+            "account_id": "acct-c",
+            "dir": root.join("acct-c").display().to_string(),
+            "logged_in": false,
+            "in_use": 0,
+            "usage": null,
+            "score": null,
+            "excluded_reason": null,
+            "cooldown": null,
+            "last_check": null,
+            "login_pending": false,
+            "stats": {"runs": 0, "done": 0, "error": 0, "input_tokens": 0, "output_tokens": 0},
+            "max_runs": null,
+            "effective_max_runs": 2,
+            "max_runs_source": "default",
+            "implicit": false,
+            "models": [],
+        })
+    );
+
+    let resp = send(
+        &app,
+        post_json_with(
+            "/api/v1/llm/sources/claude_oauth/accounts/acct-c/check",
+            &json!({}),
+            &headers,
+        ),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let v = resp.json();
+    let mut keys: Vec<&str> = v
+        .as_object()
+        .expect("object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(keys, vec!["checked_at", "detail", "result"], "{v}");
+    assert_eq!(v["result"], json!("ok"));
+    assert_eq!(v["detail"], json!("fine"));
+    assert!(
+        time::OffsetDateTime::parse(
+            v["checked_at"].as_str().expect("checked_at"),
+            &time::format_description::well_known::Rfc3339
+        )
+        .is_ok(),
+        "{v}"
+    );
+
+    let resp = send(
+        &app,
+        delete_with("/api/v1/llm/sources/claude_oauth/accounts/acct-c", &headers),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(resp.json(), json!({}));
+}
+
+/// 守る不変条件: 暗黙 source に source と違う account 名を付けた削除・確認は 404 `account_not_found`（detail は
+/// account 名）で、409 `implicit_account` にはならない（`resolve_pool_account` の分岐の順）。daemon へは届かない。
+/// 既存の試験で検出できない理由: 既存の `implicit_accounts_are_listed_and_patchable_by_source_and_refused_otherwise`
+/// は名前の不一致を PATCH（上限）でしか試さず、削除・確認は source と同じ名前（409）だけを見る。
+/// `resolve_pool_account` を移すときに分岐の順が変わると、削除・確認の不一致が 409 になっても既存の試験は通る。
+#[tokio::test]
+async fn implicit_source_with_another_account_name_is_not_found_for_delete_and_check() {
+    let (admin_tx, mut admin_rx) = mpsc::channel::<AdminRequest>(4);
+    tokio::spawn(async move {
+        if admin_rx.recv().await.is_some() {
+            panic!("an unknown implicit account must not reach the admin channel");
+        }
+    });
+    let env = TestEnv::with(EnvOptions {
+        token: Some(TOKEN.into()),
+        max_runs_per_account: 2,
+        admin_tx: Some(admin_tx),
+        ..Default::default()
+    });
+    let mut snap = snapshot(1);
+    snap.implicit_accounts = vec![task_ops::daemon::ImplicitAccountLive {
+        source: "openai_compatible:qwen".into(),
+        models: vec!["qwen3.8-27b".into()],
+        in_use: 0,
+    }];
+    env.daemon_tx.send(Some(snap)).unwrap();
+    let app = env.router();
+    let auth = auth();
+    let headers = [("authorization", auth.as_str())];
+    let other = "/api/v1/llm/sources/openai_compatible:qwen/accounts/other";
+
+    let resp = send(&app, delete_with(other, &headers)).await;
+    let problem = assert_problem(&resp, 404, "account_not_found");
+    assert_eq!(problem["detail"], json!("account not found: other"));
+    let resp = send(
+        &app,
+        post_json_with(&format!("{other}/check"), &json!({}), &headers),
+    )
+    .await;
+    let problem = assert_problem(&resp, 404, "account_not_found");
+    assert_eq!(problem["detail"], json!("account not found: other"));
+}
+
+/// 守る不変条件: HTTP の作成の本文に未知の欄があれば 400 `bad_request`（`invalid JSON body`。CoS の
+/// `account.create` は同じ本文を 422 `validation` で拒む）で、ディレクトリを作らない。上限の本文の未知の欄も
+/// 400 `bad_request`（`only max_runs can be patched`）。
+/// 既存の試験で検出できない理由: 既存の作成の試験は不正な id と重複だけを見て、本文の読み取りの失敗を
+/// 試していない。上限の試験は範囲外の値だけを見る。本文を読む道具（`read_json`）を別の module へ移したときに
+/// 拒否の status や code が変わっても、既存の試験は通る。
+#[tokio::test]
+async fn unknown_body_fields_are_bad_requests() {
+    let (env, _tmp, root) = env_with_accounts_root();
+    std::fs::create_dir_all(root.join("a")).unwrap();
+    let app = env.router();
+    let auth = auth();
+    let headers = [("authorization", auth.as_str())];
+
+    let resp = send(
+        &app,
+        post_json_with(
+            "/api/v1/llm/sources/claude_oauth/accounts",
+            &json!({"id": "y", "adapter": "codex"}),
+            &headers,
+        ),
+    )
+    .await;
+    let problem = assert_problem(&resp, 400, "bad_request");
+    assert!(
+        problem["detail"]
+            .as_str()
+            .is_some_and(|d| d.starts_with("invalid JSON body:")),
+        "{problem}"
+    );
+    assert!(!root.join("y").exists());
+
+    let resp = send(
+        &app,
+        patch_json_with(
+            "/api/v1/llm/sources/claude_oauth/accounts/a",
+            &json!({"max_runs": 2, "note": "x"}),
+            &headers,
+        ),
+    )
+    .await;
+    let problem = assert_problem(&resp, 400, "bad_request");
+    assert_eq!(
+        problem["detail"],
+        json!("unknown field `note`; only max_runs can be patched")
+    );
+}

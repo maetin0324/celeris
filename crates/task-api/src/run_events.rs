@@ -5,7 +5,7 @@ use axum::extract::{RawQuery, State};
 use axum::http::StatusCode;
 use task_core::{Event, EventRow};
 
-use crate::handlers::{ApiResult, json_response};
+use crate::http_io::{ApiResult, json_response};
 use crate::problem::{ApiProblem, store_problem};
 use crate::query::{QueryParams, parse_task_id};
 use crate::state::ApiState;
@@ -21,7 +21,7 @@ pub(crate) fn routes() -> axum::Router<ApiState> {
 /// その run に紐づくイベントだけを `seq` 昇順で返す（`GET /tasks/{id}/events` の絞り込み版）。
 pub(crate) async fn run_events(
     State(state): State<ApiState>,
-    crate::handlers::Params((id, run_id)): crate::handlers::Params<(String, String)>,
+    crate::http_io::Params((id, run_id)): crate::http_io::Params<(String, String)>,
     RawQuery(raw): RawQuery,
 ) -> ApiResult {
     let query = QueryParams::parse(raw.as_deref(), &["after_seq", "limit"])?;

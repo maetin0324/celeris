@@ -1,0 +1,10 @@
+metric	scope	before	after	checker	note
+ta_scc_units	task-api の SCC（C2）	49	49	head	measure の metrics の ta_scc_units。49 → 49（差 0）。HTTP の道具への直の組を失った 29 単位は state → handlers（ControllerApiConfig）か cos → handlers を通って SCC に残る
+ta_scc_pairs	task-api の SCC の単位の組（C2）	261	230	head	measure の metrics の ta_scc_pairs。261 → 230（−31）: 消えた 31（<module> → handlers 29 は D1 の HTTP の道具の移動、notify → cos・releases → cos 2 は D3 の Effect の移動）・増えた 0
+ta_scc_lines	task-api の SCC の行の辺（C2）	622	538	head	measure の metrics の ta_scc_lines。622 → 538（−84）: 消えた 91（移動 90 = D1 67・D2 8・D3 15、削除 1 = D2 の limit_set の解決のまとめ）・増えた 7（use の分割で handlers に残した名前の行 5、cos/ops/admin.rs → middleware の require_active 2）
+handlers_to_cos_lines	git grep crate::cos::（C5、handlers/ と handlers.rs）	19	14	-	measure の metrics の handlers_to_cos_lines:grep。19 → 14（−5）: D3 の Effect・effect_result の移動 5（handlers/accounts.rs 2・reload.rs 1・system.rs 2。すべて移動）。12 → 9 file
+handlers_to_cos_lines	repo-health の辺（C2 の task-api の SCC、handlers→cos）	19	14	head	measure の metrics の handlers_to_cos_lines:head。19 → 14（−5、すべて移動。D3）。9 file。すべて crate::。残りは OperationAudit・Applied・request_hash の 13 行と cos::routes 1 行
+cos_to_handlers_lines	git grep crate::handlers（C5、cos/）	46	29	-	measure の metrics の cos_to_handlers_lines:grep_crate。46 → 29（−17）: D1 の HTTP の道具 12（移動）・D2 の account の crate:: 5（移動）。9 → 3 file
+cos_to_handlers_lines	git grep (crate|super(::super)*)::handlers（A の C5 の式）	50	29	-	measure の metrics の cos_to_handlers_lines:grep_c5。50 → 29（−21）: D1 12（移動）・D2 9（移動 8・削除 1）。crate:: 29・super:: 0
+cos_to_handlers_lines	repo-health の辺（C2 の task-api の SCC、cos→handlers）	50	29	head	measure の metrics の cos_to_handlers_lines:head。50 → 29（−21。移動 20・削除 1）。3 file（cos/ops/admin.rs 4・projects.rs 17・tasks.rs 8）。crate:: 29・super:: 0
+cos_to_handlers_super_lines	git grep super(::super)*::handlers（C5、cos/）	4	0	-	measure の metrics の cos_to_handlers_super_lines:grep。4 → 0（−4）: cos/ops/admin.rs の accounts の 4 行。移動 3（account.create の pool_adapter、account.delete・check の resolve_pool_account、limit_set の解決 1 行）・削除 1（limit_set の pool_adapter と is_implicit_source の 2 行を account_write::limit_adapter の 1 行にまとめた分）

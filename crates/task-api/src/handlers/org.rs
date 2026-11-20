@@ -15,7 +15,7 @@ use crate::problem::store_problem;
 use crate::state::ApiState;
 use crate::types::{OrgCreateBody, OrgList};
 
-use super::{ApiResult, Params, json_response, no_query, read_json};
+use crate::http_io::{ApiResult, Params, json_response, no_query, read_json};
 
 pub(super) async fn patch_browser_settings(
     State(state): State<ApiState>,

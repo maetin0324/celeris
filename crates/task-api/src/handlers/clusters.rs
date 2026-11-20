@@ -16,7 +16,8 @@ use crate::types::{
     LocalMachineView, LocalSetting, LocalSettingApply, LocalSettingsPutBody, ValidationError,
 };
 
-use super::{ApiResult, Params, json_response, no_query, read_json, rfc3339};
+use super::rfc3339;
+use crate::http_io::{ApiResult, Params, json_response, no_query, read_json};
 
 // ---- 23. GET /clusters ----
 
@@ -330,7 +331,7 @@ pub(super) async fn put_cluster_settings(
     require_admin(&state, &headers)?;
     require_known_cluster(&state, &id)?;
     let put: ClusterSettingsPutBody = read_json(body, false).await?;
-    let clusters = crate::handlers::cluster_ids(&state);
+    let clusters = state.cluster_ids();
     let view = state
         .blocking(move |store| put_cluster_settings_op(store, &clusters, &id, put, None)?.direct())
         .await?;

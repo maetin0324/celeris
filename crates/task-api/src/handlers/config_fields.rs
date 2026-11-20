@@ -11,7 +11,8 @@ use crate::problem::ApiProblem;
 use crate::state::ApiState;
 use crate::types::{ConfigEvent, ConfigEventList, ConfigPatchBody};
 
-use super::{ApiResult, json_response, no_query, read_json, rfc3339};
+use super::rfc3339;
+use crate::http_io::{ApiResult, json_response, no_query, read_json};
 
 /// 履歴の 1 回の応答の件数（新しい順）。
 const EVENTS_LIMIT: usize = 200;

@@ -8,7 +8,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use task_core::{RepoId, SqliteStore, TaskId, TaskRepoIntegrationState, TaskRepoIntegrationStatus};
 
-use crate::handlers::{ApiResult, Params, json_response, no_query, read_json};
+use crate::http_io::{ApiResult, Params, json_response, no_query, read_json};
 use crate::middleware::require_admin;
 use crate::problem::{ApiProblem, store_problem};
 use crate::query::{QueryParams, parse_task_id};

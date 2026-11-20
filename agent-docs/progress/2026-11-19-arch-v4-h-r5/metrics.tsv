@@ -1,0 +1,4 @@
+metric	scope	before	after	checker	note
+applied_wide	crates/task-api/src	18	-	d-wide	git grep -lE "Option<&('[a-z_]+ )?(crate::cos::operations::)?OperationAudit>" <rev> -- crates/task-api/src の file 数（measure.sh <rev>）。H の値 18（struct-store.tsv の after）と同じ。型の定義側 cos/operations.rs を含む。回帰条件: 18 を超えない
+applied_narrow	crates/task-api/src	14	-	d-narrow	git grep -l 'Option<&OperationAudit>' <rev> -- crates/task-api/src の file 数（measure.sh <rev>）。H の値 14 と同じ。広い数えとの差 4 は cron_jobs.rs・execution.rs・handlers/clusters.rs・inbox_notifications.rs
+applied_functions	crates/task-api/src	55	-	h-awk	補助。struct-store.md §6 の「# 補助: file ごとの関数」の awk で、広い数えの file ごとに Option<&…OperationAudit> か Audit<'_> を受ける関数（<path> <fn> を sort -u した行の数。file_op を含む）。H の値 55 と同じ。R5 の 6 関数（knowledge.rs の accept_op・reject_op・put_page_op、lifecycle.rs の task_pause_op、skills.rs の put_skill_op・delete_skill_op）を含む

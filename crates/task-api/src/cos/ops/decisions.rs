@@ -6,7 +6,7 @@ use super::super::operations::{dispatch as dispatch_operation, unprocessable};
 use crate::problem::ApiProblem;
 use axum::http::StatusCode;
 use serde_json::Value;
-use task_core::chat::CosOperation;
+use task_core::chat::{ChatError, CosOperation};
 use task_core::store::SqliteStore;
 
 /// Registered `(method, path, action)` operations.
@@ -98,13 +98,33 @@ pub(crate) fn dispatch(
                 .kb_root
                 .clone()
                 .map_err(|problem| audit.reject(store, "knowledge_page", path, problem))?;
-            let input = serde_json::from_value(body).map_err(decode)?;
-            audited(crate::knowledge::put_page_op(
+            let input: crate::knowledge::KnowledgePagePutBody =
+                serde_json::from_value(body).map_err(decode)?;
+            // plan の拒否は正規化の前の path で記録し、効果（git）は外部の効果として 1 回だけ走らせる。
+            let edit = crate::knowledge::plan_page_put(&root, &input)
+                .map_err(|problem| audit.reject(store, "knowledge_page", &input.path, problem))?;
+            audit.external(
                 store,
-                &root,
-                input,
-                Some(audit),
-            )?)
+                "knowledge_page",
+                &edit.path,
+                "knowledge.page_put",
+                time::OffsetDateTime::now_utc(),
+                || match crate::knowledge::page_put_effect(&root, &edit)? {
+                    Ok(result) => {
+                        tracing::info!(
+                            op = "knowledge_put",
+                            path = %result.path,
+                            unchanged = result.unchanged,
+                            cos = true,
+                            "knowledge page committed"
+                        );
+                        serde_json::to_value(&result)
+                            .map(Ok)
+                            .map_err(|e| ApiProblem::internal(format!("knowledge result: {e}")))
+                    }
+                    Err(refused) => Ok(Err(refused)),
+                },
+            )
         }
         "knowledge.accept" => {
             let raw_id = matched.id.unwrap_or_default();
@@ -112,14 +132,26 @@ pub(crate) fn dispatch(
                 .kb_root
                 .clone()
                 .map_err(|problem| audit.reject(store, "knowledge", &raw_id, problem))?;
-            let input = decode_optional(body).map_err(decode)?;
-            audited(crate::knowledge::accept_op(
-                store,
-                &root,
-                raw_id,
-                input,
-                Some(audit),
-            )?)
+            let input: crate::knowledge::KnowledgeAcceptBody =
+                decode_optional(body).map_err(decode)?;
+            crate::knowledge::plan_accept(&root, &raw_id, &input)
+                .map_err(|problem| audit.reject(store, "knowledge", &raw_id, problem))?;
+            // 取り込み（git）は `cos_operation_apply` の transaction の中。失敗すれば監査の行は rejected で、
+            // 応答は効果の problem（status と code）のまま。
+            let mut failure = None;
+            let outcome = audit.apply(store, "knowledge", &raw_id, "knowledge.accept", |_tx| {
+                match crate::knowledge::accept_effect(&root, &raw_id, &input) {
+                    Ok(page) => {
+                        Ok(serde_json::json!({"id": raw_id, "path": page.path, "sha": page.sha}))
+                    }
+                    Err(problem) => {
+                        let detail = problem.detail().to_string();
+                        failure = Some(problem);
+                        Err(ChatError::Conflict(detail))
+                    }
+                }
+            });
+            outcome.map_err(|problem| failure.unwrap_or(problem))
         }
         "notification.read" => {
             let raw_id = matched.id.unwrap_or_default();
@@ -187,12 +219,29 @@ pub(crate) fn dispatch(
                     unprocessable("validation", "request.body must be empty"),
                 ));
             }
-            audited(crate::knowledge::reject_op(
-                store,
-                &root,
-                raw_id,
-                Some(audit),
-            )?)
+            crate::knowledge::plan_reject(&root, &raw_id)
+                .map_err(|problem| audit.reject(store, "knowledge", &raw_id, problem))?;
+            // 取り下げ（git）は `cos_operation_apply` の transaction の中。候補が無ければ `NotFound`、
+            // ほかの失敗は `Conflict` で rejected の行を書き、応答は効果の problem のまま。
+            let mut failure = None;
+            let outcome = audit.apply(store, "knowledge", &raw_id, "knowledge.reject", |_tx| {
+                match crate::knowledge::reject_effect(&root, &raw_id) {
+                    Ok(rejected) => Ok(serde_json::json!({"id": rejected.id, "sha": rejected.sha})),
+                    Err(problem) => {
+                        let error = if problem.code() == crate::knowledge::CANDIDATE_NOT_FOUND {
+                            ChatError::NotFound {
+                                kind: "knowledge candidate",
+                                id: raw_id.clone(),
+                            }
+                        } else {
+                            ChatError::Conflict(problem.detail().to_string())
+                        };
+                        failure = Some(problem);
+                        Err(error)
+                    }
+                }
+            });
+            outcome.map_err(|problem| failure.unwrap_or(problem))
         }
         "knowledge.record" => {
             let root = env

@@ -1,0 +1,47 @@
+metric	scope	before	after	checker	note
+rusqlite_prod_files	prod-excl-task-core-store	75	74	a-c4	−1 = 外れた 2（R4: crates/task-api/src/chat/attachments.rs・crates/task-api/src/cos/triage_view.rs）− 入った 1（R4 triage: crates/task-core/src/cos_inbox.rs。受信箱の読み取りを SqliteStore の with_read_conn で行う task-core の自由関数。接続は開かない）。crate 別 after task-core 43 task-api 15 task-ops 8 celeris 4 ほか 4
+sql_string_prod_files	prod-excl-task-core-store	50	49	a-c4	−1。集合の差は rusqlite と同じ（R4: 外れた chat/attachments.rs・cos/triage_view.rs、入った task-core/src/cos_inbox.rs）
+conn_open_files	prod-excl-task-core-store	47	45	r7-d1	R7 の ADR 2026-11-19-arch-v4-measure-rules-addendum D1 の補助の指標（A の C4 と別の数え方。checker で区別する D2）。before は H の base（H の measure の after と同じ commit）で数えた値。B0 は 48。−2 は R4（chat/attachments.rs の Connection::open 3 行・cos/triage_view.rs の Connection::open と busy_timeout）。入った file 0
+conn_arg_task_core	crates/task-core/occ	320	320	a-c6	同じ
+conn_arg_task_core	crates/task-core/files	76	76	a-c6	同じ
+conn_arg_task_core_store	crates/task-core/src/store/occ	205	205	a-c6	同じ
+conn_arg_task_core_store	crates/task-core/src/store/files	49	49	a-c6	同じ
+conn_arg_task_api	crates/task-api/occ	15	15	a-c6	数は同じ（行番号の移動だけ: handlers/authority.rs・project_controller.rs・roadmap.rs・tasks.rs・knowledge.rs・repos.rs）
+conn_arg_task_api	crates/task-api/files	10	10	a-c6	同じ
+conn_arg_task_ops	crates/task-ops/occ	7	7	a-c6	同じ
+conn_arg_task_ops	crates/task-ops/files	4	4	a-c6	同じ
+conn_fn_closure	crates/task-core	13	13	a-c6	同じ
+conn_fn_closure	crates/task-api	4	4	a-c6	補助。数は同じ（cos/operations.rs・repos.rs の行番号の移動だけ）
+conn_fn_closure	crates/task-ops	4	4	a-c6	同じ
+sqlitestore_impl	plain	102	102	a-c6	同じ
+sqlitestore_impl	path	105	105	a-c6	同じ
+sqlitestore_impl	trait	6	6	a-c6	同じ
+sqlitestore_pub	plain	631	631	a-c6	同じ
+sqlitestore_pub	path	634	634	a-c6	同じ
+sqlitestore_pub_crate	plain	67	67	a-c6	同じ
+sqlitestore_pub_crate	path	67	67	a-c6	同じ
+sqlitestore_private	plain	41	41	a-c6	同じ
+sqlitestore_rdeps	normal-transitive	11	11	a-c7	同じ（HEAD の作業ツリーで cargo metadata --offline。宣言 normal 35・dev 14 も同じ。H の base から HEAD まで Cargo.toml・Cargo.lock の差分 0）
+dispatcher_files	request/C3	69	69	a-c3	同じ
+dispatcher_files	request/E1	69	69	e-e1	同じ
+dispatcher_files	logical/C3	76	76	a-c3	分母。HEAD で #[path] を引き直して同じ 8 file と lib.rs:47（project_decider_ts.rs）
+dispatcher_files	logical/E1	76	76	e-e1	分母。HEAD で #[path] を引き直して同じ 8 file と lib.rs:47（project_decider_ts.rs）
+dispatcher_store_files	request/C3	38	38	a-c3	同じ
+dispatcher_store_files	request/E1	40	40	e-e1	同じ
+dispatcher_store_files	logical/C3	42	42	a-c3	同じ
+dispatcher_store_files	logical/E1	44	44	e-e1	同じ
+dispatcher_store_hits	request/C3	633	630	a-c3	−3（R3: tree_units.rs −1・cos_chat/root_done.rs −2。既存の owner の狭い操作に替えた）。file 数は同じ
+dispatcher_store_hits	request/E1	759	756	e-e1	−3（R3）
+dispatcher_store_hits	logical/C3	661	658	a-c3	−3（R3）
+dispatcher_store_hits	logical/E1	791	788	e-e1	−3（R3）
+dispatcher_config_files	request/C3	31	31	a-c3	同じ
+dispatcher_config_files	request/E1	31	31	e-e1	同じ
+dispatcher_config_files	logical/C3	35	35	a-c3	同じ
+dispatcher_config_files	logical/E1	35	35	e-e1	同じ
+dispatcher_config_hits	request/C3	220	212	a-c3	−8（R3: cos_chat/triage.rs −3・cos_chat/fallback.rs −5）。file 数は同じ
+dispatcher_config_hits	request/E1	227	219	e-e1	−8（R3）
+dispatcher_config_hits	logical/C3	226	218	a-c3	−8（R3）
+dispatcher_config_hits	logical/E1	233	225	e-e1	−8（R3）
+applied_narrow	crates/task-api/src	14	11	d-narrow	−3 = knowledge.rs・lifecycle.rs・skills.rs（R5）。入った file 0
+applied_wide	crates/task-api/src	18	15	d-wide	−3 = knowledge.rs・lifecycle.rs・skills.rs（R5）。入った file 0。回帰条件 18 以下を満たす。型の定義側 cos/operations.rs を除く操作の側は 14 file
+applied_functions	crates/task-api/src	55	49	h-awk	補助（H の awk）。−6 = knowledge.rs の accept_op・reject_op・put_page_op、lifecycle.rs の task_pause_op、skills.rs の put_skill_op・delete_skill_op（R5）。入った関数 0。操作の側は 48

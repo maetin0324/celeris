@@ -9,6 +9,7 @@
 //!   `external:<ref>:<key>`（同じ key は 1 件）。CoS は `project.controller_wake`。
 //! - `GET …/controller/decisions?before=&limit=` → 判断の記録（新しい順）。
 
+use axum::body::Body;
 use axum::extract::{RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
@@ -24,9 +25,10 @@ use time::OffsetDateTime;
 
 use super::*;
 use crate::cos::operations::OperationAudit;
+use crate::http_io::{ApiResult, Params, json_response, no_query, read_json};
 use crate::middleware::require_admin;
 use crate::principal::{Caller, Principal};
-use crate::problem::ops_problem;
+use crate::problem::{ops_problem, store_problem};
 use crate::query::QueryParams;
 
 /// `[project_controller]` のうち API が使う欄。

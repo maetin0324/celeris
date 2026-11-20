@@ -20,8 +20,8 @@ use serde::Deserialize;
 use task_ops::lifecycle;
 use time::OffsetDateTime;
 
-use crate::cos::operations::{Applied, OperationAudit};
-use crate::handlers::{ApiResult, Params, json_response, no_query, parse_project_id, read_json};
+use crate::handlers::parse_project_id;
+use crate::http_io::{ApiResult, Params, json_response, no_query, read_json};
 use crate::human_epoch::HumanEpoch;
 use crate::middleware::require_admin;
 use crate::problem::{ApiProblem, ops_problem};
@@ -104,6 +104,8 @@ async fn milestone_action(state: ApiState, headers: HeaderMap) -> ApiResult {
 
 /// ADR-0079 D13（Phase R5a）: task の subtree の一時停止・再開（`POST /tasks/{id}/pause|resume`）。
 /// 判断は `task_ops::lifecycle::{pause_task, resume_task}`（`ready_tasks` が祖先を辿って止める）。
+/// plan（[`plan_task_pause`]）の後、`SqliteStore::update_task` で task の行と `Edited` event を書き
+/// （`by` は認証済み principal）、`task_ops::lifecycle::pause_result` で応答を作る。
 async fn task_action(
     state: ApiState,
     caller: crate::Caller,
@@ -117,57 +119,45 @@ async fn task_action(
     require_admin(&state, &headers)?;
     let task_id = parse_task_id(&id)?;
     let EmptyBody {} = read_json(body, true).await?;
-    let trigger = if pause { "task_pause" } else { "task_resume" };
+    let trigger = task_pause_trigger(pause);
     let result = state
         .blocking(move |store| {
-            task_pause_op(store, task_id, pause, &caller.actor(), None)?.direct()
+            let (next, event) = plan_task_pause(
+                store,
+                task_id,
+                pause,
+                &caller.actor(),
+                OffsetDateTime::now_utc(),
+            )?;
+            let updated = store
+                .update_task(&next, event)
+                .map_err(crate::problem::store_problem)?;
+            lifecycle::pause_result(store, &updated)
+                .map_err(|e| ops_problem(store, e, Some(trigger)))
         })
         .await?;
     tracing::info!(who = "admin", op = trigger, task_id = %task_id, subtree = result.subtree.len(), "admin: task subtree lifecycle");
     Ok(json_response(StatusCode::OK, &result))
 }
 
-/// `POST /tasks/{id}/pause|resume` の本体。handler（`audit = None`、認証済み principal）と CoS の
-/// `/cos/operations`（ADR 2026-10-09 D3/D5。`by = cos:<thread_id>`、task の更新・`Edited` event・監査を同じ transaction）
-/// が共有する。
-pub(crate) fn task_pause_op(
+/// The `trigger` of a refused task pause or resume.
+fn task_pause_trigger(pause: bool) -> &'static str {
+    if pause { "task_pause" } else { "task_resume" }
+}
+
+/// task の一時停止・再開の plan（読み取りと検証だけで、DB を書かない）。`task_ops::lifecycle::plan_set_paused` の
+/// 次の task の行と `Edited { fields: ["paused_at"], by }` を返し、拒否は `ops_problem`（trigger `task_pause`｜`task_resume`）。
+/// 書き込みは呼び出し元が行う: HTTP の [`task_action`] は `SqliteStore::update_task`、CoS の `task.pause`・`task.resume`
+/// （`cos/ops/tasks.rs`）は監査の transaction の中で `SqliteStore::edit_task_tx`（ADR 2026-11-20-applied-shape-migration D1〜D3）。
+pub(crate) fn plan_task_pause(
     store: &task_core::store::SqliteStore,
     task_id: task_core::TaskId,
     pause: bool,
     by: &str,
-    audit: Option<&OperationAudit>,
-) -> Result<Applied<lifecycle::TaskPauseResult>, ApiProblem> {
-    let now = OffsetDateTime::now_utc();
-    let trigger = if pause { "task_pause" } else { "task_resume" };
-    let Some(audit) = audit else {
-        let (next, event) = lifecycle::plan_set_paused(store, task_id, pause, by, now)
-            .map_err(|e| ops_problem(store, e, Some(trigger)))?;
-        let updated = store
-            .update_task(&next, event)
-            .map_err(crate::problem::store_problem)?;
-        return lifecycle::pause_result(store, &updated)
-            .map(Applied::Direct)
-            .map_err(|e| ops_problem(store, e, Some(trigger)));
-    };
-    let target_id = task_id.to_string();
-    let (next, event) = lifecycle::plan_set_paused(store, task_id, pause, &audit.by(), now)
-        .map_err(|e| {
-            audit.reject(
-                store,
-                "task",
-                &target_id,
-                ops_problem(store, e, Some(trigger)),
-            )
-        })?;
-    let action = if pause { "task.pause" } else { "task.resume" };
-    let operation = audit.apply(store, "task", &target_id, action, |tx| {
-        let updated = task_core::store::SqliteStore::edit_task_tx(tx, &next, &event)?;
-        Ok(serde_json::json!({
-            "task_id": target_id,
-            "paused": updated.paused_at.is_some(),
-        }))
-    })?;
-    Ok(Applied::Audited(Box::new(operation)))
+    now: OffsetDateTime,
+) -> Result<(task_core::Task, task_core::Event), ApiProblem> {
+    lifecycle::plan_set_paused(store, task_id, pause, by, now)
+        .map_err(|e| ops_problem(store, e, Some(task_pause_trigger(pause))))
 }
 
 macro_rules! project_handler {

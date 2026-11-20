@@ -1,0 +1,153 @@
+# アーキv4 H R2 の測定（task 01M7MZTKBPZPQE4XN451F8X84F の WorkUnit struct-deps の raw/c2.py を元にした）。
+# repo の root で実行する（python3 -I なので repo の module は sys.path に入らない。検査器の dir だけを足す）。
+#   python3 -I agent-docs/progress/2026-11-19-arch-v4-h-r2/measure.snippet measure <rev> <out.json>
+#   python3 -I agent-docs/progress/2026-11-19-arch-v4-h-r2/measure.snippet compare <before.json> <after.json> [unit ...]
+# measure: 作業ツリーの scripts/dev/repo-health（head の検査器。super:: を辺にする）で <rev> の tree の deps.cycle の SCC を取り、
+#   ta_scc_*（handlers を含む SCC）、handlers→cos・cos→handlers の辺（crate:: と super:: を分ける）、task-api の SCC の組の集合、
+#   全 SCC の単位と、H の final-report.md の再現コマンド節の C5 の git grep 4 本を JSON に書く。profile は <rev> から読む。
+# compare: after の task-api の SCC の組が before の部分集合、task-api の SCC の単位数が増えない、引数の単位がどの SCC にも無い
+#   なら 0。違えば差を出して 1。単位は repo 相対（例 crates/task-api/src/http_io）か task-api の src 直下の名前（http_io）。
+import collections
+import importlib.util
+import json
+import os
+import re
+import subprocess
+import sys
+
+TA = 'crates/task-api/src/'
+H = TA + 'handlers'
+C = TA + 'cos'
+# A §7 C5 の除外（git grep の出力の行全体に grep -vE で当てる。写しのまま）。
+X = re.compile(r'(^|/)(tests?|benches|examples)/|(^|/)(tests|[^/]*_tests?|test_support)\.rs$|_fixture\.rs$')
+C5 = (
+    ('handlers_to_cos_lines', 'crate::cos::', (TA + 'handlers', TA + 'handlers.rs')),
+    ('cos_to_handlers_lines_c5', '(crate|super(::super)*)::handlers', (C,)),
+    ('cos_to_handlers_lines_crate', 'crate::handlers', (C,)),
+    ('cos_to_handlers_super_lines', 'super(::super)*::handlers', (C,)),
+)
+CRATE_RE = re.compile(r'(^|[^\w])crate::')
+SUPER_RE = re.compile(r'(^|[^\w])super::')
+
+
+def git(root, *args, ok=(0,)):
+    p = subprocess.run(['git', '-C', root, *args], capture_output=True, text=True)
+    if p.returncode not in ok:
+        sys.exit(f'git {" ".join(args)}: exit {p.returncode}: {p.stderr.strip()}')
+    return p.stdout
+
+
+def path_kind(excerpt):
+    if CRATE_RE.search(excerpt):
+        return 'crate'
+    return 'super' if SUPER_RE.search(excerpt) else 'other'
+
+
+def measure(rev, out_path):
+    root = git('.', 'rev-parse', '--show-toplevel').strip()
+    sha = git(root, 'rev-parse', '--verify', rev + '^{commit}').strip()
+    ck = os.path.join(root, 'scripts/dev/repo-health')
+    sys.dont_write_bytecode = True
+    sys.path.insert(0, ck)
+    from health import engine, snapshot
+    from health import profile as profile_mod
+    from health.adapters import Classifier
+    snap = snapshot.resolve(root, sha, sha)
+    prof = profile_mod.resolve(snap, None)
+    spec = importlib.util.spec_from_file_location('repo_health_rules.deps', ck + '/rules/deps.py')
+    deps = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(deps)
+    ctx = engine.Context(snap, prof, prof.rule_config('deps.cycle'), [], {}, [], [], Classifier(prof.classes), 'full')
+    comps, edges = deps._components(ctx, snap.head_tree)
+    cycles = []
+    for comp in sorted(comps, key=lambda c: (-len(c), sorted(c))):
+        ns = set(comp)
+        inner = [e for e in edges if e.src_unit in ns and e.dst_unit in ns]
+        cycles.append({'units': sorted(ns), 'unit_count': len(ns),
+                       'pairs': sorted({(e.src_unit, e.dst_unit) for e in inner}), 'line_edges': len(inner),
+                       'edges': [{'src': e.src, 'line': e.line, 'src_unit': e.src_unit, 'dst_unit': e.dst_unit,
+                                  'kind': e.kind, 'path': path_kind(e.excerpt), 'excerpt': e.excerpt} for e in inner]})
+    ta = next((c for c in cycles if H in c['units']), None)
+    ta_all = [c for c in cycles if any(u.startswith(TA) for u in c['units'])]
+    directions = {}
+    for a, b, name in ((H, C, 'handlers->cos'), (C, H, 'cos->handlers')):
+        es = [e for e in (ta['edges'] if ta else []) if e['src_unit'] == a and e['dst_unit'] == b]
+        directions[name] = {'lines': len(es), 'by_path': dict(collections.Counter(e['path'] for e in es)),
+                            'files': dict(sorted(collections.Counter(e['src'] for e in es).items())),
+                            'edges': [f"{e['src']}:{e['line']}: {e['excerpt']}" for e in es]}
+    c5 = {}
+    for name, pat, paths in C5:
+        out = git(root, 'grep', '-nE', pat, sha, '--', *paths, ok=(0, 1))
+        lines = [ln for ln in out.splitlines() if ln and not X.search(ln)]
+        c5[name] = {'pattern': pat, 'paths': list(paths), 'count': len(lines), 'lines': lines}
+    metrics = {
+        'module_cycles': len(cycles),
+        'ta_scc_units': ta['unit_count'] if ta else 0,
+        'ta_scc_pairs': len(ta['pairs']) if ta else 0,
+        'ta_scc_lines': ta['line_edges'] if ta else 0,
+        'handlers_to_cos_lines:head': directions['handlers->cos']['lines'],
+        'cos_to_handlers_lines:head': directions['cos->handlers']['lines'],
+        'cos_to_handlers_lines:head:crate': directions['cos->handlers']['by_path'].get('crate', 0),
+        'cos_to_handlers_lines:head:super': directions['cos->handlers']['by_path'].get('super', 0),
+        'handlers_to_cos_lines:grep': c5['handlers_to_cos_lines']['count'],
+        'cos_to_handlers_lines:grep_crate': c5['cos_to_handlers_lines_crate']['count'],
+        'cos_to_handlers_lines:grep_c5': c5['cos_to_handlers_lines_c5']['count'],
+        'cos_to_handlers_super_lines:grep': c5['cos_to_handlers_super_lines']['count'],
+        'task_api_scc_count': len(ta_all),
+        'task_api_scc_units': sum(c['unit_count'] for c in ta_all),
+        'task_api_scc_pairs': len({tuple(p) for c in ta_all for p in c['pairs']}),
+    }
+    result = {'rev': rev, 'sha': sha, 'checker': 'head（作業ツリーの scripts/dev/repo-health）', 'metrics': metrics,
+              'ta_scc_units': ta['units'] if ta else [],
+              'task_api_scc_pairs': sorted({tuple(p) for c in ta_all for p in c['pairs']}),
+              'directions': directions, 'c5': c5,
+              'cycles': [{k: v for k, v in c.items() if k != 'edges'} for c in cycles]}
+    with open(out_path, 'w', encoding='utf-8') as f:
+        json.dump(result, f, ensure_ascii=False, indent=1)
+    print('rev', rev, sha)
+    for k, v in metrics.items():
+        print(f'{k}\t{v}')
+    for name, d in directions.items():
+        print(name, d['lines'], 'lines', d['by_path'], len(d['files']), 'files')
+    return 0
+
+
+def compare(before_path, after_path, units):
+    before = json.load(open(before_path, encoding='utf-8'))
+    after = json.load(open(after_path, encoding='utf-8'))
+    bp = {tuple(p) for p in before['task_api_scc_pairs']}
+    ap = {tuple(p) for p in after['task_api_scc_pairs']}
+    bm, am = before['metrics'], after['metrics']
+    fail = []
+    added = sorted(ap - bp)
+    if added:
+        fail.append(f'task-api の SCC に before に無い組が {len(added)} 個ある')
+        for s, d in added:
+            print('  + pair', s, '->', d)
+    if am['task_api_scc_units'] > bm['task_api_scc_units']:
+        fail.append(f"task-api の SCC の単位数が増えた: {bm['task_api_scc_units']} -> {am['task_api_scc_units']}")
+    for u in units:
+        unit = u if '/' in u else TA + u
+        hits = [c['units'][:3] for c in after['cycles'] if unit in c['units']]
+        if hits:
+            fail.append(f'{unit} が SCC に入っている（{len(hits)} 個。先頭の単位 {hits[0]}）')
+    print('before', before['rev'], before['sha'], '/ after', after['rev'], after['sha'])
+    for k in bm:
+        if bm[k] != am.get(k):
+            print(f'  {k}: {bm[k]} -> {am.get(k)}')
+    removed = sorted(bp - ap)
+    print(f'  task-api の SCC の組: before {len(bp)} -> after {len(ap)}（消えた {len(removed)}・増えた {len(added)}）')
+    for s, d in removed:
+        print('  - pair', s, '->', d)
+    for msg in fail:
+        print('NG:', msg)
+    print('OK' if not fail else 'NG')
+    return 1 if fail else 0
+
+
+if __name__ == '__main__':
+    if len(sys.argv) >= 4 and sys.argv[1] == 'measure' and len(sys.argv) == 4:
+        sys.exit(measure(sys.argv[2], sys.argv[3]))
+    if len(sys.argv) >= 4 and sys.argv[1] == 'compare':
+        sys.exit(compare(sys.argv[2], sys.argv[3], sys.argv[4:]))
+    sys.exit('usage: measure <rev> <out.json> | compare <before.json> <after.json> [unit ...]')

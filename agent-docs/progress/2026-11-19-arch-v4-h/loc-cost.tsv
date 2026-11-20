@@ -1,0 +1,37 @@
+metric	scope	before	after	checker	note
+loc_prod_all	production 全言語（views.product_only.lines）	375099	375921	ssr@bc665168	+822。before は A §4 (6) と同じ値（H が bc665168 に当てて再現）。after は HEAD（= git merge-base HEAD main と同じ値）。差はすべて Rust
+loc_prod_rust	production Rust（views.product_only.rust_lines）	330408	331230	ssr@bc665168	+822。ほかの言語の production の差は 0 行
+loc_test	試験 = class_totals.external_test + inline_test	476771	481514	ssr@bc665168	+4743。external_test 455363→460106（Rust 406508→410773 +4265、Python 6725→7203 +478）、inline_test 21408→21408
+loc_own_total	own_total_with_tests 全言語（views.own_total_with_tests.lines）	1025677	1031506	ssr@bc665168	+5829。Rust 879344→884431（+5087）。tooling 25253→25517（+264）を含む
+loc_own_total_rust	own_total_with_tests Rust（views.own_total_with_tests.rust_lines）	879344	884431	ssr@bc665168	+5087
+loc_tooling	tooling（class_totals.tooling）	25253	25517	ssr@bc665168	+264（Python +190、TOML +74）
+s1_files	S1 で変える production file	3	4	-	after は G の scenarios.env の S1_FILES（D が plan と apply を crates/task-api/src/org_write.rs に移した分 +1）。HEAD の source は G の測定の tree と同じなので選び直しは G と同じ
+s1_units	S1 で変える単位（repo-health の単位 crates/<c>/src/<第 1 要素>）	3	4	-	after: task-api の org_write・handlers・cos と task-core の store
+s1_crates	S1 で変える crate	2	2	-	task-api・task-core
+s2_files	S2 で変える production file	4	4	-	A と同じ 4 file（G の scenarios.env の S2_FILES）
+s2_units	S2 で変える単位	2	2	-	task-dispatch の dispatcher・run_settlement
+s2_crates	S2 で変える crate	1	1	-	task-dispatch
+s1_direct_importers	S1 の単位を直接 import する単位（C7b）	92	92	b0	b0 の検査器で HEAD を数えた（profile は bc665168 から読む）。after は 4 単位。b0 × bc665168 は 92（A を再現）
+s1_direct_importers	S1 の単位を直接 import する単位（C7b）	93	93	head	HEAD の検査器。before は before'（HEAD の検査器 × bc665168。A の値ではない）。G の scope.md §2 と同じ値
+s1_transitive_importers	S1 の単位を推移的に import する単位（C7b）	369	369	b0	package 12 → 12。b0 × bc665168 は 369（A を再現）
+s1_transitive_importers	S1 の単位を推移的に import する単位（C7b）	365	365	head	package 12 → 12。before は before'（HEAD の検査器 × bc665168）。G と同じ値
+s2_direct_importers	S2 の単位を直接 import する単位（C7b）	6	6	b0	head の検査器でも 6 → 6
+s2_transitive_importers	S2 の単位を推移的に import する単位（C7b）	14	14	b0	package 4 → 4。head の検査器でも 14 → 14
+s1_ta_crates	S1 の test-affected --list の crate（comment の probe）	14	14	-	＋ web: typecheck+unit ＋ ts-verify: test-ts-verify。A の ta-list.txt と同じ集合
+s2_ta_crates	S2 の test-affected --list の crate（comment の probe）	5	5	-	celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。A と同じ集合
+fix_commits	修正の波及 C10 no-merges（production を変えた first-parent の非 merge commit）	194	1	ssr@bc665168	before は A の窓 [2026-10-28T00:00Z, bc665168]（H の再現も commits 492・194・91（46.9%）・134（69.1%）で A と一致）。after は bc665168..HEAD（SINCE 2026-11-17T00:00Z）: commits 12 のうち production を変えたのは 1 件だけ。件数が少なすぎて割合は比べられない
+fix_commits	修正の波及 C10 with-merges（merge commit を first-parent の差分で含める）	246	9	ssr@bc665168	before は A の窓（H の再現も 653・246・122（49.6%）・175（71.1%）で一致）。after は bc665168..HEAD の commits 41 のうち 9 件。9 件はすべてアーキ v4 B〜F の変更の merge（子 task の branch を丸ごと 1 commit にした merge を含む）で、通常の修正ではない
+fix_region_pct	C10 no-merges の複数 region（crate か top-level の dir）の割合 %	46.9	0.0	ssr@bc665168	after は 1 件中 0 件。1 件では割合として意味が無い（比較不能）
+fix_region_pct	C10 with-merges の複数 region の割合 %	49.6	55.6	ssr@bc665168	after は 9 件中 5 件。件数が少なく、子 task 単位の merge を 1 件と数えるので A の窓と比べられない
+fix_module_pct	C10 no-merges の複数 module の割合 %	69.1	0.0	ssr@bc665168	after は 1 件中 0 件（比較不能）
+fix_module_pct	C10 with-merges の複数 module の割合 %	71.1	55.6	ssr@bc665168	after は 9 件中 5 件（比較不能。理由は fix_region_pct と同じ）
+check_cold	cargo check --workspace の cold の wall 中央値 s	53.65	53.90	-	after は G の値（build-check.tsv、valid 3 回 54.90・53.52・53.90、user 216.48 s）。H は測り直していない（G の測定の tree と HEAD で crates/・scripts/・web/・Cargo.lock の差分 0）
+check_warm_s1	cargo check の warm S1（const の probe）の wall 中央値 s	42.47	42.64	-	after は G の値（build-check.tsv、42.75・42.64・42.64、user 59.15 s）。測り直していない（source の差分 0）
+check_warm_s2	cargo check の warm S2 の wall 中央値 s	14.67	15.56	-	after は G の値（build-check.tsv、15.75・14.62・15.56、user 18.92 s）。測り直していない（source の差分 0）
+test_build_cold	cargo nextest run --workspace --no-run の cold の wall 中央値 s	142.39	147.03	-	after は G の値（build-test.tsv、143.36・148.53・147.03、user 979.88 s）。測り直していない（source の差分 0）
+test_build_warm_s1	test build の warm S1 の wall 中央値 s	138.69	138.10	-	after は G の値（build-test.tsv、134.76・138.10・141.75、user 754.29 s）。測り直していない（source の差分 0）
+test_build_warm_s2	test build の warm S2 の wall 中央値 s	77.64	81.60	-	after は G の値（build-test.tsv、81.60・84.99・80.95、user 296.62 s）。測り直していない（source の差分 0）
+health_s1	repo-health S1（const の probe、--head worktree）の wall 中央値 s	86.56	93.58	head	after は G の値（scope.tsv、97.06・92.78・93.58、user 71.19 s。A の +8.1 %、印なし）。H は測り直していない（source と scripts/dev/repo-health の差分 0）
+health_s2	repo-health S2 の wall 中央値 s	81.92	96.09	head	after は G の値（scope.tsv、98.73・96.09・90.65、user 71.86 s。A の +17.3 %）。G が before を同じ host で測り直した中央値は 87.26 s（コード由来 +2.02 s、人の決定 h1=keep）。H は測り直していない（source の差分 0）
+test_affected_s1	bash scripts/dev/test-affected.sh S1（comment の probe）の wall 中央値 s	893.41	906.03	-	after は G の値（ta-s1.tsv・ta-mix.tsv、911.49・901.20・906.03、user 4492.85 s、nextest 8481 passed）。測り直していない（規則: test-affected の時間は測り直さない）
+test_affected_s2	test-affected S2 の wall 中央値 s	655.59	707.76	-	after は G の値（ta-s2.tsv・ta-mix.tsv、722.11・707.76・653.34、user 3093.42 s、nextest 3938 passed）。測り直していない（規則: test-affected の時間は測り直さない）

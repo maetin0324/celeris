@@ -4,9 +4,10 @@ use super::super::operations::{DispatchEnv, Matched, OperationAudit};
 use super::super::operations::{
     audited, decode_optional, decode_problem, path_param, unprocessable,
 };
+use crate::account_write;
 use crate::org_write::{self, OrgWritten};
 use crate::problem::ApiProblem;
-use crate::skills::{OrgSkillMountBody, plan_skill_mount};
+use crate::skills::{self, OrgSkillMountBody, plan_skill_mount};
 use serde_json::Value;
 use task_core::chat::CosOperation;
 use task_core::store::SqliteStore;
@@ -229,13 +230,13 @@ fn block_on<F: std::future::Future>(future: F) -> F::Output {
     tokio::runtime::Handle::current().block_on(future)
 }
 
-/// Run a C operation whose effect is a route's [`crate::cos::operations::Effect`].
+/// Run a C operation whose effect is a route's [`crate::problem::Effect`].
 fn external<T: serde::Serialize>(
     store: &SqliteStore,
     audit: &OperationAudit,
     target: (&str, &str),
     action: &str,
-    effect: impl FnOnce() -> crate::cos::operations::Effect<T>,
+    effect: impl FnOnce() -> crate::problem::Effect<T>,
 ) -> Result<CosOperation, ApiProblem> {
     audit.external(
         store,
@@ -274,6 +275,36 @@ fn empty_body(body: &Value) -> Result<(), ApiProblem> {
         Ok(())
     } else {
         Err(unprocessable("validation", "request.body must be empty"))
+    }
+}
+
+/// CoS `skill.put`・`skill.delete`. The KB write is a git commit: the plan's refusal is audited as
+/// rejected, and the effect runs once as an external effect (C, as `knowledge.page_put`).
+fn skill_write(
+    store: &SqliteStore,
+    env: &DispatchEnv,
+    audit: &OperationAudit,
+    action: &str,
+    path: &str,
+    body: Value,
+) -> Result<CosOperation, ApiProblem> {
+    let name = path_param(SKILL, path, "{name}");
+    let reject = |p| audit.reject(store, "skill", &name, p);
+    let root = env.kb_root.clone().map_err(reject)?;
+    if action == "skill.put" {
+        let input =
+            serde_json::from_value(body).map_err(|e| decode_problem(store, audit, path, e))?;
+        skills::plan_skill_put(&root).map_err(reject)?;
+        external(store, audit, ("skill", &name), action, || {
+            skills::skill_put_effect(&root, &name, input, "cos")
+        })
+    } else {
+        require_empty_body(store, audit, "skill", path, &body)?;
+        skills::plan_skill_delete(store, &root, &name).map_err(reject)?;
+        external(store, audit, ("skill", &name), action, || {
+            skills::skill_delete_effect(&root, &name)
+                .map(|deleted| deleted.map(|()| serde_json::json!({"name": name, "deleted": true})))
+        })
     }
 }
 
@@ -342,31 +373,7 @@ pub(crate) fn dispatch(
                 }
             })
         }
-        "skill.put" | "skill.delete" => {
-            let name = path_param(SKILL, path, "{name}");
-            let root = env
-                .kb_root
-                .clone()
-                .map_err(|p| audit.reject(store, "skill", &name, p))?;
-            if matched.action == "skill.put" {
-                let input = serde_json::from_value(body).map_err(decode)?;
-                audited(crate::skills::put_skill_op(
-                    store,
-                    &root,
-                    &name,
-                    input,
-                    Some(audit),
-                )?)
-            } else {
-                require_empty_body(store, audit, "skill", path, &body)?;
-                audited(crate::skills::delete_skill_op(
-                    store,
-                    &root,
-                    &name,
-                    Some(audit),
-                )?)
-            }
-        }
+        "skill.put" | "skill.delete" => skill_write(store, env, audit, matched.action, path, body),
         "repo.create" => {
             let id = matched.id.unwrap_or_default();
             let repo = decode_repo_body(body)
@@ -413,6 +420,7 @@ pub(crate) fn dispatch(
             )?)
         }
         "account.create" => {
+            let accounts = env.api.account_env();
             let input: crate::types::AccountCreateBody =
                 serde_json::from_value(body).map_err(decode)?;
             let id = input.id.clone();
@@ -421,15 +429,14 @@ pub(crate) fn dispatch(
                 path,
                 "{source_id}",
             );
-            let adapter = super::super::super::handlers::accounts::pool_adapter(&source)
-                .ok_or_else(|| {
-                    audit.reject(
-                        store,
-                        "account",
-                        &id,
-                        ApiProblem::bad_request("source does not have a managed account pool"),
-                    )
-                })?;
+            let adapter = account_write::pool_adapter(&source).ok_or_else(|| {
+                audit.reject(
+                    store,
+                    "account",
+                    &id,
+                    ApiProblem::bad_request("source does not have a managed account pool"),
+                )
+            })?;
             // ADR 2026-10-08 account-concurrency-limits §(d): a re-created account must not inherit
             // an old stored limit. The clear goes through the daemon (or the store), so it runs after
             // the audit transaction, and only when this request created the directory.
@@ -441,20 +448,18 @@ pub(crate) fn dispatch(
                 &id,
                 matched.action,
                 || {
-                    let view =
-                        crate::handlers::accounts::create_account_op(&env.api, adapter, &input)?;
+                    let view = account_write::create_account_op(&accounts, adapter, &input)?;
                     created.set(Some(adapter.as_str().to_string()));
                     Ok(view)
                 },
             )?)?;
             if let Some(adapter) = created.take().filter(|_| op.state == "applied") {
-                block_on(crate::handlers::accounts::clear_stale_limit(
-                    &env.api, &adapter, &id,
-                ));
+                block_on(account_write::clear_stale_limit(&accounts, &adapter, &id));
             }
             Ok(op)
         }
         "account.limit_set" => {
+            let accounts = env.api.account_env();
             let source = path_param(
                 "/api/v1/llm/sources/{source_id}/accounts/{account_id}",
                 path,
@@ -465,52 +470,29 @@ pub(crate) fn dispatch(
                 path,
                 "{account_id}",
             );
-            let adapter = if let Some(a) =
-                super::super::super::handlers::accounts::pool_adapter(&source)
-            {
-                if !env.api.inner.accounts_roots.contains_key(&a) {
-                    return Err(audit.reject(
-                        store,
-                        "account",
-                        &source,
-                        ApiProblem::account_not_found(&source),
-                    ));
-                }
-                a.as_str().to_string()
-            } else if super::super::super::handlers::accounts::is_implicit_source(&env.api, &source)
-            {
-                "implicit".to_string()
-            } else {
-                return Err(audit.reject(
-                    store,
-                    "account",
-                    &source,
-                    ApiProblem::account_not_found(&source),
-                ));
-            };
-            let account = if adapter == "implicit" && account != source {
-                return Err(audit.reject(
-                    store,
-                    "account",
-                    &account,
-                    ApiProblem::account_not_found(&account),
-                ));
-            } else {
-                account
-            };
-            let api = &env.api;
+            let adapter =
+                account_write::limit_adapter(&accounts, &source, &account).map_err(|missing| {
+                    let problem = ApiProblem::account_not_found(missing);
+                    audit.reject(store, "account", missing, problem)
+                })?;
             external(store, audit, ("account", &account), matched.action, || {
-                block_on(crate::handlers::accounts::set_account_limit_effect(
-                    api, &adapter, &account, body,
-                ))
+                crate::middleware::require_active(&env.api).map_or_else(
+                    |problem| Ok(Err(problem)),
+                    |()| {
+                        block_on(account_write::set_account_limit_effect(
+                            &accounts, adapter, &account, body,
+                        ))
+                    },
+                )
             })
         }
         "account.delete" | "account.check" => {
+            let accounts = env.api.account_env();
             let template = "/api/v1/llm/sources/{source_id}/accounts/{account_id}";
             let source = path_param(template, path, "{source_id}");
             let id = path_param(template, path, "{account_id}");
-            let adapter = super::super::super::handlers::accounts::resolve_pool_account(
-                &env.api,
+            let adapter = account_write::resolve_pool_account(
+                &accounts,
                 &source,
                 &id,
                 if matched.action == "account.delete" {
@@ -520,17 +502,23 @@ pub(crate) fn dispatch(
                 },
             )
             .map_err(|p| audit.reject(store, "account", &id, p))?;
-            let api = &env.api;
+            let active = || crate::middleware::require_active(&env.api);
             if matched.action == "account.delete" {
                 external(store, audit, ("account", &id), matched.action, || {
-                    block_on(crate::handlers::accounts::delete_account_effect(api, adapter, &id))
-                        .map(|r| r.map(|()| serde_json::json!({"id": id, "adapter": adapter.as_str(), "removed": true})))
+                    active().map_or_else(
+                        |problem| Ok(Err(problem)),
+                        |()| {
+                            block_on(account_write::delete_account_effect(&accounts, adapter, &id))
+                                .map(|r| r.map(|()| serde_json::json!({"id": id, "adapter": adapter.as_str(), "removed": true})))
+                        },
+                    )
                 })
             } else {
                 external(store, audit, ("account", &id), matched.action, || {
-                    block_on(crate::handlers::accounts::check_account_effect(
-                        api, adapter, &id,
-                    ))
+                    active().map_or_else(
+                        |problem| Ok(Err(problem)),
+                        |()| block_on(account_write::check_account_effect(&accounts, adapter, &id)),
+                    )
                 })
             }
         }

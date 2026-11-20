@@ -368,8 +368,9 @@ impl CosChatLaunch {
     /// The digest pass reads the mode of `cos_digest` (S4-14) through `dispatcher`.
     pub(crate) fn triage_ingest(&mut self, dispatcher: &mut Dispatcher) {
         let now = dispatcher.now_utc();
+        let policy = self.config.triage.policy_version.clone();
         if !self.triage.reconciled {
-            match self.triage_reconcile(dispatcher, now) {
+            match self.triage_reconcile(dispatcher, &policy, now) {
                 Ok(()) => {
                     self.triage.reconciled = true;
                     self.triage.digest_due = true;
@@ -380,13 +381,13 @@ impl CosChatLaunch {
                 }
             }
         }
-        if let Err(error) = self.triage_events(dispatcher, now) {
+        if let Err(error) = self.triage_events(dispatcher, &policy, now) {
             tracing::warn!(%error, "CoS triage event intake failed");
         }
-        if let Err(error) = self.triage_notices(now) {
+        if let Err(error) = self.triage_notices(&policy, now) {
             tracing::warn!(%error, "CoS triage notice intake failed");
         }
-        if let Err(error) = self.triage_stagnation(dispatcher, now) {
+        if let Err(error) = self.triage_stagnation(dispatcher, &policy, now) {
             tracing::warn!(%error, "CoS triage stagnation intake failed");
         }
         // D1 of the inbox-thread ADR: the judgment of each finished triage run as an
@@ -450,6 +451,7 @@ impl CosChatLaunch {
     fn triage_stagnation(
         &mut self,
         dispatcher: &Dispatcher,
+        policy: &str,
         now: OffsetDateTime,
     ) -> Result<(), String> {
         if !dispatcher.stagnation_known() {
@@ -459,7 +461,6 @@ impl CosChatLaunch {
         if self.triage.stagnation_generation == Some(generation) {
             return Ok(());
         }
-        let policy = self.config.triage.policy_version.clone();
         let inbox = self.human_inbox(dispatcher, now)?;
         let mut inserted = 0;
         for kind in InboxKind::STAGNATION_KINDS {
@@ -467,7 +468,7 @@ impl CosChatLaunch {
                 .items
                 .iter()
                 .filter(|i| i.kind == kind)
-                .map(|i| inbox_source(i, &policy))
+                .map(|i| inbox_source(i, policy))
                 .collect();
             inserted += self
                 .store
@@ -487,17 +488,17 @@ impl CosChatLaunch {
     fn triage_reconcile(
         &mut self,
         dispatcher: &Dispatcher,
+        policy: &str,
         now: OffsetDateTime,
     ) -> Result<(), String> {
-        let policy = self.config.triage.policy_version.clone();
         // Read the head first: events after it are re-read (idempotently).
         let head = self.store.latest_event_id().map_err(|e| e.to_string())?;
         let known = dispatcher.stagnation_known();
         let generation = dispatcher.orchestration.stagnation_generation();
         let inbox = self.human_inbox(dispatcher, now)?;
-        let mut by_kind = sources_by_kind(&inbox, &policy, known);
+        let mut by_kind = sources_by_kind(&inbox, policy, known);
         for item in inbox.items.iter().filter(|i| is_direct(i)) {
-            self.direct_escalate(item, &policy, now)?;
+            self.direct_escalate(item, policy, now)?;
         }
         if let Some(current) = by_kind.remove(InboxKind::CredentialWait.as_str()) {
             // 挿入は direct_escalate が行う。閉じた待ちの escalated item だけここで resolved にする。
@@ -580,9 +581,9 @@ impl CosChatLaunch {
     fn triage_events(
         &mut self,
         dispatcher: &Dispatcher,
+        policy: &str,
         now: OffsetDateTime,
     ) -> Result<(), String> {
-        let policy = self.config.triage.policy_version.clone();
         let Some(raw) = self
             .store
             .cos_triage_cursor(COS_TRIAGE_EVENTS_SOURCE)
@@ -627,15 +628,15 @@ impl CosChatLaunch {
                     .human_inbox_touching(snapshot.as_ref(), &ctx, now, &|_, _| Vec::new(), &ids)
                     .map_err(|e| e.to_string())?;
                 for item in inbox.items.iter().filter(|i| is_direct(i)) {
-                    self.direct_escalate(item, &policy, now)?;
+                    self.direct_escalate(item, policy, now)?;
                 }
-                let by_kind = sources_by_kind(&inbox, &policy, dispatcher.stagnation_known());
+                let by_kind = sources_by_kind(&inbox, policy, dispatcher.stagnation_known());
                 let current: Vec<_> = by_kind.into_iter().collect();
                 let ids: Vec<String> = touched.tasks.keys().map(|id| id.to_string()).collect();
                 self.store
                     .cos_triage_resolve_stale_touched(&current, &ids, now)
                     .map_err(|e| e.to_string())?;
-                sources_for_touched(&inbox, &touched, &policy)
+                sources_for_touched(&inbox, &touched, policy)
             };
             self.store
                 .cos_triage_ingest_batch(COS_TRIAGE_EVENTS_SOURCE, &last.to_string(), &sources, now)
@@ -648,8 +649,7 @@ impl CosChatLaunch {
         Ok(())
     }
 
-    fn triage_notices(&mut self, now: OffsetDateTime) -> Result<(), String> {
-        let policy = self.config.triage.policy_version.clone();
+    fn triage_notices(&mut self, policy: &str, now: OffsetDateTime) -> Result<(), String> {
         let Some(raw) = self
             .store
             .cos_triage_cursor(COS_TRIAGE_NOTICES_SOURCE)
@@ -689,7 +689,7 @@ impl CosChatLaunch {
         newer.reverse();
         let sources: Vec<CosTriageSource> = newer
             .iter()
-            .filter_map(|n| notice_source(n, &policy))
+            .filter_map(|n| notice_source(n, policy))
             .collect();
         self.store
             .cos_triage_ingest_batch(COS_TRIAGE_NOTICES_SOURCE, &head, &sources, now)

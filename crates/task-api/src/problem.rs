@@ -594,6 +594,29 @@ pub(crate) fn ops_problem(store: &SqliteStore, err: OpsError, trigger: Option<&s
     }
 }
 
+/// Outcome of an external effect (C): `Ok(Ok(v))` done, `Ok(Err(problem))` refused before any
+/// change (settled `rejected`), `Err(problem)` outcome unknown (left pending for remediation).
+pub(crate) type Effect<T> = Result<Result<T, ApiProblem>, ApiProblem>;
+
+/// The handler's view of an [`Effect`]: either way a failure is the route's problem.
+pub(crate) fn effect_result<T>(effect: Effect<T>) -> Result<T, ApiProblem> {
+    effect.and_then(|result| result)
+}
+
+/// DB を使う同期処理を `spawn_blocking` で実行する（`ApiState::blocking` と `account_write` が使う）。
+pub(crate) async fn blocking<T, F>(
+    store: std::sync::Arc<SqliteStore>,
+    f: F,
+) -> Result<T, ApiProblem>
+where
+    T: Send + 'static,
+    F: FnOnce(&SqliteStore) -> Result<T, ApiProblem> + Send + 'static,
+{
+    tokio::task::spawn_blocking(move || f(&store))
+        .await
+        .map_err(|e| ApiProblem::internal(format!("blocking task failed: {e}")))?
+}
+
 /// `StoreError` → HTTP。`InvalidTransition` は 409、`SQLITE_BUSY` は 503 `db_busy`、その他は 500。
 impl From<StoreError> for ApiProblem {
     fn from(err: StoreError) -> Self {

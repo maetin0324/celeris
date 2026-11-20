@@ -19,7 +19,7 @@ use serde::Deserialize;
 use task_core::{KnowledgeOp, KnowledgeUseStore};
 
 use super::{CosCaller, cos_only};
-use crate::handlers::{ApiResult, json_response};
+use crate::http_io::{ApiResult, json_response};
 use crate::problem::ApiProblem;
 use crate::state::ApiState;
 
@@ -44,7 +44,7 @@ async fn record(
             "knowledge-use accepts only the CoS run credential of the current run",
         ));
     };
-    let req: KnowledgeUseRequest = crate::handlers::read_json(body, false).await?;
+    let req: KnowledgeUseRequest = crate::http_io::read_json(body, false).await?;
     if req.op == KnowledgeOp::Record {
         // 記録は API を通る（operation `knowledge.record`）ので受け側が数える。ここでも数えると二重になる。
         return Err(ApiProblem::new(

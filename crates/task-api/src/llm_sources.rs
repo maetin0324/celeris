@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use axum::extract::{Path, RawQuery, State};
 
-use crate::handlers::{ApiResult, json_response};
+use crate::http_io::{ApiResult, json_response};
 use crate::problem::ApiProblem;
 use crate::state::ApiState;
 use crate::types::{
@@ -31,7 +31,7 @@ pub type SharedLlmSourcesReader = Arc<dyn LlmSourcesReader>;
 
 /// `GET /llm/sources`。トークン必須（他の観測系と同じ）。`[llm_proxy]` が無効なら 409。
 pub(crate) async fn list(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> ApiResult {
-    crate::handlers::no_query(&raw)?;
+    crate::http_io::no_query(&raw)?;
     let Some(reader) = state.inner.llm_sources.clone() else {
         return Err(ApiProblem::llm_proxy_unavailable());
     };
@@ -46,7 +46,7 @@ pub(crate) async fn detail(
     Path(source_id): Path<String>,
     RawQuery(raw): RawQuery,
 ) -> ApiResult {
-    crate::handlers::no_query(&raw)?;
+    crate::http_io::no_query(&raw)?;
     let Some(reader) = state.inner.llm_sources.clone() else {
         return Err(ApiProblem::llm_proxy_unavailable());
     };

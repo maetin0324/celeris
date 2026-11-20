@@ -26,7 +26,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use crate::cos::operations::{Applied, OperationAudit};
-use crate::handlers::{ApiResult, Params, json_response, no_query, read_json};
+use crate::http_io::{ApiResult, Params, json_response, no_query, read_json};
 use crate::problem::{ApiProblem, store_problem};
 use crate::state::ApiState;
 
@@ -334,7 +334,7 @@ async fn delete_override(
 async fn discover(State(state): State<ApiState>, RawQuery(raw): RawQuery, body: Body) -> ApiResult {
     no_query(&raw)?;
     let payload: DiscoverBody = read_json(body, true).await?;
-    let response = crate::cos::operations::effect_result(discover_effect(&state, payload).await)?;
+    let response = crate::problem::effect_result(discover_effect(&state, payload).await)?;
     Ok(json_response(StatusCode::ACCEPTED, &response))
 }
 
@@ -343,7 +343,7 @@ async fn discover(State(state): State<ApiState>, RawQuery(raw): RawQuery, body: 
 pub(crate) async fn discover_effect(
     state: &ApiState,
     payload: DiscoverBody,
-) -> crate::cos::operations::Effect<DiscoverResponse> {
+) -> crate::problem::Effect<DiscoverResponse> {
     if let Some(source) = &payload.source
         && let Err(problem) = parse_source(source)
     {

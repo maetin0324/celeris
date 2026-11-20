@@ -203,3 +203,58 @@ fn health_review_design_verdict_consecutive_failures_and_reason_line() {
         "design review failed: reviewer の判定が不合格（findings なし）"
     );
 }
+
+/// 不変条件（ADR 2026-11-19-planner-reviewer-prompt-coverage D2）: 採用前の計画の設計 review の reviewer の prompt
+/// （`run_design_reviewer` と同じく `crate::review::synthetic_review_task` で対象 task の objective と acceptance を写した
+/// `Review` task を、`ReviewRequest { design: Some(..) }` の `RunContext` で `claude_code::build_prompt` に渡したもの）に、
+/// 3,000 文字の objective の末尾の印と全受入条件の text が切れずに載り、設計 review の節も出る。設計 review は計画が
+/// 依頼の末尾の条件（禁止事項・不変条件）を満たすかを判定するので、末尾が落ちると判定の根拠が欠ける。
+/// 既存の試験で検出できない理由: `prompt_boundary_design_review_shows_reason_owner_row_and_invariants`（task-worker）は
+/// 短い fixture の objective で risk の理由の行しか見ず、`synthetic_review_task` を通らない。
+/// `prompt_boundary_worker_and_planner_get_class_rule_invariants_and_dependency_rule` は末尾の印を worker の prompt に
+/// しか当てない。この file の既存の試験は prompt を組まない。
+#[test]
+fn prompt_full_objective_design_review_keeps_objective_tail() {
+    use crate::review::tests::{assert_review_prompt_keeps_subject, long_objective_subject};
+    use task_worker::protocol::DesignReviewRequest;
+    use task_worker::{ReviewRequest, RunContext};
+
+    let dir = tempfile::tempdir().unwrap();
+    let subject = long_objective_subject(dir.path());
+    let plan = spec(
+        serde_json::json!([leaf("a", &["store/a.rs"], None)]),
+        Some(brief_with_new_state()),
+    );
+    let policies = vec![(
+        "core".to_string(),
+        policy("store", "^store/", &"a".repeat(64)),
+    )];
+    let (risk, _) = merge_risk(&policies, &write_paths_by_repo(&plan, "core"), &plan);
+    assert!(risk.level.needs_design_review());
+    let request = DesignReviewRequest {
+        brief: plan.design_brief.clone(),
+        plan_summary: plan_summary(&plan),
+        risk,
+        review_policy: None,
+        owner_rows: Vec::new(),
+    };
+    let review = crate::review::synthetic_review_task(
+        &subject,
+        "design-tail",
+        &crate::review::reviewer_hint(),
+    );
+    let context = RunContext {
+        review: Some(ReviewRequest {
+            design: Some(Box::new(request)),
+            ..Default::default()
+        }),
+        ..RunContext::default()
+    };
+    let prompt =
+        task_worker::claude_code::build_prompt(&review, &context, "design-tail", "artifacts");
+    assert!(
+        prompt.contains(task_worker::change_rules::review::DESIGN_HEADING),
+        "the design review section is missing"
+    );
+    assert_review_prompt_keeps_subject(&prompt, &subject, "design review");
+}

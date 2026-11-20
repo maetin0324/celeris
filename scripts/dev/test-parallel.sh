@@ -208,7 +208,10 @@ with open(nlog, encoding="utf-8", errors="replace") as fh:
             total, nbin = int(m.group(1)), int(m.group(2))
         if s.startswith("Summary [") and re.search(r"\btests? run:", s):
             summary_seen = True
-            tail = s.split(":", 1)[1]
+            # 本物の nextest は `8525 passed (3 slow, 1 leaky), 22 skipped` のように数の後へ括弧の注記を付ける。
+            # 注記を外してから `<数> <語>` の組に割る（外さないと `passed` の組が取れず nextest の通過数が抜ける。
+            # ADR 2026-11-20-release-record-summary-log D1）。
+            tail = re.sub(r"\s*\([^()]*\)", "", s.split(":", 1)[1])
             for count, word in re.findall(r"(\d+) ([a-z ]+?)(?:,|$)", tail):
                 n = int(count)
                 word = word.strip()
@@ -238,6 +241,11 @@ out = {
     "passed": npass + dpass,
     "failed": nfail + dfail,
     "ignored": nskip + dign,
+    # passed・ignored の内訳（passed = nextest_passed + doc_passed、ignored = nextest_skipped + doc_ignored）
+    "nextest_passed": npass,
+    "nextest_skipped": nskip,
+    "doc_passed": dpass,
+    "doc_ignored": dign,
     "prepare_exit": int(prc),
     "nextest_exit": int(nrc),
     "doctest_exit": None if drc == "skipped" else int(drc),

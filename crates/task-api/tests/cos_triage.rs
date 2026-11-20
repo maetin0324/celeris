@@ -1304,3 +1304,82 @@ async fn cos_chat_triage_resolve_policy_version_must_match_the_run() {
     assert_eq!(item_state(&env, &other), "pending");
     assert_ne!(run, run2);
 }
+
+/// 不変条件（`task-state-in-sqlite`・`events-append-only`・`cos-audit-same-tx`、ADR
+/// 2026-11-19-chat-attachment-store-connection D2・§5）: `GET /api/v1/cos/inbox` は API の store の読み取りの
+/// 接続（`with_read_conn`）で読み、`events` と `cos_operations` の行を増やさない。resolve の `audit.apply` が
+/// mark の後に失敗した（`applied` の監査行を trigger が拒む）とき、同じ読み取りは item を `pending` のまま返し、
+/// 増える行は拒否の記録（`rejected` の 1 行とその監査 event 1 件）だけで、`applied` の行と event は無い。
+/// 既存の `cos_chat_triage_mark_and_audit_commit_together` は試験自身の接続で状態を読み、受信箱の API の読み取りが
+/// rollback した行を見せないこと、読み取りが行を足さないことを確かめていなかった。
+#[tokio::test]
+async fn triage_conn_http_reads_show_committed_rows_and_append_nothing() {
+    let env = admin_env();
+    let app = env.router();
+    let notice = ingest(&env, "notice", "notice-conn", "v1", 1);
+    let (_t, _r, bearer) = cos_bearer(&env, "conn");
+    let headers = [("authorization", bearer.as_str())];
+    let rows = |state: Option<&str>| -> (i64, i64) {
+        let conn = db(&env);
+        let events: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE ?1 IS NULL \
+                 OR (json_extract(json,'$.type')='cos_operation' AND json_extract(json,'$.state')=?1)",
+                [state],
+                |r| r.get(0),
+            )
+            .expect("events");
+        let operations: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM cos_operations WHERE ?1 IS NULL OR state=?1",
+                [state],
+                |r| r.get(0),
+            )
+            .expect("operations");
+        (events, operations)
+    };
+    let listed = |query: &'static str| {
+        let app = app.clone();
+        async move {
+            let resp = send(&app, get_admin(&format!("/api/v1/cos/inbox{query}"))).await;
+            assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+            resp.json()["items"].as_array().expect("items").clone()
+        }
+    };
+
+    // Reads: the item is listed through the store's read connection, nothing is written.
+    let before = rows(None);
+    let readers = env.state.store_lock_counts().reader;
+    let pending = listed("?state=pending").await;
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert_eq!(pending[0]["id"], notice.as_str());
+    assert_eq!(listed("").await.len(), 1);
+    assert!(env.state.store_lock_counts().reader >= readers + 2);
+    assert_eq!(rows(None), before, "GET /cos/inbox appended nothing");
+
+    // The applied audit row is refused after the mark: the reads still show the committed state.
+    db(&env)
+        .execute_batch(
+            "CREATE TRIGGER refuse_applied BEFORE INSERT ON cos_operations WHEN NEW.state='applied' \
+             BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+        )
+        .expect("trigger");
+    let resp = send(
+        &app,
+        post_json_with(
+            &resolve_path(&notice),
+            &resolve_body("k-conn", "v1", "observe", json!({})),
+            &headers,
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 500, "{}", resp.text());
+    let pending = listed("?state=pending").await;
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert_eq!(pending[0]["state"], "pending");
+    assert!(pending[0]["operation_id"].is_null(), "{pending:?}");
+    assert!(listed("?state=observed").await.is_empty());
+    assert_eq!(rows(Some("applied")), (0, 0), "no applied row or event");
+    assert_eq!(rows(Some("rejected")), (1, 1), "only the rejection record");
+    assert_eq!(rows(None), (before.0 + 1, before.1 + 1));
+}

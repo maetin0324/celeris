@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # All Rust/web stages and packaging are required; missing web cannot produce a release.
 set -euo pipefail
+# 理由: worker の環境は本番の CELERIS_LOGS_DIR を継ぎ、継いだままだと台本が偽の要約の行を本番の release-records.jsonl に足す。
+unset CELERIS_BACKUPS_DIR CELERIS_LOGS_DIR
 
 here="$(cd "$(dirname "$0")/.." && pwd)"
 # control-ts を持たない偽の木なので、TS 制御層の bundle の段は偽物にする（本物は scripts/dev/test-release-script-gate.sh）。

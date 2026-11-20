@@ -23,6 +23,7 @@ completed: 2026-11-20
 ## commit（件名）
 
 - 「counts: test-parallel.sh の Summary 行の注記を外して数え、cargo_test に nextest と doc-test の内訳を足す」
+- 「counts: 進捗 counts.md に検査の結果を書く」
 
 ## 変えた試験（`release_parallel_test_gate.sh`）
 
@@ -93,14 +94,19 @@ base の解析は `7 passed (1 slow), 2 skipped` の `passed` の組を取れず
   `passed` が doc-test の数だけであることを書いた。legacy の runner の欄と、「gate.json の追加の欄」の `cargo_test` も合わせた。
 - `docs/ops/nextest.md`: 「件数の集計（`CELERIS_TEST_SUMMARY`）」の節と欄の表を足し、legacy の runner は内訳の欄を持たないと書いた。
 
-### 検査
-
-- `bash scripts/dev/test-affected.sh` / `cargo clippy --workspace -- -D warnings` / `cargo fmt --all -- --check` /
-  `sh scripts/dev/progress-index.sh --check` / `sh scripts/dev/check-doc-links.sh` の結果は下の「検査の結果」に書く。
-
 ## 検査の結果（提出時の HEAD で実行）
 
-（このあと埋める）
+- `bash scripts/dev/test-affected.sh` → exit 0。repo-health は `verdict=pass exit=0 … new=0 worsened=0`。
+  試験 runner の一時領域の試験（`test-runner-tmp-lifecycle.sh`・`test-runner-tmp-repro.sh`）が走り
+  `runner-tmp-repro: ok（18 case が期待表と一致…）`。crate の試験の対象は無い（`crates/` を変えていない）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo fmt --all -- --check` → exit 0。
+- `sh scripts/dev/progress-index.sh --check` → exit 0（`progress-index --check: ok`）。
+- `sh scripts/dev/check-doc-links.sh` → exit 0（`check-doc-links: ok`）。`sh scripts/dev/check-adr-numbers.sh` → exit 0（468 files）。
+- `bash -n` で 2 つの台本の構文を確かめた（exit 0）。shellcheck はこの host に無い（未実施）。
+- 範囲: `git diff --name-only "$CELERIS_WU_BASE" HEAD` は `agent-docs/progress/2026-11-19-arch-v4-h-r6/counts.md`・`docs/ops/nextest.md`・
+  `docs/ops/selfdeploy.md`・`scripts/dev/test-parallel.sh`・`scripts/selfdeploy/tests/release_parallel_test_gate.sh` の 5 つ。
+  `crates/`・`scripts/selfdeploy/release.sh`・policy の file は含まない。
 
 ## 未解決
 

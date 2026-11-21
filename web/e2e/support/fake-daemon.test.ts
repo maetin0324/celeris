@@ -330,15 +330,24 @@ it("records JSON requests, sends SSE immediately, and marks aborted requests", a
   const snapshot = JSON.parse(tick.match(/^data: (.+)$/m)?.[1] ?? "null");
   expect(validateFixture(snapshot, schema.$defs.DaemonSnapshot)).toEqual([]);
   await reader.cancel();
+  const fake = daemon;
+  const inbox = (aborted: boolean) =>
+    fake.requests.some(
+      (request: { path: string; aborted: boolean }) => request.path === "/inbox" && (!aborted || request.aborted),
+    );
+  // Wait for the events (request recorded, then closed) instead of a fixed sleep: under load
+  // 30 ms was not always enough for the server to see the request or its close (vitest's test
+  // timeout bounds both waits).
+  const until = async (done: () => boolean) => {
+    while (!done()) await new Promise((resolve) => setTimeout(resolve, 5));
+  };
   const controller = new AbortController();
   const pending = fetch(`${url}/inbox`, { signal: controller.signal });
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  await until(() => inbox(false));
   controller.abort();
   await expect(pending).rejects.toThrow();
-  await new Promise((resolve) => setTimeout(resolve, 30));
-  expect(
-    daemon.requests.some((request: { path: string; aborted: boolean }) => request.path === "/inbox" && request.aborted),
-  ).toBe(true);
+  await until(() => inbox(true));
+  expect(inbox(true)).toBe(true);
 });
 
 // ADR-0133: 受信箱・通知の fixture は状態を持ち、answer・read・read-all で変わり、SSE の合図を送る。

@@ -1,0 +1,22 @@
+warning: use of deprecated method `tokio::net::TcpStream::set_linger`: `SO_LINGER` causes the socket to block the thread on drop
+   --> crates/script-runtime/vendor/deno_core/uv_compat/tcp.rs:818:17
+    |
+818 |       && stream.set_linger(Some(std::time::Duration::ZERO)).is_err()
+    |                 ^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+   Compiling task-dispatch v0.1.0 (/local/celeris/data/workspaces/01M7XSGW4FH258N1K3AMW76Y6F/wu/settle-failure/repos/agent-platform/crates/task-dispatch)
+warning: `deno_core` (lib) generated 1 warning
+   Compiling celeris-campaign v0.1.0 (/local/celeris/data/workspaces/01M7XSGW4FH258N1K3AMW76Y6F/wu/settle-failure/repos/agent-platform/crates/campaign)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 02s
+────────────
+ Nextest run ID 47ee1b83-0dce-4d3b-a05f-f19ae6198dac with nextest profile: default
+    Starting 4 tests across 5 binaries (3301 tests skipped)
+        PASS [   2.107s] (1/4) task-dispatch dispatcher::tests::tree_decisions::decision_fail_closed_plan_issue_leaf_records_decisions_before_replan
+        PASS [   2.109s] (2/4) task-dispatch dispatcher::tests::tree_decisions::decision_fail_closed_question_leaf_records_decisions
+        PASS [   2.421s] (3/4) task-dispatch dispatcher::tests::tree_decisions::decision_fail_closed_check_failed_leaf_records_decisions
+        PASS [   3.680s] (4/4) task-dispatch dispatcher::tests::tree_decisions::decision_fail_closed_replan_exhausted_leaf_records_one_decision
+────────────
+     Summary [   3.697s] 4 tests run: 4 passed, 3301 skipped
+exit=0

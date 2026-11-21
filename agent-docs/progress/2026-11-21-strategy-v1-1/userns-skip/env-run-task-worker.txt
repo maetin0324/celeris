@@ -1,0 +1,85 @@
+$ env -u CELERIS_ISOLATION_TESTS -u CELERIS_DB_GUARD_TESTS -u CELERIS_LAUNCHER_TESTS CELERIS_USERNS_TESTS=1 cargo nextest run -p task-worker --lib --no-capture --status-level all --final-status-level all --run-ignored all --no-tests=fail -E 'binary_id(task-worker) & (test(=db_guard::tests::user_systemd_bus_is_hidden_from_launched_process) | test(=db_guard::tests::host_config_read_only_inside_namespace) | test(=db_guard::tests::the_db_and_its_wal_files_are_read_only_but_siblings_stay_writable) | test(=db_guard::tests::a_nested_user_namespace_cannot_undo_the_read_only_mount) | test(=db_guard::tests::the_guarded_process_has_no_capabilities_and_keeps_its_uid) | test(=db_guard::tests::probe_confirms_the_db_is_not_writable_inside) | test(=db_guard::tests::ssh_config_includes_still_parse_inside_the_namespace))'
+
+# 整形: 対象の 9 件以外の SKIP の行 2446 行と、task-worker・celeris-credentiald 以外の Compiling の行 74 行を省いた。
+# repo の path は <repo>、CARGO_TARGET_DIR は <target>、run の TMPDIR は <tmpdir>、nextest の run ID は <run-id> に置き換えた。
+
+
+   Compiling celeris-credentiald v0.1.0 (<repo>/crates/celeris-credentiald)
+   Compiling task-worker v0.1.0 (<repo>/crates/task-worker)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 35s
+────────────
+ Nextest run ID <run-id> with nextest profile: default
+    Starting 7 tests across 1 binary (1223 tests skipped)
+       START [         ] (1/7) task-worker db_guard::tests::a_nested_user_namespace_cannot_undo_the_read_only_mount
+
+running 1 test
+USERNS-BODY db_guard::tests::a_nested_user_namespace_cannot_undo_the_read_only_mount: unshare(1) present
+test db_guard::tests::a_nested_user_namespace_cannot_undo_the_read_only_mount ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1229 filtered out; finished in 0.37s
+
+        PASS [   0.376s] (1/7) task-worker db_guard::tests::a_nested_user_namespace_cannot_undo_the_read_only_mount
+       START [         ] (2/7) task-worker db_guard::tests::host_config_read_only_inside_namespace
+
+running 1 test
+USERNS-BODY db_guard::tests::host_config_read_only_inside_namespace: unshare -Ur true ok
+test db_guard::tests::host_config_read_only_inside_namespace ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1229 filtered out; finished in 0.37s
+
+        PASS [   0.375s] (2/7) task-worker db_guard::tests::host_config_read_only_inside_namespace
+       START [         ] (3/7) task-worker db_guard::tests::probe_confirms_the_db_is_not_writable_inside
+
+running 1 test
+USERNS-BODY db_guard::tests::probe_confirms_the_db_is_not_writable_inside: unshare -Ur true ok
+test db_guard::tests::probe_confirms_the_db_is_not_writable_inside ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1229 filtered out; finished in 0.44s
+
+        PASS [   0.451s] (3/7) task-worker db_guard::tests::probe_confirms_the_db_is_not_writable_inside
+       START [         ] (4/7) task-worker db_guard::tests::ssh_config_includes_still_parse_inside_the_namespace
+
+running 1 test
+USERNS-BODY db_guard::tests::ssh_config_includes_still_parse_inside_the_namespace: unshare -Ur true ok
+test db_guard::tests::ssh_config_includes_still_parse_inside_the_namespace ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1229 filtered out; finished in 0.43s
+
+        PASS [   0.434s] (4/7) task-worker db_guard::tests::ssh_config_includes_still_parse_inside_the_namespace
+       START [         ] (5/7) task-worker db_guard::tests::the_db_and_its_wal_files_are_read_only_but_siblings_stay_writable
+
+running 1 test
+USERNS-BODY db_guard::tests::the_db_and_its_wal_files_are_read_only_but_siblings_stay_writable: unshare -Ur true ok
+test db_guard::tests::the_db_and_its_wal_files_are_read_only_but_siblings_stay_writable ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1229 filtered out; finished in 0.40s
+
+        PASS [   0.412s] (5/7) task-worker db_guard::tests::the_db_and_its_wal_files_are_read_only_but_siblings_stay_writable
+       START [         ] (6/7) task-worker db_guard::tests::the_guarded_process_has_no_capabilities_and_keeps_its_uid
+
+running 1 test
+USERNS-BODY db_guard::tests::the_guarded_process_has_no_capabilities_and_keeps_its_uid: unshare -Ur true ok
+test db_guard::tests::the_guarded_process_has_no_capabilities_and_keeps_its_uid ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1229 filtered out; finished in 0.44s
+
+        PASS [   0.450s] (6/7) task-worker db_guard::tests::the_guarded_process_has_no_capabilities_and_keeps_its_uid
+       START [         ] (7/7) task-worker db_guard::tests::user_systemd_bus_is_hidden_from_launched_process
+
+running 1 test
+USERNS-BODY db_guard::tests::user_systemd_bus_is_hidden_from_launched_process: unshare -Ur true ok
+test db_guard::tests::user_systemd_bus_is_hidden_from_launched_process ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1229 filtered out; finished in 0.38s
+
+        PASS [   0.387s] (7/7) task-worker db_guard::tests::user_systemd_bus_is_hidden_from_launched_process
+────────────
+     Summary [   2.900s] 7 tests run: 7 passed, 1223 skipped
+        PASS [   0.376s] (1/7) task-worker db_guard::tests::a_nested_user_namespace_cannot_undo_the_read_only_mount
+        PASS [   0.375s] (2/7) task-worker db_guard::tests::host_config_read_only_inside_namespace
+        PASS [   0.451s] (3/7) task-worker db_guard::tests::probe_confirms_the_db_is_not_writable_inside
+        PASS [   0.434s] (4/7) task-worker db_guard::tests::ssh_config_includes_still_parse_inside_the_namespace
+        PASS [   0.412s] (5/7) task-worker db_guard::tests::the_db_and_its_wal_files_are_read_only_but_siblings_stay_writable
+        PASS [   0.450s] (6/7) task-worker db_guard::tests::the_guarded_process_has_no_capabilities_and_keeps_its_uid
+        PASS [   0.387s] (7/7) task-worker db_guard::tests::user_systemd_bus_is_hidden_from_launched_process
+exit=0

@@ -1,0 +1,28 @@
+# ADR-0126 B3 の優先順位の確認: cargo nextest list --message-format json の ignored 欄（9 件）
+
+$ env -u CELERIS_ISOLATION_TESTS -u CELERIS_USERNS_TESTS -u CELERIS_DB_GUARD_TESTS -u CELERIS_LAUNCHER_TESTS CELERIS_ISOLATION_TESTS=skip CELERIS_USERNS_TESTS=1 cargo nextest list -p task-worker --lib -p celeris-credentiald --test injection_peer_uid --message-format json
+exit=0
+ignored task-worker db_guard::tests::user_systemd_bus_is_hidden_from_launched_process
+ignored task-worker db_guard::tests::host_config_read_only_inside_namespace
+ignored task-worker db_guard::tests::the_db_and_its_wal_files_are_read_only_but_siblings_stay_writable
+ignored task-worker db_guard::tests::a_nested_user_namespace_cannot_undo_the_read_only_mount
+ignored task-worker db_guard::tests::the_guarded_process_has_no_capabilities_and_keeps_its_uid
+ignored task-worker db_guard::tests::probe_confirms_the_db_is_not_writable_inside
+ignored task-worker db_guard::tests::ssh_config_includes_still_parse_inside_the_namespace
+ignored celeris-credentiald::injection_peer_uid inner_peer_uid_probe
+ignored celeris-credentiald::injection_peer_uid real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch
+ignored: 9 of 9
+
+$ env -u CELERIS_ISOLATION_TESTS -u CELERIS_USERNS_TESTS -u CELERIS_DB_GUARD_TESTS -u CELERIS_LAUNCHER_TESTS CELERIS_USERNS_TESTS=1 cargo nextest list -p task-worker --lib -p celeris-credentiald --test injection_peer_uid --message-format json
+exit=0
+not-ignored task-worker db_guard::tests::user_systemd_bus_is_hidden_from_launched_process
+not-ignored task-worker db_guard::tests::host_config_read_only_inside_namespace
+not-ignored task-worker db_guard::tests::the_db_and_its_wal_files_are_read_only_but_siblings_stay_writable
+not-ignored task-worker db_guard::tests::a_nested_user_namespace_cannot_undo_the_read_only_mount
+not-ignored task-worker db_guard::tests::the_guarded_process_has_no_capabilities_and_keeps_its_uid
+not-ignored task-worker db_guard::tests::probe_confirms_the_db_is_not_writable_inside
+not-ignored task-worker db_guard::tests::ssh_config_includes_still_parse_inside_the_namespace
+ignored celeris-credentiald::injection_peer_uid inner_peer_uid_probe
+not-ignored celeris-credentiald::injection_peer_uid real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch
+ignored: 1 of 9
+

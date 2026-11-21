@@ -1,0 +1,106 @@
+$ env -u CELERIS_USERNS_TESTS -u CELERIS_ISOLATION_TESTS -u CELERIS_DB_GUARD_TESTS -u CELERIS_LAUNCHER_TESTS cargo nextest run -p task-worker --lib -p celeris-credentiald --test injection_peer_uid --status-level pass --success-output immediate --no-tests=fail -E '(binary_id(task-worker) & (test(=db_guard::tests::user_systemd_bus_is_hidden_from_launched_process) | test(=db_guard::tests::host_config_read_only_inside_namespace) | test(=db_guard::tests::the_db_and_its_wal_files_are_read_only_but_siblings_stay_writable) | test(=db_guard::tests::a_nested_user_namespace_cannot_undo_the_read_only_mount) | test(=db_guard::tests::the_guarded_process_has_no_capabilities_and_keeps_its_uid) | test(=db_guard::tests::probe_confirms_the_db_is_not_writable_inside) | test(=db_guard::tests::ssh_config_includes_still_parse_inside_the_namespace))) | (binary_id(celeris-credentiald::injection_peer_uid) & (test(=inner_peer_uid_probe) | test(=real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch)))'
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
+────────────
+ Nextest run ID <run-id> with nextest profile: default
+    Starting 9 tests across 2 binaries (1225 tests and 1 binary skipped)
+        PASS [   0.007s] (1/9) celeris-credentiald::injection_peer_uid real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch
+  stdout ───
+
+    running 1 test
+    test real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+  stderr ───
+    SKIPPED (peer-uid real-process test, not passed): set CELERIS_USERNS_TESTS=1 or CELERIS_LAUNCHER_TESTS=require to run (ADR-0126)
+
+        PASS [   0.008s] (2/9) celeris-credentiald::injection_peer_uid inner_peer_uid_probe
+  stdout ───
+
+    running 1 test
+    test inner_peer_uid_probe ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+
+        PASS [   0.009s] (3/9) task-worker db_guard::tests::a_nested_user_namespace_cannot_undo_the_read_only_mount
+  stdout ───
+
+    running 1 test
+    test db_guard::tests::a_nested_user_namespace_cannot_undo_the_read_only_mount ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1229 filtered out; finished in 0.00s
+
+  stderr ───
+    SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+
+        PASS [   0.010s] (4/9) task-worker db_guard::tests::user_systemd_bus_is_hidden_from_launched_process
+  stdout ───
+
+    running 1 test
+    test db_guard::tests::user_systemd_bus_is_hidden_from_launched_process ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1229 filtered out; finished in 0.00s
+
+  stderr ───
+    SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+
+        PASS [   0.009s] (5/9) task-worker db_guard::tests::host_config_read_only_inside_namespace
+  stdout ───
+
+    running 1 test
+    test db_guard::tests::host_config_read_only_inside_namespace ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1229 filtered out; finished in 0.00s
+
+  stderr ───
+    SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+
+        PASS [   0.010s] (6/9) task-worker db_guard::tests::the_db_and_its_wal_files_are_read_only_but_siblings_stay_writable
+  stdout ───
+
+    running 1 test
+    test db_guard::tests::the_db_and_its_wal_files_are_read_only_but_siblings_stay_writable ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1229 filtered out; finished in 0.00s
+
+  stderr ───
+    SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+
+        PASS [   0.010s] (7/9) task-worker db_guard::tests::the_guarded_process_has_no_capabilities_and_keeps_its_uid
+  stdout ───
+
+    running 1 test
+    test db_guard::tests::the_guarded_process_has_no_capabilities_and_keeps_its_uid ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1229 filtered out; finished in 0.00s
+
+  stderr ───
+    SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+
+        PASS [   0.011s] (8/9) task-worker db_guard::tests::probe_confirms_the_db_is_not_writable_inside
+  stdout ───
+
+    running 1 test
+    test db_guard::tests::probe_confirms_the_db_is_not_writable_inside ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1229 filtered out; finished in 0.00s
+
+  stderr ───
+    SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+
+        PASS [   0.011s] (9/9) task-worker db_guard::tests::ssh_config_includes_still_parse_inside_the_namespace
+  stdout ───
+
+    running 1 test
+    test db_guard::tests::ssh_config_includes_still_parse_inside_the_namespace ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1229 filtered out; finished in 0.00s
+
+  stderr ───
+    SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+
+────────────
+     Summary [   0.018s] 9 tests run: 9 passed, 1225 skipped
+exit=0

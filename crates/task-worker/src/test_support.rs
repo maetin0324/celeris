@@ -15,24 +15,17 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 /// ADR-0126 B2/B3 付記: lib 内（`src/` の `#[cfg(test)]`）の user namespace（unshare/`CLONE_NEWUSER`/
-/// 実 browser・runtime の sandbox 化）前提の試験を `tests/userns_gate/mod.rs` と同じ規則で既定 skip にする。
-/// 優先順位（上が強い）:
-/// 1. `CELERIS_ISOLATION_TESTS=skip` → skip。
-/// 2. `CELERIS_USERNS_TESTS=1`、または従来の `CELERIS_ISOLATION_TESTS=require` / `CELERIS_DB_GUARD_TESTS=require`
-///    → 走らせる（環境が無ければ skip ではなく、呼び出し側の assert/panic で fail させる）。
-/// 3. どれも無い → skip（既定）。
+/// 実 browser・runtime の sandbox 化）前提の試験を既定 skip にする。走らせるかは build の cfg
+/// `celeris_userns_tests` から導く（env を読む規則は `crates/task-worker/userns_tests_cfg.rs` だけ。
+/// ADR 2026-11-21-userns-tests-explicit-skip）。cfg が有れば走らせ、環境が無ければ呼び出し側の assert/panic で
+/// fail させる。新しい試験はこの helper で return せず、`#[cfg_attr(not(celeris_userns_tests), ignore = "…")]` を使う。
 pub(crate) fn skip_unless_userns_tests() -> bool {
-    if std::env::var("CELERIS_ISOLATION_TESTS").as_deref() == Ok("skip") {
-        eprintln!("SKIPPED (not passed): CELERIS_ISOLATION_TESTS=skip");
-        return true;
-    }
-    if std::env::var("CELERIS_USERNS_TESTS").as_deref() == Ok("1")
-        || std::env::var("CELERIS_ISOLATION_TESTS").as_deref() == Ok("require")
-        || std::env::var("CELERIS_DB_GUARD_TESTS").as_deref() == Ok("require")
-    {
+    if cfg!(celeris_userns_tests) {
         return false;
     }
-    eprintln!("SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)");
+    eprintln!(
+        "SKIPPED (userns test, not passed): build with CELERIS_USERNS_TESTS=1 (and without CELERIS_ISOLATION_TESTS=skip) to run (ADR-0126)"
+    );
     true
 }
 

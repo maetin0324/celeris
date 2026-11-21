@@ -271,20 +271,68 @@ fn answered_after_last_plan_fn(
     }
 }
 
+/// 決定が unit を止めているか: 止めている決定（[`still_holds`]）が unit を名指しする（[`names_unit`]）か、
+/// `needs_decisions` に未回答のものがある。`rows` は節点の決定の行。回答の解放（[`release_rows`]）とクラスタ job の
+/// 終了による再開（[`holds_unit`]）が同じ規則を使う。
+fn held_by_decisions(
+    u: &WorkUnitRow,
+    rows: &[DecisionRow],
+    answered_after_last_plan: &dyn Fn(&str) -> bool,
+) -> bool {
+    let held = rows
+        .iter()
+        .any(|d| still_holds(d, answered_after_last_plan) && names_unit(&d.request, u));
+    let needs_ok = u.needs_decisions.iter().all(|k| {
+        rows.iter()
+            .any(|r| r.status == DecisionStatus::Answered && &r.key == k)
+    });
+    held || !needs_ok
+}
+
+/// ADR 2026-11-21-cluster-job-wait-worker-decisions D2: 節点 `node` の unit `unit` を止めている決定があるか
+/// （[`release_rows`] と同じ規則）。クラスタ job の終了による再開（`task_dispatch` の `cluster_job_wait`）は、true なら
+/// unit を `needs_continuation` でなく `blocked(decision)` にし、答えの解放（[`release_rows`]）に再開を任せる。
+pub fn holds_unit(store: &SqliteStore, node: &Task, unit: &WorkUnitRow) -> Result<bool, OpsError> {
+    let rows: Vec<DecisionRow> = store
+        .decisions_list(Some(task_core::tree::root_id_of(node)))?
+        .into_iter()
+        .filter(|r| r.task_id == node.id)
+        .collect();
+    if rows.is_empty() && unit.needs_decisions.is_empty() {
+        return Ok(false);
+    }
+    let events = store.events_for(node.id)?;
+    let answered_after = answered_after_last_plan_fn(&events, None);
+    Ok(held_by_decisions(unit, &rows, &answered_after))
+}
+
+/// ADR 2026-11-21-cluster-job-wait-worker-decisions D3: 最後の run（`runs` 索引）がクラスタ job の wait で終わった unit。
+/// job の終了の後に決定が止めた unit で、答えで解放するときは job の wait の続き（`needs_continuation`）に戻す。
+fn waited_units(store: &SqliteStore, units: &[WorkUnitRow]) -> Result<BTreeSet<String>, OpsError> {
+    let mut out = BTreeSet::new();
+    for u in units.iter().filter(|u| {
+        u.status == WorkUnitStatus::Blocked
+            && u.blocked_reason == Some(WorkUnitBlockedReason::Decision)
+    }) {
+        let last = store.runs_for_work_unit(&u.id)?.pop();
+        if last.is_some_and(|r| r.status == task_core::RunIndexStatus::Waiting) {
+            out.insert(u.id.clone());
+        }
+    }
+    Ok(out)
+}
+
 /// 回答の後の状態（`after`: 節点の決定の行。今回の回答・取り下げを当てたもの）で、`blocked(decision)` の
-/// unit のうち、止めている決定が無く `needs_decisions` がすべて回答済みのものを戻す（依存が満たされて段階が
+/// unit のうち、止めている決定が無く `needs_decisions` がすべて回答済みのもの（[`held_by_decisions`] が false）を戻す
+/// （`waited` の unit〈最後の run がクラスタ job の wait で終わった〉は `needs_continuation`、依存が満たされて段階が
 /// 今の段階なら `ready`、でなければ `pending`）。戻す行と `WorkUnitTransitioned` を返す。
 fn release_rows(
     units: &[WorkUnitRow],
     after: &[DecisionRow],
     answered_after_last_plan: &dyn Fn(&str) -> bool,
+    waited: &BTreeSet<String>,
     now: &str,
 ) -> Vec<(WorkUnitRow, Event)> {
-    let answered: BTreeSet<&str> = after
-        .iter()
-        .filter(|r| r.status == DecisionStatus::Answered)
-        .map(|r| r.key.as_str())
-        .collect();
     let mut released: Vec<String> = Vec::new();
     let mut sim: Vec<WorkUnitRow> = units.to_vec();
     for u in sim.iter_mut() {
@@ -293,14 +341,7 @@ fn release_rows(
         {
             continue;
         }
-        let held = after
-            .iter()
-            .any(|d| still_holds(d, answered_after_last_plan) && names_unit(&d.request, u));
-        let needs_ok = u
-            .needs_decisions
-            .iter()
-            .all(|k| answered.contains(k.as_str()));
-        if held || !needs_ok {
+        if held_by_decisions(u, after, answered_after_last_plan) {
             continue;
         }
         u.status = WorkUnitStatus::Pending;
@@ -310,7 +351,9 @@ fn release_rows(
     let ready: BTreeSet<String> = task_core::newly_ready(&sim).into_iter().collect();
     let mut out = Vec::new();
     for u in sim.iter_mut().filter(|u| released.contains(&u.id)) {
-        if ready.contains(&u.id) {
+        if waited.contains(&u.id) {
+            u.status = WorkUnitStatus::NeedsContinuation;
+        } else if ready.contains(&u.id) {
             u.status = WorkUnitStatus::Ready;
         }
         u.updated_at = now.to_string();
@@ -434,7 +477,8 @@ fn plan_effect(
         | DecisionEffect::RaiseOnce
         | DecisionEffect::Replan
         | DecisionEffect::Atomic => {
-            for (r, e) in release_rows(&units, &after, &answered_after, &now_s) {
+            let waited = waited_units(store, &units)?;
+            for (r, e) in release_rows(&units, &after, &answered_after, &waited, &now_s) {
                 plan.resumed.push(r.key.clone());
                 plan.rows.push(r);
                 plan.events.push(e);

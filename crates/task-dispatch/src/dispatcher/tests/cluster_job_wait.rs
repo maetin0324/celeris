@@ -13,7 +13,9 @@ use std::collections::VecDeque;
 
 use task_core::cluster_job::{ClusterJobState, ClusterJobWaitState};
 
-use super::tree::{assert_replay_is_clean, leaf, stage, tree_dispatcher, unit, v3_plan};
+use super::tree::{
+    assert_replay_is_clean, leaf, stage, tree_dispatcher, unit, unit_reasons, v3_plan,
+};
 use super::*;
 
 /// 用意した終端を順に返す（尽きたら `Done`）。run ごとに `RunContext` を控える。
@@ -794,7 +796,7 @@ async fn a_leaf_unit_waits_alone_and_liveness_names_the_wait() {
     .await;
     let waits = store.cluster_job_waits_for_task(root_id).unwrap();
     assert_eq!(waits[0].state, ClusterJobWaitState::Satisfied);
-    let reasons = super::tree::unit_reasons(&store.events_for(root_id).unwrap(), "a");
+    let reasons = unit_reasons(&store.events_for(root_id).unwrap(), "a");
     assert!(
         reasons.iter().any(|r| r == "cluster_jobs_finished"),
         "{reasons:?}"
@@ -1330,4 +1332,445 @@ async fn partial_failure_resumes_v2_and_v3_work_units() {
         drop(seen);
         assert_replay_is_clean(&store);
     }
+}
+
+// ---- ADR 2026-11-21-cluster-job-wait-worker-decisions: wait で終わった run の決定の要求（cluster_wait_decisions_*） ----
+
+/// planner run には計画を書く。worker の run は key（WU の key、子 task なら題名の `Child ` の後）が `waiter` の最初の
+/// run だけ、`result.json` に `decisions` を書いてクラスタ job の wait（job 42634）で終わる。他の run は `Done`。
+struct WaitDecisionAdapter {
+    waiter: String,
+    decisions: serde_json::Value,
+    plan: StdMutex<Option<String>>,
+    waited: std::sync::atomic::AtomicBool,
+    seen: StdMutex<Vec<(String, task_worker::RunContext)>>,
+}
+
+impl WaitDecisionAdapter {
+    fn new(plan: String, waiter: &str, needed_before: &str) -> Self {
+        WaitDecisionAdapter {
+            waiter: waiter.to_string(),
+            decisions: serde_json::json!([{
+                "key": "vault",
+                "question": "question vault",
+                "options": [{"key": "org-vault", "label": "org vault"}, {"key": "manual", "label": "manual entry"}],
+                "recommended": "org-vault",
+                "cost_of_reversal": "medium",
+                "needed_before": [needed_before],
+            }]),
+            plan: StdMutex::new(Some(plan)),
+            waited: std::sync::atomic::AtomicBool::new(false),
+            seen: StdMutex::new(Vec::new()),
+        }
+    }
+
+    /// `key` の run の文脈（古い順）。
+    fn runs_of(&self, key: &str) -> Vec<task_worker::RunContext> {
+        self.seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(k, _)| k == key)
+            .map(|(_, c)| c.clone())
+            .collect()
+    }
+}
+
+#[async_trait]
+impl WorkerAdapter for WaitDecisionAdapter {
+    fn id(&self) -> &str {
+        "instant"
+    }
+    async fn run(
+        &self,
+        req: RunRequest,
+        _run_id: &str,
+        _limits: RunLimits,
+        _sink: &dyn EventSink,
+    ) -> Result<RunOutcome, AdapterError> {
+        std::fs::create_dir_all(&req.artifacts_dir).ok();
+        if req.context.execution_planner.is_some() {
+            if let Some(json) = self.plan.lock().unwrap().take() {
+                std::fs::write(req.artifacts_dir.join("execution-plan.json"), json).unwrap();
+            }
+            return Ok(RunOutcome {
+                terminal: Terminal::Done {
+                    summary: "planned".into(),
+                    evidence: vec![],
+                    usage: None,
+                },
+                exit_code: Some(0),
+            });
+        }
+        let key = match &req.context.work_unit {
+            Some(w) => w.key.clone(),
+            None => req
+                .task
+                .title
+                .strip_prefix("Child ")
+                .unwrap_or("atomic")
+                .to_string(),
+        };
+        self.seen
+            .lock()
+            .unwrap()
+            .push((key.clone(), req.context.clone()));
+        if key == self.waiter && !self.waited.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            let result = serde_json::json!({"decisions": self.decisions});
+            std::fs::write(req.artifacts_dir.join("result.json"), result.to_string()).unwrap();
+            return Ok(RunOutcome {
+                terminal: wait_terminal(&["42634"], None),
+                exit_code: Some(0),
+            });
+        }
+        std::fs::write(
+            req.artifacts_dir.join("result.json"),
+            serde_json::json!({"summary": "ok", "evidence": []}).to_string(),
+        )
+        .unwrap();
+        Ok(RunOutcome {
+            terminal: Terminal::Done {
+                summary: "ok".into(),
+                evidence: vec![],
+                usage: None,
+            },
+            exit_code: Some(0),
+        })
+    }
+}
+
+fn wait_decision_setup(
+    dir: &std::path::Path,
+    adapter: &Arc<WaitDecisionAdapter>,
+) -> (Arc<SqliteStore>, Dispatcher, TaskId) {
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let root = compound_task(dir);
+    let root_id = root.id;
+    store.create_task(&root, vec![]).unwrap();
+    let mut d = tree_dispatcher(&store, adapter.clone());
+    d.set_cluster_liveness_probe(Arc::new(|_: &[String], _: &str| true));
+    d.config.clusters.insert(
+        "sirius".into(),
+        cluster(task_core::cluster_job::ClusterJobWaitLimits::new(30, 7200)),
+    );
+    (store, d, root_id)
+}
+
+/// 決定 `vault` の行（open・origin worker・`needed_before`）と、それが受信箱の未回答の決定に出ること。
+fn assert_open_worker_decision(
+    store: &Arc<SqliteStore>,
+    root_id: TaskId,
+    raised_on: TaskId,
+    needed_before: &str,
+) -> task_core::DecisionRow {
+    let rows = store.decisions_list(Some(root_id)).unwrap();
+    assert_eq!(
+        rows.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(),
+        vec!["vault"],
+        "{rows:?}"
+    );
+    let row = rows[0].clone();
+    assert_eq!(row.status, task_core::DecisionStatus::Open);
+    assert_eq!(row.task_id, raised_on);
+    assert_eq!(row.needed_before, vec![needed_before.to_string()]);
+    assert_eq!(
+        row.request.raised_by.origin,
+        task_core::DecisionOrigin::Worker
+    );
+    let inbox = task_ops::decision::open_rows(store.as_ref()).unwrap();
+    assert_eq!(
+        inbox.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+        vec![row.id.as_str()]
+    );
+    row
+}
+
+/// 決定を待つ task は `ready` のまま残るので `run_until_idle` は idle にならない。`n` 回の tick のどれも run を起こさない
+/// こと（出来事待ち。止めが外れていれば最初の tick が run を起こし `dispatched` が 1 になる）。
+async fn assert_ticks_dispatch_nothing(d: &mut Dispatcher, n: usize) {
+    for _ in 0..n {
+        let report = d.tick().unwrap();
+        assert_eq!((report.dispatched, report.in_flight), (0, 0), "{report:?}");
+        tokio::task::yield_now().await;
+    }
+}
+
+fn answer_vault(store: &Arc<SqliteStore>, id: &str) -> task_ops::decision::DecisionOutcome {
+    task_ops::decision::answer(
+        store.as_ref(),
+        id,
+        Some("org-vault"),
+        None,
+        "human",
+        OffsetDateTime::now_utc(),
+    )
+    .unwrap_or_else(|e| panic!("answer {id}: {e}"))
+}
+
+fn unit_state(
+    store: &Arc<SqliteStore>,
+    root_id: TaskId,
+    key: &str,
+) -> (
+    task_core::WorkUnitStatus,
+    Option<task_core::WorkUnitBlockedReason>,
+) {
+    let units = store.work_units_for(root_id).unwrap();
+    units
+        .iter()
+        .find(|u| u.key == key)
+        .map_or((task_core::WorkUnitStatus::Pending, None), |u| {
+            (u.status, u.blocked_reason)
+        })
+}
+
+/// leaf `a` の最初の run が `needed_before: [a]` の決定を書いて wait で終わり、b が done になって止まるまで回す。
+/// 決定の行・受信箱の項目ができ、a は `blocked(cluster_jobs)` のまま（wait の行は `waiting`）。wait の id と決定の行。
+async fn park_leaf_with_decision(
+    d: &mut Dispatcher,
+    store: &Arc<SqliteStore>,
+    root_id: TaskId,
+) -> (String, task_core::DecisionRow) {
+    tick_until(d, |_| {
+        unit_state(store, root_id, "a")
+            == (
+                task_core::WorkUnitStatus::Blocked,
+                Some(task_core::WorkUnitBlockedReason::ClusterJobs),
+            )
+            && unit_state(store, root_id, "b").0 == task_core::WorkUnitStatus::Done
+    })
+    .await;
+    let row = assert_open_worker_decision(store, root_id, root_id, "a");
+    let waits = store.cluster_job_waits_for_task(root_id).unwrap();
+    assert_eq!(waits.len(), 1, "{waits:?}");
+    assert_eq!(waits[0].state, ClusterJobWaitState::Waiting);
+    let events = store.events_for(root_id).unwrap();
+    assert_eq!(unit_reasons(&events, "a"), vec!["dispatch", "cluster_jobs"]);
+    assert!(events.iter().any(|(_, e)| matches!(
+        e,
+        Event::WorkerFinished { outcome, .. }
+            if outcome.ends_with("。人の決定を待ちます（決定の要求 1 件。ADR-0079 D7）")
+    )));
+    (waits[0].wait_id.clone(), row)
+}
+
+/// 答えと job の終了が揃った後、a の続きの run（前置きに job の結果）を経て木が終わる。
+async fn finish_leaf_as_a_continuation(
+    d: &mut Dispatcher,
+    store: &Arc<SqliteStore>,
+    adapter: &WaitDecisionAdapter,
+    root_id: TaskId,
+) {
+    tick_until(d, |_| {
+        store.get(root_id).unwrap().unwrap().status == Status::Done
+    })
+    .await;
+    let runs = adapter.runs_of("a");
+    assert_eq!(
+        runs.len(),
+        2,
+        "one run after both the job end and the answer"
+    );
+    let cont = runs[1]
+        .continuation
+        .clone()
+        .expect("the run after the job end and the answer continues the wait");
+    assert_eq!(cont.previous_end, "waiting(cluster_jobs)");
+    assert_eq!(
+        cont.cluster_jobs.expect("cluster job results").state,
+        "satisfied"
+    );
+    assert_replay_is_clean(store);
+}
+
+/// ADR 2026-11-21-cluster-job-wait-worker-decisions D1・D2・D3（不変条件 I1〜I4）: 木の節点の leaf a の run が
+/// `result.json` に `needed_before: [a]` の決定を書いてクラスタ job の wait で終わる。決定の行と受信箱の項目ができ、a は
+/// `blocked(cluster_jobs)` のまま。job が先に終わると a は `needs_continuation` でなく `blocked(decision)` になり、tick を
+/// 回しても走らない。答えると a は `needs_continuation` に戻り、続きの run（前置きに job の結果）の後に木が終わる。修正の
+/// 前は wait の run の `decisions` を読まず（決定 0 件）、job の終了で a は `needs_continuation` になって答え無しに進んだ。
+/// 既存の `a_leaf_unit_waits_alone_and_liveness_names_the_wait` は `decisions` を書かず、`tree_decisions.rs` の試験は
+/// wait で終わらないので、これを検出できない。
+#[tokio::test]
+async fn cluster_wait_decisions_job_end_first_holds_the_leaf_until_the_answer() {
+    let dir = tempfile::tempdir().unwrap();
+    let plan = v3_plan(
+        vec![stage("s1", false)],
+        vec![leaf("a", "s1", &[]), leaf("b", "s1", &[])],
+    );
+    let adapter = Arc::new(WaitDecisionAdapter::new(plan, "a", "a"));
+    let (store, mut d, root_id) = wait_decision_setup(dir.path(), &adapter);
+    let (wait_id, row) = park_leaf_with_decision(&mut d, &store, root_id).await;
+
+    // job が先に終わる: wait は閉じ、a は答えを待つ（blocked(decision)）。
+    let done = notice(&wait_id, "42634", "n1", ClusterJobState::Finished, Some(0));
+    assert_eq!(d.apply_cluster_job_notice(&done).unwrap(), Notice::Finished);
+    assert_eq!(
+        store.cluster_job_wait_get(&wait_id).unwrap().unwrap().state,
+        ClusterJobWaitState::Satisfied
+    );
+    assert_eq!(
+        unit_state(&store, root_id, "a"),
+        (
+            task_core::WorkUnitStatus::Blocked,
+            Some(task_core::WorkUnitBlockedReason::Decision)
+        )
+    );
+    assert_ticks_dispatch_nothing(&mut d, 30).await;
+    assert_eq!(
+        adapter.runs_of("a").len(),
+        1,
+        "a does not run before the answer"
+    );
+    assert_eq!(
+        unit_state(&store, root_id, "a").1,
+        Some(task_core::WorkUnitBlockedReason::Decision)
+    );
+    assert_ne!(
+        unit_state(&store, root_id, "integrate-s1").0,
+        task_core::WorkUnitStatus::Done
+    );
+    assert_ne!(store.get(root_id).unwrap().unwrap().status, Status::Done);
+    assert_eq!(
+        unit_reasons(&store.events_for(root_id).unwrap(), "a"),
+        vec!["dispatch", "cluster_jobs", "decision"]
+    );
+
+    // 答える: a は job の wait の続き（needs_continuation）に戻る。
+    let outcome = answer_vault(&store, &row.id);
+    assert_eq!(outcome.resumed, vec!["a".to_string()]);
+    assert_eq!(
+        unit_state(&store, root_id, "a"),
+        (task_core::WorkUnitStatus::NeedsContinuation, None)
+    );
+    finish_leaf_as_a_continuation(&mut d, &store, &adapter, root_id).await;
+}
+
+/// ADR 2026-11-21-cluster-job-wait-worker-decisions D4（不変条件 I3・I4）: 同じ run で答えが先。答えは
+/// `blocked(cluster_jobs)` の a を触らず（job の待ちの正本はそのまま）、job が終わると a は `needs_continuation` に
+/// なって続きの run が走る。
+#[tokio::test]
+async fn cluster_wait_decisions_answer_first_resumes_on_the_job_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let plan = v3_plan(
+        vec![stage("s1", false)],
+        vec![leaf("a", "s1", &[]), leaf("b", "s1", &[])],
+    );
+    let adapter = Arc::new(WaitDecisionAdapter::new(plan, "a", "a"));
+    let (store, mut d, root_id) = wait_decision_setup(dir.path(), &adapter);
+    let (wait_id, row) = park_leaf_with_decision(&mut d, &store, root_id).await;
+
+    let outcome = answer_vault(&store, &row.id);
+    assert!(outcome.resumed.is_empty(), "{outcome:?}");
+    assert_eq!(
+        unit_state(&store, root_id, "a"),
+        (
+            task_core::WorkUnitStatus::Blocked,
+            Some(task_core::WorkUnitBlockedReason::ClusterJobs)
+        )
+    );
+    assert_ticks_dispatch_nothing(&mut d, 30).await;
+    assert_eq!(adapter.runs_of("a").len(), 1, "a waits for the job");
+
+    let done = notice(&wait_id, "42634", "n1", ClusterJobState::Finished, Some(0));
+    assert_eq!(d.apply_cluster_job_notice(&done).unwrap(), Notice::Finished);
+    assert_eq!(
+        unit_state(&store, root_id, "a"),
+        (task_core::WorkUnitStatus::NeedsContinuation, None)
+    );
+    assert_eq!(
+        unit_reasons(&store.events_for(root_id).unwrap(), "a"),
+        vec!["dispatch", "cluster_jobs", "cluster_jobs_finished"]
+    );
+    finish_leaf_as_a_continuation(&mut d, &store, &adapter, root_id).await;
+}
+
+/// ADR 2026-11-21-cluster-job-wait-worker-decisions D1・D5（不変条件 I1〜I3）: 木の子の atomic の節点 k の run が
+/// `needed_before: [self]` の決定を書いてクラスタ job の wait で終わる。決定の行と受信箱の項目ができ、k は `blocked`
+/// （wait）。`job_first` なら job の終了で k は `ready` に戻るが run は起きず、答えの後に走る。そうでなければ答えの後も
+/// k は job の終了まで `blocked` のまま。どちらでも次の run は job の wait の続きで、k と root が終わる。修正の前は
+/// `Waiting` の run の `decisions` を読まず、job の終了で k が答え無しに走った。
+async fn atomic_node_waits_for_job_and_answer(job_first: bool) {
+    let dir = tempfile::tempdir().unwrap();
+    let plan = v3_plan(
+        vec![stage("s1", false)],
+        vec![super::tree::task_unit("k", "s1", &[], "true")],
+    );
+    let adapter = Arc::new(WaitDecisionAdapter::new(plan, "k", "self"));
+    let (store, mut d, root_id) = wait_decision_setup(dir.path(), &adapter);
+    let child_of = |store: &Arc<SqliteStore>| {
+        store
+            .children(root_id)
+            .unwrap()
+            .into_iter()
+            .find(|c| c.title == "Child k")
+    };
+    tick_until(&mut d, |_| {
+        child_of(&store).is_some_and(|c| {
+            c.status == Status::Blocked
+                && !store.cluster_job_waits_for_task(c.id).unwrap().is_empty()
+        })
+    })
+    .await;
+    let child = child_of(&store).unwrap();
+    let row = assert_open_worker_decision(&store, root_id, child.id, "self");
+    let wait_id = store.cluster_job_waits_for_task(child.id).unwrap()[0]
+        .wait_id
+        .clone();
+    let done = notice(&wait_id, "42634", "n1", ClusterJobState::Finished, Some(0));
+    if job_first {
+        assert_eq!(d.apply_cluster_job_notice(&done).unwrap(), Notice::Finished);
+        assert_eq!(store.get(child.id).unwrap().unwrap().status, Status::Ready);
+        assert_ticks_dispatch_nothing(&mut d, 30).await;
+        assert_eq!(
+            adapter.runs_of("k").len(),
+            1,
+            "k does not run before the answer"
+        );
+        assert_eq!(store.get(child.id).unwrap().unwrap().status, Status::Ready);
+        answer_vault(&store, &row.id);
+    } else {
+        answer_vault(&store, &row.id);
+        assert_ticks_dispatch_nothing(&mut d, 30).await;
+        assert_eq!(adapter.runs_of("k").len(), 1, "k waits for the job");
+        assert_eq!(
+            store.get(child.id).unwrap().unwrap().status,
+            Status::Blocked
+        );
+        assert_eq!(d.apply_cluster_job_notice(&done).unwrap(), Notice::Finished);
+    }
+    tick_until(&mut d, |_| {
+        store.get(root_id).unwrap().unwrap().status == Status::Done
+    })
+    .await;
+    let runs = adapter.runs_of("k");
+    assert_eq!(
+        runs.len(),
+        2,
+        "one run after both the job end and the answer"
+    );
+    let cont = runs[1]
+        .continuation
+        .clone()
+        .expect("the run after the job end and the answer continues the wait");
+    assert_eq!(
+        cont.cluster_jobs.expect("cluster job results").state,
+        "satisfied"
+    );
+    assert!(
+        runs[1].answers.iter().any(|a| a
+            .question
+            .starts_with(task_ops::decision::ANSWERED_QUESTION_PREFIX)),
+        "{:?}",
+        runs[1].answers
+    );
+}
+
+#[tokio::test]
+async fn cluster_wait_decisions_atomic_node_job_end_first() {
+    atomic_node_waits_for_job_and_answer(true).await;
+}
+
+#[tokio::test]
+async fn cluster_wait_decisions_atomic_node_answer_first() {
+    atomic_node_waits_for_job_and_answer(false).await;
 }

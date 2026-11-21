@@ -103,16 +103,21 @@ pub(crate) struct WorkUnitSettlement {
 }
 
 impl WorkUnitSettlement {
-    /// worker の `result.json` の `decisions` を読む run か（ADR-0079 D7、ADR 2026-11-21-worker-decisions-fail-closed D1・
-    /// 付記 2026-11-21）。状態だけを戻す run（harness_error・取り消し。次の run が要求を出し直す）と、WU のクラスタ job の
-    /// wait（待ちの正本は `blocked(cluster_jobs)` で、再開はその行からだけ動く）を除く全ての遷移で読む。遷移の理由は
-    /// 列挙しない。
+    /// settlement で worker の `result.json` の `decisions` を読み、その場で leaf を止める run か（ADR-0079 D7、
+    /// ADR 2026-11-21-worker-decisions-fail-closed D1・付記 2026-11-21）。状態だけを戻す run（harness_error・取り消し。
+    /// 次の run が要求を出し直す）と、WU のクラスタ job の wait（待ちの正本は `blocked(cluster_jobs)` で、再開はその行から
+    /// だけ動く。要求は [`Self::parks_on_cluster_jobs`] の経路が記録する）を除く全ての遷移で読む。遷移の理由は列挙しない。
     pub(crate) fn reads_worker_decisions(&self) -> bool {
-        !self.reset_only
-            && self
-                .decision
-                .as_ref()
-                .is_some_and(|d| d.reason != "cluster_jobs")
+        !self.reset_only && self.decision.is_some() && !self.parks_on_cluster_jobs()
+    }
+
+    /// WU をクラスタ job の wait（`blocked(cluster_jobs)`）にする run か。この run の `decisions` は settlement では
+    /// 読まず、wait を開く側（`Dispatcher::cluster_wait_worker_decisions`）が記録し、job の終了による再開が答えまで
+    /// 止める（ADR 2026-11-21-cluster-job-wait-worker-decisions D1・D2）。
+    pub(crate) fn parks_on_cluster_jobs(&self) -> bool {
+        self.decision
+            .as_ref()
+            .is_some_and(|d| d.reason == "cluster_jobs")
     }
 }
 
@@ -447,6 +452,13 @@ pub(crate) fn settle_work_unit_failure(
 /// 答えの後の run で同じ条件なら、そこで数えと上限が効く）。auto-leaf の上限の遷移（`auto_leaf_budget`）は理由と
 /// continuation の数えを残す。質問で終わる提案（trigger が `WorkerQuestion`）なら質問の文を outcome に残す。
 /// `count` は記録する worker の決定の要求の数（settlement に auto-leaf の上限の決定の要求があれば 1 件足して示す）。
+/// ADR 2026-11-21-cluster-job-wait-worker-decisions D1: クラスタ job の wait で終わった leaf の run が
+/// `needed_before: self` の決定の要求を出した。WU の遷移（`blocked(cluster_jobs)`）と task の trigger は変えず、outcome の
+/// 文の末尾に決定を待つことを足す（止めは job の終了による再開が持つ）。
+pub(crate) fn note_cluster_wait_decisions(s: &mut WorkUnitSettlement, count: usize) {
+    s.outcome = format!("{}。{}", s.outcome, super::waits_for_decisions(count));
+}
+
 pub(crate) fn hold_for_worker_decisions(
     s: &mut WorkUnitSettlement,
     wu: &WorkUnitRow,

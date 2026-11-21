@@ -1,0 +1,124 @@
+   Compiling task-core v0.1.0 (/local/celeris/data/workspaces/01M7XSGW4FH258N1K3AMW76Y6F/wu/revert/repos/agent-platform/crates/task-core)
+warning: use of deprecated method `tokio::net::TcpStream::set_linger`: `SO_LINGER` causes the socket to block the thread on drop
+   --> crates/script-runtime/vendor/deno_core/uv_compat/tcp.rs:818:17
+    |
+818 |       && stream.set_linger(Some(std::time::Duration::ZERO)).is_err()
+    |                 ^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: `deno_core` (lib) generated 1 warning
+warning: fields `summary`, `reason`, and `cost` are never read
+   --> crates/task-core/src/decision.rs:592:5
+    |
+590 | struct RejectedRequest {
+    |        --------------- fields in this struct
+591 |     /// 元の要求の 1 行（読めた要求は [`spec_summary`]、読めなかった要素は位置 `#n`）。
+592 |     summary: String,
+    |     ^^^^^^^
+593 |     reason: String,
+    |     ^^^^^^
+594 |     /// 読めた要求の後戻りの大きさ（読めなければ `None` = 分からない）。
+595 |     cost: Option<CostOfReversal>,
+    |     ^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `rejected_decision` is never used
+   --> crates/task-core/src/decision.rs:772:4
+    |
+772 | fn rejected_decision(key: &str, lost: &[RejectedRequest], target: &str) -> DecisionSpec {
+    |    ^^^^^^^^^^^^^^^^^
+
+   Compiling celeris-credentiald v0.1.0 (/local/celeris/data/workspaces/01M7XSGW4FH258N1K3AMW76Y6F/wu/revert/repos/agent-platform/crates/celeris-credentiald)
+   Compiling task-ops v0.1.0 (/local/celeris/data/workspaces/01M7XSGW4FH258N1K3AMW76Y6F/wu/revert/repos/agent-platform/crates/task-ops)
+   Compiling routing-eval v0.1.0 (/local/celeris/data/workspaces/01M7XSGW4FH258N1K3AMW76Y6F/wu/revert/repos/agent-platform/crates/routing-eval)
+   Compiling task-worker v0.1.0 (/local/celeris/data/workspaces/01M7XSGW4FH258N1K3AMW76Y6F/wu/revert/repos/agent-platform/crates/task-worker)
+warning: `task-core` (lib) generated 2 warnings
+   Compiling task-dispatch v0.1.0 (/local/celeris/data/workspaces/01M7XSGW4FH258N1K3AMW76Y6F/wu/revert/repos/agent-platform/crates/task-dispatch)
+warning: `task-core` (lib test) generated 2 warnings (2 duplicates)
+   Compiling celeris-campaign v0.1.0 (/local/celeris/data/workspaces/01M7XSGW4FH258N1K3AMW76Y6F/wu/revert/repos/agent-platform/crates/campaign)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 40s
+────────────
+ Nextest run ID 6bd1cc38-0ebc-4d6f-a6a1-4d133d0a9c77 with nextest profile: default
+    Starting 2 tests across 5 binaries (3292 tests skipped)
+        FAIL [   0.009s] (1/2) task-core decision::tests::rejected_worker_decisions_become_one_self_decision
+  stdout ───
+
+    running 1 test
+    test decision::tests::rejected_worker_decisions_become_one_self_decision ... FAILED
+
+    failures:
+
+    failures:
+        decision::tests::rejected_worker_decisions_become_one_self_decision
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1356 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'decision::tests::rejected_worker_decisions_become_one_self_decision' (2916770) panicked at crates/task-core/src/decision/tests.rs:369:10:
+    the rejected ones reach a human
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   0.559s] (2/2) task-dispatch dispatcher::tests::tree_decisions::rejected_worker_decision_reaches_the_inbox_and_holds_the_leaf
+  stdout ───
+
+    running 1 test
+    test dispatcher::tests::tree_decisions::rejected_worker_decision_reaches_the_inbox_and_holds_the_leaf ... FAILED
+
+    failures:
+
+    failures:
+        dispatcher::tests::tree_decisions::rejected_worker_decision_reaches_the_inbox_and_holds_the_leaf
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1913 filtered out; finished in 0.55s
+
+  stderr ───
+
+    thread 'dispatcher::tests::tree_decisions::rejected_worker_decision_reaches_the_inbox_and_holds_the_leaf' (2916771) panicked at crates/task-dispatch/src/dispatcher/tests/tree_decisions.rs:815:5:
+    [WorkUnitRow { id: "01M7XTV64AW8E1NYG1FEWV5T2S", task_id: "01M7XTV62Y56CS8Y9SKQPA4QGW", plan_id: "01M7XTV64A8ANSRFZSC0QGN205", key: "a", seq: 0, kind: Implement, status: Done, blocked_reason: None, depends_on: [], runs: 1, continuations: 0, retries: 0, last_run_id: Some("01M7XTV64TMEVGC43JFGAD0AY0"), last_checkpoint_run_id: None, spec: WorkUnitSpec { key: "a", kind: Implement, title: "Leaf a", objective: "Implement a thoroughly and completely", depends_on: [], done_when: ["a is done"], checks: [WorkUnitCheck { cmd: "true", expect_exit: 0, scope: false }], context: WorkUnitContext { paths: [], from_work_units: [], knowledge: [] }, harness: None, features: None, budget: None, outputs: [], phase: Some("s1") }, created_at: "2026-11-21T01:17:00.422164329Z", updated_at: "2026-11-21T01:17:00.444588154Z", phase: Some("s1"), lease_run_id: None, lease_expires_at: None, branch: None, base_commit: None, head_commit: None, integrated_commit: None, child_task_id: None, needs_decisions: [], rebase_pending: false }, WorkUnitRow { id: "01M7XTV64A0HGV1ZAAW645ND1V", task_id: "01M7XTV62Y56CS8Y9SKQPA4QGW", plan_id: "01M7XTV64A8ANSRFZSC0QGN205", key: "b", seq: 1, kind: Implement, status: Done, blocked_reason: None, depends_on: [], runs: 1, continuations: 0, retries: 0, last_run_id: Some("01M7XTV680T9GQ1XKA4PPAVPY0"), last_checkpoint_run_id: None, spec: WorkUnitSpec { key: "b", kind: Implement, title: "Leaf b", objective: "Implement b thoroughly and completely", depends_on: [], done_when: ["b is done"], checks: [WorkUnitCheck { cmd: "true", expect_exit: 0, scope: false }], context: WorkUnitContext { paths: [], from_work_units: [], knowledge: [] }, harness: None, features: None, budget: None, outputs: [], phase: Some("s1") }, created_at: "2026-11-21T01:17:00.422164329Z", updated_at: "2026-11-21T01:17:00.546873504Z", phase: Some("s1"), lease_run_id: None, lease_expires_at: None, branch: None, base_commit: None, head_commit: None, integrated_commit: None, child_task_id: None, needs_decisions: [], rebase_pending: false }, WorkUnitRow { id: "01M7XTV64AQGA8K6BFAP8V1RGJ", task_id: "01M7XTV62Y56CS8Y9SKQPA4QGW", plan_id: "01M7XTV64A8ANSRFZSC0QGN205", key: "integrate-s1", seq: 2, kind: Integrate, status: Done, blocked_reason: None, depends_on: ["a", "b"], runs: 0, continuations: 0, retries: 0, last_run_id: None, last_checkpoint_run_id: None, spec: WorkUnitSpec { key: "integrate-s1", kind: Integrate, title: "工程 Stage s1 の統合", objective: "工程 s1 の WorkUnit のブランチを Task のブランチへ決定的に merge し、検査を再実行する（daemon が行う。LLM run は起こさない）", depends_on: ["a", "b"], done_when: [], checks: [], context: WorkUnitContext { paths: [], from_work_units: [], knowledge: [] }, harness: None, features: None, budget: None, outputs: [], phase: Some("s1") }, created_at: "2026-11-21T01:17:00.422164329Z", updated_at: "2026-11-21T01:17:00.636015651Z", phase: Some("s1"), lease_run_id: None, lease_expires_at: None, branch: None, base_commit: None, head_commit: None, integrated_commit: None, child_task_id: None, needs_decisions: [], rebase_pending: false }]
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+────────────
+     Summary [   0.577s] 2 tests run: 0 passed, 2 failed, 3292 skipped
+        FAIL [   0.009s] (1/2) task-core decision::tests::rejected_worker_decisions_become_one_self_decision
+  stdout ───
+
+    running 1 test
+    test decision::tests::rejected_worker_decisions_become_one_self_decision ... FAILED
+
+    failures:
+
+    failures:
+        decision::tests::rejected_worker_decisions_become_one_self_decision
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1356 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'decision::tests::rejected_worker_decisions_become_one_self_decision' (2916770) panicked at crates/task-core/src/decision/tests.rs:369:10:
+    the rejected ones reach a human
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   0.559s] (2/2) task-dispatch dispatcher::tests::tree_decisions::rejected_worker_decision_reaches_the_inbox_and_holds_the_leaf
+  stdout ───
+
+    running 1 test
+    test dispatcher::tests::tree_decisions::rejected_worker_decision_reaches_the_inbox_and_holds_the_leaf ... FAILED
+
+    failures:
+
+    failures:
+        dispatcher::tests::tree_decisions::rejected_worker_decision_reaches_the_inbox_and_holds_the_leaf
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1913 filtered out; finished in 0.55s
+
+  stderr ───
+
+    thread 'dispatcher::tests::tree_decisions::rejected_worker_decision_reaches_the_inbox_and_holds_the_leaf' (2916771) panicked at crates/task-dispatch/src/dispatcher/tests/tree_decisions.rs:815:5:
+    [WorkUnitRow { id: "01M7XTV64AW8E1NYG1FEWV5T2S", task_id: "01M7XTV62Y56CS8Y9SKQPA4QGW", plan_id: "01M7XTV64A8ANSRFZSC0QGN205", key: "a", seq: 0, kind: Implement, status: Done, blocked_reason: None, depends_on: [], runs: 1, continuations: 0, retries: 0, last_run_id: Some("01M7XTV64TMEVGC43JFGAD0AY0"), last_checkpoint_run_id: None, spec: WorkUnitSpec { key: "a", kind: Implement, title: "Leaf a", objective: "Implement a thoroughly and completely", depends_on: [], done_when: ["a is done"], checks: [WorkUnitCheck { cmd: "true", expect_exit: 0, scope: false }], context: WorkUnitContext { paths: [], from_work_units: [], knowledge: [] }, harness: None, features: None, budget: None, outputs: [], phase: Some("s1") }, created_at: "2026-11-21T01:17:00.422164329Z", updated_at: "2026-11-21T01:17:00.444588154Z", phase: Some("s1"), lease_run_id: None, lease_expires_at: None, branch: None, base_commit: None, head_commit: None, integrated_commit: None, child_task_id: None, needs_decisions: [], rebase_pending: false }, WorkUnitRow { id: "01M7XTV64A0HGV1ZAAW645ND1V", task_id: "01M7XTV62Y56CS8Y9SKQPA4QGW", plan_id: "01M7XTV64A8ANSRFZSC0QGN205", key: "b", seq: 1, kind: Implement, status: Done, blocked_reason: None, depends_on: [], runs: 1, continuations: 0, retries: 0, last_run_id: Some("01M7XTV680T9GQ1XKA4PPAVPY0"), last_checkpoint_run_id: None, spec: WorkUnitSpec { key: "b", kind: Implement, title: "Leaf b", objective: "Implement b thoroughly and completely", depends_on: [], done_when: ["b is done"], checks: [WorkUnitCheck { cmd: "true", expect_exit: 0, scope: false }], context: WorkUnitContext { paths: [], from_work_units: [], knowledge: [] }, harness: None, features: None, budget: None, outputs: [], phase: Some("s1") }, created_at: "2026-11-21T01:17:00.422164329Z", updated_at: "2026-11-21T01:17:00.546873504Z", phase: Some("s1"), lease_run_id: None, lease_expires_at: None, branch: None, base_commit: None, head_commit: None, integrated_commit: None, child_task_id: None, needs_decisions: [], rebase_pending: false }, WorkUnitRow { id: "01M7XTV64AQGA8K6BFAP8V1RGJ", task_id: "01M7XTV62Y56CS8Y9SKQPA4QGW", plan_id: "01M7XTV64A8ANSRFZSC0QGN205", key: "integrate-s1", seq: 2, kind: Integrate, status: Done, blocked_reason: None, depends_on: ["a", "b"], runs: 0, continuations: 0, retries: 0, last_run_id: None, last_checkpoint_run_id: None, spec: WorkUnitSpec { key: "integrate-s1", kind: Integrate, title: "工程 Stage s1 の統合", objective: "工程 s1 の WorkUnit のブランチを Task のブランチへ決定的に merge し、検査を再実行する（daemon が行う。LLM run は起こさない）", depends_on: ["a", "b"], done_when: [], checks: [], context: WorkUnitContext { paths: [], from_work_units: [], knowledge: [] }, harness: None, features: None, budget: None, outputs: [], phase: Some("s1") }, created_at: "2026-11-21T01:17:00.422164329Z", updated_at: "2026-11-21T01:17:00.636015651Z", phase: Some("s1"), lease_run_id: None, lease_expires_at: None, branch: None, base_commit: None, head_commit: None, integrated_commit: None, child_task_id: None, needs_decisions: [], rebase_pending: false }]
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+error: test run failed
+exit=100

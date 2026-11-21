@@ -1150,7 +1150,11 @@ async fn human_check_approval_child_inherits_the_parents_project_milestone_and_a
     let dir = tempfile::tempdir().unwrap();
     let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = new_task(dir.path(), Check::Human, 1);
-    task.project_id = Some(ProjectId::new());
+    // task の `project_id` は store にある案件を指す（API はそれ以外を作れない。行の無い案件の task の run は起きない。
+    // ADR 2026-11-21-strategy-evidence-contract D5.3）。
+    let project = titled_project("approval project");
+    store.project_create(&project).unwrap();
+    task.project_id = Some(project.id);
     task.milestone_id = Some(MilestoneId::new());
     task.assignee = Some("research-survey".into());
     store.insert(&task).unwrap();
@@ -1500,7 +1504,10 @@ async fn a_review_retry_that_eventually_passes_produces_exactly_one_done_report(
         1,
     );
     task.assignee = Some("coding-poc".into());
-    task.project_id = Some(ProjectId::new());
+    // task の `project_id` は store にある案件を指す（ADR 2026-11-21-strategy-evidence-contract D5.3）。
+    let project = titled_project("retry project");
+    store.project_create(&project).unwrap();
+    task.project_id = Some(project.id);
     store.insert(&task).unwrap();
     let adapter = Arc::new(AttemptGatedAdapter {
         calls: AtomicUsize::new(0),

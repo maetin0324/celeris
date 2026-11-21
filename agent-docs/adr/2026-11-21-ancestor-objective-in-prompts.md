@@ -122,8 +122,13 @@ prompt-audit は、修正後の release（2026-11-19T15:39Z 以降の昇格）�
   - 組む所は `task_dispatch::prompt_ancestors::project_request` の 1 か所で、`chain_to_root` の列（対象 task が先頭）で最初に
     `project_id` を持つ task の案件を読む。worker・planner・WU の run（`lineage`）、final review（`review_human_inputs` →
     `ReviewHumanInputs.project` → `RunContext.lineage.project`）、設計 review（`start_design_review` が `lineage` を使う）が同じ関数を通る。
-  - 案件を持つのに行を読めないときは `StoreError` で返り、run を起こさない（祖先の読み取りの失敗と同じ扱い。D3 の付記の位置のまま）。
-    production のコードに `projects` の行を消す経路は無く、本番 DB に案件の行の無い未終了の task は 0 件だった（2026-11-21、read-only で確認）。
+  - 案件を持つのに行を読めない（store の失敗・行が無い）ときは `StoreError` で返り、run を起こさない（strategy-evidence-contract D5.3）。
+    エラーは `run_extras`・`review_human_inputs` の `?` で dispatcher の tick まで返る（祖先の store の読み取りの失敗と同じ経路。ただし
+    `chain_to_root` は行の無い祖先では止まるだけで、エラーにしない）。production のコードに `projects` の行を消す経路は無く、
+    `tasks.project_id` に外部キーは無いが、案件の付いた task 2,267 件のすべてに案件の行があった（本番 DB、2026-11-21、read-only で確認）。
+    行の無い `project_id`（`ProjectId::new()`）を task に付けていた dispatcher の試験 2 件（review の
+    `a_review_retry_that_eventually_passes_produces_exactly_one_done_report` と
+    `human_check_approval_child_inherits_the_parents_project_milestone_and_assignee`）は、案件の行を store に置く形に直した。
   - `project_wake::project_request_sha256`（案件の判断の記録の `request_sha256`）も同じ `project_proposal::sha256_hex` を呼ぶようにし、
     request の hash の計算を 1 か所にした。`project_wake` の手元の `sha256_hex(&[u8])` は消し、snapshot と root の idempotency の
     hash も同じ関数で計算する（入力は UTF-8 の文字列で、出す値は変わらない）。

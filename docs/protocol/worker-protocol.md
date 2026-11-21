@@ -85,7 +85,9 @@ celeris ◀─stdout── {"type":"progress", ...}\n
 | `context.inputs` | array | ✓（空可） | 依存成果物の `ArtifactRef`。`prepare()` で `workspace/inputs/` に配置済み |
 | `context.answers` | array | –（省略可、空なら省略） | `celerisctl answer` で記録された `question` → 人間の回答の履歴（時系列、`{question: string, answer: string}`）。ADR-0010 D3, P-10。前方互換のため未知のワーカーは無視してよい |
 | `context.role` | object | –（省略可。v2, ADR-0016 D1/M3） | タスクに役割があるときだけ `Some`。`{id: string, instructions: string}`（`instructions` は `[[roles]]` に指示文が無ければ空文字列）。`claude-code`/`codex` はプロンプトの前置きにする（`## Role: <id>`） |
-| `context.children` | array | –（省略可。空なら省略。v2, ADR-0016 D3/M4） | 集約 run（`task.aggregate == true` の親の、子が全て終端になった後の run）でのみ非空。`ChildSummary`: `{id, title, role?, status, outcome?, artifacts: ArtifactRef[], workspace?, branch?}`。`branch` はその子が worktree で作業したときのブランチ（`celeris/<child_id>`。Phase 49, ADR-0041 D1）で、親はこれを merge して子の成果を統合する |
+| `context.lineage` | object | –（省略可。祖先も子も無ければ省略。ADR 2026-11-21-ancestor-objective-in-prompts D1） | この run の task の木の上下。`{ancestors?: AncestorContext[], children?: ChildSummary[]}`（どちらも空なら省略）。dispatcher が store から組む |
+| `context.lineage.ancestors` | array | –（省略可。空なら省略。ADR 2026-11-21-ancestor-objective-in-prompts D1） | この run の task の祖先（木の親、無ければ `parent_id` を root まで辿る。root が先頭、親が末尾）の `AncestorContext`: `{title, objective, acceptance?: Criterion[]}`。objective と受入条件はどれも全文で、切らない。worker・planner・WU・reviewer（final review と設計 review）の run に載る。親の無い task（root）では省略。`claude-code`・`codex`・`acp`・`pi` は task の目的の直後に「祖先の task の目的と受け入れ条件」節として出す。`context.execution_planner.tree.ancestors[]` は題名と段階だけを持ち、目的の全文はこの欄が運ぶ |
+| `context.lineage.children` | array | –（省略可。空なら省略。v2, ADR-0016 D3/M4。ADR 2026-11-21-ancestor-objective-in-prompts D1 で `context.children` から移した） | 集約 run（`task.aggregate == true` の親の、子が全て終端になった後の run）・子の失敗によるやり直し run・子を起票できる run でだけ非空。`ChildSummary`: `{id, title, role?, status, outcome?, artifacts: ArtifactRef[], workspace?, branch?}`。`branch` はその子が worktree で作業したときのブランチ（`celeris/<child_id>`。Phase 49, ADR-0041 D1）で、親はこれを merge して子の成果を統合する |
 | `context.node` | object | –（省略可。v4, ADR-0033 D4） | `task.assignee` の組織ノード（担当が決まっている run だけ）。`{id, name, brief?}`。プロンプトの一番前に「あなたは誰で、何の担当か」として置かれる |
 | `context.memory` | object | –（省略可。v4, ADR-0033 D6） | `[memory]` を設定し、担当が決まっている run だけ。`{notes?: string, project?: string}`（`<memory_dir>/<node_id>/notes.md` と `projects/<project_id>.md` の中身。それぞれ 8,000 字で切る） |
 | `context.conversation` | array | –（省略可。空なら省略。v4, ADR-0033 D4） | その案件でのこのノードと人の**直近のやり取り**（既定 20 件、古い順）。`{role: "user"\|"node", text: string}` |
@@ -123,7 +125,7 @@ celeris ◀─stdout── {"type":"progress", ...}\n
 Review プロンプトには含めない）。JSON Lines プロトコルを直接話す `fake` 等のワーカーは、この配列を読んで
 自由に扱ってよい（celeris 側は解釈を強制しない）。
 
-`context.role` / `context.children` も同様に、JSON Lines を直接話すワーカーは自由に解釈してよい
+`context.role` / `context.lineage` も同様に、JSON Lines を直接話すワーカーは自由に解釈してよい
 （celeris 側は解釈を強制しない）。`claude-code`/`codex` の反映のしかたは §9 M8 を参照。
 
 **v4 の前置き（ADR-0033 D4/D6, Phase 24。Phase 28 で末尾に対話専用の指示を追加。Phase 30 で役職と brief の

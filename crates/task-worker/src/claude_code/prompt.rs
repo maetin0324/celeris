@@ -222,19 +222,19 @@ fn prompt_header(task: &Task, context: &RunContext, run_id: &str, artifacts: &st
     out
 }
 
-/// ADR 2026-11-21-ancestor-objective-in-prompts D1: 祖先の task（`context.ancestors`。root が先頭）の objective と受入条件の
+/// ADR 2026-11-21-ancestor-objective-in-prompts D1: 祖先の task（`context.lineage.ancestors`。root が先頭）の objective と受入条件の
 /// 全文の節。worker・planner・WU・reviewer の prompt が `prompt_header` を通してこの 1 か所から出す（harness ごとの分岐は
-/// 無い）。受入条件の行は `acceptance_lines` を使う。`context.ancestors` が空（親の無い root の task）なら空文字列で、
+/// 無い）。受入条件の行は `acceptance_lines` を使う。`context.lineage.ancestors` が空（親の無い root の task）なら空文字列で、
 /// prompt は 1 バイトも変わらない。
 fn ancestors_section(context: &RunContext) -> String {
-    if context.ancestors.is_empty() {
+    if context.lineage.ancestors.is_empty() {
         return String::new();
     }
     let mut out = String::from(
         "## 祖先の task の目的と受け入れ条件（全文。root が先頭、親が末尾。目標・禁止事項・不変条件はこの task にも掛かる）\n",
     );
-    let last = context.ancestors.len();
-    for (i, a) in context.ancestors.iter().enumerate() {
+    let last = context.lineage.ancestors.len();
+    for (i, a) in context.lineage.ancestors.iter().enumerate() {
         let place = match (i, last - i) {
             (0, 1) => "root・親",
             (0, _) => "root",
@@ -415,10 +415,10 @@ fn organization_section(context: &RunContext) -> String {
     out
 }
 
-/// `context.children` があれば「集約 run」節を足す（ADR-0016 D3 / M4）。
+/// `context.lineage.children` があれば「集約 run」節を足す（ADR-0016 D3 / M4）。
 fn children_section(task: &Task, context: &RunContext, artifacts: &str) -> String {
     let mut out = String::new();
-    if context.children.is_empty() {
+    if context.lineage.children.is_empty() {
         return out;
     }
     if task.aggregate {
@@ -426,7 +426,7 @@ fn children_section(task: &Task, context: &RunContext, artifacts: &str) -> Strin
     } else {
         out.push_str("## Existing child tasks (do not duplicate)\n");
     }
-    for c in &context.children {
+    for c in &context.lineage.children {
         let role = c.role.as_deref().unwrap_or("-");
         let status = serde_json::to_string(&c.status).unwrap_or_default();
         let status = status.trim_matches('"');

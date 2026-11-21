@@ -394,7 +394,7 @@ async fn execute(
             answers: to_answers(answers_from_events(events)),
             review: None,
             role: None,
-            children: Vec::new(),
+            lineage: Default::default(),
             available_genres: Vec::new(),
             // `celerisctl worker run` は DB を変えない手動実行なので、役職・記憶・やり取り・組織図は渡さない
             // （ADR-0033 D4 / D6: 記憶の追記はディスパッチャの仕事）。
@@ -499,7 +499,7 @@ async fn execute_on_cluster(
             answers: to_answers(answers_from_events(events)),
             review: None,
             role: None,
-            children: Vec::new(),
+            lineage: Default::default(),
             available_genres: Vec::new(),
             // `celerisctl worker run` は DB を変えない手動実行なので、役職・記憶・やり取り・組織図は渡さない
             // （ADR-0033 D4 / D6: 記憶の追記はディスパッチャの仕事）。

@@ -184,13 +184,12 @@ pub fn cos_run_context(
         browser: None,
         browser_policy: None,
         prior_review: Vec::new(),
-        // ADR 2026-11-21-ancestor-objective-in-prompts D1: CoS の対話の task は木の中に無い（祖先を持たない）。
-        ancestors: Vec::new(),
         inputs: Vec::new(),
         answers: Vec::new(),
         review: None,
         role: None,
-        children: Vec::new(),
+        // ADR 2026-11-21-ancestor-objective-in-prompts D1: CoS の対話の task は木の中に無い（祖先も子も持たない）。
+        lineage: Default::default(),
         available_genres: Vec::new(),
         node: None,
         memory: None,

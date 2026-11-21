@@ -1104,9 +1104,9 @@ impl WorkerAdapter for DelegatingAdapter {
             return done("child");
         }
         *self.seen_role.lock().unwrap() = req.context.role.clone();
-        if !req.context.children.is_empty() {
+        if !req.context.lineage.children.is_empty() {
             self.aggregate_children
-                .store(req.context.children.len(), Ordering::SeqCst);
+                .store(req.context.lineage.children.len(), Ordering::SeqCst);
             if self.write_summary {
                 std::fs::create_dir_all(&req.artifacts_dir).unwrap();
                 std::fs::write(req.artifacts_dir.join("summary.md"), "# summary\n").unwrap();

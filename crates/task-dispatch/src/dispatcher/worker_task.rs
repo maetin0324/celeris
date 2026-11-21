@@ -406,10 +406,6 @@ pub(super) async fn run_worker(
         .events_for(task_id)
         .map_err(|e| AdapterError::Other(format!("store: {e}")))?;
     let prior_review = to_prior_review(prior_review_from_events(&events));
-    // ADR 2026-11-21-ancestor-objective-in-prompts D1: 祖先の objective と受入条件の全文（親の無い task は空）。読めなければ
-    // 人の元の目的の無い prompt で走らせず、run を store の失敗で止める（events の読み取りと同じ扱い）。
-    let ancestors = crate::prompt_ancestors::ancestor_contexts(store.as_ref(), &task)
-        .map_err(|e| AdapterError::Other(format!("store: {e}")))?;
     // ADR-0044 D2: 対話 run（人への返事だけをする run。Phase 28）にはコメントの書き方を出さない。
     let writes_comments = extras.conversation_addressee.is_none();
     let cargo_target_work_unit = extras.cargo_target_work_unit.clone();
@@ -426,12 +422,11 @@ pub(super) async fn run_worker(
             browser: None,
             browser_policy: browser_run_policy(store.as_ref(), &task)?,
             prior_review,
-            ancestors,
             inputs: task.inputs.clone(),
             answers: to_answers(answers_from_events(&events)),
             review: None,
             role: extras.role,
-            children: extras.children,
+            lineage: extras.lineage,
             available_genres: extras.available_genres,
             node: extras.node,
             memory: extras.memory,

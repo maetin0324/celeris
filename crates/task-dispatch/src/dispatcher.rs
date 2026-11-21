@@ -938,7 +938,7 @@ struct RunExtras {
     /// ADR 2026-10-20-mlsys-main2-fixes D1-3: task 木に token 予算があれば、run の途中で止める watch。
     token_budget: Option<Arc<token_budget::TokenBudgetWatch>>,
     role: Option<RoleContext>,
-    children: Vec<ChildSummary>,
+    lineage: task_worker::protocol::TaskLineageContext,
     /// ADR-0027 D1: 委譲できる run（`build_execute_prompt` を使う run）にだけ非空。
     available_genres: Vec<GenreContext>,
     /// ADR-0033 D4: `task.assignee` の組織ノード（担当が無いタスクでは `None`）。

@@ -2241,7 +2241,8 @@ fn review_human_inputs_collect_answered_decisions_and_answers_of_the_task_and_it
         .unwrap();
 
     let d = dispatcher(store.clone(), done_adapter(), 1);
-    let (decisions, answers) = d.review_human_inputs(&child).unwrap();
+    let inputs = d.review_human_inputs(&child).unwrap();
+    let (decisions, answers) = (inputs.decisions, inputs.answers);
     assert_eq!(
         decisions
             .iter()

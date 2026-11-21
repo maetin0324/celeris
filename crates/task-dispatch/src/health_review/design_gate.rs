@@ -347,12 +347,16 @@ impl Dispatcher {
         }
         self.quota_begin(Some(&account), reviewer.account_adapter, &run_id);
         let artifacts_dir = self.artifacts_dir(task, &dir);
+        // ADR 2026-11-21-ancestor-objective-in-prompts D3: 対象 task の祖先の目的と受入条件の全文（final review と同じ列）。
+        // 読めなければ run の起動を store の失敗にする（`?`。上の予算の watch と同じ扱い）。
+        let lineage = crate::prompt_ancestors::lineage(self.store.as_ref(), task, Vec::new())?;
         let subject_task = task.clone();
         let (task_id, end_run_id, provider) = (task.id, run_id.clone(), source.to_string());
         let tx = self.coord.completion_sender();
         let handle = tokio::spawn(async move {
             let result =
-                run_design_reviewer(&subject_task, &dir, &artifacts_dir, request, run).await;
+                run_design_reviewer(&subject_task, &dir, &artifacts_dir, request, lineage, run)
+                    .await;
             let _ = tx.send(Completion::DesignReview(Box::new(DesignReviewEnd {
                 task_id,
                 run_id: end_run_id,
@@ -444,6 +448,7 @@ async fn run_design_reviewer(
     workspace_dir: &Path,
     artifacts_dir: &Path,
     request: DesignReviewRequest,
+    lineage: task_worker::protocol::TaskLineageContext,
     run: crate::review::ReviewerRun,
 ) -> Result<RunOutcome, AdapterError> {
     let _ = std::fs::remove_file(artifacts_dir.join(crate::review::REVIEW_FILE_NAME));
@@ -471,7 +476,7 @@ async fn run_design_reviewer(
             session: run.session.clone(),
             session_diff: run.session_diff.clone(),
             // ADR 2026-11-21-ancestor-objective-in-prompts D3: 対象 task の祖先の目的と受入条件の全文。
-            ancestors: run.ancestors.clone(),
+            lineage,
             ..RunContext::default()
         },
     };

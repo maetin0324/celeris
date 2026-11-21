@@ -2417,23 +2417,26 @@ fn build_review_prompt_states_the_artifact_convention_only_for_harness_genres() 
     assert!(!none.contains("この担当の成果物"), "{none}");
 }
 
-/// ADR-0016 D3 / M4: `context.children` が非空なら集約 run の節が入り、成果物のまとめ方の指示が付く。
+/// ADR-0016 D3 / M4: `context.lineage.children` が非空なら集約 run の節が入り、成果物のまとめ方の指示が付く。
 /// 無ければ節自体が出ない。
 #[test]
 fn build_prompt_includes_children_section_only_when_present() {
     let mut task = crate::protocol::tests::sample_task();
     task.aggregate = true;
     let context = RunContext {
-        children: vec![crate::protocol::ChildSummary {
-            id: task_core::TaskId::new(),
-            title: "implement parser".into(),
-            role: Some("implementer".into()),
-            status: task_core::Status::Done,
-            branch: None,
-            outcome: Some("done".into()),
-            artifacts: vec![],
-            workspace: Some(std::path::PathBuf::from("/tmp/child-ws")),
-        }],
+        lineage: crate::protocol::TaskLineageContext {
+            children: vec![crate::protocol::ChildSummary {
+                id: task_core::TaskId::new(),
+                title: "implement parser".into(),
+                role: Some("implementer".into()),
+                status: task_core::Status::Done,
+                branch: None,
+                outcome: Some("done".into()),
+                artifacts: vec![],
+                workspace: Some(std::path::PathBuf::from("/tmp/child-ws")),
+            }],
+            ..Default::default()
+        },
         ..RunContext::default()
     };
     let prompt = build_prompt(&task, &context, "run-agg-1", "artifacts");

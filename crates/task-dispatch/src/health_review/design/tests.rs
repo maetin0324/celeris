@@ -260,8 +260,8 @@ fn prompt_full_objective_design_review_keeps_objective_tail() {
 }
 
 /// 不変条件（ADR 2026-11-21-ancestor-objective-in-prompts D3）: 子 task の計画の設計 review の reviewer の prompt
-/// （`run_design_reviewer` と同じく `ReviewRequest { design: Some(..) }` と `ReviewerRun.ancestors` を写した `RunContext`）
-/// に、store から `prompt_ancestors::ancestor_contexts` で組んだ親の 3,000 文字の objective の末尾の印と受入条件の末尾の
+/// （`run_design_reviewer` と同じく `ReviewRequest { design: Some(..) }` と祖先を `lineage.ancestors` に写した `RunContext`）
+/// に、`start_design_review` と同じく store から `prompt_ancestors::chain_to_root` で組んだ親の 3,000 文字の objective の末尾の印と受入条件の末尾の
 /// 印がちょうど 1 回ずつ載る。設計 review は計画が人の元の目的（親の禁止事項・不変条件）を満たすかを判定する。
 /// 既存の試験で検出できない理由: `prompt_full_objective_design_review_keeps_objective_tail` は対象 task 自身の objective と
 /// 受入条件だけを見て、祖先を持つ task を使わない。
@@ -311,7 +311,12 @@ fn prompt_ancestor_objective_design_review_carries_the_parent() {
             design: Some(Box::new(request)),
             ..Default::default()
         }),
-        ancestors: crate::prompt_ancestors::ancestor_contexts(&store, &subject).unwrap(),
+        lineage: task_worker::protocol::TaskLineageContext {
+            ancestors: crate::prompt_ancestors::ancestor_contexts(
+                &crate::prompt_ancestors::chain_to_root(&store, &subject).unwrap(),
+            ),
+            children: Vec::new(),
+        },
         ..RunContext::default()
     };
     let prompt =

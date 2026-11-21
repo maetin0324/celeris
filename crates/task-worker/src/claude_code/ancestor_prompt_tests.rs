@@ -1,4 +1,4 @@
-//! ADR 2026-11-21-ancestor-objective-in-prompts D1・D2 の試験（prefix `prompt_ancestor_objective_`）。`RunContext.ancestors`
+//! ADR 2026-11-21-ancestor-objective-in-prompts D1・D2 の試験（prefix `prompt_ancestor_objective_`）。`RunContext.lineage.ancestors`
 //! を持つ run の prompt を builder ごと（worker・WU・`TaskKind::Plan`・案件の計画と replan・木と木でない execution planner・
 //! reviewer）に組み、祖先の objective と受入条件の全文が 1 回ずつ載ることと、祖先の無い root の task の prompt が変わらない
 //! ことを確かめる。dispatcher が store から祖先を載せる経路は `task-dispatch` の同名 prefix の試験が見る。
@@ -7,8 +7,8 @@ use task_core::{Check, Criterion, Task, TaskKind};
 
 use crate::claude_code::{build_prompt, build_prompt_with_skill_list};
 use crate::protocol::{
-    AncestorContext, ExecutionPlannerContext, ReviewRequest, RunContext, TreeAncestorContext,
-    TreePlannerContext, WorkUnitPromptContext,
+    AncestorContext, ExecutionPlannerContext, ReviewRequest, RunContext, TaskLineageContext,
+    TreeAncestorContext, TreePlannerContext, WorkUnitPromptContext,
 };
 
 const HEADING: &str = "## 祖先の task の目的と受け入れ条件（全文。root が先頭、親が末尾。目標・禁止事項・不変条件はこの task にも掛かる）\n";
@@ -141,7 +141,7 @@ fn cases() -> Vec<(&'static str, Task, RunContext)> {
     ]
 }
 
-/// 不変条件（ADR 2026-11-21-ancestor-objective-in-prompts D1・D2）: `context.ancestors` を持つ run の prompt に、どの builder
+/// 不変条件（ADR 2026-11-21-ancestor-objective-in-prompts D1・D2）: `context.lineage.ancestors` を持つ run の prompt に、どの builder
 /// でも（codex の `build_prompt` と acp・pi の `build_prompt_with_skill_list` の両方で）祖先の節が 1 回出て、root と親の
 /// 3,000 文字の objective の末尾の印と、3,000 文字の受入条件の text の末尾の印がちょうど 1 回ずつ載る（木の planner の
 /// 祖先の行は題名と段階だけで、同じ text を 2 回出さない）。root が親より先に出る。
@@ -152,7 +152,10 @@ fn cases() -> Vec<(&'static str, Task, RunContext)> {
 fn prompt_ancestor_objective_every_builder_carries_full_ancestor_text_once() {
     for (label, task, context) in cases() {
         let context = RunContext {
-            ancestors: ancestors(),
+            lineage: TaskLineageContext {
+                ancestors: ancestors(),
+                children: Vec::new(),
+            },
             ..context
         };
         let codex = build_prompt(&task, &context, "run-ancestor", "artifacts");
@@ -185,9 +188,9 @@ fn prompt_ancestor_objective_every_builder_carries_full_ancestor_text_once() {
     }
 }
 
-/// 不変条件（ADR 2026-11-21-ancestor-objective-in-prompts D1）: 祖先の無い root の task（`context.ancestors` が空）の prompt
+/// 不変条件（ADR 2026-11-21-ancestor-objective-in-prompts D1）: 祖先の無い root の task（`context.lineage.ancestors` が空）の prompt
 /// には祖先の節が無く、祖先を足した prompt から祖先の節を除くと 1 バイトも違わない（節は差し込むだけで、ほかの文を
-/// 変えない）。`RunContext` の wire にも `ancestors` の欄が出ない。
+/// 変えない）。`RunContext` の wire にも `lineage` の欄が出ない。
 /// 既存の試験で検出できない理由: 既存の prompt の試験は祖先を持つ context を組まないので、祖先の節が root の prompt に
 /// 漏れても、節を足すときにほかの文を書き換えても、比べる相手が無い。
 #[test]
@@ -199,7 +202,10 @@ fn prompt_ancestor_objective_root_task_prompt_is_unchanged() {
             "{label}: a root task must not get the ancestors section:\n{root_prompt}"
         );
         let with = RunContext {
-            ancestors: ancestors(),
+            lineage: TaskLineageContext {
+                ancestors: ancestors(),
+                children: Vec::new(),
+            },
             ..context.clone()
         };
         let child_prompt = build_prompt(&task, &with, "run-ancestor", "artifacts");
@@ -218,8 +224,8 @@ fn prompt_ancestor_objective_root_task_prompt_is_unchanged() {
         );
         let wire = serde_json::to_value(&context).unwrap();
         assert!(
-            wire.get("ancestors").is_none(),
-            "{label}: an empty ancestors list must not appear on the wire: {wire}"
+            wire.get("lineage").is_none(),
+            "{label}: an empty lineage must not appear on the wire: {wire}"
         );
     }
 }

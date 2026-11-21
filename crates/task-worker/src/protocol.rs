@@ -226,7 +226,7 @@ impl From<&GenreSpec> for GenreContext {
     }
 }
 
-/// `context.children[]`（ADR-0016 D3 / M4）: 集約 run に渡す、委譲した子の要約。
+/// `context.lineage.children[]`（ADR-0016 D3 / M4）: 集約 run に渡す、委譲した子の要約。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ChildSummary {
     pub id: TaskId,
@@ -452,9 +452,11 @@ pub struct RunContext {
     /// タスクに役割があるときだけ `Some`（ADR-0016 D1）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<RoleContext>,
-    /// 集約 run（`aggregate = true` の親の、子が全て終端になった後の run）でのみ非空（ADR-0016 D3）。
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub children: Vec<ChildSummary>,
+    /// ADR 2026-11-21-ancestor-objective-in-prompts D1: この run の task の木の上下（祖先の目的と受入条件の全文、子の
+    /// 要約）。dispatcher が store から組む。祖先も子も無い run（親の無い root の task・対話 run）では wire にも
+    /// prompt にも出ない。
+    #[serde(default, skip_serializing_if = "TaskLineageContext::is_empty")]
+    pub lineage: TaskLineageContext,
     /// ADR-0027 D1: 委譲できる run（`build_execute_prompt` を使う run）にだけ、設定済みの分野と
     /// その役割の一覧を渡す。委譲できない run（`Plan`/`Review`）や `[[genres]]` が空の設定では空。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -504,11 +506,6 @@ pub struct RunContext {
     /// ファイル名を基準にレビュアーが不合格にした事故から）。決定的（設定を引くだけ）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subject_genre: Option<GenreContext>,
-    /// ADR 2026-11-21-ancestor-objective-in-prompts D1: この run の task の祖先（`parent_id` を root まで辿る。root が先頭、
-    /// 親が末尾）の objective と受入条件の全文。dispatcher が store から組む（worker・planner・WU・reviewer の run）。
-    /// 親の無い task（root）では空で、wire にも prompt にも出ない。
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub ancestors: Vec<AncestorContext>,
     /// ADR 2026-11-07-health-review-integration 付記 B1: dispatcher が task の作業場所から決めた、この run の作業場所の
     /// 情報（場所の説明と、repo の review 方針）。どちらも無い run（対話 run・作業場所を決めていない案件の run・
     /// reviewer の run）では `None`。
@@ -851,7 +848,7 @@ pub struct TreePlannerContext {
 }
 
 /// `context.execution_planner.tree.ancestors[]`（ADR-0079 D4 (2)）: 木の祖先 1 つ（題名と段階）。目的と受入条件の全文は
-/// `RunContext.ancestors` が運ぶ（ADR 2026-11-21-ancestor-objective-in-prompts D2。ここに写さない）。
+/// `RunContext.lineage.ancestors` が運ぶ（ADR 2026-11-21-ancestor-objective-in-prompts D2。ここに写さない）。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct TreeAncestorContext {
     pub title: String,
@@ -860,8 +857,26 @@ pub struct TreeAncestorContext {
     pub stage: Option<String>,
 }
 
-/// `context.ancestors[]`（ADR 2026-11-21-ancestor-objective-in-prompts D1）: 祖先の task 1 つの題名・objective・受入条件
-/// （どれも全文。切らない）。
+/// `context.lineage`（ADR 2026-11-21-ancestor-objective-in-prompts D1）: run の task の木の上下。どちらも store の
+/// task の木（祖先は木の親、無ければ `parent_id` を root まで。子は `parent_id`）から dispatcher が組む。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TaskLineageContext {
+    /// 祖先（root が先頭、親が末尾）の題名・objective・受入条件の全文。親の無い task では空。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ancestors: Vec<AncestorContext>,
+    /// 委譲した子の要約。集約 run・子の失敗によるやり直し run・子を起票できる run でだけ非空（ADR-0016 D3）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<ChildSummary>,
+}
+
+impl TaskLineageContext {
+    pub fn is_empty(&self) -> bool {
+        self.ancestors.is_empty() && self.children.is_empty()
+    }
+}
+
+/// `context.lineage.ancestors[]`（ADR 2026-11-21-ancestor-objective-in-prompts D1）: 祖先の task 1 つの題名・objective・
+/// 受入条件（どれも全文。切らない）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct AncestorContext {
     pub title: String,

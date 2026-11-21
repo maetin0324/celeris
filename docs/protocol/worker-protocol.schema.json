@@ -56,7 +56,7 @@
       "type": "object"
     },
     "AncestorContext": {
-      "description": "`context.ancestors[]`（ADR 2026-11-21-ancestor-objective-in-prompts D1）: 祖先の task 1 つの題名・objective・受入条件\n（どれも全文。切らない）。",
+      "description": "`context.lineage.ancestors[]`（ADR 2026-11-21-ancestor-objective-in-prompts D1）: 祖先の task 1 つの題名・objective・\n受入条件（どれも全文。切らない）。",
       "properties": {
         "acceptance": {
           "items": {
@@ -730,7 +730,7 @@
       ]
     },
     "ChildSummary": {
-      "description": "`context.children[]`（ADR-0016 D3 / M4）: 集約 run に渡す、委譲した子の要約。",
+      "description": "`context.lineage.children[]`（ADR-0016 D3 / M4）: 集約 run に渡す、委譲した子の要約。",
       "properties": {
         "artifacts": {
           "description": "子のワークスペースに残った成果物（`ArtifactProduced` の一覧。パスは子のワークスペース相対）。",
@@ -4216,13 +4216,6 @@
           },
           "type": "array"
         },
-        "ancestors": {
-          "description": "ADR 2026-11-21-ancestor-objective-in-prompts D1: この run の task の祖先（`parent_id` を root まで辿る。root が先頭、\n親が末尾）の objective と受入条件の全文。dispatcher が store から組む（worker・planner・WU・reviewer の run）。\n親の無い task（root）では空で、wire にも prompt にも出ない。",
-          "items": {
-            "$ref": "#/$defs/AncestorContext"
-          },
-          "type": "array"
-        },
         "answers": {
           "description": "`celerisctl answer` で与えられた回答の履歴（時系列）。無ければ省略（ADR-0010 D3）。",
           "items": {
@@ -4269,13 +4262,6 @@
             }
           ],
           "description": "propagation §8.5: variant 付き task の run だけ `Some`。dispatcher が run 開始直前に照合した\n固定値（identity・org digest・selected・daemon instance・config hash）。plain な run は `None` で\n`request.json` もプロンプトも従来と同じ。保存と再開検査は `campaign_pin`。"
-        },
-        "children": {
-          "description": "集約 run（`aggregate = true` の親の、子が全て終端になった後の run）でのみ非空（ADR-0016 D3）。",
-          "items": {
-            "$ref": "#/$defs/ChildSummary"
-          },
-          "type": "array"
         },
         "clusters": {
           "description": "ADR-0059 D6（Phase 99）/ Phase 99b 追記: **CoS の対話 run** にだけ渡す `[[clusters]]` の一覧\n（id・接続状態・実効の作業ディレクトリ）。`recent_work` / `knowledge` / `profile` / `role` と\n同じく継続中の run でも毎回渡す（クラスタの登録・接続状態は差分でなく「いまの状態」）。CoS 以外\nの run では常に空。",
@@ -4391,6 +4377,10 @@
             }
           ],
           "description": "ADR-0047 D2: マウントされた知識の**索引だけ**（本文は入れない）。ディスパッチャが実効マウントと\n`index.json` から決定的に組む。`None` の run の前置きは Phase 60 までと 1 バイトも変わらない。"
+        },
+        "lineage": {
+          "$ref": "#/$defs/TaskLineageContext",
+          "description": "ADR 2026-11-21-ancestor-objective-in-prompts D1: この run の task の木の上下（祖先の目的と受入条件の全文、子の\n要約）。dispatcher が store から組む。祖先も子も無い run（親の無い root の task・対話 run）では wire にも\nprompt にも出ない。"
         },
         "memory": {
           "anyOf": [
@@ -5087,6 +5077,26 @@
       ],
       "type": "string"
     },
+    "TaskLineageContext": {
+      "description": "`context.lineage`（ADR 2026-11-21-ancestor-objective-in-prompts D1）: run の task の木の上下。どちらも store の\ntask の木（祖先は木の親、無ければ `parent_id` を root まで。子は `parent_id`）から dispatcher が組む。",
+      "properties": {
+        "ancestors": {
+          "description": "祖先（root が先頭、親が末尾）の題名・objective・受入条件の全文。親の無い task では空。",
+          "items": {
+            "$ref": "#/$defs/AncestorContext"
+          },
+          "type": "array"
+        },
+        "children": {
+          "description": "委譲した子の要約。集約 run・子の失敗によるやり直し run・子を起票できる run でだけ非空（ADR-0016 D3）。",
+          "items": {
+            "$ref": "#/$defs/ChildSummary"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "TaskMode": {
       "description": "ADR-0046 D4（Phase 59）: タスクの進め方。前置きに足す規則とレビューの厳しさを切り替える。\n既定は `Production`（導入前のタスクは全部これ。従来の挙動と同じ）。状態機械は見ない。",
       "oneOf": [
@@ -5245,7 +5255,7 @@
       ]
     },
     "TreeAncestorContext": {
-      "description": "`context.execution_planner.tree.ancestors[]`（ADR-0079 D4 (2)）: 木の祖先 1 つ（題名と段階）。目的と受入条件の全文は\n`RunContext.ancestors` が運ぶ（ADR 2026-11-21-ancestor-objective-in-prompts D2。ここに写さない）。",
+      "description": "`context.execution_planner.tree.ancestors[]`（ADR-0079 D4 (2)）: 木の祖先 1 つ（題名と段階）。目的と受入条件の全文は\n`RunContext.lineage.ancestors` が運ぶ（ADR 2026-11-21-ancestor-objective-in-prompts D2。ここに写さない）。",
       "properties": {
         "stage": {
           "description": "この祖先の計画の中で、次の節点（無ければこの task）が属する段階。",

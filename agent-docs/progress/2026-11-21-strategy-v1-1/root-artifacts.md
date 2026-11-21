@@ -31,8 +31,7 @@ updated: 2026-11-21
     並びは「同じ task の WorkUnit の run の `ArtifactProduced`（古い順）→ review する run の分」。
     `review_task` は同じ名前なら後ろを使うので、review する run の分 → WU の新しい run の分の順に選ぶ。
   - WorkUnit の run は `WorkUnitTransitioned{to: running, run_id}` の `work_unit_id` が `work_units_for(task)` にあるものだけ。
-  - workspace の外を指す path は除く。規則は `task_worker::artifact::resolve` の字面の検査を `check_relative` に切り出して
-    共有した（`resolve` も `check_relative` を呼ぶ）。
+  - workspace の外を指す path の除外は、後の commit で `review_task` に移した（下の最後の commit）。
   - `review.rs` の `review_task` の doc の `produced` の説明を書き換えた。
   - 試験 `crates/task-dispatch/src/dispatcher/tests/root_review_artifacts.rs`（5 件）を足した。
 - `strategy-v1 1 root-artifacts: 試験 (1) を本番と同じ形（review する run も同じ WU の run）にする`
@@ -45,6 +44,15 @@ updated: 2026-11-21
     `Dispatcher::spawn_review` の関数の行 727 > 200）で exit 1 になったので移した。移した後の `check-health.sh` は
     `verdict=pass worsened=0`。使われなくなった `dispatcher.rs` の `artifacts_for_run` の import を消した。
 - `strategy-v1 1 root-artifacts: ADR と進捗 file を関数の移動と検査の結果に合わせる`
+- `strategy-v1 1 root-artifacts: workspace の外を指す候補の除外を review_task で resolve を呼ぶ形にし、task-worker の artifact.rs を base に戻す`
+  - 前の run は `crates/task-worker/src/artifact.rs` に `check_relative` を切り出したが、WorkUnit の範囲 check
+    （task-dispatch の review・dispatcher と試験、この進捗 dir、ADR）の外で、run の後の check が `out of scope:
+    crates/task-worker/src/artifact.rs` で exit 1 になった。`artifact.rs` は base に戻した。
+  - `ArtifactExists` が候補を選ぶとき、`crates/task-dispatch/src/review.rs` の `escapes_workspace` が公開関数
+    `task_worker::artifact::resolve` を task の workspace の dir に当て、`NotRelative`・`Escapes` の候補を使わない。
+    規則を書き直さず、外への symlink も除ける。`artifact_candidates` は path を見なくなった（外を指す候補が後ろにあっても、
+    前にある中の同名の候補が隠されない）。
+  - 試験 (3) に外への symlink と「後ろの外の候補が前の中の候補を隠さない」を足し、判定を先に確かめる順にした。
 
 新しい状態・DB 表・event・設定の欄・Manager・trait・fallback は足していない。成果物を root の dir に写す仕組みも置いていない。
 
@@ -55,38 +63,52 @@ updated: 2026-11-21
 | `root_review_artifact_finds_work_unit_run_artifact` | (1) 本番と同じ形で WU の 1 本目の run の成果物を見つける | FAIL | PASS |
 | `root_review_artifact_prefers_reviewed_run_then_newest_work_unit` | 名前が重なれば review する run → WU の新しい順 | FAIL | PASS |
 | `root_review_artifact_ignores_other_tasks_and_projects` | (2) 子 task・同じ案件の兄弟・他の案件の task の同名の成果物を拾わない | PASS | PASS |
-| `root_review_artifact_ignores_paths_outside_workspace` | (3) 絶対 path・`..`・空の path を拾わない（review する run の分も） | FAIL | PASS |
+| `root_review_artifact_ignores_paths_outside_workspace` | (3) 絶対 path・`..`・空の path・外への symlink を使わない（review する run の分も）。後ろの外の候補が前の中の候補を隠さない | FAIL | PASS |
 | `root_review_artifact_unplanned_task_keeps_reviewed_run_only` | (4) 計画の無い task の候補は `artifacts_for_run` と同じ | PASS | PASS |
 
 (2) と (4) が修正前に通るのは、修正前の候補が review する run の分だけだったから（(2) は修正が他の task の成果物まで
 広げないこと、(4) は計画の無い task の挙動を変えないことを守る試験）。
 
-### 修正前の出力（候補の組み立ての本体を base と同じ `artifacts_for_run(events, run_id)` に戻して実行）
+### 修正前の出力（提出時の試験を、`review.rs` の本体だけ base と同じ形に戻して実行。戻した後に本体を元に戻した）
+
+修正前 A: `artifact_candidates` を `artifacts_for_run(events, run_id)` だけにし、`escapes_workspace` の検査を外す（base と同じ判定）。
 
 ```
 $ cargo nextest run -p task-dispatch --lib -E 'test(root_review_artifact_)' --no-fail-fast
-    FAIL ... root_review_artifact_ignores_paths_outside_workspace
     FAIL ... root_review_artifact_prefers_reviewed_run_then_newest_work_unit
+    FAIL ... root_review_artifact_ignores_paths_outside_workspace
     FAIL ... root_review_artifact_finds_work_unit_run_artifact
 panicked at crates/task-dispatch/src/dispatcher/tests/root_review_artifacts.rs:173:5:
     artifact "final-report.md" not found at artifacts/final-report.md
 panicked at crates/task-dispatch/src/dispatcher/tests/root_review_artifacts.rs:214:5:
     artifact "report.md" not found at artifacts/report.md
-panicked at crates/task-dispatch/src/dispatcher/tests/root_review_artifacts.rs:353:5:
-    [ArtifactRef { name: "final-report.md", path: "<tempdir>/outside/final-report.md", sha256: "", kind: "md", declared: false }]
+panicked at crates/task-dispatch/src/dispatcher/tests/root_review_artifacts.rs:359:5:
+    path=<tempdir>/outside/final-report.md sha256=31207a2065f46a5b948fce6fe5c13e85abaf5631e2f894b47dcd4fce14f6c57b
      Summary 5 tests run: 2 passed, 3 failed
 exit=100
 ```
 
-(1) の落ち方は本番の seq 2075 と同じ文面。(3) の修正前の失敗は、review する run が記録した workspace の外の絶対 path が候補に
-入っていたことを示す。成果物を出す側の `resolve` はこの path を記録しない（試験 `resolve_rejects_absolute_parent_missing_and_symlink_escape`
-が守る）ので、通常の経路でこの記録はできない。本番 DB で同じ記録があったかは調べていない（未確認）。
+修正前 B: 候補の組み立ては修正後のまま、`escapes_workspace` の検査だけを外す。
+
+```
+    FAIL ... root_review_artifact_ignores_paths_outside_workspace
+panicked at crates/task-dispatch/src/dispatcher/tests/root_review_artifacts.rs:359:5:
+    path=<tempdir>/outside/final-report.md sha256=31207a2065f46a5b948fce6fe5c13e85abaf5631e2f894b47dcd4fce14f6c57b
+     Summary 5 tests run: 4 passed, 1 failed
+exit=100
+```
+
+(1) の落ち方は本番の seq 2075 と同じ文面。(3) は、修正前は review する run が記録した workspace の外の絶対 path をそのまま使い、
+外の file で合格していた（A）。候補を WorkUnit の run まで広げても、`escapes_workspace` が無ければ同じく外の file で合格する（B）。
+成果物を出す側の `resolve` はこの path を記録しない（試験 `resolve_rejects_absolute_parent_missing_and_symlink_escape` が守る）ので、
+通常の経路でこの記録はできない。本番 DB で同じ記録があったかは調べていない（未確認）。
 
 修正後: 同じ command で `Summary 5 tests run: 5 passed`、exit=0。
 
 ## 証拠
 
-- 修正前・修正後の試験: 上の節。完全な出力は run の成果物 dir の `logs/before.log`・`logs/after.log`。
+- 修正前・修正後の試験: 上の節。完全な出力は run の成果物 dir の `logs/before.log`（A）・`logs/before-no-escape-check.log`（B）・
+  `logs/after.log`。
 - 検査: 下の「検査」節。
 
 ## LoC 差分（`scripts/dev/source-size-report.py --exclusive-classes --rev <rev> --format json`。script と toml は `$CELERIS_WU_BASE` から `git show` で取り出し、base と HEAD の両方に当てた）
@@ -95,30 +117,34 @@ exit=100
 | --- | --- | --- | --- |
 | production 全言語（product_only） | 376018 | 376071 | +53 |
 | production Rust | 331327 | 331380 | +53 |
-| own_total_with_tests | 1034966 | 1035442 | +476 |
-| external_test | 463385 | 463808 | +423 |
+| own_total_with_tests | 1034966 | 1035464 | +498 |
+| external_test | 463385 | 463830 | +445 |
 | inline_test | 21408 | 21408 | 0 |
 
-`git diff --numstat $CELERIS_WU_BASE HEAD` の内訳（Rust）: `review.rs` +45/−1、`artifact.rs` +18/−9、`review_spawn.rs` +2/−2、
-`dispatcher.rs` +4/−4（import の折り返し）、`dispatcher/tests/mod.rs` +1、`dispatcher/tests/root_review_artifacts.rs` +422。
-docs は ADR と進捗 file。
+`git diff --numstat $CELERIS_WU_BASE HEAD` の内訳（Rust）: `review.rs` +56/−3、`review_spawn.rs` +2/−2、
+`dispatcher.rs` +4/−4（import の折り返し）、`dispatcher/tests/mod.rs` +1、`dispatcher/tests/root_review_artifacts.rs` +444。
+`crates/task-worker/src/artifact.rs` は差分 0。docs は ADR と進捗 file。
 
-本体の純増 53 行の理由: 候補の組み立て（WU の run の見分けと path の除外、doc comment 7 行を含む）と、`check_relative` の
-切り出し（doc comment と関数の枠）。この task は行数の純減を目的にしていない。
+本体の純増 53 行の理由: 候補の組み立て `artifact_candidates`（WU の run の見分け）と `escapes_workspace`（`resolve` を呼ぶ 6 行）と、
+その doc comment。この task は行数の純減を目的にしていない。
 
 ## 検査（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`。この節を書いた後の commit は進捗 file だけ）
 
-- `bash scripts/dev/test-affected.sh` → exit 0（858 秒）。repo-health `verdict=pass worsened=0 new=0`、
-  nextest `6163 tests run: 6163 passed (11 slow), 21 skipped`、doc test は全 crate で失敗 0。
-  対象 crate は `--list` で celeris・celeris-campaign・celerisctl・llm-proxy・task-api・task-dispatch・task-worker。
+- `bash scripts/dev/test-affected.sh` → exit 100（1356 秒）。対象 crate は celeris・celeris-campaign・celerisctl・llm-proxy・
+  task-dispatch。repo-health `verdict=pass worsened=0 new=0`。nextest `3946 tests run: 3945 passed (18 slow), 1 timed out,
+  11 skipped`。時間切れは `celeris-campaign::dagbench_process recovery_notice_continuation`（600 秒）の 1 件だけ。
+  同じ時間に host の検査の枠 2 本が使われていた（他の WorkUnit の test-affected）。この試験だけを
+  `cargo nextest run -p celeris-campaign --test dagbench_process recovery_notice_continuation` で再実行すると
+  `1 test run: 1 passed`（20.9 秒）、exit 0。`crates/campaign/tests/dagbench_process.rs` は `ArtifactExists`・`review_task`・
+  `artifact_candidates` を参照しない（`grep` で確認）。負荷による時間切れと推定するが、全体の再実行はしていない（未確認）。
 - `cargo clippy --workspace -- -D warnings` → exit 0
 - `cargo fmt --all -- --check` → exit 0
-- `cargo nextest run -p task-dispatch --lib -E 'test(root_review_artifact_)'` → 修正前の本体で exit 100（3 failed）、
-  修正後 exit 0（5 passed）
+- `cargo nextest run -p task-dispatch --lib -E 'test(root_review_artifact_)'` → 修正前 A で exit 100（3 failed）、修正前 B で
+  exit 100（1 failed）、修正後 exit 0（5 passed）
+- WorkUnit の範囲 check（計画の command をそのまま実行）→ exit 0。`sh "$CELERIS_WU_SCOPE_PATHS"` が出す path は ADR・この進捗 file・
+  `crates/task-dispatch/src/{review.rs,dispatcher.rs,dispatcher/review_spawn.rs,dispatcher/tests/mod.rs,
+  dispatcher/tests/root_review_artifacts.rs}` だけ
 - `sh scripts/dev/progress-index.sh --check` → exit 0、`sh scripts/dev/check-adr-numbers.sh` → exit 0
-- `sh "$CELERIS_WU_SCOPE_PATHS"` → 変えた path は ADR・この進捗 file・`crates/task-dispatch/src/{review.rs,dispatcher.rs,
-  dispatcher/review_spawn.rs,dispatcher/tests/mod.rs,dispatcher/tests/root_review_artifacts.rs}`・`crates/task-worker/src/artifact.rs`
-  だけ（他の WorkUnit の担当の file に触れていない）
 
 ## 回帰の条件
 

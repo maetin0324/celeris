@@ -6,7 +6,7 @@ tasks: [01M7YWAC1JMG1Y87EA9XM1QSJ8]
 - 日付: 2026-11-21
 - 状態: Accepted
 - 関係: [ADR-0079](0079-recursive-task-decomposition.md) D7（worker の決定。`needed_before` が要求を出した仕事を止める）、
-  [ADR-0090](0090-cluster-job-wait.md) D2（WU の `blocked(cluster_jobs)` と wait の行、job の終了による再開）、
+  [ADR-0090](0090-durable-wait-for-cluster-jobs.md) D2（WU の `blocked(cluster_jobs)` と wait の行、job の終了による再開）、
   [ADR 2026-11-21-worker-decisions-fail-closed](2026-11-21-worker-decisions-fail-closed.md)（以下「fail-closed の ADR」）。
   この ADR は fail-closed の ADR の付記 2026-11-21 が「外す経路」に残したクラスタ job の wait（WU の遷移 `cluster_jobs`、
   atomic の `RunEnd::Waiting`）を閉じる。fail-closed の ADR の D1（守る規則）をこの経路にも当て、D2〜D5 と付記の読む規則・

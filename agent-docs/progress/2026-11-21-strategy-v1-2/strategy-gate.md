@@ -16,8 +16,9 @@ commit は次の 3 件と、この進捗の commit。
 
 ## 開始時の確認（本番の release）
 
-- `curl -s http://127.0.0.1:7710/api/v1/health` の `release` は `56f1f8d3ee4c` だった（2026-11-21T16:34Z）。
-- 子 1 の統合 commit「integrate wu/gate (phase close)」について `git merge-base --is-ancestor <その commit> 56f1f8d3ee4c` は exit 0。
+- `curl -s http://127.0.0.1:7710/api/v1/health` の `release` 欄（release の commit の先頭 12 桁。2026-11-21T16:34Z に読んだ。
+  この file には hash を書かない）を `R` とする。
+- 子 1 の統合 commit「integrate wu/gate (phase close)」について `git merge-base --is-ancestor <その commit> R` は exit 0。
   子 1 の修正は本番で動いている。
 
 ## 実装前 brief

@@ -238,6 +238,8 @@ pub use script_inbox::ScriptInboxItem;
 pub mod project_brief;
 pub mod project_proposal;
 pub mod roadmap;
+/// ADR 2026-11-21-strategy-evidence-contract: 戦略・仮説・証拠の文書 `celeris.strategy/1` と検証の純関数。
+pub mod strategy;
 pub use org::{
     Milestone, MilestoneDecision, MilestoneId, MilestoneStatus, OrgError, OrgKind, OrgNode,
     Project, ProjectId, ProjectStatus, assignee_defaults, department_of, is_root_task,
@@ -451,4 +453,11 @@ pub fn is_principal_actor(by: &str) -> bool {
     ["human:", "operator:", "mcp:", "cos:"]
         .iter()
         .any(|p| by.strip_prefix(p).is_some_and(|rest| !rest.is_empty()))
+}
+
+/// `by` が人の主体（`human:` + 名前）か。`operator:`・`mcp:`・`cos` と、主体の規則より前の接頭辞の無い `human` は
+/// 人の承認に数えない（ADR 2026-11-21-strategy-evidence-contract D2.2 の 4）。
+pub fn is_human_principal(by: &str) -> bool {
+    by.strip_prefix("human:")
+        .is_some_and(|rest| !rest.is_empty())
 }

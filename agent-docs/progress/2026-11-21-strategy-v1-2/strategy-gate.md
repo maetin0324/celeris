@@ -8,12 +8,13 @@ completed: 2026-11-21
 # strategy-gate（WorkUnit。子 2 の段 wire）
 
 完了日: 2026-11-21。設計は [ADR 2026-11-21-strategy-evidence-contract](../../adr/2026-11-21-strategy-evidence-contract.md) の D3・D4・D6。
-commit は次の 4 件と、この進捗の commit。
+commit は次の 5 件と、この進捗の commit。
 
 - 「strategy-v1 2 strategy-gate: CoS の task.create の任意の欄 strategy を検査し、未承認・stale・別案件・出典欠損を 422 で拒否する」
 - 「strategy-v1 2 strategy-gate: API の schema と web の生成型、CoS の operations の説明に strategy の欄を足す」
 - 「strategy-v1 2 strategy-gate: strategy の監査・hash・検査を OperationBody の関数に移し、create_operation を base の行数以下に戻す」
 - 「strategy-v1 2 strategy-gate: 範囲外の 3 file を base に戻し、試験の API の状態を試験の module で組む」
+- 「strategy-v1 2 strategy-gate: 試験の api_state を cargo fmt で整える」
 
 経緯: 最初の提出（attempt 1 の前の run）は計画の範囲の check で落ちた。範囲の外の `config/skills/cos-operator/operations.md`
 （CoS の説明）・`crates/task-api/src/handlers.rs`・`crates/task-api/src/handlers/tests.rs`（試験の部品 `state` を `pub(crate)` にした）を
@@ -134,9 +135,10 @@ task を作らない。欄の無い要求は今と同じ。task-core の `strate
 - `bash scripts/dev/test-affected.sh`: exit 0。repo-health verdict=pass（fail_grade 0）、nextest 6187 tests run: 6187 passed・28 skipped、
   web の tsc -b と unit（101 files・705 tests passed）。
 - `cargo clippy --workspace -- -D warnings`: exit 0。
-- `cargo fmt --all -- --check`: exit 0。
+- `cargo fmt --all -- --check`: exit 0（最初は試験の `api_state` の 1 行で落ち、`cargo fmt --all` で直して commit した）。
 - `git diff --quiet $CELERIS_WU_BASE HEAD -- crates/task-core/migrations crates/task-core/src/model/events.rs crates/task-core/src/store`: exit 0（差分なし）。
 - 計画の範囲の check（`sh "$CELERIS_WU_SCOPE_PATHS"` の path を許す接頭辞で絞る command）: exit 0。変えた path は上の表の 7 file とこの進捗だけ。
+- `sh scripts/dev/progress-index.sh --check`: exit 0。
 
 ## 親の目的への寄与
 

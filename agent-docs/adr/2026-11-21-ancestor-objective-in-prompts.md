@@ -67,6 +67,8 @@ prompt-audit は、修正後の release（2026-11-19T15:39Z 以降の昇格）�
     後に呼ばれ、base でも同じ所で `?` で store を読む（`store.children`・`events_for`・`comments_for`・`get` など）。祖先の読み取りはこの既存の
     扱いに加わるだけで、位置と失敗時の挙動（WorkerStarted の後の store の失敗）を変えない。
   - `pick_reviewer` と `spawn_review` は変えない（repo health の関数の行の上限 200 を base で超えている関数を伸ばさない）。
+- D4: 計画の無い root の task（祖先の無い task）の prompt は 1 byte も変えない。`ancestors_section` は空の祖先で空文字列を返し、
+  木の planner の祖先の行の変更は木の祖先を持つ task にしか出ない。
 - D5: wire の版。D1 で `context.children` を消し、D2 で `objective_excerpt` を消して既存の形を変えるので、`PROTOCOL_VERSION`
   （`crates/task-worker/src/protocol.rs`）を 4 から 5 に上げる（`docs/protocol/worker-protocol.md` の版の行・例、schema も合わせる）。
   daemon とワーカーの production のコードは版を数値で比べない（`git grep -n PROTOCOL_VERSION` で代入だけ）。版を 4 と固定していた
@@ -74,8 +76,6 @@ prompt-audit は、修正後の release（2026-11-19T15:39Z 以降の昇格）�
   契約（非終端で sink の `comment` に渡る）は残りの assert が守る。wire の版の値は `protocol/tests.rs` の
   `run_request_serializes_with_type_tag`（`v["protocol"] == 5`）が守る。`tests/e2e/tests/scenarios.rs` の `"protocol":4` の literal も 5 に
   直す必要がある（release gate の全体の試験だけが走らせる）。
-- D4: 計画の無い root の task（祖先の無い task）の prompt は 1 byte も変えない。`ancestors_section` は空の祖先で空文字列を返し、
-  木の planner の祖先の行の変更は木の祖先を持つ task にしか出ない。
 
 ## 欠け 5（Project.request）を扱わない理由
 

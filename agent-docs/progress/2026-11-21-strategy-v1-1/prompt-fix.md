@@ -6,7 +6,7 @@ updated: 2026-11-21
 ---
 # prompt-fix（WorkUnit。子 1 の受入条件 2 の修正）
 
-完了日: 未（計画の範囲 check の replan 待ち。下の「範囲 check の不一致」）。設計の記録は [ADR 2026-11-21-ancestor-objective-in-prompts](../../adr/2026-11-21-ancestor-objective-in-prompts.md)。
+完了日: 未（範囲の外の 1 行の replan 待ち。下の「範囲の外に残った 1 行」）。WU の check 0〜4 は提出時の HEAD で全て exit 0。設計の記録は [ADR 2026-11-21-ancestor-objective-in-prompts](../../adr/2026-11-21-ancestor-objective-in-prompts.md)。
 
 ## 結論
 
@@ -43,6 +43,32 @@ updated: 2026-11-21
 - 設計 review は `start_design_review`（`health_review/design_gate.rs`。`#[path]` で dispatcher module に入る）が 1 行で組む。
 
 v2 の repo health（size の規則だけ、提出時の作業ツリー）: `verdict=pass exit=0 … fail_grade=0 new=0 worsened=0`。
+
+## 設計 review の指摘への対応（この run）
+
+commit「strategy-v1 1 prompt-fix: 設計 review の祖先の読み取りを WorkerStarted の前に移し、wire の版を 5 に上げる」と
+commit「strategy-v1 1 prompt-fix: wire の版の試験を 5 に合わせる」。
+
+| 指摘 | 対応 | 確かめ方 |
+|---|---|---|
+| (1) `start_design_review` の祖先の読み取りが `WorkerStarted`・runs の行・`quota_begin` の後にある | `prompt_ancestors::lineage(...)?` を `run_watch(...)?` の直後（`pick_reviewer` と `Event::WorkerStarted` の append の前）に移した。読めなければ run を起こさずに返る | WU の check 2: `run_watch=283 lineage=286 started=298` |
+| (1) ADR D3 の位置の記述 | D3 を書き直し、付記に 3 経路の位置を書いた: final review は `review_human_inputs(&task)?` が WorkerStarted より前（base と同じ）、設計 review は上のとおり前、worker・planner・WU は `run_extras(...)?` の中で WorkerStarted の後（base でも同じ所で `?` で store を読む） | ADR の D3 と付記 |
+| (2) `dispatcher.rs` の `has_child_failed_transition` の doc comment が `context.children` | `context.lineage.children` に直した | check 2: `grep -n 'context\.children' crates/task-dispatch/src/dispatcher.rs` が 0 行 |
+| (2) `PROTOCOL_VERSION` が 4 で、doc が「全て追加のみ」 | 5 に上げ、doc に「v5 は `context.children` と `objective_excerpt` を消した」と書いた。`docs/protocol/worker-protocol.md` の版の行・`run.protocol` の行・例 2 か所を 5 にし、「4 のまま」の記述を「上げない」にした。schema を `UPDATE_SCHEMA=1` で作り直した。ADR に D5 を足した | check 2: `pub const PROTOCOL_VERSION: u32 = 5;`。`committed_schema_matches_generated` が pass |
+| (2) 版を数値で比べる所の確認 | `git grep -n PROTOCOL_VERSION` で production のコードは代入だけ（比べる所は無い）。試験の 3 か所が 4 を固定していた: `crates/task-worker/src/protocol/tests.rs` の `v["protocol"] == 4`（5 に直した）、`crates/task-worker/src/subprocess/tests.rs` の comment 行の試験の末尾の `assert_eq!(PROTOCOL_VERSION, 4)`（消した。comment 行の契約は残りの assert が守り、版の値は前者が守る）、`tests/e2e/tests/scenarios.rs:437` の `"protocol":4`（範囲の外。下の節） | `git grep -nE 'v\["protocol"\]|PROTOCOL_VERSION, ?4|"protocol":4' -- crates tests` |
+| (3) `review_spawn.rs` の先頭の use 行 | `use crate::review::RepoHealth;` を base に戻し、`ReviewHumanInputs` は `crate::review::ReviewHumanInputs` と full path で書いた。root-artifacts の branch は merge していない | `git diff <WU の base> HEAD -- crates/task-dispatch/src/dispatcher/review_spawn.rs` に use 行の差が無い。WU の check 3: `git merge-tree --write-tree --name-only celeris-wu/01M7XQ9Q4P4ZQ38Y509J9XYAQ0/root-artifacts HEAD` が exit 0 |
+
+`crates/task-worker/src/subprocess/tests.rs` は高 risk の path class `sandbox` に入る。変えたのは試験の版の固定の 1 行と doc comment の 1 文だけで、
+sandbox の不変条件（`worker-db-read-only`・`worker-no-subagents`）に関わるコードは変えていない。
+
+## 範囲の外に残った 1 行（plan_issue で replan を求める）
+
+- `tests/e2e/tests/scenarios.rs:437` の `assert!(run1.starts_with(r#"{"type":"run","protocol":4"#));` は版 5 では落ちる。e2e の crate は
+  task-worker に依存しないので test-affected は走らせず、release gate の `cargo nextest run --workspace` だけが走らせる。
+- WU の範囲 check（check 4）は `tests/e2e/` を許さない。範囲の外に回避策を置かないため、この run では直していない。
+- 求めた直し: 範囲 check の正規表現に `tests/e2e/tests/scenarios.rs` を足す。直しは 437 行の `4` を `5` にし、直前の comment（435〜436 行）を
+  「v5 は `context.children` を `context.lineage.children` に移した」に合わせる。`tests/e2e/tests/delegation_scenarios.rs` の 269・618 行の
+  doc comment の `context.children` も古い（fake worker の `grep -q '"children":\[{'` は `"lineage":{"children":[{` にも当たるので動きは変わらない）。
 
 ## 欠けの一覧ごとの対処（prompt-audit の「欠けの一覧」）
 
@@ -81,18 +107,19 @@ task-worker の 2 件と設計 review の 1 件は新しい欄（`RunContext.lin
 受入条件の末尾だけを見る。木の planner の試験は 300 文字の抜粋の短い印しか見ない。どれも祖先を持つ task の prompt を組まないので、祖先の
 目的が切れても、受入条件が無くても落ちない。
 
-## 証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`）
+## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`（この WU の base）と `git merge-base HEAD main`）
 
-- 対象の試験:
-  `cargo nextest run --no-fail-fast -p task-worker -p task-dispatch -E 'test(/prompt_ancestor_objective_|prompt_full_objective_|planner_prompt_acceptance_|acceptance_lines_|planner_prompt_carries_depth|tree_replan|review_human_inputs|build_prompt_includes_children|committed_schema_matches_generated|run_extras|reviewer_run|cos_run_context|design_review/)'`
-  → exit 0、`61 tests run: 61 passed`。
-- `bash scripts/dev/test-affected.sh` → exit 0。repo health `verdict=pass exit=0 findings=695 fail_grade=0 new=0 worsened=0`、
-  nextest `6163 tests run: 6163 passed (9 slow), 21 skipped`。
-- `cargo clippy --workspace -- -D warnings` → exit 0。
-- `cargo fmt --all -- --check` → exit 0。
-- `UPDATE_SCHEMA=1 cargo nextest run -p task-worker -E 'test(committed_schema_matches_generated)'` で
-  `docs/protocol/worker-protocol.schema.json` を作り直し、上の対象の試験で一致を確かめた。`docs/protocol/worker-protocol.md` の
-  `context.children` の行を `context.lineage`・`context.lineage.ancestors`・`context.lineage.children` の行に置き換えた。
+- WU の check 0（対象の試験）:
+  `cargo nextest run -p task-worker -p task-dispatch --no-tests=fail -E 'test(/prompt_ancestor_objective_/) | test(/prompt_full_objective_/) | test(/planner_prompt_acceptance/) | test(/acceptance_lines_/) | test(/health_review::design/)'`
+  に `a_comment_line_is_passed`・`committed_schema_matches_generated`・`review_human_inputs` を足して走らせた → exit 0、`20 tests run: 20 passed`。
+- WU の check 1: `bash scripts/dev/test-affected.sh` → exit 0。repo health `verdict=pass exit=0 findings=695 fail_grade=0 new=0 worsened=0`、
+  nextest `6163 tests run: 6163 passed (7 slow), 21 skipped`。`cargo clippy --workspace -- -D warnings` → exit 0。
+  `cargo fmt --all -- --check` → exit 0。
+  - 版を 5 に上げた直後の test-affected は `protocol::tests::run_request_serializes_with_type_tag` の 1 件で落ちた（`v["protocol"] == 4`）。
+    この試験を 5 に直して再実行した結果が上。
+- WU の check 2（読み取りの位置・版・古い説明）: `run_watch=283 lineage=286 started=298`、版 5、`context.children` 0 行 → exit 0。
+- WU の check 3: `git merge-tree --write-tree --name-only celeris-wu/01M7XQ9Q4P4ZQ38Y509J9XYAQ0/root-artifacts HEAD` → exit 0（衝突なし）。
+- WU の check 4（範囲）: `sh "$CELERIS_WU_SCOPE_PATHS"` の path のうち範囲の外は 0 件 → exit 0。
 
 ## LoC（この WU の base = commit「strategy-v1 1 prompt-audit: 修正後の本番 run の実 prompt を再監査する」と HEAD。分類規則は base の `scripts/dev/source-size-report.py` と `source-size-report.toml` に固定）
 
@@ -100,10 +127,12 @@ task-worker の 2 件と設計 review の 1 件は新しい欄（`RunContext.lin
 
 | 区分 | base | HEAD | 差 |
 |---|---|---|---|
-| production（全言語） | 376018 | 376156 | +138 |
-| production（Rust） | 331327 | 331465 | +138 |
-| external_test | 463385 | 463936 | +551 |
-| own_total_with_tests | 1034966 | 1035655 | +689 |
+| production（全言語） | 376018 | 376159 | +141 |
+| production（Rust） | 331327 | 331468 | +141 |
+| external_test | 463385 | 463935 | +550 |
+| own_total_with_tests | 1034966 | 1035657 | +691 |
+
+この run の差（前回の提出から）: production +3（`PROTOCOL_VERSION` の doc の行）、external_test −1（`subprocess/tests.rs` の版の固定の行）。
 
 production の純増の理由: 祖先の節（`ancestors_section`）、`TaskLineageContext`・`AncestorContext` の型、`prompt_ancestors.rs`（走査を
 `review_human_inputs` から移した分を含む）、`ReviewHumanInputs`。消したもの: `review_human_inputs` の走査（12 行）、`TreeAncestorContext.objective_excerpt`、
@@ -123,19 +152,11 @@ production の純増の理由: 祖先の節（`ancestors_section`）、`TaskLine
    `ancestor_acceptance` の行の `cut` と `missing` が 0 で、`result` が `found` であることを確かめる。WU の run（`wu_key` が `-` でない行）と
    reviewer の行も含める。prompt_audit.py の基点（`FIX_SUBJECT`）は 11-19 の planner の修正なので、昇格時刻の絞り込みは手で行う。
 
-## 範囲 check の不一致（plan_issue で replan を求めた）
-
-- 計画の prompt-fix の範囲 check（`scope: true` の check）は `crates/celerisctl/` を許さない。提出時の HEAD でこの check を走らせると
-  `out of scope: crates/celerisctl/src/commands/worker.rs` で落ちる。
-- 原因: `RunContext.children` を `RunContext.lineage` に置き換えたので、`celerisctl worker run` の `RunContext` の literal 2 か所
-  （`children: Vec::new()`）を `lineage: Default::default()` に直す必要がある。欄を置き換えずに 41 番目の欄を足すと、repo health の
-  型の欄の上限 40 で test-affected が落ちる（前回の run の不合格）。
-- 求めた直し: 範囲 check の正規表現に `crates/celerisctl/src/commands/worker.rs` を足す。コードの変更は要らない（提出時の HEAD で
-  check 1 は 13 passed・exit 0、check 2 の 3 つのコマンドは exit 0）。
-
 ## 未解決事項
 
 - 本番での再監査は未確認（昇格前のため）。手順は上に書いた。
+- `tests/e2e/tests/scenarios.rs:437` の版の literal は範囲の外で直していない（上の節。replan 待ち）。
+- 設計 review の祖先の読み取りが store の失敗で返る経路に、失敗を注入する試験は無い。位置は WU の check 2（行番号の比較）だけが守る。
 - `celerisctl worker run`（手動の run）と eval の trial の run は、最小の context で起こす既存の方針のままで祖先を載せない。
 - 修正前の tree での失敗は dispatcher の 2 件だけを記録した。task-worker の 2 件と設計 review の 1 件は新しい欄を使うので、修正前の tree では
   compile できない。

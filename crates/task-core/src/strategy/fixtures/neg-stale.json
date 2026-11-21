@@ -1,0 +1,174 @@
+{
+ "schema": "celeris.strategy/1",
+ "project_id": "01M2WTS3DKNZBSZ2JMVB4CZMBW",
+ "strategy_id": "arch-v4-cycle",
+ "version": 1,
+ "supersedes": null,
+ "idempotency_key": "strategy:arch-v4-cycle:v1",
+ "source": {
+  "kind": "celeris_task_run",
+  "label": "戦略 review の run"
+ },
+ "actor": {
+  "kind": "worker",
+  "id": "01M7ZRUN00000000000000STV1"
+ },
+ "source_revision": {
+  "request_sha256": "c515b3c87587338e41c7d562494deb0143921ac76bed6368737c43c1eb742b2c",
+  "roadmap_version": 3
+ },
+ "timestamp": "2026-11-21T15:00:00Z",
+ "acl": {
+  "classification": "internal",
+  "outbound": false
+ },
+ "decision_state": "proposed",
+ "research_question": {
+  "text": "子 A〜H を固定の計画で進めても task-core の SCC が減らなかったのはなぜか。どの辺を切れば循環の単位が減るか。",
+  "references": [
+   {
+    "kind": "task",
+    "task_id": "01M7MZT8KX547464YYS76QNP4G"
+   }
+  ]
+ },
+ "candidates": [
+  {
+   "id": "cut-min-edges",
+   "title": "循環を切る最小の辺の集合を測ってから切る",
+   "approach": "struct-deps の SCC から最小の辺の集合を求め、上位 3 辺だけを切る pilot を 1 つ走らせる",
+   "decision_method": "pilot の後に task-core の SCC の単位が 55 未満になれば採る。変わらなければ捨てる",
+   "cost": {
+    "usd_max": 40,
+    "wall_hours_max": 6,
+    "note": "pilot 1 件と測定だけ"
+   },
+   "risks": [
+    "切った辺が別の循環を作る"
+   ],
+   "reevaluate_when": [
+    "pilot の後に SCC の単位が減らない",
+    "費用が 40 USD を超える"
+   ],
+   "hypotheses": [
+    "h-cycle-edges"
+   ],
+   "selected": true
+  },
+  {
+   "id": "continue-pilots",
+   "title": "狭い pilot を E・F と続ける",
+   "approach": "D と同じ形の pilot を続ける",
+   "decision_method": "E の後に SCC の単位が減れば続ける",
+   "cost": {
+    "usd_max": 120,
+    "wall_hours_max": 20
+   },
+   "risks": [],
+   "reevaluate_when": [
+    "E の後に SCC の単位が減らない"
+   ],
+   "hypotheses": [
+    "h-pilots-enough"
+   ],
+   "selected": false
+  }
+ ],
+ "hypotheses": [
+  {
+   "id": "h-cycle-edges",
+   "statement": "少数の辺が task-core の循環の大半を作っている",
+   "confidence": "estimated",
+   "falsified_by": "上位 3 辺を切っても SCC の単位が 55 のまま",
+   "evidence": [
+    "e-scc-unchanged",
+    "e-chat-note"
+   ]
+  },
+  {
+   "id": "h-pilots-enough",
+   "statement": "狭い pilot を重ねれば循環は減る",
+   "confidence": "contradicted",
+   "falsified_by": "D の後に SCC の単位が変わらない",
+   "evidence": [
+    "e-pilot-refute"
+   ]
+  }
+ ],
+ "evidence": [
+  {
+   "id": "e-scc-unchanged",
+   "stance": "support",
+   "hypothesis": "h-cycle-edges",
+   "statement": "D の後も task-core の SCC の単位は 55 のままだった",
+   "observed_at": "2026-11-18T20:36:00Z",
+   "source": {
+    "kind": "celeris_task_run",
+    "label": "アーキv4 D の測定"
+   },
+   "references": [
+    {
+     "kind": "artifact",
+     "task_id": "01M7TASKD00000000000000000",
+     "name": "struct-deps.tsv",
+     "sha256": "cf2c70ea6dc5ad472a435cfbcc6f11ff455c2269db1de9c6530695afa028bf60"
+    },
+    {
+     "kind": "commit",
+     "repo": "agent-platform",
+     "sha": "43109d4c2a75e7b1d59840ea1cb385222524990b"
+    },
+    {
+     "kind": "chat",
+     "thread_id": "01M5JJTVPW15CKFRCA0FAYCHK4",
+     "message_id": "01M7XPWTXR1A0CNWYN7D1HBZWB"
+    }
+   ]
+  },
+  {
+   "id": "e-pilot-refute",
+   "stance": "refute",
+   "hypothesis": "h-pilots-enough",
+   "statement": "A〜H を終えても SCC 17→17 で、pilot を重ねた効果は無かった",
+   "observed_at": "2026-11-20T09:00:00Z",
+   "source": {
+    "kind": "celeris_task_run",
+    "label": "アーキv4 H の再測定"
+   },
+   "references": [
+    {
+     "kind": "task",
+     "task_id": "01M7TASKH00000000000000000"
+    },
+    {
+     "kind": "url",
+     "url": "https://arxiv.org/abs/2401.00001"
+    }
+   ]
+  },
+  {
+   "id": "e-chat-note",
+   "stance": "unknown",
+   "hypothesis": "h-cycle-edges",
+   "statement": "人は最小の辺の集合を先に測りたいと書いた。効果は未確認",
+   "observed_at": "2026-11-21T03:00:00Z",
+   "source": {
+    "kind": "celeris_cos_thread",
+    "label": "案件 thread",
+    "thread_id": "01M5JJTVPW15CKFRCA0FAYCHK4"
+   },
+   "references": [
+    {
+     "kind": "knowledge",
+     "path": "projects/agent-platform/arch-v4.md",
+     "sha256": "80ac79d35f8ea4cb785c907a1308d0427bc4f57a703eab9763d4aa0fb4ef40a8"
+    },
+    {
+     "kind": "chat",
+     "thread_id": "01M0GLOBALTHREAD0000000000",
+     "message_id": "01M7XMSGGLOBAL000000000000"
+    }
+   ]
+  }
+ ]
+}

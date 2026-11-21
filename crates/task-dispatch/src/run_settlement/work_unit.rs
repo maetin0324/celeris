@@ -111,9 +111,14 @@ impl WorkUnitSettlement {
         !self.reset_only && self.decision.is_some() && !self.parks_on_cluster_jobs()
     }
 
-    /// WU をクラスタ job の wait（`blocked(cluster_jobs)`）にする run か。この run の `decisions` は settlement では
-    /// 読まず、wait を開く側（`Dispatcher::cluster_wait_worker_decisions`）が記録し、job の終了による再開が答えまで
-    /// 止める（ADR 2026-11-21-cluster-job-wait-worker-decisions D1・D2）。
+    /// worker 完了の経路が `decisions` を記録する run か: settlement で読んで止める run（[`Self::reads_worker_decisions`]）と、
+    /// WU をクラスタ job の wait にする run（[`Self::parks_on_cluster_jobs`]。止めは job の終了による再開が持つ。
+    /// ADR 2026-11-21-cluster-job-wait-worker-decisions D1・D2）。
+    pub(crate) fn records_worker_decisions(&self) -> bool {
+        self.reads_worker_decisions() || self.parks_on_cluster_jobs()
+    }
+
+    /// WU をクラスタ job の wait（`blocked(cluster_jobs)`）にする run か。
     pub(crate) fn parks_on_cluster_jobs(&self) -> bool {
         self.decision
             .as_ref()
@@ -450,12 +455,14 @@ pub(crate) fn settle_work_unit_failure(
 /// 止めるのは決定だけ）。行は `running` の行 `wu` を `blocked(decision)` にしたもので、この run の遷移の数え
 /// （`continue` の continuation・`retry` の再試行）は動かさない（replay は `decision` の遷移で数えを動かさない。
 /// 答えの後の run で同じ条件なら、そこで数えと上限が効く）。auto-leaf の上限の遷移（`auto_leaf_budget`）は理由と
-/// continuation の数えを残す。質問で終わる提案（trigger が `WorkerQuestion`）なら質問の文を outcome に残す。
+/// continuation の数えを残す。質問で終わる提案（trigger が `WorkerQuestion`）なら質問の文を outcome に残す。クラスタ job の
+/// wait の run（`cluster_jobs`）は行と trigger を変えず、outcome に決定を待つことを足すだけ（ADR
+/// 2026-11-21-cluster-job-wait-worker-decisions D1）。
 /// `count` は記録する worker の決定の要求の数（settlement に auto-leaf の上限の決定の要求があれば 1 件足して示す）。
 /// ADR 2026-11-21-cluster-job-wait-worker-decisions D1: クラスタ job の wait で終わった leaf の run が
 /// `needed_before: self` の決定の要求を出した。WU の遷移（`blocked(cluster_jobs)`）と task の trigger は変えず、outcome の
 /// 文の末尾に決定を待つことを足す（止めは job の終了による再開が持つ）。
-pub(crate) fn note_cluster_wait_decisions(s: &mut WorkUnitSettlement, count: usize) {
+fn note_cluster_wait_decisions(s: &mut WorkUnitSettlement, count: usize) {
     s.outcome = format!("{}。{}", s.outcome, super::waits_for_decisions(count));
 }
 
@@ -464,6 +471,10 @@ pub(crate) fn hold_for_worker_decisions(
     wu: &WorkUnitRow,
     count: usize,
 ) {
+    if s.parks_on_cluster_jobs() {
+        note_cluster_wait_decisions(s, count);
+        return;
+    }
     let count = count + usize::from(s.auto_leaf_request.is_some());
     if let Some(decision) = s.decision.as_mut() {
         if decision.reason != AUTO_LEAF_BUDGET_REASON {

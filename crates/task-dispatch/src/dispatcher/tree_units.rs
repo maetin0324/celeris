@@ -360,19 +360,24 @@ impl Dispatcher {
     /// 止める unit を組み立てる。書き込みはしない。木が無効・木の節点でない・ファイルが
     /// 無い・`decisions` が無い（`null`・空の配列を含む）なら `None`（従来と 1 バイトも変わらない）。配列でない
     /// `decisions` は受け付けなかった要求 1 件として同じまとめに入れ、要求を出した仕事を止める
-    /// （ADR 2026-11-21-worker-decisions-fail-closed D2）。
+    /// （ADR 2026-11-21-worker-decisions-fail-closed D2）。`result.json` は WU の run なら WU の作業場所、atomic の run なら
+    /// task の artifacts から読む。クラスタ job の wait を開く run も読む（ADR 2026-11-21-cluster-job-wait-worker-decisions
+    /// D1。止めは wait の再開が持つ）。
     pub(super) fn worker_decisions(
         &self,
         task: &Task,
         wu: Option<&task_core::WorkUnitRow>,
-        artifacts_dir: Option<&Path>,
         run_id: &str,
     ) -> Result<Option<WorkerDecisions>, DispatchError> {
         let limits = self.config.execution.limits.tree;
         if !limits.enabled || !self.is_tree_node(task)? {
             return Ok(None);
         }
-        let Some(dir) = artifacts_dir else {
+        let dir = match wu {
+            Some(_) => self.work_unit_checkpoint_site(task, wu).0,
+            None => self.task_dir(task).map(|d| self.artifacts_dir(task, &d)),
+        };
+        let Some(dir) = dir else {
             return Ok(None);
         };
         let Ok(text) = std::fs::read_to_string(dir.join("result.json")) else {

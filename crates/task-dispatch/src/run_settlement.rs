@@ -38,13 +38,12 @@ pub(crate) use crate::execution_scheduler::ContinuationInputs;
 mod task_run;
 pub(crate) use task_run::{
     PhaseStep, TaskRunInput, hold_task_for_worker_decisions, phase_step_after_write,
-    settle_task_run, task_checkpoint_end, task_reads_worker_decisions, waits_for_decisions,
+    settle_task_run, task_checkpoint_end, task_records_worker_decisions, waits_for_decisions,
 };
 mod work_unit;
 pub(crate) use work_unit::{
     WorkUnitFailureStep, WorkUnitRunInput, hold_for_worker_decisions, integration_repair_exhausted,
-    note_cluster_wait_decisions, settle_work_unit, settle_work_unit_failure, work_unit_run_end,
-    work_unit_saves_checkpoint,
+    settle_work_unit, settle_work_unit_failure, work_unit_run_end, work_unit_saves_checkpoint,
 };
 
 /// [`replan_or_ask`] の入力。各経路が読んだ値を詰める。

@@ -306,6 +306,34 @@ pub fn holds_unit(store: &SqliteStore, node: &Task, unit: &WorkUnitRow) -> Resul
     Ok(held_by_decisions(unit, &rows, &answered_after))
 }
 
+/// ADR 2026-11-21-cluster-job-wait-worker-decisions D2: クラスタ job の終了（または上限）で `blocked(cluster_jobs)` から
+/// 出る unit の行き先。unit を止める決定がある（[`holds_unit`]）なら `resume`（`needs_continuation` か v1 の上限の
+/// `blocked(question)`）の代わりに `blocked(decision)`（遷移の理由 `decision`）を返し、再開は答えの解放
+/// （[`release_rows`]）に任せる。無ければ `resume` のまま。
+pub fn job_end_target<'a>(
+    store: &SqliteStore,
+    unit: &WorkUnitRow,
+    resume: (WorkUnitStatus, Option<WorkUnitBlockedReason>, &'a str),
+) -> Result<(WorkUnitStatus, Option<WorkUnitBlockedReason>, &'a str), OpsError> {
+    let Some(node) = unit
+        .task_id
+        .parse::<TaskId>()
+        .ok()
+        .and_then(|id| store.get(id).transpose())
+        .transpose()?
+    else {
+        return Ok(resume);
+    };
+    if holds_unit(store, &node, unit)? {
+        return Ok((
+            WorkUnitStatus::Blocked,
+            Some(WorkUnitBlockedReason::Decision),
+            "decision",
+        ));
+    }
+    Ok(resume)
+}
+
 /// ADR 2026-11-21-cluster-job-wait-worker-decisions D3: 最後の run（`runs` 索引）がクラスタ job の wait で終わった unit。
 /// job の終了の後に決定が止めた unit で、答えで解放するときは job の wait の続き（`needs_continuation`）に戻す。
 fn waited_units(store: &SqliteStore, units: &[WorkUnitRow]) -> Result<BTreeSet<String>, OpsError> {

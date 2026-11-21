@@ -539,25 +539,14 @@ impl Dispatcher {
             // ADR-0079 D7・ADR 2026-11-21-worker-decisions-fail-closed 付記 2026-11-21: leaf の決定の要求は WU の失敗の処理より
             // 先に読み、`needed_before: self` なら leaf を `blocked(decision)` にして失敗の処理を起こさない。auto-leaf の上限の
             // 決定の要求は同じ記録に入れる。他の unit を指した決定はその unit だけを止め、この run の遷移は変えない。
-            // ADR 2026-11-21-cluster-job-wait-worker-decisions D1: クラスタ job の wait で終わった run の決定の要求も記録する。
-            // unit は `blocked(cluster_jobs)` のままにし、job の終了による再開が答えまで止める（D2）。
-            let mut found = if settled.reads_worker_decisions() {
-                let (site_artifacts, _, _, _) = self.work_unit_checkpoint_site(&task, Some(wu));
-                let found =
-                    self.worker_decisions(&task, Some(wu), site_artifacts.as_deref(), &run_id)?;
-                if let Some(f) = found.as_ref().filter(|f| f.self_hold) {
-                    run_settlement::hold_for_worker_decisions(&mut settled, wu, f.count);
-                }
-                found
-            } else if settled.parks_on_cluster_jobs() {
-                let found = self.cluster_wait_worker_decisions(&task, Some(wu), &run_id)?;
-                if let Some(f) = found.as_ref().filter(|f| f.self_hold) {
-                    run_settlement::note_cluster_wait_decisions(&mut settled, f.count);
-                }
-                found
+            let mut found = if settled.records_worker_decisions() {
+                self.worker_decisions(&task, Some(wu), &run_id)?
             } else {
                 None
             };
+            if let Some(f) = found.as_ref().filter(|f| f.self_hold) {
+                run_settlement::hold_for_worker_decisions(&mut settled, wu, f.count);
+            }
             if let Some(request) = settled.auto_leaf_request.take() {
                 let f = found.get_or_insert_with(|| WorkerDecisions {
                     events: vec![],
@@ -689,22 +678,9 @@ impl Dispatcher {
         // ADR-0079 D7・ADR 2026-11-21-worker-decisions-fail-closed 付記「atomic の規則」: 木の節点の atomic の run の
         // `decisions` を記録し、`needed_before: self` なら trigger を `hold_task_for_worker_decisions` で替え、答えまで
         // run を起こさない（`decision_self_hold`。答えは次の run の前置きの `answers` に入る）。
-        if current_wu.is_none() && run_settlement::task_reads_worker_decisions(run_end) {
-            let artifacts_dir = self.task_dir(&task).map(|d| self.artifacts_dir(&task, &d));
-            worker_decisions =
-                self.worker_decisions(&task, None, artifacts_dir.as_deref(), &run_id)?;
-            if let Some(f) = worker_decisions.as_ref().filter(|f| f.self_hold) {
-                (trigger, outcome_str) =
-                    run_settlement::hold_task_for_worker_decisions(trigger, &outcome_str, f.count);
-            }
-        } else if current_wu.is_none()
-            && matches!(trigger, Trigger::ClusterJobWait)
-            && cluster_wait.is_some()
+        if current_wu.is_none() && run_settlement::task_records_worker_decisions(run_end, &trigger)
         {
-            // ADR 2026-11-21-cluster-job-wait-worker-decisions D1・D5: wait を開く atomic の run の決定の要求を記録する。
-            // trigger は `ClusterJobWait` のまま（`hold_task_for_worker_decisions` が残す）で、job の終了の後は
-            // `decision_self_hold` が答えまで run を起こさない。
-            worker_decisions = self.cluster_wait_worker_decisions(&task, None, &run_id)?;
+            worker_decisions = self.worker_decisions(&task, None, &run_id)?;
             if let Some(f) = worker_decisions.as_ref().filter(|f| f.self_hold) {
                 (trigger, outcome_str) =
                     run_settlement::hold_task_for_worker_decisions(trigger, &outcome_str, f.count);

@@ -18,7 +18,7 @@ use task_core::cluster_job::{
 use task_core::{Event, Status, Task, TaskId, Trigger, WorkUnitBlockedReason, WorkUnitStatus};
 use time::OffsetDateTime;
 
-use super::{DispatchError, Dispatcher, WorkerDecisions, ops_to_store, rfc3339};
+use super::{DispatchError, Dispatcher, ops_to_store, rfc3339};
 use crate::cluster_runtime::{ClusterJobPoller, ClusterRuntime, JobPollSlot};
 
 fn parse_ts(s: &str) -> Option<OffsetDateTime> {
@@ -98,24 +98,6 @@ impl Dispatcher {
             state: ClusterJobWaitState::Waiting,
             last_status: Vec::new(),
         })
-    }
-
-    /// ADR 2026-11-21-cluster-job-wait-worker-decisions D1: クラスタ job の wait を開く run（WU の遷移 `cluster_jobs`、
-    /// atomic の trigger `ClusterJobWait`）の `result.json` の `decisions` を、既存の [`Dispatcher::worker_decisions`] で
-    /// 読む。run の遷移・trigger・wait の行は変えない（待ちの正本は `blocked(cluster_jobs)` と wait の行のまま）。止めは
-    /// 再開の側が持つ: WU は job の終了で [`Dispatcher::cluster_wait_unit_row`] が `blocked(decision)` にし、atomic は
-    /// `decision_self_hold` が答えまで run を起こさない。
-    pub(super) fn cluster_wait_worker_decisions(
-        &self,
-        task: &Task,
-        wu: Option<&task_core::WorkUnitRow>,
-        run_id: &str,
-    ) -> Result<Option<WorkerDecisions>, DispatchError> {
-        let artifacts = match wu {
-            Some(wu) => self.work_unit_checkpoint_site(task, Some(wu)).0,
-            None => self.task_dir(task).map(|d| self.artifacts_dir(task, &d)),
-        };
-        self.worker_decisions(task, wu, artifacts.as_deref(), run_id)
     }
 
     /// ADR-0090 D2: WU の continuation の前置きに渡す、その WU の直前の wait の結果（終わった wait だけ）。
@@ -445,20 +427,12 @@ impl Dispatcher {
         }) else {
             return Ok(None);
         };
-        let held = match self.store.get(task_id)? {
-            Some(node) => task_ops::decision::holds_unit(self.store.as_ref(), &node, &u)
-                .map_err(ops_to_store)?,
-            None => false,
-        };
-        let (to, blocked_reason, reason) = if held {
-            (
-                WorkUnitStatus::Blocked,
-                Some(WorkUnitBlockedReason::Decision),
-                "decision",
-            )
-        } else {
-            (to, blocked_reason, reason)
-        };
+        let (to, blocked_reason, reason) = task_ops::decision::job_end_target(
+            self.store.as_ref(),
+            &u,
+            (to, blocked_reason, reason),
+        )
+        .map_err(ops_to_store)?;
         let mut row = u.clone();
         row.status = to;
         row.blocked_reason = blocked_reason;

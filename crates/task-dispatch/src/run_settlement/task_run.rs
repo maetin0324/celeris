@@ -152,7 +152,7 @@ pub(crate) fn settle_task_run(input: TaskRunInput<'_>) -> TaskRunSettlement {
 /// ADR-0079 D7（Phase R3a）・ADR 2026-11-21-worker-decisions-fail-closed 付記「atomic の規則」: atomic task の run が
 /// worker の `result.json` の `decisions` を読むか。終わり方が分かり（`Some`）、状態だけを戻す run（harness_error・
 /// 取り消し。run をやり直し、次の run が要求を出し直す）とクラスタ job の wait（`Waiting`。要求は wait を開く側の
-/// `Dispatcher::cluster_wait_worker_decisions` が記録する。ADR 2026-11-21-cluster-job-wait-worker-decisions）でなければ読む。trigger は
+/// [`task_records_worker_decisions`] の経路が記録する。ADR 2026-11-21-cluster-job-wait-worker-decisions）でなければ読む。trigger は
 /// 見ない（done・yield・予算切れ・質問・失敗のどれで終わった run でも読む）。
 pub(crate) fn task_reads_worker_decisions(end: Option<RunEnd>) -> bool {
     end.is_some_and(|end| {
@@ -161,6 +161,13 @@ pub(crate) fn task_reads_worker_decisions(end: Option<RunEnd>) -> bool {
             RunEnd::HarnessError { .. } | RunEnd::Cancelled | RunEnd::Waiting
         )
     })
+}
+
+/// worker 完了の経路が atomic の run の `decisions` を記録するか: [`task_reads_worker_decisions`] の run と、クラスタ job の
+/// wait を開く run（trigger `ClusterJobWait`。止めは job の終了の後の `decision_self_hold`。ADR
+/// 2026-11-21-cluster-job-wait-worker-decisions D1・D5）。
+pub(crate) fn task_records_worker_decisions(end: Option<RunEnd>, trigger: &Trigger) -> bool {
+    task_reads_worker_decisions(end) || matches!(trigger, Trigger::ClusterJobWait)
 }
 
 /// 決定の要求を待つことを示す outcome の文（atomic の止めとクラスタ job の wait の run が足す）。

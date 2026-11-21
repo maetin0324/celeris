@@ -1,12 +1,13 @@
 ---
 title: 戦略層 v1 子 1 prompt-fix — 子 task の worker・planner・WU・reviewer の実 prompt に祖先の目的と受入条件の全文を出す
 tasks: [01M7XQ9Q4P4ZQ38Y509J9XYAQ0]
-status: blocked
+status: done
 updated: 2026-11-21
+completed: 2026-11-21
 ---
 # prompt-fix（WorkUnit。子 1 の受入条件 2 の修正）
 
-完了日: 未（範囲の外の 1 行の replan 待ち。下の「範囲の外に残った 1 行」）。WU の check 0〜4 は提出時の HEAD で全て exit 0。設計の記録は [ADR 2026-11-21-ancestor-objective-in-prompts](../../adr/2026-11-21-ancestor-objective-in-prompts.md)。
+完了日: 2026-11-21（範囲の外に残った 1 行は WorkUnit e2e-protocol が直した。下の「範囲の外に残った 1 行」）。WU の check 0〜4 は提出時の HEAD で全て exit 0。設計の記録は [ADR 2026-11-21-ancestor-objective-in-prompts](../../adr/2026-11-21-ancestor-objective-in-prompts.md)。
 
 ## 結論
 
@@ -55,13 +56,13 @@ commit「strategy-v1 1 prompt-fix: wire の版の試験を 5 に合わせる」�
 | (1) ADR D3 の位置の記述 | D3 を書き直し、付記に 3 経路の位置を書いた: final review は `review_human_inputs(&task)?` が WorkerStarted より前（base と同じ）、設計 review は上のとおり前、worker・planner・WU は `run_extras(...)?` の中で WorkerStarted の後（base でも同じ所で `?` で store を読む） | ADR の D3 と付記 |
 | (2) `dispatcher.rs` の `has_child_failed_transition` の doc comment が `context.children` | `context.lineage.children` に直した | check 2: `grep -n 'context\.children' crates/task-dispatch/src/dispatcher.rs` が 0 行 |
 | (2) `PROTOCOL_VERSION` が 4 で、doc が「全て追加のみ」 | 5 に上げ、doc に「v5 は `context.children` と `objective_excerpt` を消した」と書いた。`docs/protocol/worker-protocol.md` の版の行・`run.protocol` の行・例 2 か所を 5 にし、「4 のまま」の記述を「上げない」にした。schema を `UPDATE_SCHEMA=1` で作り直した。ADR に D5 を足した | check 2: `pub const PROTOCOL_VERSION: u32 = 5;`。`committed_schema_matches_generated` が pass |
-| (2) 版を数値で比べる所の確認 | `git grep -n PROTOCOL_VERSION` で production のコードは代入だけ（比べる所は無い）。試験の 3 か所が 4 を固定していた: `crates/task-worker/src/protocol/tests.rs` の `v["protocol"] == 4`（5 に直した）、`crates/task-worker/src/subprocess/tests.rs` の comment 行の試験の末尾の `assert_eq!(PROTOCOL_VERSION, 4)`（消した。comment 行の契約は残りの assert が守り、版の値は前者が守る）、`tests/e2e/tests/scenarios.rs:437` の `"protocol":4`（範囲の外。下の節） | `git grep -nE 'v\["protocol"\]|PROTOCOL_VERSION, ?4|"protocol":4' -- crates tests` |
+| (2) 版を数値で比べる所の確認 | `git grep -n PROTOCOL_VERSION` で production のコードは代入だけ（比べる所は無い）。試験の 3 か所が 4 を固定していた: `crates/task-worker/src/protocol/tests.rs` の `v["protocol"] == 4`（5 に直した）、`crates/task-worker/src/subprocess/tests.rs` の comment 行の試験の末尾の `assert_eq!(PROTOCOL_VERSION, 4)`（消した。comment 行の契約は残りの assert が守り、版の値は前者が守る）、`tests/e2e/tests/scenarios.rs:437` の `"protocol":4`（範囲の外。WorkUnit e2e-protocol が 5 に直した。下の節） | `git grep -nE 'v\["protocol"\]|PROTOCOL_VERSION, ?4|"protocol":4' -- crates tests` |
 | (3) `review_spawn.rs` の先頭の use 行 | `use crate::review::RepoHealth;` を base に戻し、`ReviewHumanInputs` は `crate::review::ReviewHumanInputs` と full path で書いた。root-artifacts の branch は merge していない | `git diff <WU の base> HEAD -- crates/task-dispatch/src/dispatcher/review_spawn.rs` に use 行の差が無い。WU の check 3: `git merge-tree --write-tree --name-only celeris-wu/01M7XQ9Q4P4ZQ38Y509J9XYAQ0/root-artifacts HEAD` が exit 0 |
 
 `crates/task-worker/src/subprocess/tests.rs` は高 risk の path class `sandbox` に入る。変えたのは試験の版の固定の 1 行と doc comment の 1 文だけで、
 sandbox の不変条件（`worker-db-read-only`・`worker-no-subagents`）に関わるコードは変えていない。
 
-## 範囲の外に残った 1 行（plan_issue で replan を求める）
+## 範囲の外に残った 1 行（WorkUnit e2e-protocol で解消）
 
 - `tests/e2e/tests/scenarios.rs:437` の `assert!(run1.starts_with(r#"{"type":"run","protocol":4"#));` は版 5 では落ちる。e2e の crate は
   task-worker に依存しないので test-affected は走らせず、release gate の `cargo nextest run --workspace` だけが走らせる。
@@ -69,6 +70,15 @@ sandbox の不変条件（`worker-db-read-only`・`worker-no-subagents`）に関
 - 求めた直し: 範囲 check の正規表現に `tests/e2e/tests/scenarios.rs` を足す。直しは 437 行の `4` を `5` にし、直前の comment（435〜436 行）を
   「v5 は `context.children` を `context.lineage.children` に移した」に合わせる。`tests/e2e/tests/delegation_scenarios.rs` の 269・618 行の
   doc comment の `context.children` も古い（fake worker の `grep -q '"children":\[{'` は `"lineage":{"children":[{` にも当たるので動きは変わらない）。
+- 解消（2026-11-21、WorkUnit e2e-protocol。commit「strategy-v1 1 e2e-protocol: e2e の worker protocol の literal を 5 に直す」）:
+  計画が e2e-protocol の unit を足し、その unit が `scenarios.rs:437` の `4` を `5` にし、435〜436 行の comment を v5 の内容に直した。
+  `delegation_scenarios.rs` の 269・618 行の doc comment は `context.lineage.children` に直した（fake worker の script は変えていない）。
+  証拠（詳細は [e2e-protocol.md](e2e-protocol.md)）:
+  - 直す前: `cargo nextest run --workspace --no-tests=fail -E 'binary(scenarios)'` → exit 100、4 件中 1 件 FAIL
+    （`command_check_fails_once_then_passes_after_retry` が `tests/e2e/tests/scenarios.rs:437:5` の
+    `assertion failed: run1.starts_with(r#"{"type":"run","protocol":4"#)` で panic）。
+  - 直した後: `cargo nextest run -p e2e --no-tests=fail -E 'binary(scenarios)'` → exit 0、4 passed。
+    `-E 'binary(delegation_scenarios)'` → exit 0、5 passed。
 
 ## 欠けの一覧ごとの対処（prompt-audit の「欠けの一覧」）
 
@@ -155,7 +165,7 @@ production の純増の理由: 祖先の節（`ancestors_section`）、`TaskLine
 ## 未解決事項
 
 - 本番での再監査は未確認（昇格前のため）。手順は上に書いた。
-- `tests/e2e/tests/scenarios.rs:437` の版の literal は範囲の外で直していない（上の節。replan 待ち）。
+- `tests/e2e/tests/scenarios.rs:437` の版の literal は、この WU の範囲の外だったので WorkUnit e2e-protocol が直した（上の節）。
 - 設計 review の祖先の読み取りが store の失敗で返る経路に、失敗を注入する試験は無い。位置は WU の check 2（行番号の比較）だけが守る。
 - `celerisctl worker run`（手動の run）と eval の trial の run は、最小の context で起こす既存の方針のままで祖先を載せない。
 - 修正前の tree での失敗は dispatcher の 2 件だけを記録した。task-worker の 2 件と設計 review の 1 件は新しい欄を使うので、修正前の tree では

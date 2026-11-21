@@ -74,8 +74,12 @@ prompt-audit は、修正後の release（2026-11-19T15:39Z 以降の昇格）�
   daemon とワーカーの production のコードは版を数値で比べない（`git grep -n PROTOCOL_VERSION` で代入だけ）。版を 4 と固定していた
   試験の行（`subprocess/tests.rs` の comment 行の試験の末尾の `assert_eq!(PROTOCOL_VERSION, 4)`）は消す。その試験が守る comment 行の
   契約（非終端で sink の `comment` に渡る）は残りの assert が守る。wire の版の値は `protocol/tests.rs` の
-  `run_request_serializes_with_type_tag`（`v["protocol"] == 5`）が守る。`tests/e2e/tests/scenarios.rs` の `"protocol":4` の literal も 5 に
-  直す必要がある（release gate の全体の試験だけが走らせる）。
+  `run_request_serializes_with_type_tag`（`v["protocol"] == 5`）が守る。`tests/e2e/tests/scenarios.rs` の `"protocol":4` の literal は、
+  prompt-fix の範囲 check が `tests/e2e/` を許さなかったので、WorkUnit e2e-protocol が 5 に直した（2026-11-21。435〜436 行の comment も
+  v5 の内容に直し、`tests/e2e/tests/delegation_scenarios.rs` の doc comment の子の一覧の位置も `context.lineage.children` に直した）。
+  直す前は `cargo nextest run --workspace -E 'binary(scenarios)'` が `scenarios.rs:437` で落ち、直した後は通る
+  （`agent-docs/progress/2026-11-21-strategy-v1-1/e2e-protocol.md`）。e2e の crate は task-worker に依存しないので test-affected は
+  task-worker だけの変更でこの試験を選ばず、release gate の全体の試験だけが走らせる。
 
 ## 欠け 5（Project.request）を扱わない理由
 

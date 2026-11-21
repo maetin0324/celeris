@@ -485,3 +485,281 @@ fn checkpoints_are_saved_for_continuations_and_cluster_waits() {
     assert!(work_unit_saves_checkpoint(RunEnd::Waiting, false, false));
     assert!(!work_unit_saves_checkpoint(RunEnd::Completed, true, true));
 }
+
+/// self の決定の要求で WU を止める（worker 完了の経路と同じ呼び方）。
+fn hold(s: &mut WorkUnitSettlement, wu: &WorkUnitRow, count: usize) {
+    hold_for_worker_decisions(s, &wu.key, count);
+}
+
+/// 不変条件（ADR 2026-11-21-worker-decisions-fail-closed D1・付記 2026-11-21、I1・I5）: worker の `decisions` を
+/// 読むのは、状態だけを戻す run（harness_error・取り消し）と WU のクラスタ job の wait（`cluster_jobs`）を除く全ての
+/// 遷移。遷移の理由を列挙しないので、continuation・auto-leaf の上限・進捗なし・固い上限・計画の問題・質問・再試行・
+/// 失敗・merge の repair の失敗で終わった run の要求も人に届く。旧い `worker_decisions_hold_a_completed_leaf_only` は
+/// done の遷移と状態だけを戻す run の 2 つしか見ず、他の遷移で読まないこと（取りこぼし）を検出できなかった。
+#[test]
+fn decision_fail_closed_reads_every_end_but_reset_and_cluster_jobs() {
+    let wu = row("a", WorkUnitKind::Implement, WorkUnitStatus::Running);
+    let units = [wu.clone()];
+    let mut merge = row("merge-s1-a", WorkUnitKind::Repair, WorkUnitStatus::Running);
+    merge.phase = Some("s1".into());
+    let merge_units = [merge.clone()];
+    let fresh = checkpoint(1, None);
+    let stale = checkpoint(0, None);
+    let issue = checkpoint(0, Some("split it"));
+    let progressed = ContinuationInputs {
+        checkpoint: Some(&fresh),
+        ..ContinuationInputs::default()
+    };
+    let stuck = ContinuationInputs {
+        checkpoint: Some(&stale),
+        prev_checkpoint: Some(&stale),
+        ..ContinuationInputs::default()
+    };
+    let capped = ContinuationInputs {
+        checkpoint: Some(&fresh),
+        continuations_since_answer: 10,
+        ..ContinuationInputs::default()
+    };
+    let planned = ContinuationInputs {
+        checkpoint: Some(&issue),
+        ..ContinuationInputs::default()
+    };
+    let none = ContinuationInputs::default();
+    let failed = |retryable| RunEnd::Failed { retryable };
+
+    let mut auto_leaf = input(budget(), &wu, &units, progressed, "b");
+    auto_leaf.auto_leaf_measured = true;
+    auto_leaf.auto_leaf_request = Some(request());
+    let mut retry = input(failed(true), &wu, &units, none, "error(retryable=true): x");
+    retry.max_retries = 1;
+    let cases = [
+        (
+            "completed",
+            true,
+            input(RunEnd::Completed, &wu, &units, none, "done: ok"),
+        ),
+        (
+            "continue",
+            true,
+            input(budget(), &wu, &units, progressed, "b"),
+        ),
+        ("auto_leaf_budget", true, auto_leaf),
+        ("limit", true, input(budget(), &wu, &units, stuck, "b")),
+        (
+            "continuation_cap",
+            true,
+            input(budget(), &wu, &units, capped, "b"),
+        ),
+        (
+            "plan_issue",
+            true,
+            input(budget(), &wu, &units, planned, "b"),
+        ),
+        (
+            "question",
+            true,
+            input(RunEnd::Question, &wu, &units, none, "question: q"),
+        ),
+        ("retry", true, retry),
+        (
+            "failed",
+            true,
+            input(
+                failed(false),
+                &wu,
+                &units,
+                none,
+                "error(retryable=false): x",
+            ),
+        ),
+        (
+            "merge_repair_failed",
+            true,
+            input(
+                failed(false),
+                &merge,
+                &merge_units,
+                none,
+                "error(retryable=false): c",
+            ),
+        ),
+        (
+            "harness_error",
+            false,
+            input(work_unit_run_end(None), &wu, &units, none, "infra"),
+        ),
+        (
+            "harness_error",
+            false,
+            input(RunEnd::Cancelled, &wu, &units, none, "cancelled"),
+        ),
+        (
+            "cluster_jobs",
+            false,
+            input(RunEnd::Waiting, &wu, &units, none, "waiting"),
+        ),
+    ];
+    for (reason, reads, i) in cases {
+        let s = settle_work_unit(i);
+        assert_eq!(s.decision.as_ref().map(|d| d.reason), Some(reason));
+        assert_eq!(s.reads_worker_decisions(), reads, "{reason}");
+    }
+}
+
+/// 不変条件（ADR 2026-11-21-worker-decisions-fail-closed 付記 2026-11-21、I2・I7）: self の決定の要求で止めた WU は、
+/// どの遷移でも `blocked(decision)`・task は `Continue{advance}` になり、WU の失敗（自動 replan・質問・replan の
+/// 使い切りの決定）・integration repair の打ち切り・自動 replan の記録・失敗の伝播・待つ unit の ready を残さない
+/// （1 つの leaf を止めるのは決定 1 か所）。止めた遷移が数えを動かす遷移でも行の数えは run の前の値のまま（replay は
+/// `decision` の遷移で数えを動かさない）で、auto-leaf の上限の遷移は理由と continuation の数えを残す。質問で終わった
+/// run は質問の文を outcome に残す。旧い試験は done の遷移の止めしか見ず、失敗の側の提案が止めの後にも残ることを
+/// 検出できなかった。
+#[test]
+fn decision_fail_closed_hold_clears_failure_side_effects() {
+    let wu = row("a", WorkUnitKind::Implement, WorkUnitStatus::Running);
+    let mut next = row("b", WorkUnitKind::Implement, WorkUnitStatus::Pending);
+    next.depends_on = vec!["a".into()];
+    let units = [wu.clone(), next];
+    let advance = Trigger::Continue {
+        why: ContinueWhy::Advance,
+    };
+    let held = |s: &WorkUnitSettlement, reason: &str| {
+        let d = s.decision.as_ref().expect("transition");
+        assert_eq!(d.reason, reason);
+        assert_eq!(d.updated.status, WorkUnitStatus::Blocked);
+        assert_eq!(
+            d.updated.blocked_reason,
+            Some(WorkUnitBlockedReason::Decision)
+        );
+        assert!(d.newly_ready.is_empty() && d.newly_blocked.is_empty());
+        assert!(!d.plan_complete);
+        assert!(s.failure.is_none() && s.integration_repair_exhaust.is_none());
+        assert!(s.auto_replan.is_none());
+    };
+
+    // 失敗（待つ b は dependency_failed にならない）。止めた後の失敗の処理は何もしない。
+    let mut s = settle_work_unit(input(
+        RunEnd::Failed { retryable: false },
+        &wu,
+        &units,
+        ContinuationInputs::default(),
+        "error(retryable=false): boom",
+    ));
+    assert!(s.failure.is_some());
+    hold(&mut s, &wu, 1);
+    held(&s, "decision");
+    assert_eq!(
+        settle_work_unit_failure(&mut s, limits(0, 0, 1)),
+        WorkUnitFailureStep::Settled
+    );
+    assert!(s.auto_replan.is_none());
+    assert_eq!(s.trigger, advance);
+    assert_eq!(
+        s.outcome,
+        "decision: WorkUnit a は人の決定を待ちます（決定の要求 1 件。ADR-0079 D7）"
+    );
+
+    // 計画の問題（質問の文を残す）。
+    let cp = checkpoint(0, Some("split it"));
+    let planned = ContinuationInputs {
+        checkpoint: Some(&cp),
+        ..ContinuationInputs::default()
+    };
+    let mut s = settle_work_unit(input(budget(), &wu, &units, planned, "b"));
+    assert_eq!(s.failure.as_ref().map(|f| f.reason), Some("plan_issue"));
+    hold(&mut s, &wu, 1);
+    held(&s, "decision");
+    assert_eq!(s.trigger, advance);
+    assert!(
+        s.outcome
+            .ends_with("止めた質問: WorkUnit a が計画の問題を申告しました: split it"),
+        "{}",
+        s.outcome
+    );
+
+    // worker の質問（質問の文を残す）。
+    let mut s = settle_work_unit(input(
+        RunEnd::Question,
+        &wu,
+        &units,
+        ContinuationInputs::default(),
+        "question: which vault?",
+    ));
+    hold(&mut s, &wu, 2);
+    held(&s, "decision");
+    assert_eq!(s.trigger, advance);
+    assert_eq!(
+        s.outcome,
+        "decision: WorkUnit a は人の決定を待ちます（決定の要求 2 件。ADR-0079 D7）。止めた質問: which vault?"
+    );
+
+    // integration repair の失敗（打ち切らない）。
+    let repair = row("repair-s1-1", WorkUnitKind::Repair, WorkUnitStatus::Running);
+    let repair_units = [repair.clone()];
+    let mut failed_repair = input(
+        RunEnd::Failed { retryable: false },
+        &repair,
+        &repair_units,
+        ContinuationInputs::default(),
+        "error(retryable=false): boom",
+    );
+    failed_repair.integration_repair_trusted = Some(true);
+    let mut s = settle_work_unit(failed_repair);
+    assert!(s.integration_repair_exhaust.is_some());
+    hold(&mut s, &repair, 1);
+    held(&s, "decision");
+    assert_eq!(s.trigger, advance);
+
+    // done（待つ b を ready にせず、task の完了を advance に替える）。
+    let mut s = settle_work_unit(input(
+        RunEnd::Completed,
+        &wu,
+        &units,
+        ContinuationInputs::default(),
+        "done: ok",
+    ));
+    assert_eq!(s.decision.as_ref().map(|d| d.newly_ready.len()), Some(1));
+    s.trigger = Trigger::WorkerDone;
+    hold(&mut s, &wu, 2);
+    held(&s, "decision");
+    assert_eq!(s.trigger, advance);
+
+    // 再試行・continuation: 行の数えは run の前の値（`decision` の遷移は数えない）。
+    let mut retry = input(
+        RunEnd::Failed { retryable: true },
+        &wu,
+        &units,
+        ContinuationInputs::default(),
+        "error(retryable=true): x",
+    );
+    retry.max_retries = 1;
+    let mut s = settle_work_unit(retry);
+    hold(&mut s, &wu, 1);
+    held(&s, "decision");
+    assert_eq!(s.decision.as_ref().map(|d| d.updated.retries), Some(0));
+    let fresh = checkpoint(1, None);
+    let progressed = ContinuationInputs {
+        checkpoint: Some(&fresh),
+        ..ContinuationInputs::default()
+    };
+    let mut s = settle_work_unit(input(budget(), &wu, &units, progressed, "b"));
+    hold(&mut s, &wu, 1);
+    held(&s, "decision");
+    assert_eq!(
+        s.decision.as_ref().map(|d| d.updated.continuations),
+        Some(0)
+    );
+    assert_eq!(s.trigger, advance);
+
+    // auto-leaf の上限: 理由と continuation の数えを残す。
+    let mut measured = input(budget(), &wu, &units, progressed, "b");
+    measured.auto_leaf_measured = true;
+    measured.auto_leaf_request = Some(request());
+    let mut s = settle_work_unit(measured);
+    hold(&mut s, &wu, 2);
+    held(&s, "auto_leaf_budget");
+    assert_eq!(
+        s.decision.as_ref().map(|d| d.updated.continuations),
+        Some(1)
+    );
+    assert_eq!(s.trigger, advance);
+}

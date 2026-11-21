@@ -151,7 +151,8 @@ pub(crate) fn settle_task_run(input: TaskRunInput<'_>) -> TaskRunSettlement {
 
 /// ADR-0079 D7（Phase R3a）・ADR 2026-11-21-worker-decisions-fail-closed 付記「atomic の規則」: atomic task の run が
 /// worker の `result.json` の `decisions` を読むか。終わり方が分かり（`Some`）、状態だけを戻す run（harness_error・
-/// 取り消し。run をやり直し、次の run が要求を出し直す）とクラスタ job の wait（`Waiting`）でなければ読む。trigger は
+/// 取り消し。run をやり直し、次の run が要求を出し直す）とクラスタ job の wait（`Waiting`。要求は wait を開く側の
+/// [`task_records_decisions`] の経路が記録する。ADR 2026-11-21-cluster-job-wait-worker-decisions）でなければ読む。trigger は
 /// 見ない（done・yield・予算切れ・質問・失敗のどれで終わった run でも読む）。
 pub(crate) fn task_reads_worker_decisions(end: Option<RunEnd>) -> bool {
     end.is_some_and(|end| {
@@ -162,11 +163,24 @@ pub(crate) fn task_reads_worker_decisions(end: Option<RunEnd>) -> bool {
     })
 }
 
+/// worker 完了の経路が atomic の run の `decisions` を記録するか: [`task_reads_worker_decisions`] の run と、クラスタ job の
+/// wait を開く run（trigger `ClusterJobWait`。止めは job の終了の後の `decision_self_hold`。ADR
+/// 2026-11-21-cluster-job-wait-worker-decisions D1・D5）。
+pub(crate) fn task_records_decisions(end: Option<RunEnd>, trigger: &Trigger) -> bool {
+    task_reads_worker_decisions(end) || matches!(trigger, Trigger::ClusterJobWait)
+}
+
+/// 決定の要求を待つことを示す outcome の文（atomic の止めとクラスタ job の wait の run が足す）。
+pub(crate) fn waits_for_decisions(count: usize) -> String {
+    format!("人の決定を待ちます（決定の要求 {count} 件。ADR-0079 D7）")
+}
+
 /// ADR-0079 D7・付記「atomic の規則」: `needed_before: self` の決定の要求を出した atomic task の run の trigger と
 /// outcome の文。done・質問・失敗（`WorkerDone`・`WorkerQuestion`・`WorkerError`）は `Continue{advance}` に置き換え、
 /// 最終レビュー・質問・再試行・失敗に進めず `ready` に戻す。質問で終わる提案（worker の質問・進捗なし・固い上限）を
 /// 止めたときは、質問の文を outcome の末尾（`。止めた質問: …`）に残す。それ以外の trigger（continuation の
-/// `Continue{continue}`・子 task 待ちの `Continue{children_wait}`）は trigger と outcome の文を残し、文の末尾に決定を
+/// `Continue{continue}`・子 task 待ちの `Continue{children_wait}`・クラスタ job の wait の `ClusterJobWait`〈ADR
+/// 2026-11-21-cluster-job-wait-worker-decisions D5〉）は trigger と outcome の文を残し、文の末尾に決定を
 /// 待つことを足す（checkpoint・continuation の数え・子の待ちは変えない）。どれでも次の run は `dispatch_admission` の
 /// `decision_self_hold` が答えまで起こさない（止めの正本は decisions の行 1 つ）。
 pub(crate) fn hold_task_for_worker_decisions(
@@ -174,7 +188,7 @@ pub(crate) fn hold_task_for_worker_decisions(
     outcome: &str,
     count: usize,
 ) -> (Trigger, String) {
-    let waits = format!("人の決定を待ちます（決定の要求 {count} 件。ADR-0079 D7）");
+    let waits = waits_for_decisions(count);
     match trigger {
         Trigger::WorkerDone | Trigger::WorkerQuestion | Trigger::WorkerError { .. } => {
             let mut text = format!("decision: {waits}");

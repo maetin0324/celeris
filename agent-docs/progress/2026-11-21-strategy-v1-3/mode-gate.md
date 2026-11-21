@@ -98,9 +98,16 @@ Run #1 で、同じ試験 file（JSON と SQL だけを使う）を base の src
   `crates/task-dispatch/src/dispatcher/tests/|crates/task-worker/src/protocol/cos_chat\.rs$|docs/protocol/worker-protocol\.schema\.json$`
   あわせて ADR D1.2 の置き場所を `task_core::discussion_mode` に改める（health の上限のため）。
 
+### Run #2 の検査（提出時の HEAD で実行）
+
+- `bash scripts/dev/test-affected.sh`: exit 0。web は tsc -b 通過・vitest 101 file 705 passed、test-ts-verify 通過、
+  nextest は対象 14 crate で 8601 tests run: 8601 passed・31 skipped（481.8 s）、script bundle の SKIP 0 件。
+- `cargo clippy --workspace -- -D warnings`: exit 0（vendor の deno_core の既存の警告 1 件のみ）。
+- `cargo fmt --all -- --check`: exit 0。`sh scripts/dev/progress-index.sh --check`: exit 0。
+- 範囲の check: 範囲外 21 path のまま（計画の問題として申告。上の 2）。
+
 ## 未解決事項
 
-- 修正後の test-affected の全体の再実行（schema 再生成と timeout の 2 件は単独で確認済み）。Run #2 の結果は下の「Run #2 の検査」。
 - 範囲の check は計画の正規表現が直るまで通らない（Run #2 の 2）。
 - MCP の入力の `instructed_by`（run の入力の MCP の発言は今も引用できる）は既存の挙動のまま。mode は「させない」向きにだけ効く（ADR D7）。人の承認に数えるかは子 4 の scope の決定に残る。
 

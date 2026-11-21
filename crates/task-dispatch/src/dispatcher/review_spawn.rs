@@ -46,6 +46,47 @@ fn pre_review_stale_state(events: &[Event]) -> (u32, Option<&Event>, Option<&Eve
     (count, last, halted)
 }
 
+/// ADR 2026-11-21-root-review-work-unit-artifacts: 最終 review の `ArtifactExists` が名前を照合する成果物の候補
+/// （`review_task` の `produced`。後ろほど優先）。`events`・`units` は対象 task のもの（`events_for`・`work_units_for`）。
+/// 並びは「同じ task の WorkUnit の run の `ArtifactProduced`（古い順）→ review する run（`run_id`）の
+/// `ArtifactProduced`」なので、名前が重なれば review する run の分 → WorkUnit の新しい run の分の順に選ばれる。
+/// WorkUnit の run は `WorkUnitTransitioned{to: running, run_id}` の `work_unit_id` が `units` にあるものだけ（子 task に
+/// 任せた unit は run_id を持たず、子 task の成果物は子の events にあるので入らない）。path が workspace の外を指すもの
+/// （`task_worker::artifact::check_relative` が拒むもの）は候補にしない。計画の無い task では review する run の分だけになる。
+pub(super) fn review_artifact_candidates(
+    events: &[(u64, Event)],
+    units: &[task_core::WorkUnitRow],
+    run_id: &str,
+) -> Vec<ArtifactRef> {
+    let unit_ids: std::collections::HashSet<&str> = units.iter().map(|u| u.id.as_str()).collect();
+    let unit_runs: std::collections::HashSet<&str> = events
+        .iter()
+        .filter_map(|(_, event)| match event {
+            Event::WorkUnitTransitioned {
+                work_unit_id,
+                to: task_core::WorkUnitStatus::Running,
+                run_id: Some(unit_run),
+                ..
+            } if unit_ids.contains(work_unit_id.as_str()) && unit_run != run_id => {
+                Some(unit_run.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    events
+        .iter()
+        .filter_map(|(_, event)| match event {
+            Event::ArtifactProduced {
+                run_id: produced_by,
+                artifact,
+            } if unit_runs.contains(produced_by.as_str()) => Some(artifact.clone()),
+            _ => None,
+        })
+        .chain(artifacts_for_run(events, run_id))
+        .filter(|artifact| task_worker::artifact::check_relative(&artifact.path).is_ok())
+        .collect()
+}
+
 /// ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D2: `git diff --name-only -z --no-renames a b`。
 /// git が起きない・失敗・path が UTF-8 でないときは `Err`（再利用しない側に倒す）。
 fn changed_files_between(dir: &Path, a: &str, b: &str) -> Result<Vec<String>, String> {
@@ -820,7 +861,8 @@ impl Dispatcher {
             .map(|(spec, path, mode)| self.cluster.remote_ssh_settings(spec, path, task.id, *mode));
         let cluster_id = cluster.as_ref().map(|(spec, ..)| spec.id.clone());
         let events = self.store.events_for(task_id)?;
-        let produced = artifacts_for_run(&events, &run_id);
+        let produced =
+            review_artifact_candidates(&events, &self.store.work_units_for(task_id)?, &run_id);
         // ADR-0014 D1: Reviewer run も対象タスクに WorkerStarted（role: reviewer）を残す（アカウント別の集計に含めるため）。
         if let Some((route_input, pick, trace, review_run_id, adapter_id)) = &review_selection {
             let model = pick.candidate.model.to_string();

@@ -3112,6 +3112,7 @@ mod project_wake;
 mod research_deadline;
 mod review;
 mod review_route;
+mod root_review_artifacts;
 mod route_launch;
 mod route_select;
 mod run_tmpdir;

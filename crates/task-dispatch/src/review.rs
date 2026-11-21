@@ -630,7 +630,9 @@ pub(crate) async fn exec_check_outcome(
 
 pub const SUMMARY_FILE_NAME: &str = "summary.md";
 
-/// `task.acceptance` を順に判定する。`produced` はその run の `ArtifactProduced`（名前の照合に使う）。
+/// `task.acceptance` を順に判定する。`produced` は `ArtifactExists` の名前の照合に使う成果物の候補で、同じ名前なら後ろの
+/// ものを使う（最終 review では review する run と同じ task の WorkUnit の run の `ArtifactProduced`。組み立ては
+/// `dispatcher::review_spawn::review_artifact_candidates`、ADR 2026-11-21-root-review-work-unit-artifacts）。
 /// `artifacts_dir` はそのタスクの成果物ディレクトリ（ADR-0036 D1。ディスパッチャが決める）。
 /// `plan.json` / `review.json` / `summary.md` と `Check::ArtifactExists` の既定のパスはここを基準にする。
 pub async fn review_task(

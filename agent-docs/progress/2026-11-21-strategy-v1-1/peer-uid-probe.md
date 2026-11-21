@@ -154,7 +154,20 @@ release gate と同じ host の、celeris の worker run の外の login shell �
 
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 
-（下の「提出時の検査」節に書く）
+検査は commit「strategy-v1 1 peer-uid-probe: ADR に試験 9 の読み取りの修正の付記を足し、進捗を書く」の HEAD で実行した。
+その後の commit はこの節の文だけを書き足した（code・試験・Cargo の入力は変えていない）。
+
+- `bash scripts/dev/test-affected.sh` → exit 0（12 分 48 秒）。対象 crate は celeris・celeris-campaign・celeris-credentiald・celerisctl・
+  llm-proxy・task-api・task-dispatch・task-worker と web（理由: web の型の元になる crate の変更: celeris-credentiald）。
+  nextest `Summary … 6262 tests run: 6262 passed (9 slow), 30 skipped`。web は tsc -b が通り、vitest `Test Files 101 passed`・
+  `Tests 705 passed`、`node --test` `tests 110`・`pass 110`・`fail 0`。repo-health は `verdict=pass`（fail_grade=0、new=0、worsened=0）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo fmt --all -- --check` → exit 0。
+- `sh scripts/dev/progress-index.sh --check` → exit 0（`progress-index --check: ok`）。
+- `sh scripts/dev/check-doc-links.sh` → exit 0。
+- `sh agent-docs/progress/2026-11-21-strategy-v1-1/userns-skip/check-skip.sh` → exit 0（9 件が ignored のまま。上の節）。
+- `sh "$CELERIS_WU_SCOPE_PATHS"` → 変更 path は `crates/celeris-credentiald/tests/injection_peer_uid.rs`・
+  `agent-docs/adr/2026-11-21-userns-tests-explicit-skip.md`・`agent-docs/progress/2026-11-21-strategy-v1-1/peer-uid-probe.md` の 3 つだけ。
 
 ## 未解決（この unit では直さない。人の決定のとおり）
 

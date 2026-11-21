@@ -150,3 +150,37 @@ unit settle-leaf（WU の run）で D3 の直し方を確かめ、次のとお�
   は、auto-leaf の上限の run も読む新しい規則に合わせて `assert!(s.reads_worker_decisions())` にした（`auto_leaf_request`
   の確かめは残した）。auto-leaf の要求が worker の決定と並んでも記録されることは
   `decision_fail_closed_auto_leaf_request_recorded_with_and_without_worker_decisions`（`dispatcher/tests/tree_gate.rs`）が守る。
+
+## 付記 2026-11-21（atomic の規則の実装）
+
+unit settle-atomic が上の「atomic の規則」を入れた。owner は `run_settlement/task_run.rs` と、その呼び出し側の
+`worker_finish.rs`（atomic の run の決定の読み取りの 1 か所）。
+
+- 読む規則: `task_reads_worker_decisions(end)` は `end` が `Some` で、`HarnessError`・`Cancelled`・`Waiting` でなければ
+  true。引数から trigger を外した（旧: `WorkerDone` かつ `Completed` のときだけ true）。atomic の呼び出しの位置では
+  `Completed` の run は必ず `WorkerDone` なので、旧い規則は「done の run だけ」と同じだった。
+  - `Waiting`（クラスタ job の wait）を読まない理由は WU の run と同じで、要求は job の後の run の `result.json` が
+    出し直す。harness_error・取り消しは run をやり直す。
+  - 終わり方が分からない run（`None`。adapter が結果を返さなかった供給側・インフラの失敗の requeue・infra 再試行・
+    browser の前提の block）は読まない。requeue・infra 再試行は run をやり直し、次の run の `result.json` が要求を
+    出し直す。
+  - 失敗の run を読んでも、前の run の `result.json` を読み直すことは無い。subprocess の adapter（claude_code・codex・
+    pi・acp・fake）は run の始めに `prepare_run`（`task_worker::subprocess`）で `result.json` を消す。
+- 止め方: `hold_task_for_worker_decisions(trigger, outcome, count)` は `WorkerDone`・`WorkerQuestion`・`WorkerError` を
+  `Continue{advance}` にし、outcome を `decision: 人の決定を待ちます（決定の要求 N 件。ADR-0079 D7）` にする。
+  `WorkerQuestion`（worker の質問・進捗なし・固い上限）なら末尾に `。止めた質問: <質問の文>` を足す。それ以外の
+  trigger（`Continue{continue}`・`Continue{children_wait}`）は trigger と outcome の文を残し、末尾に
+  `。人の決定を待ちます（決定の要求 N 件。ADR-0079 D7）` を足す。文の接頭辞 `continue: ` を残すので、run の一覧の
+  分類（`task_ops::view`・`task_api::stats` の `classify_outcome`）は continuation のまま。
+- 数え: continuation の遷移（`continue`）と checkpoint（`CheckpointSaved`）はそのまま残すので、continuation の数えと
+  進捗なしの窓は変わらない。答えの後の run は checkpoint の続き（continuation）として走る。失敗を `Continue{advance}`
+  に替えた run は試行（`attempts`）を消費しない（`Continue` の遷移は試行を据え置く。WU の run の `retry` の数えを
+  動かさないのと同じ）。答えの後の run がまた失敗すれば、その run で試行を数える。予算の記録と木の token 予算の
+  止め（`stop_at_token_budget`。止めた trigger も「次の run を起こす」trigger なので今までどおり当たる）は変えない。
+- 置き換えた試験: `worker_decisions_hold_an_atomic_run_only_when_done`（`run_settlement/task_run/tests.rs`）は
+  「done の run だけで読む」「止めた trigger は常に `Continue{advance}`、outcome は固定の文」の旧い契約を確かめていた
+  ので消し、`decision_fail_closed_task_reads_every_end_but_reset_and_waiting` に置き換えた（done の run を読むこと・
+  終わり方不明の run を読まないこと・done を `Continue{advance}` と固定の文にすることは引き継いだ。質問の後の trigger
+  で読まないことの確かめは、trigger を見ない新しい規則で廃止した）。経路全体の試験として
+  `decision_fail_closed_yielded_atomic_node_records_decisions`・`decision_fail_closed_failed_atomic_node_records_decisions`
+  （`dispatcher/tests/tree_decisions.rs`）を足した。

@@ -182,7 +182,9 @@ fn continuation_disabled_retries_the_unit_unless_the_auto_leaf_limit_stops_it() 
     );
     assert_eq!(s.outcome, "decision: leaf a の継続を確認してください");
     assert!(s.auto_leaf_request.is_some());
-    assert!(!s.reads_worker_decisions());
+    // ADR 2026-11-21-worker-decisions-fail-closed 付記 2026-11-21: auto-leaf の上限で止めた run も worker の
+    // `decisions` を読む（auto-leaf の要求と worker の決定を両方記録する）。
+    assert!(s.reads_worker_decisions());
 }
 
 /// 不変条件: auto-leaf で測っている leaf は進捗なしの上限で止めず（測った回数の上限が代わりに効く）、auto-leaf の
@@ -419,61 +421,6 @@ fn a_work_unit_failure_replans_asks_or_hints() {
     assert!(settle_work_unit(misplaced).failure.is_none());
 }
 
-/// 不変条件: worker の決定の要求を読むのは done にした run だけで（状態だけを戻す run では読まない）、
-/// `needed_before: self` の要求は leaf を `blocked(decision)` にし、待つ unit を ready にせず、task の完了を
-/// `advance` に替える。経路全体の試験は木の節点の 1 つの組しか通さず、状態だけを戻す run で読まないことを検出できない。
-#[test]
-fn worker_decisions_hold_a_completed_leaf_only() {
-    let wu = row("a", WorkUnitKind::Implement, WorkUnitStatus::Running);
-    let mut next = row("b", WorkUnitKind::Implement, WorkUnitStatus::Pending);
-    next.depends_on = vec!["a".into()];
-    let units = [wu.clone(), next];
-    let mut s = settle_work_unit(input(
-        RunEnd::Completed,
-        &wu,
-        &units,
-        ContinuationInputs::default(),
-        "done: ok",
-    ));
-    assert!(s.reads_worker_decisions());
-    assert_eq!(s.decision.as_ref().map(|d| d.newly_ready.len()), Some(1));
-    s.trigger = Trigger::WorkerDone;
-    hold_for_worker_decisions(&mut s, "a", 2);
-    let d = s.decision.as_ref().expect("transition");
-    assert_eq!(d.reason, "decision");
-    assert_eq!(
-        d.updated.blocked_reason,
-        Some(WorkUnitBlockedReason::Decision)
-    );
-    assert!(d.newly_ready.is_empty() && d.newly_blocked.is_empty());
-    assert_eq!(
-        s.trigger,
-        Trigger::Continue {
-            why: ContinueWhy::Advance
-        }
-    );
-    assert_eq!(
-        s.outcome,
-        "decision: WorkUnit a は人の決定を待ちます（決定の要求 2 件。ADR-0079 D7）"
-    );
-
-    let reset = settle_work_unit(input(
-        work_unit_run_end(None),
-        &wu,
-        &units,
-        ContinuationInputs::default(),
-        "infra_requeue: adapter: x",
-    ));
-    assert!(reset.reset_only);
-    assert!(!reset.reads_worker_decisions());
-    assert_eq!(reset.trigger, Trigger::WorkerError { retryable: false });
-    assert_eq!(reset.outcome, "infra_requeue: adapter: x");
-    assert_eq!(
-        reset.decision.map(|d| d.updated.status),
-        Some(WorkUnitStatus::Ready)
-    );
-}
-
 /// 不変条件: checkpoint を組み立てるのは continuation に回る終わり方で continuation が有効か auto-leaf の上限を
 /// 超えた run と、クラスタ job の wait だけ。組み立ての条件は経路全体の試験でしか通らず、auto-leaf の上限で組み立てる
 /// 組を検出できない。
@@ -488,7 +435,7 @@ fn checkpoints_are_saved_for_continuations_and_cluster_waits() {
 
 /// self の決定の要求で WU を止める（worker 完了の経路と同じ呼び方）。
 fn hold(s: &mut WorkUnitSettlement, wu: &WorkUnitRow, count: usize) {
-    hold_for_worker_decisions(s, &wu.key, count);
+    hold_for_worker_decisions(s, wu, count);
 }
 
 /// 不変条件（ADR 2026-11-21-worker-decisions-fail-closed D1・付記 2026-11-21、I1・I5）: worker の `decisions` を
@@ -604,6 +551,21 @@ fn decision_fail_closed_reads_every_end_but_reset_and_cluster_jobs() {
         assert_eq!(s.decision.as_ref().map(|d| d.reason), Some(reason));
         assert_eq!(s.reads_worker_decisions(), reads, "{reason}");
     }
+    // 状態だけを戻す run は task の trigger と outcome の文を settle のまま残す（旧い試験から引き継いだ確かめ）。
+    let reset = settle_work_unit(input(
+        work_unit_run_end(None),
+        &wu,
+        &units,
+        none,
+        "infra_requeue: adapter: x",
+    ));
+    assert!(reset.reset_only);
+    assert_eq!(reset.trigger, Trigger::WorkerError { retryable: false });
+    assert_eq!(reset.outcome, "infra_requeue: adapter: x");
+    assert_eq!(
+        reset.decision.map(|d| d.updated.status),
+        Some(WorkUnitStatus::Ready)
+    );
 }
 
 /// 不変条件（ADR 2026-11-21-worker-decisions-fail-closed 付記 2026-11-21、I2・I7）: self の決定の要求で止めた WU は、
@@ -722,6 +684,10 @@ fn decision_fail_closed_hold_clears_failure_side_effects() {
     hold(&mut s, &wu, 2);
     held(&s, "decision");
     assert_eq!(s.trigger, advance);
+    assert_eq!(
+        s.outcome,
+        "decision: WorkUnit a は人の決定を待ちます（決定の要求 2 件。ADR-0079 D7）"
+    );
 
     // 再試行・continuation: 行の数えは run の前の値（`decision` の遷移は数えない）。
     let mut retry = input(

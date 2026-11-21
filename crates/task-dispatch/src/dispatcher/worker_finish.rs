@@ -536,6 +536,36 @@ impl Dispatcher {
                 check_failure_signature: check_failure.as_ref().map(|f| f.failure_signature()),
                 misplaced: misplaced_result,
             });
+            // ADR-0079 D7（Phase R3a）・ADR 2026-11-21-worker-decisions-fail-closed D1・付記 2026-11-21: 木の節点の leaf の
+            // run が `result.json` の `decisions` で人への決定の要求を出した。WU の失敗の処理（integration repair の
+            // 打ち切り・自動 replan・質問・replan の使い切りの決定）より先に読み、記録し（path 付き）、`needed_before:
+            // self` ならこの leaf を `blocked(decision)` で止めて失敗の処理を起こさない。他の unit を指した決定はその
+            // unit だけを止め、この run の遷移は変えない。auto-leaf の上限の決定の要求は worker の決定と同じ記録に入れる。
+            let mut found = if settled.reads_worker_decisions() {
+                let (site_artifacts, _, _, _) = self.work_unit_checkpoint_site(&task, Some(wu));
+                self.worker_decisions(&task, Some(wu), site_artifacts.as_deref(), &run_id)?
+            } else {
+                None
+            };
+            let auto_leaf_request = settled.auto_leaf_request.take();
+            if let Some(f) = found.as_ref().filter(|f| f.self_hold) {
+                let count = f.count + usize::from(auto_leaf_request.is_some());
+                run_settlement::hold_for_worker_decisions(&mut settled, wu, count);
+            }
+            if let Some(request) = auto_leaf_request {
+                let f = found.get_or_insert_with(|| WorkerDecisions {
+                    events: vec![],
+                    held_rows: vec![],
+                    self_hold: false,
+                    count: 0,
+                });
+                f.events.push(Event::DecisionRequested {
+                    decision: Box::new(request),
+                });
+                f.self_hold = true;
+                f.count += 1;
+            }
+            worker_decisions = found;
             if let Some(reason) = settled.integration_repair_exhaust {
                 let (fallback, event) = self.integration_repair_exhaustion(&task, wu, reason)?;
                 integration_exhausted_event = event;
@@ -588,33 +618,6 @@ impl Dispatcher {
                     .unwrap_or_else(|| subject.summary.clone());
                 paragraphs.push(format!("{}: {}", wu.spec.title, this_completed));
                 subject.summary = paragraphs.join("\n");
-            }
-            // ADR-0079 D7（Phase R3a）: 木の節点の leaf の run が `result.json` の `decisions` で人への決定の要求を
-            // 出した。記録し（path 付き）、`needed_before: self` ならこの leaf を done にせず止める。他の unit を指した
-            // 決定はその unit だけを止め、この run の完了は妨げない。
-            if settled.reads_worker_decisions() {
-                let (site_artifacts, _, _, _) = self.work_unit_checkpoint_site(&task, Some(wu));
-                if let Some(found) =
-                    self.worker_decisions(&task, Some(wu), site_artifacts.as_deref(), &run_id)?
-                {
-                    if found.self_hold {
-                        run_settlement::hold_for_worker_decisions(
-                            &mut settled,
-                            &wu.key,
-                            found.count,
-                        );
-                    }
-                    worker_decisions = Some(found);
-                }
-            } else if let Some(request) = settled.auto_leaf_request.take() {
-                worker_decisions = Some(WorkerDecisions {
-                    events: vec![Event::DecisionRequested {
-                        decision: Box::new(request),
-                    }],
-                    held_rows: vec![],
-                    self_hold: true,
-                    count: 1,
-                });
             }
             trigger = settled.trigger;
             outcome_str = settled.outcome;

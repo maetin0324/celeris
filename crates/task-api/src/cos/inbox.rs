@@ -26,7 +26,8 @@ use ulid::Ulid;
 
 use super::basis::{self, BasisTarget, DelegatedBasis};
 use super::operations::{
-    DispatchEnv, ItemMark, Matched, OperationAudit, OperationView, dispatch, request_hash,
+    DispatchEnv, ItemMark, Matched, OperationAudit, OperationView, bind_run_policy, dispatch,
+    request_hash,
 };
 use super::{CosCaller, cos_only, reject_identity_claims, triage_view};
 use crate::http_io::{ApiResult, Params, json_response};
@@ -536,8 +537,7 @@ async fn resolve(
                 }
                 return Ok((existing, None));
             }
-            super::operations::bind_run_policy(store, &mut audit, "cos_inbox_item", &item_key)?;
-            super::discussion_gate::check(store, &mut audit, "cos_inbox_item", &item_key, action)?;
+            bind_run_policy(store, &mut audit, "cos_inbox_item", &item_key, Some(action))?;
             let rejecter = audit.clone();
             let reject =
                 |problem: ApiProblem| rejecter.reject(store, "cos_inbox_item", &item_key, problem);

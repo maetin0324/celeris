@@ -6,6 +6,7 @@
 use std::path::Path;
 
 use task_core::authority::grant_denial;
+use task_core::chat::ChatDiscussionMode;
 use task_core::chat::ChatRunSessionMode;
 use task_core::chat::ChatThreadKind;
 use task_core::store::SqliteStore;
@@ -168,6 +169,20 @@ pub fn relayed_instructions(
         });
     }
     Ok(out)
+}
+
+/// ADR 2026-11-21-chat-discussion-mode D1.2: the run's mode for the CoS prompt hint, derived by
+/// [`task_core::discussion_mode::discussion_mode_of_run`]; `None` for `execute`. An unreadable run
+/// fails the launch (fail closed). The API refuses the operations whatever the prompt says.
+pub fn discussion_mode(
+    store: &SqliteStore,
+    thread_id: &str,
+    run_id: &str,
+) -> Result<Option<ChatDiscussionMode>, String> {
+    let run = store
+        .chat_run_discussion_mode(thread_id, run_id)
+        .map_err(|e| format!("discussion mode unavailable: {e}"))?;
+    Ok(Some(run.mode).filter(|mode| *mode != ChatDiscussionMode::Execute))
 }
 
 /// D2: the `RunContext` of a CoS chat run. Every field is written out: a CoS run carries its thread

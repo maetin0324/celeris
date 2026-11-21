@@ -39,7 +39,7 @@ pub struct CosChatContext {
     /// Delivery is recorded by `chat_runs.input_message_id` and the message state, not here.
     pub inputs: Vec<CosChatInput>,
     /// ADR 2026-11-21-chat-discussion-mode D1.2: the run's mode when its inputs chose `discuss` or
-    /// `propose` (derived by `task_core::chat::discussion_mode_of_run`). A prompt hint only: the API
+    /// `propose` (derived by `task_core::discussion_mode::discussion_mode_of_run`). A prompt hint only: the API
     /// refuses the run's CoS operations whatever the prompt says. Absent for `execute`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub discussion_mode: Option<task_core::chat::ChatDiscussionMode>,

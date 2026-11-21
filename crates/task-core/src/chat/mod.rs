@@ -47,9 +47,7 @@ mod window;
 mod window_tests;
 pub use credential::{ChatCheckpointSaved, CosRunCredentialError, CosRunIdentity};
 pub use digest_fixture::{COS_DIGEST_GENERATED_CASES, cos_digest_fixture_jsonl};
-pub use discussion_mode::{
-    ChatDiscussionDecider, ChatDiscussionMode, RunDiscussionMode, discussion_mode_of_run,
-};
+pub use discussion_mode::ChatDiscussionMode;
 pub use human_post::chat_posted_project_tx;
 pub use operations::{AuditContext, CosOperation};
 pub use override_op::{OverrideAction, OverrideResult};

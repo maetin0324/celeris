@@ -16,9 +16,10 @@ use crate::problem::ApiProblem;
 pub(crate) const DISCUSSION_MODE_FORBIDDEN: &str = "discussion_mode_forbidden";
 
 /// D2.3: refuses `action` unless the caller's run is `execute` (derived from the run's input
-/// messages by [`task_core::chat::discussion_mode_of_run`]). Called after `bind_run_policy` and
-/// before `instructed_by` is read, so citing a person's message cannot lift the refusal. The audit
-/// payload names the mode and the messages that decided it (D7).
+/// messages by [`task_core::discussion_mode::discussion_mode_of_run`]). Called by
+/// [`super::operations::bind_run_policy`] once the policy version matches, before `instructed_by`
+/// is read, so citing a person's message cannot lift the refusal. The audit payload names the mode
+/// and the messages that decided it (D7).
 pub(crate) fn check(
     store: &SqliteStore,
     audit: &mut OperationAudit,

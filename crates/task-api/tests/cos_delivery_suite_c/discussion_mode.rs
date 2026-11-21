@@ -485,7 +485,7 @@ async fn discussion_mode_discuss_publish_ops_are_403() {
             (
                 "PUT",
                 format!("/api/v1/projects/{project}/docs/page"),
-                json!({"path": "docs/x.md", "body": "x"}),
+                json!({"path": "x.md", "body": "x"}),
             ),
             (
                 "POST",

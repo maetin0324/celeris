@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use time::OffsetDateTime;
 
 use super::*;
+use crate::discussion_mode::{ChatDiscussionDecider, RunDiscussionMode};
 use crate::store::SqliteStore;
 
 fn at(secs: i64) -> OffsetDateTime {

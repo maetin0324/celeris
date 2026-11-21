@@ -522,13 +522,21 @@ pub(crate) fn bind_run_policy(
     audit: &mut OperationAudit,
     target_kind: &str,
     target_id: &str,
+    action: Option<&str>,
 ) -> Result<(), ApiProblem> {
     let handed = store
         .chat_run_policy_version(&audit.ctx.run_id)
         .map_err(chat_problem)?;
     let claimed = audit.ctx.policy_version.clone();
     let detail = match handed.as_deref() {
-        Some(handed) if handed == claimed => return Ok(()),
+        // ADR 2026-11-21-chat-discussion-mode D2.3: a registered `action` of a discuss / propose
+        // run is refused here, before any `instructed_by` is read. An unknown route (`None`) keeps
+        // its registry refusal.
+        Some(handed) if handed == claimed => {
+            return action.map_or(Ok(()), |action| {
+                super::discussion_gate::check(store, audit, target_kind, target_id, action)
+            });
+        }
         Some(handed) => format!(
             "policy_version {claimed} is not the policy version this run was given ({handed}); \
              send the run's <policy_version>"
@@ -769,6 +777,7 @@ async fn create_operation(
         env.inbox_feed = Some(std::sync::Arc::new(feed.items));
     }
     let instructed_by = req.instructed_by.clone();
+    let action = matched.as_ref().map(|m| m.action);
     let routine = req.basis.clone();
     let mut human_required = wait.as_ref().and_then(|w| w.human_required.clone());
     let operation = state
@@ -786,15 +795,11 @@ async fn create_operation(
                 }
                 return Ok(existing);
             }
-            bind_run_policy(store, &mut audit, "api", &path)?;
-            // Refuse excluded/unknown routes before interpreting a relayed instruction or body.
-            // The registry reason is authoritative and no secret body reaches domain validation.
-            let Some(action) = matched.as_ref().map(|m| m.action) else {
+            bind_run_policy(store, &mut audit, "api", &path, action)?;
+            // Excluded/unknown routes: the registry reason, before any instruction or body is read.
+            if matched.is_none() {
                 return dispatch(store, &env, &audit, &method, &path, req.request.body);
-            };
-            // ADR 2026-11-21-chat-discussion-mode D2.3: a discuss / propose run changes nothing,
-            // whatever it cites below.
-            super::discussion_gate::check(store, &mut audit, "api", &path, action)?;
+            }
             if let Some(message_id) = instructed_by.as_deref() {
                 // D3: the instruction must be the human message that started this very run, or a
                 // relayed instruction of this thread in scope (ADR 2026-10-27-relayed-instructions

@@ -6,7 +6,7 @@ tasks: [01M7YWAC1BVNG09WKDQJ6CA86Z, 01M7ZDW4QK6N27N7MFJPCZ13JN]
 - 日付: 2026-11-21
 - 状態: Accepted（G1〜G6 は確定。G5 は人の決定 `daemon-gate-no-new-privs` の CoS の回答〈推奨どおり〉で確定。
   G7〈移行の 1 回目の release〉は task 01M7ZDW4QK6N27N7MFJPCZ13JN が人の決定 `first-release` の CoS の回答〈opt-in-env〉で足した。
-  G7 は一時の例外で、撤去の条件と責任者を G7 に書く）
+  G7 は一時の例外で、task 01M7ZYFB4YSJHWR7SF97G501S8 が 2026-11-21 に撤去した〈G7 の節に記録〉）
 - task: 01M7YWAC1BVNG09WKDQJ6CA86Z（戦略層 v1 子 1 の第一ゲートの U2。operator が起票）
 - 進捗: [2026-11-21-userns-skip-gate.md](../progress/2026-11-21-userns-skip-gate.md)（gate の実行文脈の確認の command と出力）
 - 関係: [ADR-0126](0126-test-daemons-without-userns.md) B2・B3・B4、
@@ -86,8 +86,6 @@ ADR-0126 B2 は「`CELERIS_USERNS_TESTS=1` で環境が無ければ（道具が�
 ### 3.5 新しい状態・分岐・fallback・port
 - release.sh の新しい入力 `SD_GATE_SKIP_HOST_TESTS`（人が明示する除外。G4）と、gate.json の新しい欄 `host_tests`・`gate_env`（G6）。
 - G5 の推奨を採るなら、release.sh が自分の `NoNewPrivs` を読む分岐 1 つ（試験用に読む file を差し替える口を 1 つ）。
-- G7（移行）: 試験 7・9 が実行時に読む env `CELERIS_SECOND_STAGE_TESTS`（release.sh が `require` を立てる）と、env が無いときの旧い挙動の分岐。
-  一時の分岐で、撤去の条件と責任者は G7。
 - production の Rust のコード・config・API・DB には足さない。
 
 ### 3.6 撤去対象
@@ -109,12 +107,11 @@ ADR-0126 B2 は「`CELERIS_USERNS_TESTS=1` で環境が無ければ（道具が�
   返らない、のどれでも panic して FAIL する。panic の文言は「peer-uid real-process test environment required: <理由>」を保つ。
 - 走らせるか（ignored か）は子 1 の D1 のまま。env 無しの build では今どおり ignored。
 - `CELERIS_LAUNCHER_TESTS=require` は D1 の cfg を有効にする変数として残る（build script が読む）。試験 9 の中では読まない。
-  ただし G7 の移行の間は、試験 9 は FAIL にするかを env で決める（G7）。
 
 ### G3. 試験 7（task-worker）
 - cfg 有りの build で `ssh -V` が起きない・`/etc/ssh/ssh_config.d` が dir でないとき、panic して FAIL する（ADR-0126 B2「道具が無ければ fail」）。
   env は読まない（子 1 の ADR の I4〈db_guard_tests.rs に `CELERIS_USERNS_TESTS`・`CELERIS_ISOLATION_TESTS`・`CELERIS_DB_GUARD_TESTS` の
-  読み取りが無い〉を保つ）。G7 の移行の間は、FAIL にするかを `CELERIS_SECOND_STAGE_TESTS` で決める（I4 の 3 つの env は読まない）。
+  読み取りが無い〉を保つ）。
 
 ### G4. 人が明示して外す（sudo・ssh の無い host）
 - release.sh は `SD_GATE_SKIP_HOST_TESTS` を読む。値は `sudo`・`ssh` の comma 区切り（空・未設定は何も外さない）。
@@ -150,37 +147,31 @@ daemon の gate から cargo-test の段で落ちる（release.sh は current �
 - gate.json に `host_tests` を足す:
   `{"sudo": {"run": true|false, "off_by": null|"SD_GATE_SKIP_HOST_TESTS"|"no_new_privs", "reason": "…", "tests": ["<試験名>"]}, "ssh": {…}}`。
 - gate.json に `gate_env` を足す: `CELERIS_USERNS_TESTS`・`CELERIS_ISOLATION_TESTS`・`CELERIS_LAUNCHER_TESTS`・`SD_GATE_SKIP_HOST_TESTS` の実際の値
-  （未設定は null）。G7 で `CELERIS_SECOND_STAGE_TESTS` を足した（5 つ）。ADR-0126 B4 の「人が `CELERIS_USERNS_TESTS=0` を明示した」ことも、ここで読めるようになる。
+  （未設定は null。4 つ）。ADR-0126 B4 の「人が `CELERIS_USERNS_TESTS=0` を明示した」ことも、ここで読めるようになる。
 - `release-records.jsonl` の gate の要約（[ADR 2026-11-20-release-record-summary-log](2026-11-20-release-record-summary-log.md)）にも `host_tests` を写す（prune で gate.json が消えても残す）。
 
-### G7. 移行の 1 回目の release（人の決定 `first-release`、CoS の回答 `opt-in-env`）
-- 事象: delivery の prepare.sh（`scripts/selfdeploy/prepare.sh:19`）は current の release に梱包された release.sh を起こす。この変更を含む
-  最初の release の gate は、G4〜G6 を持たない旧い release.sh で走る。旧い台本は試験 9 を外さないので、G2 の形（cfg 有りの build で常に
-  FAIL）のままだと、daemon の文脈（NoNewPrivs 1・`sudo -n` が通らない）で試験 9 が panic し、その gate が cargo-test の段で落ちる。
-- 決定: 試験 7・9 の 2 段目の欠けを FAIL にするのは、env `CELERIS_SECOND_STAGE_TESTS=require` があるときだけにする。
-  - 立てるのは新しい release.sh だけ（`export CELERIS_SECOND_STAGE_TESTS=require`。呼び出し元の値は使わない。人は env で厳格化を外せず、
-    走れない試験は G4・G5 で外す）。gate.json の `gate_env` に値を残す（G6 の 5 つ目の欄）。
-  - `CELERIS_LAUNCHER_TESTS=require` は gate に立てない（G1 は変えない）。名前を分けたのは、この env を読む試験 9 の外の 2 件
-    （3.4 (a)）を厳しくしないため。
-  - env が無い経路（current の旧い release.sh・手元の nextest・reviewer の run）は、前の変更より前の挙動のまま: 試験 9 は理由
-    （`SKIP: (not passed) …`）を出して return し、`CELERIS_LAUNCHER_TESTS=require` なら FAIL する。試験 7 は `skip: …` を出して return する。
-    試験 7 は前と違い ssh の前提を userns の確認より先に見る（子 process の試験が userns の無い所でも走るため。ssh と userns の両方が
-    欠けた host でだけ結果が変わる）。
-  - D1（env 無しの build で ignored）は変えない。`CELERIS_SECOND_STAGE_TESTS` は実行時にだけ読み、build script は読まない
-    （共有の release の target を作り直さない）。
-- この host の 1 回目の gate: 旧い台本は env を立てないので試験 9 は return して PASS、試験 7 は ssh がある見込みなので本体が走る（今と同じ）。
-  2 回目以降（新しい release.sh が current になった後）の daemon の gate: env が立ち、NoNewPrivs 1 で試験 9 は filter で skipped、
-  試験 7 は strict で走る。
-- 一時の例外である。旧挙動の分岐（env を読む関数 2 つ〈`injection_peer_uid.rs` と `db_guard_tests.rs` の `second_stage_strict()`〉、
-  env が無いときの return、試験 9 の `CELERIS_LAUNCHER_TESTS` の読み取り、旧挙動を固定する試験 2 件
-  〈`test9_keeps_old_behaviour_without_the_gate_env_under_no_new_privs`・`ssh_test_keeps_old_behaviour_without_the_gate_env`〉、
-  release.sh の `export CELERIS_SECOND_STAGE_TESTS=require` と `gate_env` の欄）は永続させない。
-  - 撤去の条件: G7 を含む release が昇格した後、その release.sh で走った最初の release の gate.json で、`gate_env.CELERIS_SECOND_STAGE_TESTS`
-    が `"require"`、`host_tests.sudo` が `run: false`・`off_by: "no_new_privs"`（daemon の gate のとき）、`host_tests.ssh.run` が true であることを
-    operator が確かめた後。
-  - 撤去の責任者: operator（外部の運用者 claude-code-ops-session）。確かめた後に撤去の follow-up task を起票する（起票は CoS が取り込み後に判断する）。
-    撤去後は G2・G3 の形（cfg 有りの build で常に FAIL。env を読まない）に戻り、G4・G5 の外し方はそのまま残る。
-  - 撤去と同じ変更で、G2・G3・3.5・7 節の G7 への注記と、I6・I7 を消す（I7 の `gate_env` の欄を残すかは撤去の task が決める）。
+### G7. 移行の 1 回目の release の例外（撤去済み）
+- 経緯: 移行の 1 回目の release の gate は、G4〜G6 を持たない旧い release.sh で走り、daemon の文脈（NoNewPrivs 1）で試験 9 が panic して
+  落ちる。これを避けるため、試験 7・9 は env `CELERIS_SECOND_STAGE_TESTS=require` があるときだけ 2 段目の欠けを FAIL にし、新しい release.sh が
+  その env を立てた（人の決定 `first-release`、CoS の回答 `opt-in-env`）。一時の例外で、撤去の条件と責任者（operator）を決めていた。
+- 撤去の条件の確認: G7 を含む release の昇格の後、新しい release.sh が走った最初の release（9e33fe4f46f4、gate 2026-11-21T20:55:46Z、daemon の gate）の
+  gate.json を operator（claude-code-ops-session）が読み、`gate_env.CELERIS_SECOND_STAGE_TESTS` が `"require"`、`gate_env.CELERIS_LAUNCHER_TESTS` が null、
+  `host_tests.sudo` が `run: false`・`off_by: "no_new_privs"`、`host_tests.ssh.run` が true、`cargo_test.nextest_skipped` が前の gate の 23 から 24 に
+  なったことを確かめた。release-records.jsonl の gate の行にも同じ `host_tests` がある。
+- 撤去（task 01M7ZYFB4YSJHWR7SF97G501S8、2026-11-21）: 次を消した。試験 7・9 は G2・G3 の形（cfg 有りの build で 2 段目の欠けは常に FAIL。env を読まない）に戻った。
+  - `injection_peer_uid.rs` と `db_guard_tests.rs` の `second_stage_strict()`、env が無いときの return（PASS と数える分岐）。
+  - 試験 9 の `CELERIS_LAUNCHER_TESTS` の読み取り。
+  - 旧挙動を固定する試験 2 件（`test9_keeps_old_behaviour_without_the_gate_env_under_no_new_privs`・`ssh_test_keeps_old_behaviour_without_the_gate_env`）。
+  - release.sh の strict の env の export と、shell の試験の fixture の `CARGO_ENV_LOG`（その env を記録する口）。
+  - gate.json の `gate_env` の `CELERIS_SECOND_STAGE_TESTS` の欄は**消した**。理由: 値は常に `require` で、env 自体が無くなるので情報が無い。
+    残すと、読む側（operator・文書・試験）が存在しない env の意味を覚え続けることになり、「旧い仕組みを残さない」方針に反する。
+    撤去前の gate.json にはこの欄が残るが、読む処理は無い。
+- 残すもの: G4・G5 の外し方（NoNewPrivs 1 で試験 9 を filter で外す、`SD_GATE_SKIP_HOST_TESTS`）と `host_tests` の記録。
+- 撤去を含む最初の release の gate が落ちない見込み: その gate は current（G7 を含む）の release.sh で走る。この台本は strict の env を立て、NoNewPrivs 1 では
+  試験 9 を nextest の filter で外す（skipped）。撤去後の試験 7 は env を読まず、ssh があるので本体が走って PASS する（9e33fe4f46f4 の gate で `host_tests.ssh.run` が
+  true だった）。env は撤去後の試験が読まない値になるだけなので、試験の結果は変わらない。shell の試験 `release_host_tests_gate.sh` は撤去後の release.sh で通る
+  （NoNewPrivs 0 で filter なし、1 で試験 9 だけ外れ、`gate_env` が 4 つの欄）。試験 9 の本体は sandbox で走らないので、host での実行は operator が
+  login shell で行う（進捗 `2026-11-21-userns-gate-g7-removal.md` の本番への移行）。この見込みは最初の gate.json で確かめる。
 
 ## 5. 試験（不変条件と、それを確かめる試験）
 
@@ -207,13 +198,6 @@ daemon の gate から cargo-test の段で落ちる（release.sh は current �
   試験 9 が外れて skipped、試験 7 は本体が走って今と同じく PASS、と impl が進捗に書く。昇格後の最初の gate.json で確かめる手順を
   record の WorkUnit が「本番への移行」に書く。
 - 子 1 の check-skip.sh（env 無しの build で 9 件が ignored、PASS 0 件）は変えずに通る。
-- **I6（G7: 旧い台本の文脈では FAIL にしない）**: 試験 9 を子 process で、strict の env を消し、`PR_SET_NO_NEW_PRIVS` を立て、自分の NoNewPrivs が 1 なら
-  本物の sudo と同じ文言で exit 1 する偽の `sudo` で起こす → 子は PASS し `SKIP: (not passed)` を出す。同じ子に `CELERIS_SECOND_STAGE_TESTS=require`
-  を立てると FAIL する。試験 7 も strict の env を消して ssh の無い PATH で起こすと PASS（`skip: `）。失敗注入: strict を常に有効にすると落ちる。
-  I1・I2 の子は `CELERIS_SECOND_STAGE_TESTS=require`（I1 は `CELERIS_LAUNCHER_TESTS=require` も）を立てて起こす。失敗注入: strict を常に無効にすると I1・I2 が落ちる。
-- **I7（G7: 新しい release.sh は env を立てる）**: I3・I4 の shell の試験で、偽の cargo が nextest run のときに見た `CELERIS_SECOND_STAGE_TESTS` が
-  NoNewPrivs 0・1 のどちらでも `require`、呼び出し元が `0` を立てても `require`、`gate_env` に `"require"` が出る。失敗注入: export を消すか
-  `${CELERIS_SECOND_STAGE_TESTS:-require}` にすると落ちる。
 
 ## 6. 他の ADR との関係
 
@@ -239,5 +223,4 @@ daemon の gate から cargo-test の段で落ちる（release.sh は current �
   `real_namespace_when_host_is_ready`、task-api の `userns_available()` を使う 2 件（子 1 の userns-skip.md の提案 1 の A）。この task の範囲外。
 - env 有りの build を gate の外で使う人（`CELERIS_USERNS_TESTS=1` を付けた手元の実行・reviewer の run）では、sudo が使えなければ試験 9 が、ssh が
   無ければ試験 7 が FAIL する。B2 の意図どおり（明示的に求めたのに黙って飛ばさない）で、外すなら nextest の `-E` で明示する。
-  G7 の移行の間は、`CELERIS_SECOND_STAGE_TESTS=require`（試験 9 は `CELERIS_LAUNCHER_TESTS=require` も可）を立てたときだけこうなる。
-  立てない手元の実行では、2 段目の欠けは理由を出して PASS と数えられる（G7 の撤去まで受け入れる）。
+  G7 の撤去後は、strict の env の有無によらない。

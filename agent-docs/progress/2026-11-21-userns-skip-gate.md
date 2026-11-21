@@ -366,6 +366,8 @@ $ tr '\0' '\n' </proc/812926/environ
 
 ## 本番への移行（人が実行する手順）
 
+（G7 は 2026-11-21 に撤去済み。1・2 の `CELERIS_SECOND_STAGE_TESTS` は当時の確認の手順で、撤去は [2026-11-21-userns-gate-g7-removal.md](2026-11-21-userns-gate-g7-removal.md)。）
+
 設定・unit・本番 DB は変えない。この変更の release が昇格した後の、最初の daemon の gate で次を確かめる。
 `<sha12>` は昇格した release の sha12、`$CELERIS_STATE_DIR` は本番の state dir（`/local/celeris/state`）。
 
@@ -387,9 +389,9 @@ $ tr '\0' '\n' </proc/812926/environ
    （`sudo` = 試験 9、`ssh` = 試験 7。comma 区切り。未知の key は gate の前に落ちる）。ssh が無いのに外さないと、試験 7 が panic して gate が落ちる
    （PASS と数えない）。外した試験は nextest の filter で skipped と数え、gate.json の `host_tests.<key>.off_by="SD_GATE_SKIP_HOST_TESTS"` と
    `reason` に残る。2 の command で見る。`CELERIS_USERNS_TESTS=0`（ADR-0126 B4）で userns の試験全体を外す場合は `gate_env.CELERIS_USERNS_TESTS="0"` で読める。
-5. 試験 9 の本体は daemon の gate では走らない。credentiald を変えた release では operator が login shell で流す（G7 の撤去までは
-   `CELERIS_SECOND_STAGE_TESTS=require` を付ける。付けないと欠けが PASS と数えられる）:
-   `CELERIS_USERNS_TESTS=1 CELERIS_SECOND_STAGE_TESTS=require TMPDIR=/tmp cargo nextest run -p celeris-credentiald --test injection_peer_uid --no-capture --status-level all -E 'test(=real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch)'`
+5. 試験 9 の本体は daemon の gate では走らない。credentiald を変えた release では operator が login shell で流す（G7 は撤去済みで、strict の env は要らない。
+   2 段目の欠けは常に FAIL）:
+   `CELERIS_USERNS_TESTS=1 TMPDIR=/tmp cargo nextest run -p celeris-credentiald --test injection_peer_uid --no-capture --status-level all -E 'test(=real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch)'`
 6. 「未確認」の項目は host で次を実行して確かめる（unit の file の `NoNewPrivileges=true` と、NoNewPrivs 1 の sandbox での `setpriv --no-new-privs` の下の
    sudo の exit 1 は、子 task 01M7ZDW4QK6N27N7MFJPCZ13JN が確かめた。systemd が解釈した値と、NoNewPrivs 0 から立てたときの sudo は未確認）:
    `systemctl --user show celeris@<sha12>.service -p NoNewPrivileges`（期待 `yes`）、

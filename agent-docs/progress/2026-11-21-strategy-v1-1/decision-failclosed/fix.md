@@ -1,12 +1,12 @@
 ---
 title: 戦略層 v1 子 1 decision-failclosed / fix — 配列でない decisions を受け付けなかった要求 1 件にし、要求を出した仕事を止める
 tasks: [01M7XSGW4FH258N1K3AMW76Y6F]
-status: blocked
+status: done
 updated: 2026-11-21
 ---
 # decision-failclosed / fix — 配列でない `decisions` を fail-closed にする
 
-完了日: 2026-11-21（`decisions-not-array` の修正。残る 2 経路は replan 待ち）
+完了日: 2026-11-21（`decisions-not-array` の修正。残る経路は同じ段の unit settle-leaf・settle-failure・settle-atomic が直す）
 
 ## 結論
 
@@ -15,8 +15,9 @@ updated: 2026-11-21
   atomic なら `self`）を 1 件記録し、要求を出した仕事を答えが出るまで止める（ADR 2026-11-21-worker-decisions-fail-closed D2）。
 - `decision_fail_closed_` で始まる試験 3 件を先に書いた。修正前は 3 件とも assertion で落ち（before.log、exit=100）、修正後は
   3 件とも通る（after.log、exit=0）。
-- 残る to-fix の 2 経路（`continuable-end`・`failed-end`）は、直す owner が `run_settlement`・`worker_finish.rs` にあり、この unit の
-  対象のパスの外にある。範囲の外に回避策を置かず、この unit は `plan_issue` で replan を求める（ADR の D3）。
+- 残る経路（`continuable-end`・`failed-end`・`question-and-decisions`）は、直す owner が `run_settlement`・`worker_finish.rs` にあり、
+  この unit の対象のパスの外にある。replan で同じ段に足された unit settle-leaf・settle-failure・settle-atomic が直す。この unit は
+  範囲の外に回避策を置かず、`plan_issue` を返さない。
 
 ## 実装前 brief
 
@@ -91,19 +92,24 @@ updated: 2026-11-21
 
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 
-- `cargo nextest run -p task-core -p task-dispatch --no-tests=fail -E 'test(/decision_fail_closed/)'` → exit 0、3 passed（after.log）
+2 回目の run（attempt 1）は実装をし直さず、3 件の commit（「decision-failclosed fix: decision_fail_closed_* の試験を先に書き、
+修正前に落ちる before.log を取る」「decision-failclosed fix: 配列でない decisions を受け付けなかった要求 1 件にし、要求を出した
+仕事を止める」「decision-failclosed fix: fix.md に変えた関数・試験・before/after と残る 2 経路の replan の要求を書く」）が
+`git log` で HEAD にあることを確かめてから、次の検査を走らせた。
+
 - `cargo nextest run -p task-core -p task-dispatch --no-tests=fail -E 'test(/rejected_worker_decision/) | test(/decision_fail_closed/) |
-  test(/worker_decisions/) | test(/worker_declared/) | test(/tree_decisions/) | test(/decision::tests/)'` → exit 0、35 passed
-  （`rejected_worker_decision_reaches_the_inbox_and_holds_the_leaf`・`rejected_worker_decisions_become_one_self_decision`・
-  `worker_decisions_are_validated_and_self_is_resolved`・`worker_decisions_beyond_the_cap_are_bundled`・
-  `worker_decisions_hold_a_completed_leaf_only`・`worker_decisions_hold_an_atomic_run_only_when_done`・`worker_declared_decisions` を含む）
-- `bash scripts/dev/test-affected.sh` → exit 0。nextest 8523 passed・22 skipped（14 crate）、web の tsc -b と unit（vitest 705 passed）、
-  test-ts-verify 20 passed、script bundle の SKIP 0 件。web install（pnpm install --offline）が 300 秒の上限で止まったと出たが、
-  その後の typecheck と unit は通った。
+  test(/worker_decisions/) | test(/worker_declared/)'` → exit 0、11 tests run: 11 passed
+  （`rejected_worker_decision_*`・`worker_decisions_*`・`worker_declared_decisions`・`decision_fail_closed_*` の 3 件を含む）
+- `bash scripts/dev/test-affected.sh` → exit 0。repo_health_gate: all checks passed、web の tsc -b と unit（vitest 101 files・
+  705 passed）、test-ts-verify 20 passed、nextest 14 crate で 8523 passed・22 skipped、doc test 通過、script bundle の SKIP 0 件。
+  末尾に scratch の古い trash dir を消せない `rm: Permission denied` が 3 行出たが、exit code は 0。
 - `cargo clippy --workspace -- -D warnings` → exit 0（外部の crate `deno_core` の deprecated の warning 1 件だけ）
 - `cargo fmt --all -- --check` → exit 0
 - `sh "$CELERIS_WU_SCOPE_PATHS"` → 変えた path は decision.rs・decision/tests.rs・tree_units.rs・tree_decisions.rs と
   この dir の fix.md・fix/before.log・fix/after.log だけ
+- 既存の試験の期待値: `git diff` で、`rejected_worker_decision*`・`worker_decisions*` の確かめは引数を `field(..)` で包んだだけで、
+  `worker_decisions_from_json` の `.len()` の確かめは `None`（4 通り）と `Some(配列)` の一致に変わった（弱めていない）。
+  `tree_decisions.rs` の削除行は 0 行。
 
 ## LoC の差分（`git diff --numstat "$CELERIS_WU_BASE" HEAD`、追加/削除）
 
@@ -115,19 +121,18 @@ updated: 2026-11-21
 
 ## 未解決
 
-- `continuable-end`（yield・予算切れ・クラスタ job の wait で終わった leaf の run の `decisions`）と `failed-end`（checks の不合格・
-  worker の失敗で終わった run の `decisions`）は直していない。owner は `run_settlement`（`WorkUnitSettlement::reads_worker_decisions`
-  〈`crates/task-dispatch/src/run_settlement/work_unit.rs`〉・`task_reads_worker_decisions`〈`crates/task-dispatch/src/run_settlement/task_run.rs`〉）と
-  呼び出し側の `crates/task-dispatch/src/dispatcher/worker_finish.rs`（高 risk の path class `worker-finish`）で、この unit の対象の
-  パスの外にある。この unit は `plan_issue` を返し、これらを範囲に入れた unit（設計 brief 付き）を足す replan を求める。
-  `decision.rs`・`tree_units.rs` 側は変えなくてよい（`Dispatcher::worker_decisions` をそのまま呼べる）。
-- `question-and-decisions`（質問で止まる run の `decisions` の中身が人に届かない）は survey の「提案」のとおり未決。
+survey の to-fix・提案の残り 3 経路は、replan で同じ段に足された unit が直す（この unit は `plan_issue` を返さない）。
+
+- `continuable-end`（yield・予算切れ・クラスタ job の wait で終わった run の `decisions`）と `failed-end`（checks の不合格・worker の
+  失敗で終わった run の `decisions`）: settle-leaf が leaf の WU の run の `decisions` を ADR D1 の規則で読み、`self` の要求なら失敗の
+  処理より先に決定で止める。settle-atomic が atomic の節点の run を同じ規則で読む。
+- `question-and-decisions`（質問で止まる run の `decisions` の中身が人に届かない）: settle-failure が、失敗・`plan_issue`・質問・
+  replan の使い切りで終わった leaf の run でも決定が先に止めることを試験で確かめる。
+- owner は `run_settlement`（`crates/task-dispatch/src/run_settlement/work_unit.rs`・`crates/task-dispatch/src/run_settlement/task_run.rs`）と
+  `crates/task-dispatch/src/dispatcher/worker_finish.rs`（高 risk の path class `worker-finish`）。`decision.rs`・`tree_units.rs` 側は
+  変えなくてよい（`Dispatcher::worker_decisions` をそのまま呼べる）。
 
 ## 提案
 
-- replan で足す unit の案: key `settle-decisions`、対象のパス `crates/task-dispatch/src/run_settlement/work_unit.rs`・
-  `crates/task-dispatch/src/run_settlement/task_run.rs`・`crates/task-dispatch/src/dispatcher/worker_finish.rs`・
-  `crates/task-dispatch/src/dispatcher/tests/tree_decisions.rs`。ADR D3 の案（`Yielded`・`BudgetExhausted`・`Waiting`・checks の不合格・
-  worker の失敗の run も `Dispatcher::worker_decisions` を呼び、`self_hold` なら `blocked(decision)`。`harness_error`・取り消しは読まない）と
-  試験名 `decision_fail_closed_yielded_leaf_records_decisions`・`decision_fail_closed_check_failed_leaf_records_decisions`・
-  `decision_fail_closed_yielded_atomic_node_records_decisions` を使う。この unit `fix` の commit は branch にあり、統合を待つ。
+- 無し。前の run が書いた replan の案（`run_settlement`・`worker_finish.rs` を範囲に入れた unit を足す）は、計画の unit
+  settle-leaf・settle-failure・settle-atomic として入った。

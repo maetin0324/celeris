@@ -259,7 +259,8 @@ fn api_state(dir: &std::path::Path) -> crate::ApiState {
         budget_rates: task_core::pricing::BudgetRates::default(),
         local_machine: crate::LocalMachineSettings::default(),
     };
-    crate::ApiState::new(settings, tokio::sync::watch::channel(None).1).unwrap_or_else(|e| panic!("{e}"))
+    crate::ApiState::new(settings, tokio::sync::watch::channel(None).1)
+        .unwrap_or_else(|e| panic!("{e}"))
 }
 
 fn world() -> World {

@@ -1,0 +1,66 @@
+{
+ "note": "未来にだけ現れる語。first_seen は events.jsonl と BASE の first-parent の commit（arch-v4 の進捗 file）で最初に現れた時刻。replay.py first-seen で測り直し、verify が記録との一致を確かめる",
+ "schema": "celeris.replay-sentinels/1",
+ "sentinels": [
+  {
+   "first_seen": "2026-11-20T14:19:12.908344101Z",
+   "text": "parent-unmet"
+  },
+  {
+   "first_seen": "2026-11-20T14:12:09.760274261Z",
+   "text": "残り 16"
+  },
+  {
+   "first_seen": "2026-11-20T16:25:40.000000000Z",
+   "text": "54e61984357f"
+  },
+  {
+   "first_seen": "2026-11-20T15:44:09.000000000Z",
+   "text": "17 → 17"
+  },
+  {
+   "first_seen": "2026-11-20T14:19:12.908344101Z",
+   "text": "+919"
+  },
+  {
+   "first_seen": "2026-11-20T16:05:48.799507989Z",
+   "text": "2026-11-20-arch-v4"
+  },
+  {
+   "first_seen": "2026-11-19T10:51:01.840994873Z",
+   "text": "2026-11-19-arch-v4-h"
+  },
+  {
+   "first_seen": "2026-11-19T10:28:48.000000000Z",
+   "text": "2026-11-19-arch-v4-g.md"
+  },
+  {
+   "first_seen": "2026-11-19T00:07:18.346872093Z",
+   "text": "2026-11-18-arch-v4-f.md"
+  },
+  {
+   "first_seen": "2026-11-18T11:14:35.000000000Z",
+   "text": "2026-11-18-arch-v4-e.md"
+  },
+  {
+   "first_seen": "2026-11-18T19:55:39.991438858Z",
+   "text": "2026-11-18-arch-v4-d.md"
+  },
+  {
+   "first_seen": "2026-11-18T20:19:26.000000000Z",
+   "text": "3 → 4"
+  },
+  {
+   "first_seen": "2026-11-19T10:37:13.000000000Z",
+   "text": "+822"
+  },
+  {
+   "first_seen": "2026-11-19T15:04:45.902820368Z",
+   "text": "R1〜R6"
+  },
+  {
+   "first_seen": "2026-11-19T09:25:53.263865885Z",
+   "text": "verdict=code"
+  }
+ ]
+}

@@ -1,0 +1,8 @@
+{
+ "idempotency": {
+  "ext-chatgpt-2026-11-21-001": "sha256:51bda22f44f79e62ae91c09331e087df37ef5455cb014cafbbce5eb8886644c0"
+ },
+ "note": "thread の案件と、既に受けた idempotency key → content_hash。null は値の比較の前に置き換える",
+ "project_id": "01M2WTS3DKNZBSZ2JMVB4CZMBW",
+ "thread_id": "01M5JJTVPW15CKFRCA0FAYCHK4"
+}

@@ -1,0 +1,58 @@
+id	status	area	path	pattern	note
+P1	reuse	project	crates/task-core/src/org.rs	^pub struct Project \{	案件の本体（DB の projects 行）
+P2	reuse	project	crates/task-core/src/org.rs	^    pub request: String,	Project.request。人の元の目的の正本。戦略層はここを読むだけで書かない
+P3	reuse	project	crates/task-api/src/cos/goal_guard.rs	PROJECT_REQUEST_HUMAN_ONLY: &str	CoS が request を変える要求は 422（人の発言の引用が無いとき）
+P4	reuse	project	crates/task-api/src/cos/goal_guard.rs	TASK_GOAL_HUMAN_ONLY: &str	draft でない task の objective・acceptance を CoS が変えると 422
+P5	reuse	publish	crates/task-api/src/cos/goal_guard.rs	EXTERNAL_PUBLICATION_REQUIRES_HUMAN: &str	案件 CoS の外部公開は人の引用か authority の許可が要る（publish の既存の拒否の口）
+P6	reuse	publish	crates/task-api/src/cos/goal_guard.rs	PRODUCTION_REQUIRES_HUMAN: &str	本番の変更は人の引用か許可が要る
+P7	partial	project	crates/task-core/src/project_brief.rs	^pub struct ProjectBrief \{	ProjectBrief: 派生の要約（objective・現状・evidence_refs）。未検証の要約として扱う。仮説・反証の欄は無い
+P8	reuse	project	crates/task-api/src/handlers/projects.rs	^pub\(crate\) fn put_project_brief_op\(	brief を書けるのは案件 CoS thread の run だけ（D3）
+RM1	reuse	roadmap	crates/task-core/src/roadmap.rs	^pub struct Roadmap \{	承認済み Roadmap（版）。戦略層は読むだけ
+RM2	reuse	roadmap	crates/task-core/src/roadmap.rs	^pub struct RoadmapProposalInput \{	Roadmap の提案（proposed の版。今の版を変えない）。戦略案の versioned draft の前例
+RM3	reuse	roadmap	crates/task-api/src/handlers/roadmap.rs	^fn requires_human\(	Roadmap の decide・Outcome の status は人の token だけ（403）
+RM4	reuse	roadmap	crates/task-core/src/roadmap.rs	^pub struct OutcomeEvent \{	Outcome の記録（status・evidence）
+RM5	reuse	roadmap	crates/task-core/migrations/0113_project_roadmap.sql	evidence_json TEXT NOT NULL DEFAULT '\[\]',	Outcome の evidence の列（root の task を根拠に取る）
+C1	reuse	controller	crates/task-dispatch/src/dispatcher/project_wake.rs	^pub\(crate\) fn post_reconcile_wake\(	wake（出来事 → 案件の wake）
+C2	reuse	controller	crates/task-ops/src/project_snapshot.rs	^pub fn build\(	snapshot（決定的な入力の組み立て）
+C3	reuse	controller	control-ts/src/domains/project_controller.ts	^export function decide\(	TS の決定器（LLM なし）
+C4	reuse	controller	crates/task-dispatch/src/dispatcher/project_decider_ts.rs	^fn invalid_rule\(violations: &\[ProposalViolation\]\)	Rust の gate（TS の提案の違反を拒否）
+C5	reuse	controller	crates/task-dispatch/src/dispatcher/project_decider_ts.rs	^pub fn verify_achievement\(	Outcome の達成を Rust が根拠で確かめる
+C6	reuse	controller	crates/task-dispatch/src/dispatcher/project_guard.rs	^pub\(crate\) fn pre_decide\(	予算・停滞・同じ失敗の guard（decider の前。LLM なし）。子 6 の停止はここを使う
+H1	reuse	chat	crates/task-core/src/chat/mod.rs	^pub struct ChatThread \{	CoS Chat の thread（案件 thread を含む）
+H2	reuse	chat	crates/task-core/src/chat/mod.rs	^pub struct ChatMessage \{	message
+H3	reuse	chat	crates/task-api/src/chat/mod.rs	"/api/v1/chat/threads/\{t\}/messages",	REST: 人の発言
+H4	reuse	chat	crates/task-api/src/chat/mod.rs	^async fn post_relay\(	REST: relay（人の指示を operator が運ぶ）
+H5	reuse	chat	crates/task-api/src/chat/mod.rs	"chat_relay_forbidden",	relay は operator の principal だけ（403）
+H6	partial	chat	crates/task-api/src/chat/mod.rs	^async fn post_proposal\(	proposals は統括 CoS の転送だけ（直接は 403）。versioned な戦略案の記録ではない
+H7	reuse	chat	crates/task-api/src/chat/stream.rs	"/api/v1/chat/threads/\{t\}/stream"	SSE
+H8	reuse	chat	crates/task-core/src/chat/store.rs	searches titles and message text through FTS5	履歴の検索（FTS5）
+H9	reuse	chat	crates/task-core/src/chat/mod.rs	^pub struct ChatRelayRequest \{	relay の要求の形
+H10	reuse	chat	crates/task-api/src/chat/attachments.rs	"/api/v1/chat/threads/\{t\}/attachments",	添付
+M1	reuse	mcp	crates/celeris-mcp/src/tools/console.rs	name: "console_instruct",	MCP: CoS chat への指示（thread_id・relay 指定）
+M2	reuse	mcp	crates/celeris-mcp/src/tools/console.rs	name: "console_reply",	MCP: 返事の取得
+M3	reuse	mcp	crates/celeris-mcp/src/tools/console.rs	pub relay: Option<RelayArgs>,	relay の記録（人の発言の verbatim を運ぶ。主体は mcp:<client>）
+M4	reuse	authz	crates/task-core/src/mcp.rs	^pub enum McpScope \{	MCP の scope（KnowledgeRead・KnowledgePropose・TasksRead・TasksInteract・TasksDecide・ConsoleInstruct ほか）
+M5	risk	authz	crates/celeris-mcp/src/tools/decisions.rs	name: "decision_answer",	scope TasksInteract の client は人の決定に答えられる（by=mcp:<id>）。外部 LLM の client に渡すと承認と取り違える（脅威 T3）
+M6	risk	authz	crates/celeris-mcp/src/tools/decisions.rs	name: "task_plan_gate",	同上（plan の承認）
+M7	reuse	knowledge	crates/celeris-mcp/src/tools/knowledge.rs	name: "knowledge_propose",	MCP: knowledge の提案（受信箱へ。正本は変えない）
+M8	reuse	knowledge	crates/celeris-mcp/src/tools/knowledge.rs	name: "knowledge_search",	MCP: 検索（KnowledgeRead）
+K1	reuse	knowledge	crates/task-api/src/knowledge.rs	\.route\("/api/v1/knowledge/inbox", get\(inbox\)\.post\(record\)\)	knowledge の受信箱（記録＝提案）
+K2	reuse	knowledge	crates/task-api/src/knowledge.rs	\.route\("/api/v1/knowledge/inbox/\{id\}/accept", post\(accept\)\)	受信箱の採否
+A1	reuse	authz	crates/task-api/src/principal.rs	^pub enum Principal \{	主体（Human・Operator・Mcp・Cos・Unauthenticated）。認証だけが作る
+A2	reuse	authz	crates/task-api/src/principal.rs	"mcp" \| "cos" => Err\(format!\(	config の token は mcp・cos を名乗れない（外部 LLM が human を名乗れない根拠の 1 つ）
+A3	reuse	authz	crates/task-api/src/handlers/authority.rs	^fn require_human\(caller: &Caller\)	authority の操作は人だけ
+A4	reuse	authz	crates/task-core/src/authority.rs	^pub struct AuthorityGrant \{	authority ledger の許可（予算つき・監査つき）
+W1	reuse	ui	web/features/projects/project-controller-panel.tsx	^export function ProjectControllerPanel\(	案件の自動運営の画面
+W2	reuse	ui	web/features/projects/project-roadmap-panel.tsx	^export function ProjectRoadmapPanel\(	Roadmap の画面（人の decide）
+W3	reuse	ui	web/features/projects/project-authority-panel.tsx	^export function ProjectAuthorityPanel\(	authority の画面
+W4	reuse	ui	web/routes/projects.$id.index.tsx	ProjectDetailScreen	案件の詳細の route
+W5	reuse	ui	web/features/chat/composer/chat-composer.tsx	^export function ChatComposer\(	Chat の入力欄（添付つき）
+V1	partial	evidence	crates/task-worker/src/protocol.rs	^pub struct Evidence \{	worker の受け入れ条件の証拠（result.json）。研究の仮説・反証の evidence ではない
+X1	missing	strategy	-	(?i)hypothes	仮説の記録（Strategy/Hypothesis/Evidence 契約）が無い。子 2
+X2	missing	strategy	-	(?i)strategy_candidate|StrategyCandidate|struct Strategy	戦略候補の型・比較が無い。子 2・5
+X3	missing	evaluator	-	(?i)epistemic	epistemic progress の評価が無い。子 6
+X4	missing	evaluator	-	(?i)goal_evaluator|parent_goal_eval	親の目的の途中評価（checkpoint）が無い。子 6
+X5	missing	chat	-	(?i)discuss[-_ ]?only|discussion_mode	discuss-only の権限（副作用 0 の mode）が無い。子 3
+X6	missing	publish	-	(?i)signoff|sign_off|publish_manifest|PublishManifest	publish の manifest と人の署名が無い。子 7
+X7	missing	external	-	\bMuse\b	Muse への言及・接続が無い。子 4
+X8	missing	external	-	(?i)excerpt_import|import_excerpt|chatgpt_import	外部 LLM の会話の抜粋を同意つきで取り込む口が無い。子 4

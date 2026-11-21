@@ -1,0 +1,168 @@
+{
+ "checkpoints": {
+  "A-done": {
+   "evidence": [
+    {
+     "contains": "| 既存の module 循環 | 17 | 17 | 一致 |",
+     "file": "snapshot/agent-docs/progress/2026-11-17-arch-v4-a.md"
+    }
+   ],
+   "ideal_action": "discriminating_experiment",
+   "ideal_verdict": "at_risk",
+   "order": 2,
+   "why": "before が固まった（循環 17・S1 3 file）。D・E・F の pilot は 2 file・2 領域の狭さで、17 の循環・SCC 49/55 単位を動かせるかは未検証の仮説。実装の前に『handlers ⇄ cos の単位の循環を切るのに何本の辺を消す必要があるか』を測る識別実験が安い。"
+  },
+  "A-mid": {
+   "evidence": [
+    {
+     "contains": "既存モジュール循環17件",
+     "file": "goal.md"
+    }
+   ],
+   "ideal_action": "continue",
+   "ideal_verdict": "unknown",
+   "order": 1,
+   "why": "基準の計測の途中。親の指標の before しか無い。"
+  },
+  "C-done": {
+   "evidence": [
+    {
+     "contains": "+664",
+     "file": "snapshot/agent-docs/progress/2026-11-17-arch-v4-c.md"
+    }
+   ],
+   "ideal_action": "continue",
+   "ideal_verdict": "at_risk",
+   "order": 4,
+   "why": "production +664（ADR の目安 400 超）、循環 17 のまま。D の完了時に handlers ⇄ cos の単位の循環が減ったかを親の checkpoint の条件にする。"
+  },
+  "C-mid": {
+   "evidence": [
+    {
+     "contains": "design_review_failed:2",
+     "file": "events.jsonl"
+    }
+   ],
+   "ideal_action": "continue",
+   "ideal_verdict": "at_risk",
+   "order": 3,
+   "why": "C は判定の規則の task で構造を変えない。設計 review の不合格 2 回で人の承認待ちが出た。親の指標はまだ動かない前提。"
+  },
+  "D-done": {
+   "evidence": [
+    {
+     "contains": "組 261・単位 49 は不変",
+     "file": "events.jsonl"
+    }
+   ],
+   "ideal_action": "pivot",
+   "ideal_verdict": "off_track",
+   "order": 7,
+   "why": "D の reviewer が『組 261・単位 49 は不変』と確認した。仮説『狭い pilot で SCC が減る』は D で反証された。"
+  },
+  "D-mid": {
+   "evidence": [
+    {
+     "contains": "17・198・756",
+     "file": "snapshot/agent-docs/progress/2026-11-17-arch-v4-c.md"
+    }
+   ],
+   "ideal_action": "continue",
+   "ideal_verdict": "at_risk",
+   "order": 5,
+   "why": "D の実装の段が統合された。結果の数値はまだ slice に無い。"
+  },
+  "E-done": {
+   "evidence": [
+    {
+     "contains": "(1) 循環: 上のとおり差 0",
+     "file": "snapshot/agent-docs/progress/2026-11-18-arch-v4-e.md"
+    },
+    {
+     "contains": "単位の循環は解けていない",
+     "file": "snapshot/agent-docs/progress/2026-11-18-arch-v4-d.md"
+    }
+   ],
+   "ideal_action": "pivot",
+   "ideal_verdict": "off_track",
+   "order": 8,
+   "why": "E も循環の差 0、test-affected は A より +113.73 s。2 つ目の pilot も (1)(5) を動かさない。"
+  },
+  "E-mid": {
+   "evidence": [
+    {
+     "contains": "未達/要判断として書いたもの: handlers ⇄ cos",
+     "file": "events.jsonl"
+    }
+   ],
+   "ideal_action": "discriminating_experiment",
+   "ideal_verdict": "off_track",
+   "order": 6,
+   "why": "最初に検知できる時点。D の worker の報告（D#1446）が handlers ⇄ cos を未達/要判断と書いた。最初の pilot で単位の循環が切れないなら、同じ形の pilot（E・F）を積んでも (1) は動かない見込み。E・F を続ける前に、循環を切る最小の辺の集合を測るか、人に戦略を聞く。"
+  },
+  "F-done": {
+   "evidence": [
+    {
+     "contains": "`rusqlite` を書く production file 75 → 75",
+     "file": "snapshot/agent-docs/progress/2026-11-18-arch-v4-f.md"
+    }
+   ],
+   "ideal_action": "ask_human",
+   "ideal_verdict": "off_track",
+   "order": 10,
+   "why": "F も循環 17・rusqlite の file 75 → 75。3 つの pilot がどれも親の (1)(2) を動かさない。"
+  },
+  "F-mid": {
+   "evidence": [
+    {
+     "contains": "単位の循環は解けていない",
+     "file": "snapshot/agent-docs/progress/2026-11-18-arch-v4-d.md"
+    }
+   ],
+   "ideal_action": "ask_human",
+   "ideal_verdict": "off_track",
+   "order": 9,
+   "why": "D・E の 2 件で反証が重なった。F を続けるか、戦略を変えるかを人に聞く時点。"
+  },
+  "G-done": {
+   "evidence": [
+    {
+     "contains": "S1 は file・単位 3 → 4",
+     "file": "snapshot/agent-docs/progress/2026-11-19-arch-v4-g.md"
+    }
+   ],
+   "ideal_action": "ask_human",
+   "ideal_verdict": "off_track",
+   "order": 12,
+   "why": "S1 の変更波及は 3 → 4 に悪化、production +822。H（最終検査）に進む前に親の未達を人に示す時点。"
+  },
+  "G-mid": {
+   "evidence": [
+    {
+     "contains": "verdict=code",
+     "file": "events.jsonl"
+    }
+   ],
+   "ideal_action": "ask_human",
+   "ideal_verdict": "off_track",
+   "order": 11,
+   "why": "G の比較で health:S2 がコード由来の悪化と判定された（verdict=code）。"
+  }
+ },
+ "first_detectable": {
+  "basis": "D#1446（2026-11-18T19:55:39Z の worker の報告）が handlers ⇄ cos を未達/要判断と書いた。これを含む最初の checkpoint が E-mid（2026-11-18T20:36:35Z）",
+  "checkpoint": "E-mid"
+ },
+ "historical": {
+  "cost_note": "worker_finished の usage.cost_usd（API の list price 換算。subscription の実費ではない）の和",
+  "list_price_usd_total": 450.35,
+  "list_price_usd_upto_H_done": 435.31,
+  "list_price_usd_upto_first_detectable": 171.06,
+  "parent_actions_before": "無し（親は ready のまま子の完了を待った。途中の checkpoint は計画に無かった）",
+  "parent_first_evaluation": "2026-11-20T14:12:10.518221787Z",
+  "worker_runs_after_first_detectable_until_H_done": 137,
+  "worker_runs_before_first_detectable": 155
+ },
+ "note": "採点用。slice の入力に入れてはいけない（入れると check が落ちる。否定対照 N3）。evidence は各 slice の中の file に実在する文字列で、check がその実在を確かめる。ideal_* は子 0 の案で、人が rubric で独立に採点するときの参照。",
+ "schema": "celeris.replay-answer-key/1"
+}

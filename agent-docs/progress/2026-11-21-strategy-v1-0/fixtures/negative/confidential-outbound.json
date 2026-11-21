@@ -1,0 +1,38 @@
+{
+ "envelope": {
+  "actor": {
+   "id": "cos:project-thread",
+   "kind": "cos"
+  },
+  "body": "D の pilot の後も handlers ⇄ cos の単位の循環が残った。E・F を同じ形で続ける前に、循環を切る最小の辺の集合を測りたい。",
+  "classification": "confidential",
+  "confidence": "estimated",
+  "consent": {
+   "granted_at": "2026-11-21T02:59:00Z",
+   "granted_by": "human:web",
+   "scope": "selected_excerpt"
+  },
+  "content_hash": "sha256:329eb60373de54c4f91e4a865d4447f7233322ba95f2700b028c0f58fd811819",
+  "decision_state": "discussion",
+  "direction": "outbound",
+  "idempotency_key": "k-329eb60373de",
+  "linked": {
+   "evidence": [],
+   "hypotheses": [
+    "H-cycle-pilots"
+   ]
+  },
+  "project_id": "01M2WTS3DKNZBSZ2JMVB4CZMBW",
+  "references": [
+   "agent-docs/progress/2026-11-18-arch-v4-d.md#未達要判断"
+  ],
+  "source": {
+   "kind": "celeris_cos_thread",
+   "label": "celeris_cos_thread",
+   "thread_id": "01M5JJTVPW15CKFRCA0FAYCHK4"
+  },
+  "source_revision": "r1",
+  "timestamp": "2026-11-21T03:00:00Z"
+ },
+ "expect": "R13:outbound_confidential"
+}

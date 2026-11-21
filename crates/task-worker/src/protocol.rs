@@ -870,11 +870,35 @@ pub struct TaskLineageContext {
     /// 委譲した子の要約。集約 run・子の失敗によるやり直し run・子を起票できる run でだけ非空（ADR-0016 D3）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<ChildSummary>,
+    /// ADR 2026-11-21-strategy-evidence-contract D5（U3）: task（無ければ最も近い祖先）が属する案件の `Project.request`
+    /// の全文と sha256。案件に属さない task では `None` で、wire にも prompt にも出ない。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<ProjectRequestContext>,
 }
 
 impl TaskLineageContext {
     pub fn is_empty(&self) -> bool {
-        self.ancestors.is_empty() && self.children.is_empty()
+        self.ancestors.is_empty() && self.children.is_empty() && self.project.is_none()
+    }
+}
+
+/// `context.lineage.project`（ADR 2026-11-21-strategy-evidence-contract D5.1）: 人の元の目的の正本である
+/// `Project.request` の全文（切り詰めない）と、その sha256（`task_core::project_proposal::sha256_hex`。案件の
+/// 判断の記録の `request_sha256` と同じ値）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectRequestContext {
+    pub project_id: String,
+    pub request: String,
+    pub request_sha256: String,
+}
+
+impl From<&task_core::org::Project> for ProjectRequestContext {
+    fn from(project: &task_core::org::Project) -> Self {
+        Self {
+            project_id: project.id.to_string(),
+            request: project.request.clone(),
+            request_sha256: task_core::project_proposal::sha256_hex(&project.request),
+        }
     }
 }
 

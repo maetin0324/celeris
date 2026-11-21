@@ -1336,7 +1336,7 @@ async fn review_passes_human_decisions_and_check_results_to_reviewer() {
             human_inputs: ReviewHumanInputs {
                 decisions: vec![decision.clone()],
                 answers: vec![answer.clone()],
-                ancestors: Vec::new(),
+                ..Default::default()
             },
             ..Default::default()
         },

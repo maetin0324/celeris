@@ -3658,6 +3658,26 @@
       "description": "案件の一意識別子（ULID）。`TaskId` と同じ形。",
       "type": "string"
     },
+    "ProjectRequestContext": {
+      "description": "`context.lineage.project`（ADR 2026-11-21-strategy-evidence-contract D5.1）: 人の元の目的の正本である\n`Project.request` の全文（切り詰めない）と、その sha256（`task_core::project_proposal::sha256_hex`。案件の\n判断の記録の `request_sha256` と同じ値）。",
+      "properties": {
+        "project_id": {
+          "type": "string"
+        },
+        "request": {
+          "type": "string"
+        },
+        "request_sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_id",
+        "request",
+        "request_sha256"
+      ],
+      "type": "object"
+    },
     "ProviderFailure": {
       "description": "`error.provider_failure`（任意）: 供給側の失敗の種別（ADR-0010 D5, P-21）。付いていればディスパッチャは\nattempts を消費せず `requeue` し、プロバイダを cooldown にする。",
       "oneOf": [
@@ -5093,6 +5113,17 @@
             "$ref": "#/$defs/ChildSummary"
           },
           "type": "array"
+        },
+        "project": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProjectRequestContext"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-11-21-strategy-evidence-contract D5（U3）: task（無ければ最も近い祖先）が属する案件の `Project.request`\nの全文と sha256。案件に属さない task では `None` で、wire にも prompt にも出ない。"
         }
       },
       "type": "object"

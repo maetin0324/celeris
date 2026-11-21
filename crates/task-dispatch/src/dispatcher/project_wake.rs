@@ -1091,7 +1091,8 @@ pub(super) fn project_request_sha256(store: &SqliteStore, project: &str) -> Stri
         .and_then(|id| store.project_get(id).ok().flatten())
         .map(|p| p.request)
         .unwrap_or_default();
-    sha256_hex(request.as_bytes())
+    // run の prompt の `context.lineage.project.request_sha256`（ADR 2026-11-21-strategy-evidence-contract D5.1）と同じ関数。
+    task_core::project_proposal::sha256_hex(&request)
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {

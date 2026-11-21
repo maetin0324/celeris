@@ -41,7 +41,7 @@ fn long_parent(dir: &std::path::Path) -> Task {
 
 /// run の種類（planner・WU・reviewer・worker）ごとの prompt。
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum RunKind {
+pub(super) enum RunKind {
     Planner,
     WorkUnit,
     Reviewer,
@@ -49,21 +49,21 @@ enum RunKind {
 }
 
 /// 受け取った `RunRequest` から prompt を組んで記録する adapter。planner には `plan` を書き、reviewer には全件合格の
-/// `review.json` を書き、worker・WU には `result.json` を書く。
-struct PromptCapture {
+/// `review.json` を書き、worker・WU には `result.json` を書く。案件の依頼の試験（`prompt_project_request`）も使う。
+pub(super) struct PromptCapture {
     plan: Option<String>,
     seen: StdMutex<Vec<(RunKind, String)>>,
 }
 
 impl PromptCapture {
-    fn new(plan: Option<String>) -> Self {
+    pub(super) fn new(plan: Option<String>) -> Self {
         PromptCapture {
             plan,
             seen: StdMutex::new(Vec::new()),
         }
     }
 
-    fn prompts(&self, kind: RunKind) -> Vec<String> {
+    pub(super) fn prompts(&self, kind: RunKind) -> Vec<String> {
         self.seen
             .lock()
             .unwrap()

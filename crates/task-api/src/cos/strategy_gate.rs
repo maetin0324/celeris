@@ -217,11 +217,11 @@ fn last_answer(
         .events_for(row.task_id)
         .map_err(store_problem)?
         .into_iter()
-        .filter_map(|(_, e)| match e {
+        .rev()
+        .find_map(|(_, e)| match e {
             Event::DecisionAnswered { id, option, by, .. } if id == row.id => Some((option, by)),
             _ => None,
-        })
-        .last())
+        }))
 }
 
 /// D2.2 の 1・2: 文書を作った task の、この版の key の決定（問いの sha256 が文書と同じものを先に選ぶ）。

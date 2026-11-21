@@ -94,7 +94,10 @@ review-gate の `health_review/(design|design_gate|…).rs` など）は変え�
 - `bash scripts/dev/test-affected.sh`（対象: celeris・celeris-campaign・celerisctl・llm-proxy・task-api・task-dispatch・task-worker）:
   - 1 回目（fixture を直す前）: exit 100、`6179 tests run: 6177 passed, 2 failed, 28 skipped`。落ちた 2 件は上の fixture の 2 件
     （`Store(Invalid("project … of task … is not in the store; the run's Project.request cannot be read"))`）。
-  - 2 回目（fixture を直した後）: 下の「未解決」を見よ。
+  - 1 回目の repo health: `repo_health_gate: all checks passed`（`deps.cycle` pass）。web の検査は対象外（`--list` に web の行が無い）。
+  - fixture を直した後: 1 回目の後に変えたのは task-dispatch の試験の file と文書だけなので、task-dispatch の全試験を走らせ直した。
+    `cargo nextest run -p task-dispatch --no-tests=fail` → exit 0、`1944 tests run: 1944 passed, 0 skipped`。他の 6 crate は 1 回目で全件通過
+    （production のコードは 1 回目の後に変えていない）。
 
 ## LoC（`git diff --numstat` の base から HEAD。file の分類は path で行った）
 
@@ -112,7 +115,7 @@ review-gate の `health_review/(design|design_gate|…).rs` など）は変え�
 ## 未解決
 
 - D5.7 の再監査（昇格後に子 1 の prompt-audit の collect と render）は未実施。
-- test-affected の 2 回目の結果は result.json と報告に書く（この file を commit した後に走らせる）。
+- test-affected の全体は fixture を直した後に走らせ直していない（task-dispatch だけを走らせ直した。理由は上）。
 
 ## 提案
 

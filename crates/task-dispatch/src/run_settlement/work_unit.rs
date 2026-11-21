@@ -21,6 +21,10 @@ use crate::execution_scheduler::{ContinuationInputs, WuDecision, WuLimits};
 /// `WorkUnitTransitioned.reason`。
 const MERGE_REPAIR_FAILED_REASON: &str = "merge_repair_failed";
 
+/// auto-leaf の測った回数が上限を超えた leaf を止めたときの `WorkUnitTransitioned.reason`（replay は continuation を
+/// 数え、`blocked(decision)` にする）。
+const AUTO_LEAF_BUDGET_REASON: &str = "auto_leaf_budget";
+
 /// ADR-0072 D6 の表: 分類できない供給側・インフラの失敗（`end` が無い）は harness_error 相当として WU を ready に
 /// 戻すだけにする。
 pub(crate) fn work_unit_run_end(run_end: Option<RunEnd>) -> RunEnd {
@@ -99,13 +103,16 @@ pub(crate) struct WorkUnitSettlement {
 }
 
 impl WorkUnitSettlement {
-    /// worker の `result.json` の `decisions` を読む run か（done にした WU だけ。ADR-0079 D7）。
+    /// worker の `result.json` の `decisions` を読む run か（ADR-0079 D7、ADR 2026-11-21-worker-decisions-fail-closed D1・
+    /// 付記 2026-11-21）。状態だけを戻す run（harness_error・取り消し。次の run が要求を出し直す）と、WU のクラスタ job の
+    /// wait（待ちの正本は `blocked(cluster_jobs)` で、再開はその行からだけ動く）を除く全ての遷移で読む。遷移の理由は
+    /// 列挙しない。
     pub(crate) fn reads_worker_decisions(&self) -> bool {
         !self.reset_only
             && self
                 .decision
                 .as_ref()
-                .is_some_and(|d| d.reason == "completed")
+                .is_some_and(|d| d.reason != "cluster_jobs")
     }
 }
 
@@ -294,7 +301,7 @@ fn work_unit_outcome(
 fn hold_for_auto_leaf(decision: &mut WuDecision) {
     decision.updated.status = WorkUnitStatus::Blocked;
     decision.updated.blocked_reason = Some(WorkUnitBlockedReason::Decision);
-    decision.reason = "auto_leaf_budget";
+    decision.reason = AUTO_LEAF_BUDGET_REASON;
     decision.trigger = Trigger::Continue {
         why: ContinueWhy::Advance,
     };
@@ -431,25 +438,53 @@ pub(crate) fn settle_work_unit_failure(
     }
 }
 
-/// ADR-0079 D7（Phase R3a）: done にした leaf の worker が `needed_before: self` の決定の要求を出した。leaf を done に
-/// せず `blocked(decision)` にし（それを待つ unit は ready にしない）、task が完了に進むなら `Continue{advance}` にする。
-/// `count` は記録する決定の要求の数。
-pub(crate) fn hold_for_worker_decisions(s: &mut WorkUnitSettlement, key: &str, count: usize) {
+/// ADR-0079 D7（Phase R3a）・ADR 2026-11-21-worker-decisions-fail-closed 付記 2026-11-21: leaf の worker が
+/// `needed_before: self` の決定の要求を出した。worker 完了の経路は失敗の処理より先にこれを呼ぶ。どの遷移でも leaf を
+/// `blocked(decision)` にし（それを待つ unit は ready にせず、失敗を伝播しない）、task を `Continue{advance}` にして、
+/// WU の失敗（自動 replan・質問・replan の使い切りの決定）と integration repair の打ち切りを起こさない（1 つの leaf を
+/// 止めるのは決定だけ）。行は `running` の行 `wu` を `blocked(decision)` にしたもので、この run の遷移の数え
+/// （`continue` の continuation・`retry` の再試行）は動かさない（replay は `decision` の遷移で数えを動かさない。
+/// 答えの後の run で同じ条件なら、そこで数えと上限が効く）。auto-leaf の上限の遷移（`auto_leaf_budget`）は理由と
+/// continuation の数えを残す。質問で終わる提案（trigger が `WorkerQuestion`）なら質問の文を outcome に残す。
+/// `count` は記録する worker の決定の要求の数（settlement に auto-leaf の上限の決定の要求があれば 1 件足して示す）。
+pub(crate) fn hold_for_worker_decisions(
+    s: &mut WorkUnitSettlement,
+    wu: &WorkUnitRow,
+    count: usize,
+) {
+    let count = count + usize::from(s.auto_leaf_request.is_some());
     if let Some(decision) = s.decision.as_mut() {
+        if decision.reason != AUTO_LEAF_BUDGET_REASON {
+            let mut held = wu.clone();
+            held.clear_lease();
+            decision.updated = held;
+            decision.reason = "decision";
+        }
         decision.updated.status = WorkUnitStatus::Blocked;
         decision.updated.blocked_reason = Some(WorkUnitBlockedReason::Decision);
-        decision.reason = "decision";
+        decision.plan_complete = false;
         decision.newly_blocked.clear();
         decision.newly_ready.clear();
     }
-    if matches!(s.trigger, Trigger::WorkerDone) {
-        s.trigger = Trigger::Continue {
-            why: ContinueWhy::Advance,
-        };
-    }
+    let question = matches!(s.trigger, Trigger::WorkerQuestion).then(|| {
+        s.outcome
+            .strip_prefix("question: ")
+            .unwrap_or(s.outcome.as_str())
+            .to_string()
+    });
+    s.trigger = Trigger::Continue {
+        why: ContinueWhy::Advance,
+    };
+    s.failure = None;
+    s.integration_repair_exhaust = None;
+    s.auto_replan = None;
     s.outcome = format!(
-        "decision: WorkUnit {key} は人の決定を待ちます（決定の要求 {count} 件。ADR-0079 D7）"
+        "decision: WorkUnit {} は人の決定を待ちます（決定の要求 {count} 件。ADR-0079 D7）",
+        wu.key
     );
+    if let Some(question) = question {
+        s.outcome.push_str(&format!("。止めた質問: {question}"));
+    }
 }
 
 #[cfg(test)]

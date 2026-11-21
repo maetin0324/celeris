@@ -224,6 +224,11 @@ fn raw(key: &str, needed_before: &[&str]) -> serde_json::Value {
     serde_json::to_value(spec(key, needed_before)).unwrap()
 }
 
+/// `result.json` の `decisions` の欄（要素の配列）。
+fn field(items: &[serde_json::Value]) -> serde_json::Value {
+    serde_json::Value::Array(items.to_vec())
+}
+
 /// R3a: worker の決定の検証（形・指す先・key の重複・`self` の書き換え）。
 #[test]
 fn worker_decisions_are_validated_and_self_is_resolved() {
@@ -238,7 +243,7 @@ fn worker_decisions_are_validated_and_self_is_resolved() {
         serde_json::json!({"key": "w5", "question": "q"}),
         raw("w1", &["b"]),
     ];
-    let batch = prepare_worker_decisions(&items, Some("a"), &units, &stages, &taken, 8);
+    let batch = prepare_worker_decisions(&field(&items), Some("a"), &units, &stages, &taken, 8);
     assert_eq!(
         batch
             .accepted
@@ -254,7 +259,7 @@ fn worker_decisions_are_validated_and_self_is_resolved() {
     assert!(batch.bundled.is_empty());
     // atomic の run: `self` のまま。unit は指せない。
     let atomic = prepare_worker_decisions(
-        &[raw("w1", &["self"]), raw("w2", &["a"])],
+        &field(&[raw("w1", &["self"]), raw("w2", &["a"])]),
         None,
         &BTreeSet::new(),
         &BTreeSet::new(),
@@ -263,10 +268,19 @@ fn worker_decisions_are_validated_and_self_is_resolved() {
     );
     assert_eq!(atomic.accepted.len(), 1);
     assert_eq!(atomic.accepted[0].needed_before, vec!["self".to_string()]);
-    assert_eq!(worker_decisions_from_json(r#"{"summary":"s"}"#).len(), 0);
+    // 欄の取り出し: 要求が無い（欄が無い・`null`・空の配列・JSON でない）なら `None`、配列はそのまま（要素は 1 件）。
+    // 配列でない欄の扱いは `decision_fail_closed_non_array_decisions_become_one_rejected_decision` が確かめる。
+    for text in [
+        r#"{"summary":"s"}"#,
+        r#"{"decisions":null}"#,
+        r#"{"decisions":[]}"#,
+        "not json",
+    ] {
+        assert_eq!(worker_decisions_from_json(text), None, "{text}");
+    }
     assert_eq!(
-        worker_decisions_from_json(r#"{"decisions":[{"key":"x"}]}"#).len(),
-        1
+        worker_decisions_from_json(r#"{"decisions":[{"key":"x"}]}"#),
+        Some(serde_json::json!([{"key": "x"}]))
     );
 }
 
@@ -283,7 +297,7 @@ fn worker_decisions_beyond_the_cap_are_bundled() {
         serde_json::to_value(high).unwrap(),
         raw("w4", &["a"]),
     ];
-    let batch = prepare_worker_decisions(&items, None, &units, &BTreeSet::new(), &taken, 2);
+    let batch = prepare_worker_decisions(&field(&items), None, &units, &BTreeSet::new(), &taken, 2);
     assert_eq!(batch.accepted.len(), 2);
     assert_eq!(batch.accepted[0].key, "w1");
     let bundle = &batch.accepted[1];
@@ -299,7 +313,7 @@ fn worker_decisions_beyond_the_cap_are_bundled() {
     assert!(validate_shape(bundle).is_empty());
     // cap 0 でも 1 件には束ねる。cap 1 なら全部が 1 件の束になる。
     let zero = prepare_worker_decisions(
-        &items[..2],
+        &field(&items[..2]),
         None,
         &units,
         &BTreeSet::new(),
@@ -309,7 +323,7 @@ fn worker_decisions_beyond_the_cap_are_bundled() {
     assert_eq!(zero.accepted.len(), 1);
     assert_eq!(zero.accepted[0].key, BUNDLE_KEY);
     let one_over = prepare_worker_decisions(
-        &items[..2],
+        &field(&items[..2]),
         None,
         &units,
         &BTreeSet::new(),
@@ -353,7 +367,7 @@ fn rejected_worker_decisions_become_one_self_decision() {
         raw("h0", &["b"]),
         raw("h1", &["b"]),
     ];
-    let batch = prepare_worker_decisions(&items, Some("a"), &units, &stages, &taken, 8);
+    let batch = prepare_worker_decisions(&field(&items), Some("a"), &units, &stages, &taken, 8);
     assert_eq!(
         batch
             .accepted
@@ -400,7 +414,7 @@ fn rejected_worker_decisions_become_one_self_decision() {
     );
     // atomic の run: `self` のまま。
     let atomic = prepare_worker_decisions(
-        &items[1..2],
+        &field(&items[1..2]),
         None,
         &BTreeSet::new(),
         &BTreeSet::new(),
@@ -414,7 +428,7 @@ fn rejected_worker_decisions_become_one_self_decision() {
     // 同じ問いのまとめが記録済み（古い `result.json` の読み直し）なら出し直さない。
     let recorded: BTreeMap<String, String> = [(ae.key.clone(), ae.question.clone())].into();
     let again = prepare_worker_decisions(
-        &items[1..2],
+        &field(&items[1..2]),
         None,
         &BTreeSet::new(),
         &BTreeSet::new(),
@@ -424,9 +438,88 @@ fn rejected_worker_decisions_become_one_self_decision() {
     assert_eq!(again.rejected.len(), 1);
     assert!(again.escalated.is_none());
     // 拒否が無ければ（受け付けた・束ねただけなら）まとめは無い。
-    let clean = prepare_worker_decisions(&items[..1], Some("a"), &units, &stages, &taken, 0);
+    let clean =
+        prepare_worker_decisions(&field(&items[..1]), Some("a"), &units, &stages, &taken, 0);
     assert!(clean.escalated.is_none());
     assert!(clean.rejected.is_empty());
+}
+
+/// worker の `result.json` の本文から、dispatcher（`Dispatcher::worker_decisions`）と同じ順で決定の batch を作る:
+/// `decisions` の欄を取り出し、計画の unit `a` を指せる leaf（`self_key`）として検証する。
+fn batch_from_result(text: &str, self_key: Option<&str>) -> WorkerDecisionBatch {
+    let units: BTreeSet<String> = ["a"].iter().map(|s| s.to_string()).collect();
+    match worker_decisions_from_json(text) {
+        Some(field) => prepare_worker_decisions(
+            &field,
+            self_key,
+            &units,
+            &BTreeSet::new(),
+            &BTreeMap::new(),
+            8,
+        ),
+        // dispatcher は要求の無い本文で `None` を返す（何も記録しない）。
+        None => WorkerDecisionBatch::default(),
+    }
+}
+
+/// ADR 2026-11-21-worker-decisions-fail-closed D2: `decisions` の欄が配列でない（object・文字列・数・真偽値）
+/// `result.json` は、受け付けなかった要求 1 件（位置 `#field`）のまとめ `rejected` になる。守る不変条件は I1（`null`
+/// でも空の配列でもない欄があれば決定が 1 件以上できる）・I2（`needed_before` は要求を出した仕事: leaf の key、
+/// atomic なら `self`）・I4（決定 1 件の形の object でも受け付けない）・I3（欄が無い・`null`・空の配列・JSON でない
+/// 本文は何も作らない）。既存の `worker_decisions_are_validated_and_self_is_resolved`・
+/// `rejected_worker_decisions_become_one_self_decision` は配列しか渡さず、`worker_decisions_from_json` の確かめも
+/// 欄が無いときと配列のときだけなので、配列でない欄が空になって要求が消えることを検出できない。
+#[test]
+fn decision_fail_closed_non_array_decisions_become_one_rejected_decision() {
+    let one = raw("w1", &["self"]).to_string();
+    for (field, ty) in [
+        (one.as_str(), "object"),
+        (r#""pick a vault""#, "string"),
+        ("3", "number"),
+        ("true", "boolean"),
+    ] {
+        let text = format!(r#"{{"summary":"s","decisions":{field}}}"#);
+        for (self_key, target) in [(Some("a"), "a"), (None, NEEDED_BEFORE_SELF)] {
+            let batch = batch_from_result(&text, self_key);
+            assert!(
+                batch.escalated.is_some(),
+                "a non-array decisions field ({ty}) must reach a human: {batch:?}"
+            );
+            assert!(batch.accepted.is_empty(), "{ty}: {:?}", batch.accepted);
+            assert!(batch.bundled.is_empty());
+            let reason = format!("decisions must be an array of decision objects (got {ty})");
+            assert_eq!(batch.rejected, vec![reason.clone()]);
+            let e = batch.escalated.as_ref().unwrap();
+            assert_eq!(e.key, REJECTED_KEY);
+            assert_eq!(e.needed_before, vec![target.to_string()], "{ty}");
+            assert_eq!(e.cost_of_reversal, CostOfReversal::High);
+            assert!(validate_shape(e).is_empty(), "{:?}", validate_shape(e));
+            for needle in ["決定の要求 1 件", "\n1) #field", reason.as_str()] {
+                assert!(e.question.contains(needle), "{needle:?} in {}", e.question);
+            }
+            assert_eq!(e.cost_note.as_deref(), Some("受け付けなかった決定: #field"));
+        }
+    }
+    // 決定 1 件の形の object は、要約に元の key と問いが入る（受け付けはしない）。
+    let shaped = batch_from_result(&format!(r#"{{"decisions":{one}}}"#), Some("a"));
+    let question = shaped.escalated.map(|e| e.question).unwrap_or_default();
+    assert!(
+        question.contains("1) #field w1 question w1?。受け付けなかった理由: decisions must be"),
+        "{question}"
+    );
+    // 欄が無い・`null`・空の配列・JSON でない本文は今までどおり何も作らない。
+    for text in [
+        r#"{"summary":"s"}"#,
+        r#"{"summary":"s","decisions":null}"#,
+        r#"{"summary":"s","decisions":[]}"#,
+        "not json",
+    ] {
+        assert_eq!(
+            batch_from_result(text, Some("a")),
+            WorkerDecisionBatch::default(),
+            "{text}"
+        );
+    }
 }
 
 /// D7 / R1a (e): `decision.schema.json` の生成スキーマとコミット済みファイルの一致。

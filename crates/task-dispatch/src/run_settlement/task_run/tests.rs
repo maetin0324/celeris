@@ -191,30 +191,97 @@ fn settle_task_run_asks_on_no_progress_before_the_hard_limit() {
     );
 }
 
-/// 不変条件: atomic task の run が worker の `decisions` を読むのは `WorkerDone` かつ `Completed` の run だけで、
-/// `needed_before: self` なら `Continue{advance}` で最終レビューに進めない（ADR-0079 D7）。
-/// 既存の試験で検出できない理由: 経路全体の試験は done の run の 1 通りだけで、質問・失敗・部をまたぐ質問の後の trigger で
-/// 読まないことを見ていない。
+/// 不変条件（ADR 2026-11-21-worker-decisions-fail-closed D1・付記「atomic の規則」。I1・I2）: atomic task の run は、
+/// 終わり方が分かり（`Some`）状態だけを戻す run（harness_error・取り消し）とクラスタ job の wait（`Waiting`）でなければ
+/// worker の `decisions` を読む（done・yield・予算切れ・質問・失敗。trigger は見ない）。`needed_before: self` の要求なら
+/// done・質問・失敗の trigger を `Continue{advance}` にして最終レビュー・質問・再試行・失敗に進めず、質問の文は outcome に
+/// 残す。continuation と子 task 待ちの trigger は残し、outcome の文の末尾に決定を待つことを足す。
+/// 既存の試験で検出できない理由: 置き換えた `worker_decisions_hold_an_atomic_run_only_when_done` は「done の run だけで
+/// 読む」旧い契約を確かめていた。経路全体の試験（`tree_decisions.rs`）は atomic の節点を done の run でしか通さないので、
+/// yield・予算切れ・質問・失敗で読まないこと、止めた trigger が質問・失敗・continuation のどれになるかを検出できない。
 #[test]
-fn worker_decisions_hold_an_atomic_run_only_when_done() {
-    assert!(task_reads_worker_decisions(
-        &Trigger::WorkerDone,
-        Some(RunEnd::Completed)
-    ));
-    assert!(!task_reads_worker_decisions(
-        &Trigger::WorkerQuestion,
-        Some(RunEnd::Completed)
-    ));
-    assert!(!task_reads_worker_decisions(&Trigger::WorkerDone, None));
-    assert_eq!(
-        hold_task_for_worker_decisions(2),
+fn decision_fail_closed_task_reads_every_end_but_reset_and_waiting() {
+    for end in [
+        RunEnd::Completed,
+        RunEnd::Yielded,
+        RunEnd::BudgetExhausted {
+            kind: BudgetKind::Turns,
+        },
+        RunEnd::BudgetExhausted {
+            kind: BudgetKind::WallClock,
+        },
+        RunEnd::Question,
+        RunEnd::Failed { retryable: true },
+        RunEnd::Failed { retryable: false },
+    ] {
+        assert!(task_reads_worker_decisions(Some(end)), "reads {end:?}");
+    }
+    for end in [
+        Some(RunEnd::HarnessError {
+            class: task_core::HarnessErrorClass::Infra,
+        }),
+        Some(RunEnd::HarnessError {
+            class: task_core::HarnessErrorClass::LeaseExpired,
+        }),
+        Some(RunEnd::Cancelled),
+        Some(RunEnd::Waiting),
+        None,
+    ] {
+        assert!(!task_reads_worker_decisions(end), "does not read {end:?}");
+    }
+
+    let advance = Trigger::Continue {
+        why: ContinueWhy::Advance,
+    };
+    let waits = "人の決定を待ちます（決定の要求 2 件。ADR-0079 D7）";
+    for (trigger, outcome) in [
+        (Trigger::WorkerDone, "done: ok"),
         (
-            Trigger::Continue {
-                why: ContinueWhy::Advance
-            },
-            "decision: 人の決定を待ちます（決定の要求 2 件。ADR-0079 D7）".to_string()
-        )
-    );
+            Trigger::WorkerError { retryable: true },
+            "error(retryable=true): boom",
+        ),
+        (
+            Trigger::WorkerError { retryable: false },
+            "error(retryable=false): boom",
+        ),
+    ] {
+        assert_eq!(
+            hold_task_for_worker_decisions(trigger.clone(), outcome, 2),
+            (advance.clone(), format!("decision: {waits}")),
+            "{trigger:?}"
+        );
+    }
+    // worker の質問と進捗なしの質問（どちらも `question: ` の接頭辞の後が質問の文）。質問の文を残す。
+    let no_progress = crate::execution_scheduler::no_progress_question(None, 3, 2);
+    for (outcome, question) in [
+        ("question: which vault?", "which vault?"),
+        (
+            no_progress.as_str(),
+            no_progress.trim_start_matches("question: "),
+        ),
+    ] {
+        assert_eq!(
+            hold_task_for_worker_decisions(Trigger::WorkerQuestion, outcome, 2),
+            (
+                advance.clone(),
+                format!("decision: {waits}。止めた質問: {question}")
+            )
+        );
+    }
+    // continuation と子 task 待ちは trigger を残す（次の run は `decision_self_hold` が答えまで起こさない）。
+    for (why, outcome) in [
+        (ContinueWhy::Continue, "continue: yielded の続き（Run #3）"),
+        (
+            ContinueWhy::ChildrenWait,
+            "continue: 委譲した子の完了を待ちます（yielded の続き）",
+        ),
+    ] {
+        let kept = Trigger::Continue { why };
+        assert_eq!(
+            hold_task_for_worker_decisions(kept.clone(), outcome, 2),
+            (kept, format!("{outcome}。{waits}"))
+        );
+    }
 }
 
 fn unit(key: &str, kind: WorkUnitKind, status: WorkUnitStatus) -> WorkUnitRow {

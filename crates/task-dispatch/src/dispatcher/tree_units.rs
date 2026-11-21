@@ -358,7 +358,9 @@ impl Dispatcher {
     /// （`task_core::decision::prepare_worker_decisions`: 形・指す先・key の重複・`max_open_decisions` の残りを超えた分の
     /// 束ね・受け付けなかった要求のまとめ〈ADR 2026-11-18-rejected-worker-decisions-reach-human〉）、記録する event と
     /// 止める unit を組み立てる。書き込みはしない。木が無効・木の節点でない・ファイルが
-    /// 無い・`decisions` が無ければ `None`（従来と 1 バイトも変わらない）。
+    /// 無い・`decisions` が無い（`null`・空の配列を含む）なら `None`（従来と 1 バイトも変わらない）。配列でない
+    /// `decisions` は受け付けなかった要求 1 件として同じまとめに入れ、要求を出した仕事を止める
+    /// （ADR 2026-11-21-worker-decisions-fail-closed D2）。
     pub(super) fn worker_decisions(
         &self,
         task: &Task,
@@ -376,10 +378,9 @@ impl Dispatcher {
         let Ok(text) = std::fs::read_to_string(dir.join("result.json")) else {
             return Ok(None);
         };
-        let raw = task_core::decision::worker_decisions_from_json(&text);
-        if raw.is_empty() {
+        let Some(field) = task_core::decision::worker_decisions_from_json(&text) else {
             return Ok(None);
-        }
+        };
         let now = rfc3339(OffsetDateTime::now_utc());
         let units = if wu.is_some() {
             self.store.work_units_for(task.id)?
@@ -414,7 +415,7 @@ impl Dispatcher {
             .min(limits.max_open_decisions_per_tree.saturating_sub(open_tree));
         let self_key = wu.map(|w| w.key.as_str());
         let batch = task_core::decision::prepare_worker_decisions(
-            &raw, self_key, &unit_keys, &stages, &taken, cap,
+            &field, self_key, &unit_keys, &stages, &taken, cap,
         );
         let mut events: Vec<Event> = Vec::new();
         for reason in &batch.rejected {

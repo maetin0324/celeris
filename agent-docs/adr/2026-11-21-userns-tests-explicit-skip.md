@@ -4,7 +4,7 @@ tasks: [01M7XSH46KVRV62ENAWWKWJKBQ]
 # ADR 2026-11-21: userns の試験は env 無しの build で harness の ignored にし、env 有りの build では本体を走らせる（ADR-0126 B の付記）
 
 - 日付: 2026-11-21
-- 状態: Accepted（実装は WorkUnit `impl`。env 有りの実行の記録は WorkUnit `verify`。結果は 4 節の付記）
+- 状態: Accepted（実装は WorkUnit `impl`。env 有りの実行の記録は WorkUnit `verify`。結果は 4 節の付記。試験 9 の子の行の読み取りの修正は 5 節の付記〈WorkUnit `peer-uid-probe`〉）
 - task: 01M7XSH46KVRV62ENAWWKWJKBQ（戦略層 v1 子 1 の受入条件 3。unit `userns-skip`）
 - 進捗: [userns-skip.md](../progress/2026-11-21-strategy-v1-1/userns-skip.md)（9 件の return の行と変更前の nextest の出力）
 - 関係: [ADR-0126](0126-test-daemons-without-userns.md) B2・B3（既定 skip と env の優先順位）・却下した案の 3 つ目（`#[ignore]`）、
@@ -134,3 +134,23 @@ build した後に env を変えて test binary を直接走らせても、cfg �
   `PEER-UID control`・`dac`・`broker`・`result` の 4 行と PASS を確かめる（手順は進捗の「未確認の 2 件」）。
 - I3: `CELERIS_ISOLATION_TESTS=skip CELERIS_USERNS_TESTS=1` の `nextest list` で 9 件とも ignored のまま。`CELERIS_USERNS_TESTS=1` だけでは
   `inner_peer_uid_probe` の 1 件だけが ignored。
+
+## 5. 付記（2026-11-21、WorkUnit `peer-uid-probe`。人の決定 first-gate-unmet の答え）
+- 原因: operator が release gate の host（`NoNewPrivs: 0`、`sudo -n -u celeris-browser true` が 0）で試験 9 を
+  `CELERIS_USERNS_TESTS=1 CELERIS_LAUNCHER_TESTS=require TMPDIR=/tmp` で走らせ、exit 100 になった（`PEER-UID control` の 1 行の後に
+  `no PEER-UID-PROBE line` で panic）。`probe_as` は子を `--nocapture --test-threads=1` で起こす。libtest は 1 thread のとき
+  `test inner_peer_uid_probe ... ` を試験の開始時に改行せずに出し、子の `println`（`inner_peer_uid_probe` の末尾）がその後ろに続く。
+  親の `stdout.lines().find_map(Probe::parse)` と `Probe::parse` の `strip_prefix(MARK)` は、行の頭に `MARK` が無いこの行を読めなかった。
+  子の本体は走っており、uid 995 の `connect()` は `EACCES` を返していた（DAC 層の拒否）。broker 層の判定には進んでいなかった。
+- 直し方: 親が子の stdout を読む関数を `read_probe` の 1 つにした。各行の中の `MARK` の位置から行末までを `Probe::parse` に渡す。
+  子を起こす引数と読み取りは `run_probe_child` にまとめ、`probe_as` は `sudo -n -u <user> /usr/bin/env` を前に付けてそれを呼ぶだけにした。
+  `MARK` の後の欄の規則（未知の欄は `None`）、試験 9 の本体の判定（dac・broker・journal の件数）、`missing()` と
+  `CELERIS_LAUNCHER_TESTS=require` の扱いは変えていない。
+- 試験: `probe_found_after_libtest_prefix`（host の子の stdout と同じ形の文字列を読む）と `probe_read_from_real_child_run`
+  （同じ UID の子を `run_probe_child` で本当に起こして読む。sudo は要らない）。どちらも cfg によらず走る。読み取りを旧い形に戻すと 2 件とも落ちる
+  （出力は進捗 `agent-docs/progress/2026-11-21-strategy-v1-1/peer-uid-probe.md`）。
+- host での確認: worker の sandbox は `NoNewPrivs: 1` で sudo が使えないので、試験 9 の本体（`PEER-UID` の dac・broker・result の行）は
+  この unit では確かめていない。第一ゲートの決定（WorkUnit `gate`）で operator が release gate の host で同じ command を走らせ、
+  `PEER-UID control`・`dac`・`broker`・`result` の 4 行と PASS を確かめる。
+- 3 節の「残る穴」（release gate が `CELERIS_LAUNCHER_TESTS=require` を立てず、sudo が使えない host では試験 9 が return して PASS になる）は
+  この unit では直さない（人の決定で別 task。U2）。

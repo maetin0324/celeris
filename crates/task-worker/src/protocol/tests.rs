@@ -138,7 +138,7 @@ fn run_request_serializes_with_type_tag() {
     };
     let v = serde_json::to_value(&req).unwrap();
     assert_eq!(v["type"], "run");
-    assert_eq!(v["protocol"], 4);
+    assert_eq!(v["protocol"], 5);
     assert_eq!(v["task"]["kind"], "execute");
     let back: RunRequest = serde_json::from_value(v).unwrap();
     assert_eq!(back, req);

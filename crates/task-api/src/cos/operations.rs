@@ -386,6 +386,58 @@ pub struct OperationBody {
     /// `instructed_by` (the person decided).
     #[serde(default)]
     basis: Option<super::basis::DelegatedBasis>,
+    /// ADR 2026-11-21-strategy-evidence-contract D4: the strategy document (`celeris.strategy/1`
+    /// artifact) this `task.create` executes. When present, the document must be a human-approved,
+    /// current version of the new task's project with resolvable sources, or the request is 422
+    /// with the rule's code and nothing is created; it is checked with or without `instructed_by`.
+    /// Other operations refuse it (422 `strategy_not_applicable`). Absent, nothing changes.
+    #[serde(default)]
+    strategy: Option<super::strategy_gate::StrategyRef>,
+}
+
+impl OperationBody {
+    /// The audit payload: the request and, when present, the strategy it executes (ADR
+    /// 2026-11-21-strategy-evidence-contract D4).
+    fn audit_payload(&self, method: &str) -> Value {
+        let mut payload = serde_json::json!({
+            "method": method,
+            "path": self.request.path,
+            "body": self.request.body,
+        });
+        if let Some(value) = self
+            .strategy
+            .as_ref()
+            .and_then(|s| serde_json::to_value(s).ok())
+        {
+            payload["strategy"] = value;
+        }
+        payload
+    }
+
+    fn hash(&self, method: &str) -> String {
+        operation_hash(
+            method,
+            &self.request.path,
+            &self.request.body,
+            self.strategy.as_ref(),
+        )
+    }
+
+    /// ADR 2026-11-21-strategy-evidence-contract D4: a `task.create` that names a strategy runs only
+    /// a human-approved, current, same-project strategy with its sources; a refusal is recorded.
+    fn check_strategy(
+        &self,
+        store: &SqliteStore,
+        env: &DispatchEnv,
+        audit: &OperationAudit,
+        matched: Option<&Matched>,
+    ) -> Result<(), ApiProblem> {
+        let (Some(strategy), Some(matched)) = (self.strategy.as_ref(), matched) else {
+            return Ok(());
+        };
+        super::strategy_gate::check(store, env, matched, &self.request.body, strategy)
+            .map_err(|problem| audit.reject(store, "api", &self.request.path, problem))
+    }
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -514,12 +566,34 @@ fn canonical_json(value: &Value) -> String {
 
 /// `request_hash` = sha256 of `METHOD \n path \n canonical body`.
 pub(crate) fn request_hash(method: &str, path: &str, body: &Value) -> String {
+    format!("{:x}", request_hasher(method, path, body).finalize())
+}
+
+fn request_hasher(method: &str, path: &str, body: &Value) -> Sha256 {
     let mut hasher = Sha256::new();
     hasher.update(method.as_bytes());
     hasher.update(b"\n");
     hasher.update(path.as_bytes());
     hasher.update(b"\n");
     hasher.update(canonical_json(body).as_bytes());
+    hasher
+}
+
+/// ADR 2026-11-21-strategy-evidence-contract D1.4: the idempotency key covers the whole request, so
+/// a `strategy` is hashed after the body (`\n strategy \n canonical strategy`). Without one the hash
+/// is [`request_hash`] unchanged.
+fn operation_hash(
+    method: &str,
+    path: &str,
+    body: &Value,
+    strategy: Option<&super::strategy_gate::StrategyRef>,
+) -> String {
+    let Some(strategy) = strategy.and_then(|s| serde_json::to_value(s).ok()) else {
+        return request_hash(method, path, body);
+    };
+    let mut hasher = request_hasher(method, path, body);
+    hasher.update(b"\nstrategy\n");
+    hasher.update(canonical_json(&strategy).as_bytes());
     format!("{:x}", hasher.finalize())
 }
 
@@ -656,13 +730,9 @@ async fn create_operation(
             policy_version: req.policy_version.clone(),
         },
         idempotency_key: req.idempotency_key.clone(),
-        request_hash: request_hash(&method, &path, &req.request.body),
+        request_hash: req.hash(&method),
         expected_revision: req.expected_revision.clone(),
-        payload: serde_json::json!({
-            "method": method,
-            "path": path,
-            "body": req.request.body,
-        }),
+        payload: req.audit_payload(&method),
         item: None,
     };
     if match_operation(&method, &path).is_err() {
@@ -790,6 +860,8 @@ async fn create_operation(
             {
                 return Err(audit.reject(store, "api", &path, problem));
             }
+            // ADR 2026-11-21-strategy-evidence-contract D4 (relayed or not).
+            req.check_strategy(store, &env, &audit, matched.as_ref())?;
             // ADR 2026-11-04-project-controller A7: 本番・外部公開・不可逆・API の認可・外部の効果は、
             // autonomy の中では人の発言の引用か authority ledger の有効な許可を要する。
             let pass = match super::goal_guard::authority_gate(

@@ -4259,6 +4259,7 @@ export type OperationBody = {
   "policy_version": string;
   "reason": string;
   "request": OperationRequest;
+  "strategy"?: StrategyRef | null;
 };
 
 export type OperationIntent = {
@@ -6053,6 +6054,12 @@ export type StandingRuleList = {
 };
 
 export type Status = "draft" | "ready" | "running" | "blocked" | "reviewing" | "done" | "failed" | "cancelled";
+
+export type StrategyRef = {
+  "name": string;
+  "sha256": string;
+  "task_id": string;
+};
 
 export type StreamHeartbeat = {
   "now": string;

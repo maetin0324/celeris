@@ -21310,6 +21310,18 @@
         },
         "request": {
           "$ref": "#/$defs/OperationRequest"
+        },
+        "strategy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StrategyRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "ADR 2026-11-21-strategy-evidence-contract D4: the strategy document (`celeris.strategy/1`\nartifact) this `task.create` executes. When present, the document must be a human-approved,\ncurrent version of the new task's project with resolvable sources, or the request is 422\nwith the rule's code and nothing is created; it is checked with or without `instructed_by`.\nOther operations refuse it (422 `strategy_not_applicable`). Absent, nothing changes."
         }
       },
       "required": [
@@ -30268,6 +30280,27 @@
         "cancelled"
       ],
       "type": "string"
+    },
+    "StrategyRef": {
+      "additionalProperties": false,
+      "description": "`/cos/operations` の欄 `strategy`: 実行する戦略の文書（作った task・成果物の name・記録の sha256）。",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "name",
+        "sha256"
+      ],
+      "type": "object"
     },
     "StreamHeartbeat": {
       "description": "SSE `event: heartbeat`。",

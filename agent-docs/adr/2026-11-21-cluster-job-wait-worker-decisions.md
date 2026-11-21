@@ -47,20 +47,25 @@ wait の行だけが残る（正本が 2 つ）。job が終わっても `cluste
 ## 決定
 
 - D1（読む場所と記録）: クラスタ job の wait で終わった木の節点の run（WU の遷移 `cluster_jobs`、atomic の trigger
-  `ClusterJobWait`。どちらも wait の行を開く run）の `result.json` の `decisions` は、wait を開くときに
-  `Dispatcher::cluster_wait_worker_decisions`（`cluster_job_wait.rs`）が既存の `Dispatcher::worker_decisions` で読む。
-  受け付けた決定・拒否のまとめ（fail-closed の ADR D1・11-18 の ADR D1）・他の unit の `blocked(decision)` は、既存の経路と
-  同じく `WorkerFinished` の後の書き込み（`work_units_apply`）で記録する。決定の行と受信箱の項目はこの書き込みでできる。
+  `ClusterJobWait`。どちらも wait の行を開く run）の `result.json` の `decisions` も、既存の `Dispatcher::worker_decisions`
+  （`tree_units.rs`）で読む。worker 完了の経路は `WorkUnitSettlement::records_worker_decisions`（settlement で読んで止める run か、
+  `parks_on_cluster_jobs`）と `run_settlement::task_records_decisions`（`task_reads_worker_decisions` か trigger
+  `ClusterJobWait`）で読むかを決める。`worker_decisions` は `result.json` の場所を `work_unit_checkpoint_site` で 1 か所で
+  引く（呼び出し側が場所を渡す引数を消した）。受け付けた決定・拒否のまとめ（fail-closed の ADR D1・11-18 の ADR D1）・
+  他の unit の `blocked(decision)` は、既存の経路と同じく `WorkerFinished` の後の書き込み（`work_units_apply`）で記録する。
+  決定の行と受信箱の項目はこの書き込みでできる。
   - settlement の読む規則（`reads_worker_decisions`・`task_reads_worker_decisions`）は変えない。どちらも「settlement で読み、
     その場で leaf を止める run か」を表し、クラスタ job の wait では false のまま（止めは wait の再開が持つ）。
   - run の遷移・trigger・wait の行は変えない。WU は `blocked(cluster_jobs)`、atomic の task は `ClusterJobWait` で
     `blocked` のまま。`needed_before: self` の要求なら outcome の文の末尾に「人の決定を待ちます（決定の要求 N 件。ADR-0079 D7）」を
     足す（atomic は既存の `hold_task_for_worker_decisions` が `ClusterJobWait` を残して文を足す）。
 - D2（job の終了が先: WU）: `finish_cluster_job_wait`（satisfied と v2 の timed_out）と v1 の timed_out の unit の行は
-  `cluster_wait_unit_row` が作る。この関数は、`task_ops::decision::holds_unit` が「この unit を止める決定がある」
+  `cluster_wait_unit_row` が作る。この関数は行き先を `task_ops::decision::job_end_target` に聞き、`job_end_target` は
+  `task_ops::decision::holds_unit` が「この unit を止める決定がある」
   （未回答か、`replan` で答えて replan が済んでいない決定が `needed_before` で unit か `stage:<その段階>` を名指しする、または
   `needs_decisions` に未回答のものがある。`release_rows` と同じ規則）と答えたら、行を `blocked(decision)`
-  （遷移の理由 `decision`。replay は `decision` を `Decision` に写す）にする。wait の行は今までどおり閉じる
+  （遷移の理由 `decision`。replay は `decision` を `Decision` に写す）を返す。`holds_unit` と `release_rows` は同じ判定
+  （`held_by_decisions`）を使う。wait の行は今までどおり閉じる
   （`ClusterJobWaitFinished`。poll は止まる）。task の `ClusterJobResume` も今までどおり（v1 の task は `ready` に戻り、
   unit が `blocked(decision)` なので走る unit が無い）。
 - D3（答え: WU）: `task_ops::decision::release_rows` は、解放する unit の最後の run（`runs` 索引の
@@ -94,8 +99,9 @@ wait の行だけが残る（正本が 2 つ）。job が終わっても `cluste
 
 ## 試験
 
-`crates/task-dispatch/src/dispatcher/tests/cluster_job_wait.rs` に足す（名前は `cluster_wait_decisions_` で始める）。時計は
-`FakeClock`、job の状態は既存の試験と同じ通知（`apply_cluster_job_notice`）で決定的に渡す。sleep と負荷は使わない。
+`crates/task-dispatch/src/dispatcher/tests/cluster_job_wait.rs` に足す（名前は `cluster_wait_decisions_` で始める）。job の
+状態は既存の試験と同じ通知（`apply_cluster_job_notice`）で決定的に渡す（poll の hook は挿さない）。答えの前に走らないことは、
+決めた回数の tick のどれも run を起こさない（`TickReport.dispatched == 0`）ことで確かめる。負荷は使わない。
 
 - `cluster_wait_decisions_job_end_first_holds_the_leaf_until_the_answer`: 木の節点の v2 の WU の leaf が job の wait で終わり、
   `result.json` に `needed_before: [leaf]` の決定を書く。決定の行（open・origin worker）と受信箱の項目ができ、unit は
@@ -103,11 +109,12 @@ wait の行だけが残る（正本が 2 つ）。job が終わっても `cluste
   答えると unit は `needs_continuation` になり、次の run の前置きに job の状態が入る（I1〜I4）。
 - `cluster_wait_decisions_answer_first_resumes_on_the_job_end`: 同じ run で答えが先。答えの後も unit は `blocked(cluster_jobs)`。
   job の終了で `needs_continuation`（I3・I4）。
-- `cluster_wait_decisions_atomic_node_waits_for_both`: 木の子の atomic の節点が job の wait で終わり、`needed_before: [self]` の
+- `cluster_wait_decisions_atomic_node_job_end_first`・`cluster_wait_decisions_atomic_node_answer_first`: 木の子の atomic の節点が job の wait で終わり、`needed_before: [self]` の
   決定を書く。決定の行と受信箱の項目ができ、task は `blocked`。job が先なら task は `ready` だが run は起きず、答えの後に
   走る（I1・I2・I3）。
-- `task_ops::decision` の単体試験 `release_resumes_a_waited_unit_as_a_continuation`: 最後の run が wait で終わった unit は
-  `needs_continuation`、そうでない unit は今のまま `pending`/`ready` に戻す（D3）。
+- `task_ops::decision` の D3（最後の run が wait で終わった unit は `needs_continuation`、それ以外は今のまま）は、上の
+  job が先の試験（答えの直後に `needs_continuation`）と、既存の `tree_decisions.rs` の試験（答えの後の run が最初から走る）で
+  確かめる。`task_ops::decision` には単体試験の module が無いので、新しく作らない。
 
 既存の試験で検出できない理由: `tests/cluster_job_wait.rs` の試験は `result.json` に `decisions` を書かず、`tree_decisions.rs` の
 adapter は wait で終わらない。fail-closed の ADR の 2 つの表の試験は settlement の読む規則を見るだけで、wait の経路の記録と

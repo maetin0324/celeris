@@ -16,8 +16,10 @@ warning: `deno_core` (lib) generated 1 warning
    Compiling celeris-campaign v0.1.0 (/local/celeris/data/workspaces/01M7XSGW4FH258N1K3AMW76Y6F/wu/revert/repos/agent-platform/crates/campaign)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 40s
 ────────────
- Nextest run ID 2a80fcca-dece-4c44-82b3-eba4027fc5fb with nextest profile: default
+ Nextest run ID f670788d-afe4-46e2-bd61-ed4220c33d93 with nextest profile: default
     Starting 2 tests across 5 binaries (3292 tests skipped)
+        PASS [   0.008s] (1/2) task-core decision::tests::rejected_worker_decisions_become_one_self_decision
+        PASS [   2.154s] (2/2) task-dispatch dispatcher::tests::tree_decisions::rejected_worker_decision_reaches_the_inbox_and_holds_the_leaf
 ────────────
-     Summary [   2.158s] 2 tests run: 2 passed, 3292 skipped
+     Summary [   2.171s] 2 tests run: 2 passed, 3292 skipped
 exit=0

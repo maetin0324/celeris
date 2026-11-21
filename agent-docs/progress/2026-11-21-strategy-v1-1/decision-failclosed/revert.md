@@ -18,38 +18,42 @@ updated: 2026-11-21
 1. `crates/task-core/src/decision.rs` の `prepare_worker_decisions`（605 行から。`if !lost.is_empty() {` で始まる 714〜722 行）: 受け付けなかった要求 `lost` から `rejected_decision` で決定を組み立てて `out.escalated` に入れる block を消した。`escalated` は常に `None` になる。
 2. `crates/task-dispatch/src/dispatcher/tree_units.rs` の `Dispatcher::worker_decisions`（362 行から。437 行）: 記録する決定の列 `recorded` を `batch.recorded()`（受け付けた決定とまとめの決定）から `batch.accepted.iter()`（修正前と同じく受け付けた決定だけ）に戻し、その上の D1 の説明の 2 行を消した。
 
-戻した状態のコンパイルの警告（`revert/reverted.log` の 56・72 行）:
+戻した状態のコンパイルの警告（`revert/reverted.log` の 11・27 行）:
 - `fields summary, reason, and cost are never read`（`RejectedRequest`）
 - `function rejected_decision is never used`
 
-どちらも warning で、コンパイル error ではない（`Finished test profile` が 86 行にある）。
+どちらも warning で、コンパイル error ではない（`Finished test profile` が 41 行にある。`error[E` は 0 件）。
 
 ## 落ちた試験と assertion（`revert/reverted.log`、最終行 `exit=100`）
-`Summary [   0.577s] 2 tests run: 0 passed, 2 failed, 3292 skipped`
+`Summary [   0.577s] 2 tests run: 0 passed, 2 failed, 3292 skipped`（84 行）。`FAIL` の行は 45・64 行（最後の一覧で 85・104 行にもう一度出る）。
 
 | 試験 | 落ちた場所 | assertion の要点 |
 |---|---|---|
-| `task-dispatch dispatcher::tests::tree_decisions::rejected_worker_decision_reaches_the_inbox_and_holds_the_leaf` | `crates/task-dispatch/src/dispatcher/tests/tree_decisions.rs:815:5` | `assert!(blocked_by_decision(&units, "a"), "{units:?}")`。leaf `a` が `blocked(decision)` でなく `status: Done, blocked_reason: None` になった。panic の文に出た unit の行では `b`・`integrate-s1` も `Done`。決定は記録されず、要求を出した leaf も統合も止まらなかった |
-| `task-core decision::tests::rejected_worker_decisions_become_one_self_decision` | `crates/task-core/src/decision/tests.rs:369:10` | `batch.escalated.as_ref().expect("the rejected ones reach a human")`。`escalated` が `None` で panic。直前の `assert_eq!(batch.rejected.len(), 5)` は通った（拒否の理由は進行の 1 行には残るが、人に届く決定は作られない） |
+| `task-dispatch dispatcher::tests::tree_decisions::rejected_worker_decision_reaches_the_inbox_and_holds_the_leaf` | `crates/task-dispatch/src/dispatcher/tests/tree_decisions.rs:815:5`（log の 79 行） | `assert!(blocked_by_decision(&units, "a"), "{units:?}")`。leaf `a` が `blocked(decision)` でなく `status: Done, blocked_reason: None` になった。panic の文に出た unit の行では `b`・`integrate-s1` も `Done`。決定は記録されず、要求を出した leaf も統合も止まらなかった |
+| `task-core decision::tests::rejected_worker_decisions_become_one_self_decision` | `crates/task-core/src/decision/tests.rs:369:10`（log の 60 行） | `batch.escalated.as_ref().expect("the rejected ones reach a human")`。`escalated` が `None` で panic。直前の `assert_eq!(batch.rejected.len(), 5)` は通った（拒否の理由は進行の 1 行には残るが、人に届く決定は作られない） |
 
 dispatch の試験は 815 行（run の後の最初の assertion）で落ちたので、その後の decisions の行・受信箱・答えた後の走り直しの assertion には届いていない。
 
 ## 戻した後（`revert/restored.log`、最終行 `exit=0`）
 - `git checkout -- crates/` の後、`git diff -- crates/ | wc -l` は 0。
-- 同じ command の結果は `Summary [   2.158s] 2 tests run: 2 passed, 3292 skipped`、`exit=0`。
-- repo の `.config/nextest.toml` は `status-level = "fail"` で、通った試験の名前を出さない。そこで同じ command に `--status-level pass` だけを足した run を `revert/restored-pass.log` に取った。次の 2 行が出て、`exit=0`:
-  - `PASS [   0.009s] (1/2) task-core decision::tests::rejected_worker_decisions_become_one_self_decision`
-  - `PASS [   2.172s] (2/2) task-dispatch dispatcher::tests::tree_decisions::rejected_worker_decision_reaches_the_inbox_and_holds_the_leaf`
+- 同じ command の結果は `Summary [   2.171s] 2 tests run: 2 passed, 3292 skipped`（24 行）、`exit=0`。`PASS` の行（21・22 行）:
+  - `PASS [   0.008s] (1/2) task-core decision::tests::rejected_worker_decisions_become_one_self_decision`
+  - `PASS [   2.154s] (2/2) task-dispatch dispatcher::tests::tree_decisions::rejected_worker_decision_reaches_the_inbox_and_holds_the_leaf`
+
+## 出力の設定（`NEXTEST_STATUS_LEVEL=pass`）
+- repo の `.config/nextest.toml` は `status-level = "fail"` で、通った試験の行を出さない。前回の run はそのまま取ったので restored.log に試験の名前が無く、計画の check（restored.log に試験名があること）で落ちた。
+- そこで 2 つの log とも、同じ command の前に環境変数 `NEXTEST_STATUS_LEVEL=pass`（nextest の `--status-level` と同じ。出力の量だけを変え、選ぶ試験と判定は変えない）を付けて取り直した。reverted.log と restored.log の条件は同じ。
+- 前回の別の log（`revert/restored-pass.log`）は restored.log と中身が重なるので消した。
 
 ## 証拠のコマンド（この WorkUnit の worktree で実行。基準は `$CELERIS_WU_BASE`）
-- 戻しの保存: `git diff -- crates/ > agent-docs/progress/2026-11-21-strategy-v1-1/decision-failclosed/revert/revert.patch`（2 file、1 行追加・12 行削除）
-- 戻した状態: `cargo nextest run -p task-core -p task-dispatch --no-tests=fail -E 'test(/rejected_worker_decision/)' > …/revert/reverted.log 2>&1; echo "exit=$?" >> …/revert/reverted.log` → `exit=100`（2 failed）
+- 戻しの保存: `git diff -- crates/ > agent-docs/progress/2026-11-21-strategy-v1-1/decision-failclosed/revert/revert.patch`（2 file、1 行追加・12 行削除）。取り直しでは `git apply revert/revert.patch` で同じ戻しを当て、`git diff -- crates/` が revert.patch と一致することを確かめた
+- 戻した状態: `NEXTEST_STATUS_LEVEL=pass cargo nextest run -p task-core -p task-dispatch --no-tests=fail -E 'test(/rejected_worker_decision/)' > …/revert/reverted.log 2>&1; echo "exit=$?" >> …/revert/reverted.log` → `exit=100`（2 failed）
 - 作業ツリーを戻す: `git checkout -- crates/`
-- 戻した後: 同じ command を `…/revert/restored.log` に取った → `exit=0`（2 passed）
-- 試験の名前の確認: 同じ command に `--status-level pass` を足して `…/revert/restored-pass.log` に取った → `exit=0`（上の 2 試験が PASS）
-- 作業ツリー: `git status --short --untracked-files=all -- crates/` → 0 行、`git diff -- crates/` → 0 行
+- 戻した後: 同じ command を `…/revert/restored.log` に取った → `exit=0`（2 passed、2 試験とも `PASS` の行がある）
+- 計画の check（reverted.log・restored.log・revert.patch の grep と test）を同じ cwd で実行 → exit 0
+- 作業ツリー: `git status --short --untracked-files=all -- crates/` → 0 行、`git diff HEAD -- crates/` → 0 行、`git diff $CELERIS_WU_BASE -- crates/` → 0 行
 - 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` → `agent-docs/progress/2026-11-21-strategy-v1-1/decision-failclosed/` の下の file だけ
-- 進捗の形: `sh scripts/dev/progress-index.sh --check` → `progress-index --check: ok`
+- 進捗の形: `sh scripts/dev/progress-index.sh --check` → `progress-index --check: ok`（exit 0）
 
 `bash scripts/dev/test-affected.sh`・clippy・fmt は、source を変えていないこの unit では実行していない。提出時の HEAD での実行は close の unit が行う。
 

@@ -1,12 +1,12 @@
 ---
 title: release gate で userns の試験の本体の中の skip（試験 7 の ssh 無し・試験 9 の missing()）を PASS と数えない
-tasks: [01M7YWAC1BVNG09WKDQJ6CA86Z]
+tasks: [01M7YWAC1BVNG09WKDQJ6CA86Z, 01M7ZDW4QK6N27N7MFJPCZ13JN]
 status: done
 updated: 2026-11-21
 ---
 # release gate で userns の試験の本体の中の skip（試験 7 の ssh 無し・試験 9 の missing()）を PASS と数えない
 
-完了日: 2026-11-21（WorkUnit record まで。統合は celeris）
+完了日: 2026-11-21（WorkUnit record まで。統合は celeris）。子 task 01M7ZDW4QK6N27N7MFJPCZ13JN（移行の 1 回目の release、下の「移行の 1 回目の release」）も 2026-11-21。
 
 ## 結論（WorkUnit adr）
 
@@ -232,25 +232,154 @@ cargo は `$CARGO_TARGET_DIR`、修正を外して試験を走らせ、直した
 ### この host の gate が落ちない根拠（ADR I5）
 - daemon の gate: NoNewPrivs 1・ssh あり（上の 2・4。ssh の gate 文脈は未確認）→ release.sh が試験 9 だけを外す（`host_tests.sudo.off_by = "no_new_privs"`）。
   試験 7 は本体が走り、ssh が在れば今と同じく PASS。`release_host_tests_gate.sh` の NoNewPrivs 1 の節がこの分岐を決定的に示す。
-- この変更を含む release 自身の gate は current の旧い release.sh で走り、旧い release.sh は filter を渡さない。その gate では新しい試験 9 が
-  daemon の文脈（NoNewPrivs 1）で panic しうる。**この release の gate が落ちたら、原因はこの点**（旧い台本は外さない）。落ちるなら
-  `SD_GATE_SKIP_HOST_TESTS` は旧い台本は読まないので、operator が login shell で release.sh を起こす（NoNewPrivs 0 なら sudo が通る）。
-  未確認: 実際に落ちるか（試験 9 は env 有りの build でだけ走る。gate の build は `CELERIS_USERNS_TESTS=1` なので走る）。
+- この変更を含む release 自身の gate は current の旧い release.sh で走り、旧い release.sh は filter を渡さない。impl の段の形のままだと、その gate で
+  試験 9 が daemon の文脈（NoNewPrivs 1）で panic して落ちる。子 task 01M7ZDW4QK6N27N7MFJPCZ13JN が ADR G7 で直した（下の「移行の 1 回目の release」）。
+
+## 移行の 1 回目の release（子 task 01M7ZDW4QK6N27N7MFJPCZ13JN）
+
+人の決定 `first-release`（CoS の回答 `opt-in-env`。推奨どおり）に従い案 a を入れた。ADR に G7・I6・I7 を足した。
+
+### 実装前 brief
+1. 根本原因: delivery の prepare.sh（`scripts/selfdeploy/prepare.sh:19`）は current の release に梱包された release.sh を起こす。impl の段は
+   試験 7・9 の厳格化を試験の中だけで常に有効にし、外す手段（G4・G5）を新しい release.sh にだけ置いた。旧い release.sh で走る最初の gate には
+   外す手段が無く、試験 9 が NoNewPrivs 1 で panic する。症状は最初の release の gate の cargo-test の段に出る。
+2. 責務 owner: FAIL にするかの判定は試験 7・9 の本体（`db_guard_tests.rs` と `injection_peer_uid.rs` の `second_stage_strict()`）。gate がそれを
+   有効にするのは `scripts/selfdeploy/release.sh`。
+3. 既存の再利用先: impl の段の子 process の試験（偽の sudo・空の PATH）、`release_host_tests_gate.sh` と共有の fixture の偽の cargo、
+   gate.json の `gate_env`。
+4. 選択肢: 案 a（新しい release.sh だけが立てる env で厳格化を有効にする）と案 b（コードを変えず 1 回目だけ operator が手で gate を通す）。
+   人の決定で a。env の名前は `CELERIS_LAUNCHER_TESTS` と分けた（G1 を変えない。試験 9 の外の 2 件を厳しくしない）。
+5. 新しい状態・分岐: 実行時に読む env `CELERIS_SECOND_STAGE_TESTS` と、env が無いときの旧い挙動の分岐。一時の例外で、撤去の条件と責任者は ADR G7。
+   fixture の偽の cargo に `CARGO_ENV_LOG`（試験だけが使う）。
+6. 撤去対象: 無し（impl の段の「常に FAIL」を env 付きにした）。旧い挙動の分岐は G7 の撤去の follow-up で消す（下の提案 4）。
+7. 不変条件: env 無し・NoNewPrivs 1 で試験 7・9 は FAIL しない／env 有りで欠けは FAIL／新しい release.sh は env を必ず立て、NoNewPrivs 1 なら
+   試験 9 を filter で外して gate.json に残す。試験は下。
+
+### 変更
+- `crates/celeris-credentiald/tests/injection_peer_uid.rs`: `second_stage_strict()`（`CELERIS_SECOND_STAGE_TESTS=require` か
+  `CELERIS_LAUNCHER_TESTS=require`）。`missing()` は strict なら panic、そうでなければ `SKIP: (not passed) …` を出し、呼び出し側が return する
+  （前の変更より前の挙動）。子 process の試験は env を明示して起こす（`GateEnv`）。新しい試験
+  `test9_keeps_old_behaviour_without_the_gate_env_under_no_new_privs`: 子に `PR_SET_NO_NEW_PRIVS` を立て、自分の NoNewPrivs が 1 なら本物の
+  sudo と同じ文言で exit 1 する偽の `sudo` で試験 9 を起こす。env 無しなら PASS・`SKIP: (not passed)`、`CELERIS_SECOND_STAGE_TESTS=require` なら FAIL。
+- `crates/task-worker/src/db_guard_tests.rs`: `second_stage_strict()`（`CELERIS_SECOND_STAGE_TESTS=require` だけ。I4 の 3 つの env は読まない）。
+  試験 7 は strict なら panic、そうでなければ `skip: <理由>` を出して return。新しい試験 `ssh_test_keeps_old_behaviour_without_the_gate_env`。
+- `scripts/selfdeploy/release.sh`: `export CELERIS_SECOND_STAGE_TESTS=require`（呼び出し元の値を使わない）、`gate_env` に 5 つ目の欄。
+- `scripts/selfdeploy/tests/release_host_tests_gate.sh`・`fixtures/release-gate-tree.sh`: 偽の cargo が `CARGO_ENV_LOG` に env の値を残し、
+  NoNewPrivs 0・1 と呼び出し元が `0` を立てた場合のそれぞれで、nextest run を起こした cargo が `require` を見たかを確かめる。
+- 文書: ADR G7・I6・I7・7 節、`docs/ops/selfdeploy.md`。
+
+### 決定的な試験の結果（この worker の sandbox。NoNewPrivs 1）
+```
+$ cargo nextest run -p celeris-credentiald --test injection_peer_uid
+     Summary [   0.023s] 7 tests run: 7 passed, 2 skipped
+$ cargo nextest run -p task-worker --lib -E 'test(ssh_)'
+     Summary [   2.030s] 10 tests run: 10 passed, 1225 skipped
+$ CELERIS_SECOND_STAGE_TESTS=require cargo nextest run -p task-worker --lib -E 'test(ssh_)'     # 新しい gate の親の env
+     Summary [   2.030s] 10 tests run: 10 passed, 1225 skipped
+$ bash scripts/selfdeploy/tests/release_host_tests_gate.sh
+release_host_tests_gate: ok
+```
+gate と同じ cfg（`CELERIS_USERNS_TESTS=1`）の build で、試験 9 そのものを gate の 3 つの形で流した（`T9='test(=real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch)'`）:
+```
+$ grep NoNewPrivs /proc/self/status
+NoNewPrivs:	1
+# 旧い台本相当（strict の env 無し、NoNewPrivs 1）
+$ env -u CELERIS_SECOND_STAGE_TESTS -u CELERIS_LAUNCHER_TESTS CELERIS_USERNS_TESTS=1 cargo nextest run -p celeris-credentiald --test injection_peer_uid --no-capture --status-level all -E "$T9"
+        PASS [   0.008s] (1/1) celeris-credentiald::injection_peer_uid real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch
+SKIP: (not passed) cannot run a process as celeris-browser: `sudo -n -u celeris-browser true` exit=Some(1): sudo: /etc/sudo.conf is owned by uid 65534, should be 0
+     Summary [   0.008s] 1 test run: 1 passed, 8 skipped        → rc=0
+# 新しい台本相当で filter が無いとき（+ CELERIS_SECOND_STAGE_TESTS=require）
+        FAIL [   0.011s] (1/1) … real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch
+peer-uid real-process test environment required: cannot run a process as celeris-browser: `sudo -n -u celeris-browser true` exit=Some(1): …
+     Summary [   0.012s] 1 test run: 0 passed, 1 failed, 8 skipped   → rc=100
+# 新しい台本相当（NoNewPrivs 1 の filter `-E "not (package(celeris-credentiald) & $T9)"`、全件）
+     Summary [   0.022s] 7 tests run: 7 passed, 2 skipped        → rc=0
+```
+- 試験 7 の本体を cfg 有りで流す確認は、この sandbox では userns が使えない（`assert_userns_available()` が落ちる）ので行っていない。
+  子 process の試験（ssh の無い PATH）で、env 無しは PASS・env 有りは FAIL を確かめた。
+
+### 失敗注入（修正を外すと試験が落ちる。各注入の後に元へ戻し、上の PASS を再確認した）
+| 外した修正 | 落ちた試験 | 結果 |
+|---|---|---|
+| 試験 9 の `second_stage_strict()` を常に true（env に依らず厳格） | `test9_keeps_old_behaviour_without_the_gate_env_under_no_new_privs`（`old release.sh context must not FAIL`） | 7 件中 1 件 FAIL |
+| 試験 7 の `second_stage_strict()` を常に true | `db_guard::tests::ssh_test_keeps_old_behaviour_without_the_gate_env` | 10 件中 1 件 FAIL |
+| 試験 9 の `second_stage_strict()` を常に false（旧い挙動だけ） | `test9_fails_instead_of_skipping_when_sudo_is_unusable`・`…_when_no_probe_line_returns`・`test9_keeps_old_behaviour_…`（strict の子） | 7 件中 3 件 FAIL |
+| 試験 7 の `second_stage_strict()` を常に false（`false && …`） | `db_guard::tests::ssh_test_fails_instead_of_skipping_when_ssh_is_missing` | 10 件中 1 件 FAIL |
+| release.sh の `export CELERIS_SECOND_STAGE_TESTS=require` を消す | `release_host_tests_gate.sh`: `FAIL: gate_env wrong: {… 'CELERIS_SECOND_STAGE_TESTS': None …}` | rc=1 |
+| release.sh を `${CELERIS_SECOND_STAGE_TESTS:-require}`（呼び出し元の値を使う）にする | 同: `FAIL: caller's CELERIS_SECOND_STAGE_TESTS overrode the gate` | rc=1 |
+- 試験 7 の「常に false」の最初の注入は `false || …` と書き、意味が変わらず 10 件とも PASS した（注入の誤り）。`false && …` で取り直した結果が上の行。
+
+### gate の文脈の確認（この worker の sandbox で実行。読み取りだけ）
+```
+$ setpriv --version
+setpriv from util-linux 2.40.2
+$ grep -E 'NoNewPrivs|Seccomp:' /proc/self/status
+NoNewPrivs:	1
+Seccomp:	2
+$ setpriv --no-new-privs sudo -n -u celeris-browser true; echo "rc=$?"
+sudo: /etc/sudo.conf is owned by uid 65534, should be 0
+sudo: The "no new privileges" flag is set, which prevents sudo from running as root.
+sudo: If sudo is running in a container, you may need to adjust the container configuration to disable the flag.
+rc=1
+$ setpriv --no-new-privs grep NoNewPrivs /proc/self/status
+NoNewPrivs:	1
+$ grep -n 'NoNewPrivileges\|^Environment\|^ExecStart' ~/.config/systemd/user/celeris@.service
+13:Environment=CELERIS_STATE_DIR=/local/celeris/state
+14:EnvironmentFile=-%h/.config/celeris/paths.env
+19:Environment=PATH=%h/.local/bin:%h/.cargo/bin:/usr/lib/node_modules/corepack/shims:/usr/local/bin:/usr/bin:/bin
+20:ExecStart=/local/celeris/state/releases/%i/bin/celeris --config %h/.config/celeris/config.toml --release %i
+30:NoNewPrivileges=true
+$ ls ~/.config/systemd/user/celeris@.service.d/      → 50-credentiald.conf（中身は [Unit] Wants=celeris-credentiald@%i.service だけ。NoNewPrivileges の行は無い）
+$ for p in $(pgrep -f 'bin/celeris --config'); do …; done   （daemon の行）
+/local/celeris/state/releases/56f1f8d3ee4c/bin/celeris --config /home/rmaeda/.config/celeris/config.toml --release 56f1f8d3ee4c
+NoNewPrivs:	1
+0::/user.slice/user-1001.slice/user@1001.service/app.slice/app-celeris.slice/celeris@56f1f8d3ee4c.service
+$ systemctl --user show 'celeris@*.service' -p Id -p NoNewPrivileges
+Failed to connect to user scope bus via local transport: No such file or directory
+$ readlink -f /local/celeris/state/current
+/local/celeris/state/releases/56f1f8d3ee4c
+$ grep -c 'SECOND_STAGE\|SD_GATE_SKIP_HOST_TESTS\|CELERIS_LAUNCHER_TESTS' /local/celeris/state/current/scripts/release.sh
+0
+$ grep -n 'CELERIS_USERNS_TESTS=\|CELERIS_ISOLATION_TESTS=' /local/celeris/state/current/scripts/release.sh
+177:export CELERIS_ISOLATION_TESTS="${CELERIS_ISOLATION_TESTS:-require}"
+182:export CELERIS_USERNS_TESTS="${CELERIS_USERNS_TESTS:-1}"
+$ grep -n 'release.sh' /local/celeris/state/current/scripts/prepare.sh
+19:timeout --signal=TERM --kill-after=30s 7200 bash "$script_dir/release.sh" "$sha"
+$ grep -cE '^(export )?(CELERIS_LAUNCHER_TESTS|CELERIS_SECOND_STAGE_TESTS|CELERIS_USERNS_TESTS|SD_GATE_SKIP_HOST_TESTS)=' ~/.config/celeris/paths.env
+0
+$ grep -cE 'CELERIS_LAUNCHER_TESTS|CELERIS_SECOND_STAGE_TESTS|SD_GATE_SKIP_HOST_TESTS' ~/.config/systemd/user/celeris@.service ~/.config/systemd/user/celeris@.service.d/50-credentiald.conf
+…celeris@.service:0
+…50-credentiald.conf:0
+$ tr '\0' '\n' </proc/812926/environ
+/proc/812926/environ: Permission denied
+```
+- 確認できたこと: (1) 入っている unit の file は `NoNewPrivileges=true`（30 行目）で、drop-in は上書きしていない。走っている daemon（release 56f1f8d3ee4c）は
+  `NoNewPrivs: 1`。(2) `setpriv --no-new-privs` の下で `sudo -n -u celeris-browser true` は exit 1 と `The "no new privileges" flag is set`。
+  (3) current の release.sh（56f1f8d3ee4c）は `CELERIS_SECOND_STAGE_TESTS`・`SD_GATE_SKIP_HOST_TESTS`・`CELERIS_LAUNCHER_TESTS` を立てない。
+  unit・drop-in・`paths.env` にもこれらの env は無い。したがって、この変更を含む最初の gate では試験 7・9 は旧い挙動で走る。
+- 未確認: (a) この sandbox は user namespace の中で、親がすでに NoNewPrivs 1 なので、`setpriv --no-new-privs` は状態を変えていない
+  （`/etc/sudo.conf` の owner が 65534 に見える）。NoNewPrivs 0 の login shell から `setpriv --no-new-privs` を立てたときの sudo の挙動は、
+  人が host で `setpriv --no-new-privs sudo -n -u celeris-browser true; echo rc=$?`（期待 `rc=1`）を実行して確かめる。
+  (b) systemd が解釈した値（`systemctl --user show celeris@56f1f8d3ee4c.service -p NoNewPrivileges`、期待 `NoNewPrivileges=yes`）は user bus に
+  届かず未確認。unit の file と daemon の `NoNewPrivs: 1` が根拠。(c) daemon の process の env は読めなかった（Permission denied）。env を足す元
+  （unit・drop-in・`paths.env`）に無いことだけを確かめた。
 
 ## 本番への移行（人が実行する手順）
 
 設定・unit・本番 DB は変えない。この変更の release が昇格した後の、最初の daemon の gate で次を確かめる。
 `<sha12>` は昇格した release の sha12、`$CELERIS_STATE_DIR` は本番の state dir（`/local/celeris/state`）。
 
-1. 前提: この変更を含む release 自身の gate は、current の旧い release.sh で走る（filter を渡さない）。その gate の cargo-test の段で
-   試験 9 が NoNewPrivs 1 のため panic して落ちたら、原因はこの点である。そのときは operator が login shell（NoNewPrivs 0・sudo が通る）で
-   `bash scripts/selfdeploy/release.sh <sha>` を起こして gate を通す。新しい release.sh が効くのは、その release が昇格した後の gate から。
-2. 昇格後の最初の daemon の gate の gate.json を読む:
+1. 1 回目の gate（この変更を含む release 自身の gate）: current の旧い release.sh が走り、`CELERIS_SECOND_STAGE_TESTS` を立てないので、
+   試験 7・9 は旧い挙動（2 段目の欠けは理由を出して PASS）で通る（ADR G7）。operator の手の操作は要らない。その gate.json には `host_tests`・
+   `gate_env` が無い（旧い台本は書かない）。cargo-test の段で試験 9 が `environment required` で落ちたら、G7 が効いていない（daemon の env に
+   `CELERIS_SECOND_STAGE_TESTS=require` か `CELERIS_LAUNCHER_TESTS=require` がある）ので、`prepare.log` と daemon の env の元を確かめる。
+2. 昇格後の最初の daemon の gate（新しい release.sh が current になった後）の gate.json を読む:
    ```
    python3 -I -c 'import json,sys; g=json.load(open(sys.argv[1])); print(json.dumps({k:g[k] for k in ("host_tests","gate_env")}, indent=1)); print(g["cargo_test"]["nextest_skipped"])' $CELERIS_STATE_DIR/releases/<sha12>/gate.json
    ```
    期待: `host_tests.sudo.run=false`・`off_by="no_new_privs"`、`host_tests.ssh.run=true`（試験 7 が本体まで走った）、
-   `gate_env.CELERIS_LAUNCHER_TESTS=null`、`nextest_skipped` が前の gate より 1 増える。`host_tests.sudo.run` が true なら、
+   `gate_env.CELERIS_SECOND_STAGE_TESTS="require"`（試験 7・9 が strict で走った）、`gate_env.CELERIS_LAUNCHER_TESTS=null`、
+   `nextest_skipped` が前の gate より 1 増える（試験の数が変わらないとき）。これを確かめたら operator は G7 の撤去の follow-up を起こす（提案 4）。`host_tests.sudo.run` が true なら、
    gate が NoNewPrivs を読めていない。`ssh.run=false` なら外した理由（`off_by`・`reason`）を読む。
 3. release-records.jsonl の gate の行にも同じ `host_tests` がある:
    `tail -1 $CELERIS_STATE_DIR/logs/release-records.jsonl | python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("host_tests"))'`
@@ -258,9 +387,11 @@ cargo は `$CARGO_TARGET_DIR`、修正を外して試験を走らせ、直した
    （`sudo` = 試験 9、`ssh` = 試験 7。comma 区切り。未知の key は gate の前に落ちる）。ssh が無いのに外さないと、試験 7 が panic して gate が落ちる
    （PASS と数えない）。外した試験は nextest の filter で skipped と数え、gate.json の `host_tests.<key>.off_by="SD_GATE_SKIP_HOST_TESTS"` と
    `reason` に残る。2 の command で見る。`CELERIS_USERNS_TESTS=0`（ADR-0126 B4）で userns の試験全体を外す場合は `gate_env.CELERIS_USERNS_TESTS="0"` で読める。
-5. 試験 9 の本体は daemon の gate では走らない。credentiald を変えた release では operator が login shell で流す:
-   `CELERIS_USERNS_TESTS=1 TMPDIR=/tmp cargo nextest run -p celeris-credentiald --test injection_peer_uid --no-capture --status-level all -E 'test(=real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch)'`
-6. 「未確認」の 3 項目（上の 2〜4。unit の `NoNewPrivileges`、gate の文脈の `sudo`、`/usr/bin/ssh`）は host で次を実行して確かめる:
+5. 試験 9 の本体は daemon の gate では走らない。credentiald を変えた release では operator が login shell で流す（G7 の撤去までは
+   `CELERIS_SECOND_STAGE_TESTS=require` を付ける。付けないと欠けが PASS と数えられる）:
+   `CELERIS_USERNS_TESTS=1 CELERIS_SECOND_STAGE_TESTS=require TMPDIR=/tmp cargo nextest run -p celeris-credentiald --test injection_peer_uid --no-capture --status-level all -E 'test(=real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch)'`
+6. 「未確認」の項目は host で次を実行して確かめる（unit の file の `NoNewPrivileges=true` と、NoNewPrivs 1 の sandbox での `setpriv --no-new-privs` の下の
+   sudo の exit 1 は、子 task 01M7ZDW4QK6N27N7MFJPCZ13JN が確かめた。systemd が解釈した値と、NoNewPrivs 0 から立てたときの sudo は未確認）:
    `systemctl --user show celeris@<sha12>.service -p NoNewPrivileges`（期待 `yes`）、
    `setpriv --no-new-privs sudo -n -u celeris-browser true; echo rc=$?`（期待 `rc=1`）、`ls -l /usr/bin/ssh; ls -ld /etc/ssh/ssh_config.d`。
 
@@ -283,7 +414,10 @@ cargo は `$CARGO_TARGET_DIR`、修正を外して試験を走らせ、直した
 
 ## 未解決
 - 人の決定 `daemon-gate-no-new-privs` は CoS が推奨どおり回答済み（impl で反映）。
-- 上の 2〜4 の「未確認」の 3 項目は、人が host で command を実行して確かめる。
+- 人の決定 `first-release` は CoS が `opt-in-env` で回答済み（子 task 01M7ZDW4QK6N27N7MFJPCZ13JN で反映。ADR G7）。
+- 「未確認」の項目（systemd が解釈した `NoNewPrivileges` の値、NoNewPrivs 0 から `setpriv --no-new-privs` を立てたときの sudo、gate の文脈の
+  `/usr/bin/ssh`、daemon の process の env）は、人が host で command を実行して確かめる（本番への移行 6）。
+- G7 の移行の間は、strict の env を立てない手元の実行（`CELERIS_USERNS_TESTS=1` だけ）で試験 7・9 の 2 段目の欠けが PASS と数えられる（ADR 7 節）。
 - daemon の gate（NoNewPrivs 1）では、どの選択肢でも試験 9 の本体は走らない。U1 のような試験 9 の読み取りの不具合は、NoNewPrivs 0 の文脈
   （人・operator の login shell）で試験 9 を流したときにしか見つからない（ADR の「残る穴」）。
 
@@ -296,6 +430,13 @@ cargo は `$CARGO_TARGET_DIR`、修正を外して試験を走らせ、直した
    を流す、という運用にするかを別に決める（この task の範囲外）。
 3. **子 1 の ADR §3 への参照**: impl の WorkUnit が、[ADR 2026-11-21-userns-tests-explicit-skip](../adr/2026-11-21-userns-tests-explicit-skip.md) §3 の
    「残る穴」の末尾に、この ADR で gate の扱いを決めたことへの 1 行の参照を足す（D1 の本文は変えない）。
+4. **G7 の旧挙動の分岐の撤去（follow-up。子 task 01M7ZDW4QK6N27N7MFJPCZ13JN が提案。起票は CoS が取り込み後に判断する）**:
+   条件は「G7 を含む release が昇格した後、その release.sh で走った最初の release の gate.json で `gate_env.CELERIS_SECOND_STAGE_TESTS="require"`・
+   `host_tests.sudo`（daemon の gate なら `run: false`・`off_by: "no_new_privs"`）・`host_tests.ssh.run: true` を operator が確かめた後」。責任者は operator。
+   消すもの: `injection_peer_uid.rs`・`db_guard_tests.rs` の `second_stage_strict()` と env が無いときの return、試験 9 の `CELERIS_LAUNCHER_TESTS` の読み取り、
+   試験 `test9_keeps_old_behaviour_without_the_gate_env_under_no_new_privs`・`ssh_test_keeps_old_behaviour_without_the_gate_env`、
+   release.sh の `export CELERIS_SECOND_STAGE_TESTS=require`（`gate_env` の欄を残すかは撤去の task が決める）、ADR の G7 への注記、本番への移行 5 の env。
+   受け入れ条件の案: 撤去後、strict の env を立てない子 process でも試験 7・9 の 2 段目の欠けが FAIL する（I1・I2 の子から env を消して通る）。
 
 ## 検査
 ### adr の段（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）

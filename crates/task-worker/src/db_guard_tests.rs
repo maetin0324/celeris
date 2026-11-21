@@ -466,9 +466,18 @@ fn sync_ssh_shadow_copies_contents_and_drops_stale_files() {
     );
 }
 
+/// 2 段目の前提の欠けを FAIL にする移行の env（ADR 2026-11-21-release-gate-second-stage-skip G7）。立てるのは新しい release.sh だけ。
+const SECOND_STAGE_ENV: &str = "CELERIS_SECOND_STAGE_TESTS";
+
+/// 試験 7 の前提の欠けを FAIL にするか（G3・G7）。`CELERIS_SECOND_STAGE_TESTS=require` のときだけ。無い経路（current の旧い
+/// release.sh・手元の nextest）は旧い挙動（理由を出して return）のまま。G7 の撤去の follow-up でこの関数ごと消し、常に FAIL にする。
+fn second_stage_strict() -> bool {
+    std::env::var(SECOND_STAGE_ENV).as_deref() == Ok("require")
+}
+
 /// 試験 7 の 2 段目の前提（ssh と `/etc/ssh/ssh_config.d`）が欠けているときの理由。揃っていれば None。
-/// 欠けは skip（return して PASS）にせず試験を失敗させる（ADR 2026-11-21-release-gate-second-stage-skip G3、
-/// ADR-0126 B2「道具が無ければ fail」）。外すなら呼び出し側が nextest の filter で明示する。
+/// strict（`second_stage_strict()`）なら欠けは skip（return して PASS）にせず試験を失敗させる（ADR 2026-11-21-release-gate-second-stage-skip
+/// G3・G7、ADR-0126 B2「道具が無ければ fail」）。外すなら呼び出し側が nextest の filter で明示する。
 fn ssh_prerequisite_gap(config_d_is_dir: bool, ssh_runs: bool) -> Option<String> {
     match (config_d_is_dir, ssh_runs) {
         (true, true) => None,
@@ -480,7 +489,7 @@ fn ssh_prerequisite_gap(config_d_is_dir: bool, ssh_runs: bool) -> Option<String>
     }
 }
 
-/// 試験 7 の判定の分岐: 前提が欠けたら skip ではなく失敗。
+/// 試験 7 の判定の分岐: 前提が欠けたら理由を返す（strict なら試験 7 が失敗にする）。
 #[test]
 fn ssh_prerequisite_gap_is_a_failure_reason_not_a_skip() {
     assert_eq!(ssh_prerequisite_gap(true, true), None);
@@ -492,13 +501,13 @@ fn ssh_prerequisite_gap_is_a_failure_reason_not_a_skip() {
     }
 }
 
-/// 試験 7 を子 process（同じ試験 binary、ssh の無い PATH）で起こすと PASS ではなく FAIL する。
-/// 判定の純関数の試験では、試験 7 の本体がその関数の結果を panic にすることを確かめられない
-/// （本体を return の形に戻しても純関数の試験は通る）。cfg によらず走り、本物の ssh を要らない。
-#[test]
-fn ssh_test_fails_instead_of_skipping_when_ssh_is_missing() {
+/// 試験 7 を子 process（同じ試験 binary、ssh の無い PATH）で起こし、`(終了 status, stdout+stderr)` を返す。
+/// `strict` なら子に `CELERIS_SECOND_STAGE_TESTS=require`（新しい release.sh の gate）を立て、そうでなければ消す
+/// （current の旧い release.sh の gate・手元の nextest。新しい gate では親に立っているので明示して消す）。
+fn run_test7_without_ssh(strict: bool) -> (bool, String) {
     let empty = tempfile::tempdir().unwrap();
-    let out = Command::new(std::env::current_exe().unwrap())
+    let mut child = Command::new(std::env::current_exe().unwrap());
+    child
         .args([
             "--include-ignored",
             "--exact",
@@ -507,20 +516,43 @@ fn ssh_test_fails_instead_of_skipping_when_ssh_is_missing() {
             "--test-threads=1",
         ])
         .env("PATH", empty.path())
-        .output()
-        .unwrap();
+        .env_remove(SECOND_STAGE_ENV);
+    if strict {
+        child.env(SECOND_STAGE_ENV, "require");
+    }
+    let out = child.output().unwrap();
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(!out.status.success(), "child must FAIL, not pass: {text}");
+    (out.status.success(), text)
+}
+
+/// 新しい release.sh の gate（strict の env 有り）で試験 7 を ssh の無い PATH で起こすと PASS ではなく FAIL する。
+/// 判定の純関数の試験では、試験 7 の本体がその関数の結果を panic にすることを確かめられない
+/// （本体を return の形に戻しても純関数の試験は通る）。cfg によらず走り、本物の ssh を要らない。
+#[test]
+fn ssh_test_fails_instead_of_skipping_when_ssh_is_missing() {
+    let (ok, text) = run_test7_without_ssh(true);
+    assert!(!ok, "child must FAIL, not pass: {text}");
     assert!(text.contains("ssh prerequisite missing"), "{text}");
 }
 
+/// G7（移行）: current の旧い release.sh の gate と同じ文脈（strict の env 無し）では、試験 7 は今の本番と同じく理由を出して
+/// return し、PASS と数えられる（この変更を含む最初の release の gate を落とさない）。厳格化を env に依らず常に有効にすると
+/// 子が FAIL し、この試験が落ちる。G7 の撤去の follow-up でこの試験も消す。
+#[test]
+fn ssh_test_keeps_old_behaviour_without_the_gate_env() {
+    let (ok, text) = run_test7_without_ssh(false);
+    assert!(ok, "old release.sh context must not FAIL: {text}");
+    assert!(text.contains("skip: "), "{text}");
+}
+
 /// D4: namespace の中でも ssh が `/etc/ssh/ssh_config.d` の Include を "Bad owner" で拒否しない
-/// （`ssh -G` は設定を解釈して表示するだけで接続しない）。ssh が無いホストでは失敗する
-/// （gate が外すときは nextest の filter で明示する。ADR 2026-11-21-release-gate-second-stage-skip G3）。
+/// （`ssh -G` は設定を解釈して表示するだけで接続しない）。ssh が無いホストでは、strict の env（新しい release.sh の gate）なら
+/// 失敗し、無ければ理由を出して return する（gate が外すときは nextest の filter で明示する。
+/// ADR 2026-11-21-release-gate-second-stage-skip G3・G7）。
 #[test]
 #[cfg_attr(
     not(celeris_userns_tests),
@@ -531,7 +563,11 @@ fn ssh_config_includes_still_parse_inside_the_namespace() {
         Path::new(SSH_CONFIG_D).is_dir(),
         Command::new("ssh").arg("-V").output().is_ok(),
     ) {
-        panic!("ssh prerequisite missing: {gap}");
+        if second_stage_strict() {
+            panic!("ssh prerequisite missing: {gap}");
+        }
+        eprintln!("skip: {gap}");
+        return;
     }
     assert_userns_available();
     let f = fixture();

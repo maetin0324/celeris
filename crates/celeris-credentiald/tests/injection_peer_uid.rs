@@ -5,8 +5,10 @@
 //!
 //! 別 UID の process は launcher の UID（`celeris-browser`、設定 `[browser].launcher_uid`）で
 //! `sudo -n -u` により起こす。`unshare -r` の子は host では同 UID なので別 UID の証拠にしない。
-//! sudo が使えない・user が無い・probe の行が返らない環境では、本体に入った後は常に失敗する（skip して pass と数えない。
-//! ADR 2026-11-21-release-gate-second-stage-skip G2）。既定では ADR-0126 B の opt-in
+//! sudo が使えない・user が無い・probe の行が返らない環境では、本体に入った後は失敗する（skip して pass と数えない。
+//! ADR 2026-11-21-release-gate-second-stage-skip G2）。移行の間は、新しい release.sh が立てる `CELERIS_SECOND_STAGE_TESTS=require`
+//! か `CELERIS_LAUNCHER_TESTS=require` のときだけ失敗し、どちらも無ければ旧い挙動（理由を出して return）のまま（同 ADR G7。
+//! 撤去の条件と責任者も G7）。既定では ADR-0126 B の opt-in
 //! （`CELERIS_USERNS_TESTS=1`）が無い build で harness の ignored になる（sudo の試行を CI の既定に入れないため）。
 //! 走らせるかは build script の cfg `celeris_userns_tests` が決める（規則は `crates/task-worker/userns_tests_cfg.rs`。
 //! ADR 2026-11-21-userns-tests-explicit-skip）。
@@ -46,15 +48,30 @@ const PROBE_SOCKET_ENV: &str = "CELERIS_PEER_UID_PROBE_SOCKET";
 const PROBE_USER_ENV: &str = "CELERIS_PEER_UID_USER";
 const DEFAULT_PROBE_USER: &str = "celeris-browser";
 const MARK: &str = "PEER-UID-PROBE";
+/// 2 段目の前提の欠けを FAIL にする移行の env（ADR 2026-11-21-release-gate-second-stage-skip G7）。立てるのは新しい release.sh だけ。
+const SECOND_STAGE_ENV: &str = "CELERIS_SECOND_STAGE_TESTS";
+const LAUNCHER_ENV: &str = "CELERIS_LAUNCHER_TESTS";
 
-/// 本体に入った後、環境（user・sudo・probe の行）が無いときは skip（return して PASS）にせず失敗させる
-/// （ADR 2026-11-21-release-gate-second-stage-skip G2、ADR-0126 B2）。走らせるかの規則（cfg `celeris_userns_tests`）
-/// とは別で、この関数は env を読まない。gate が走れない host で外すときは nextest の filter で明示する。
-fn missing(reason: impl AsRef<str>) -> ! {
-    panic!(
-        "peer-uid real-process test environment required: {}",
-        reason.as_ref()
-    )
+/// 本体に入った後の環境（user・sudo・probe の行）の欠けを FAIL にするか。新しい release.sh が立てる
+/// `CELERIS_SECOND_STAGE_TESTS=require` か、旧来の `CELERIS_LAUNCHER_TESTS=require` のとき（ADR 2026-11-21-release-gate-second-stage-skip
+/// G2・G7、ADR-0126 B2）。どちらも無い経路（current の旧い release.sh・手元の nextest）は旧い挙動のまま。走らせるかの規則
+/// （cfg `celeris_userns_tests`）とは別。G7 の撤去の follow-up でこの関数ごと消し、`missing()` を常に panic にする。
+fn second_stage_strict() -> bool {
+    [SECOND_STAGE_ENV, LAUNCHER_ENV]
+        .iter()
+        .any(|name| std::env::var(name).as_deref() == Ok("require"))
+}
+
+/// 環境の欠け。`second_stage_strict()` なら panic して FAIL、そうでなければ理由を出して戻る（呼び出し側が return する）。
+/// gate が走れない host で外すときは nextest の filter で明示する（G4・G5）。
+fn missing(reason: impl AsRef<str>) {
+    if second_stage_strict() {
+        panic!(
+            "peer-uid real-process test environment required: {}",
+            reason.as_ref()
+        );
+    }
+    eprintln!("SKIP: (not passed) {}", reason.as_ref());
 }
 
 fn request() -> InjectionRequest {
@@ -355,10 +372,11 @@ fn real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch() {
         missing(format!(
             "user {user} is absent (set {PROBE_USER_ENV} to another local user)"
         ));
+        return;
     };
     let my_uid = unsafe { libc::geteuid() };
     assert_ne!(other_uid, my_uid, "{user} must differ from the test UID");
-    // sudo が使えるか（NOPASSWD か `sudo -v` 済み）。無ければ失敗する（missing）。
+    // sudo が使えるか（NOPASSWD か `sudo -v` 済み）。無ければ missing（strict なら失敗）。
     match Command::new("sudo")
         .args(["-n", "-u", &user, "/usr/bin/true"])
         .output()
@@ -370,12 +388,15 @@ fn real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch() {
                 o.status.code(),
                 String::from_utf8_lossy(&o.stderr).trim()
             ));
+            return;
         }
         Err(e) if e.kind() == ErrorKind::NotFound => {
             missing("sudo is not installed");
+            return;
         }
         Err(e) => {
             missing(format!("sudo: {e}"));
+            return;
         }
     }
 
@@ -401,7 +422,10 @@ fn real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch() {
     // 層 1（dac）: 本番と同じ permission。別 UID は connect で EACCES、broker は接続を見ない。
     let (uid, dac) = match probe_as(&user, &socket) {
         Ok(found) => found,
-        Err(reason) => missing(reason),
+        Err(reason) => {
+            missing(reason);
+            return;
+        }
     };
     eprintln!("PEER-UID dac uid={uid} {dac:?}");
     assert_eq!(uid, other_uid, "probe process did not run as {user}");
@@ -425,11 +449,15 @@ fn real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch() {
             "broker layer: fixture ancestor {} is not traversable by {user} (run with TMPDIR=/tmp)",
             dir.display()
         ));
+        return;
     }
     fx.loosen_dac();
     let (uid, broker) = match probe_as(&user, &socket) {
         Ok(found) => found,
-        Err(reason) => missing(reason),
+        Err(reason) => {
+            missing(reason);
+            return;
+        }
     };
     eprintln!("PEER-UID broker uid={uid} {broker:?}");
     assert_eq!(uid, other_uid);
@@ -453,9 +481,30 @@ fn real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch() {
     );
 }
 
+/// 子 process の試験 9 に渡す gate の env（G7）。子は親の env から 2 つの strict の env を消し、ここで決めたものだけを立てる
+/// （新しい release.sh の gate では親にも `CELERIS_SECOND_STAGE_TESTS=require` が立っている）。
+#[derive(Clone, Copy, Debug)]
+enum GateEnv {
+    /// current の旧い release.sh・手元の nextest（strict の env が無い）。
+    Absent,
+    /// 新しい release.sh（`CELERIS_SECOND_STAGE_TESTS=require`）。
+    NewReleaseScript,
+    /// 旧来の手の厳格化（`CELERIS_LAUNCHER_TESTS=require`。operator の login shell の実行）。
+    LauncherRequire,
+}
+
+/// daemon の gate の sudo を真似る偽の `sudo`: 自分の `NoNewPrivs` が 1 なら本物の sudo と同じ文言で exit 1、0 なら exit 0
+/// （probe の行は出さない）。本物の sudo も別 UID の process も要らない。
+const NNP_AWARE_SUDO: &str = r#"if [ "$(awk '$1 == "NoNewPrivs:" { print $2 }' /proc/self/status)" = 1 ]; then
+  echo 'sudo: The "no new privileges" flag is set, which prevents sudo from running as root.' >&2
+  exit 1
+fi
+exit 0"#;
+
 /// 試験 9 を子 process（同じ試験 binary、PATH の先頭に偽の `sudo`）で起こし、`(終了 status, stdout+stderr)` を返す。
-/// 別 UID の user は試験の UID と違う既存の user（`nobody`）。本物の sudo も別 UID の process も要らない。
-fn run_test9_with_fake_sudo(script: &str) -> (bool, String) {
+/// 別 UID の user は試験の UID と違う既存の user（`nobody`）。`no_new_privs` なら子に `PR_SET_NO_NEW_PRIVS` を立てる
+/// （daemon の unit の `NoNewPrivileges=true` と同じ状態。子とその子に継がれ、外せない）。
+fn run_test9_with_fake_sudo(script: &str, gate: GateEnv, no_new_privs: bool) -> (bool, String) {
     let dir = short_tempdir().unwrap();
     let fake = dir.path().join("sudo");
     fs::write(&fake, format!("#!/bin/sh\n{script}\n")).unwrap();
@@ -465,7 +514,8 @@ fn run_test9_with_fake_sudo(script: &str) -> (bool, String) {
         dir.path().display(),
         std::env::var("PATH").unwrap_or_default()
     );
-    let out = Command::new(std::env::current_exe().unwrap())
+    let mut child = Command::new(std::env::current_exe().unwrap());
+    child
         .args([
             "--include-ignored",
             "--exact",
@@ -475,8 +525,30 @@ fn run_test9_with_fake_sudo(script: &str) -> (bool, String) {
         ])
         .env("PATH", path)
         .env(PROBE_USER_ENV, "nobody")
-        .output()
-        .unwrap();
+        .env_remove(SECOND_STAGE_ENV)
+        .env_remove(LAUNCHER_ENV);
+    match gate {
+        GateEnv::Absent => {}
+        GateEnv::NewReleaseScript => {
+            child.env(SECOND_STAGE_ENV, "require");
+        }
+        GateEnv::LauncherRequire => {
+            child.env(LAUNCHER_ENV, "require");
+        }
+    }
+    if no_new_privs {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: fork の後・exec の前に async-signal-safe な prctl だけを呼ぶ。
+        unsafe {
+            child.pre_exec(|| {
+                if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    let out = child.output().unwrap();
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&out.stdout),
@@ -485,22 +557,45 @@ fn run_test9_with_fake_sudo(script: &str) -> (bool, String) {
     (out.status.success(), text)
 }
 
-/// sudo が使えない（NoNewPrivs 1 の daemon の gate と同じ失敗）とき、試験 9 は skip で PASS ではなく FAIL する。
-/// 本体を `return` の形に戻すと子が PASS し、この試験が落ちる（既存の試験は本体が走ったときの判定しか見ない）。
+/// 新しい release.sh の gate（strict の env 有り）で sudo が使えないとき、試験 9 は skip で PASS ではなく FAIL する。
+/// 旧来の `CELERIS_LAUNCHER_TESTS=require` でも同じ。本体を常に `return` の形に戻すと子が PASS し、この試験が落ちる
+/// （既存の試験は本体が走ったときの判定しか見ない）。
 #[test]
 fn test9_fails_instead_of_skipping_when_sudo_is_unusable() {
-    let (ok, text) = run_test9_with_fake_sudo("echo 'no new privileges' >&2; exit 1");
-    assert!(!ok, "child must FAIL, not pass: {text}");
-    assert!(text.contains("environment required"), "{text}");
+    for gate in [GateEnv::NewReleaseScript, GateEnv::LauncherRequire] {
+        let (ok, text) =
+            run_test9_with_fake_sudo("echo 'no new privileges' >&2; exit 1", gate, false);
+        assert!(!ok, "{gate:?}: child must FAIL, not pass: {text}");
+        assert!(text.contains("environment required"), "{gate:?}: {text}");
+    }
 }
 
-/// sudo は通るが probe の `PEER-UID-PROBE` 行が返らないときも FAIL する（`no PEER-UID-PROBE line`）。
+/// strict の env 有りで sudo は通るが probe の `PEER-UID-PROBE` 行が返らないときも FAIL する（`no PEER-UID-PROBE line`）。
+/// NoNewPrivs 0 の login shell で sudo が通る host の gate と同じ形（sudo の後の欠けを PASS に混ぜない）。
 #[test]
 fn test9_fails_instead_of_skipping_when_no_probe_line_returns() {
-    let (ok, text) = run_test9_with_fake_sudo("exit 0");
+    let (ok, text) = run_test9_with_fake_sudo("exit 0", GateEnv::NewReleaseScript, false);
     assert!(!ok, "child must FAIL, not pass: {text}");
     assert!(text.contains("environment required"), "{text}");
     assert!(text.contains("no PEER-UID-PROBE line"), "{text}");
+}
+
+/// G7（移行）: current の旧い release.sh の gate と同じ文脈（strict の env 無し・NoNewPrivs 1）では、試験 9 は今の本番と同じく
+/// 理由を出して return し、PASS と数えられる（この変更を含む最初の release の gate を落とさない）。厳格化を env に依らず
+/// 常に有効にすると子が FAIL し、この試験が落ちる。G7 の撤去の follow-up でこの試験も消す。
+#[test]
+fn test9_keeps_old_behaviour_without_the_gate_env_under_no_new_privs() {
+    let (ok, text) = run_test9_with_fake_sudo(NNP_AWARE_SUDO, GateEnv::Absent, true);
+    assert!(ok, "old release.sh context must not FAIL: {text}");
+    assert!(text.contains("SKIP: (not passed)"), "{text}");
+    assert!(
+        text.contains("no new privileges"),
+        "child must run with NoNewPrivs 1: {text}"
+    );
+    // 同じ子を strict の env 付き（新しい release.sh が試験 9 を外さなかったとき）で起こすと FAIL する。
+    let (ok, text) = run_test9_with_fake_sudo(NNP_AWARE_SUDO, GateEnv::NewReleaseScript, true);
+    assert!(!ok, "new release.sh context must FAIL, not pass: {text}");
+    assert!(text.contains("environment required"), "{text}");
 }
 
 /// `PEER-UID-PROBE` 行の往復（別 UID の子の出力を親が読む部分）。

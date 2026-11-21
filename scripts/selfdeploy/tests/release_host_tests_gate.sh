@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # ADR 2026-11-21-release-gate-second-stage-skip（G1・G4・G5・G6）: release.sh は userns の試験 7・9 を、人が明示したとき
 # （SD_GATE_SKIP_HOST_TESTS）と、試験 9 だけ NoNewPrivs 1 を読んだときにだけ nextest の filter で外し、gate.json の
-# `host_tests` に理由を残す。外さないときは filter を渡さない。`gate_env` に 4 つの env の実際の値が出る。
+# `host_tests` に理由を残す。外さないときは filter を渡さない。`gate_env` に 5 つの env の実際の値が出る。
+# G7（移行）: release.sh は試験の runner に CELERIS_SECOND_STAGE_TESTS=require を渡す（呼び出し元の値によらない。NoNewPrivs 0 でも 1 でも）。
 # 偽の cargo / pnpm / node / celerisctl を使い、本番のパス・ネットワークには触れない（一時ディレクトリだけ）。
 set -euo pipefail
 # 理由: worker の環境は本番の CELERIS_LOGS_DIR を継ぎ、継いだままだと台本が偽の要約の行を本番の release-records.jsonl に足す。
@@ -26,7 +27,8 @@ fail() {
 
 run_release() {
   : >"$root/cargo.log"
-  CELERIS_STATE_DIR="$root/state" CELERIS_CONFIG_DIR="$root/config" CELERIS_CONFIG="$root/config/config.toml" \
+  : >"$root/cargo-env.log"
+  CARGO_ENV_LOG="$root/cargo-env.log" CELERIS_STATE_DIR="$root/state" CELERIS_CONFIG_DIR="$root/config" CELERIS_CONFIG="$root/config/config.toml" \
     SD_REPO="$repo" SD_CELERISCTL="$root/bin/celerisctl" SD_PNPM_SHIM_DIR="$root/bin" \
     CARGO_LOG="$root/cargo.log" FAKE_SCRATCH="$root/scratch" SD_RELEASE_PRUNE=0 \
     PATH="$root/bin:$PATH" bash "$here/release.sh" "$1" >"$root/release.out" 2>&1
@@ -50,6 +52,8 @@ status_file() { printf 'Name:\tx\nNoNewPrivs:\t%s\nSeccomp:\t0\n' "$1" >"$root/s
 SUDO_NAME=real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch
 SSH_NAME=db_guard::tests::ssh_config_includes_still_parse_inside_the_namespace
 nextest_line() { grep -- '^nextest run ' "$root/cargo.log" | head -1; }
+# G7: nextest run を起こした cargo が見た CELERIS_SECOND_STAGE_TESTS の値。
+second_stage_env() { grep -- '^nextest run ' "$root/cargo-env.log" | head -1 | sed -n 's/.* CELERIS_SECOND_STAGE_TESTS=//p'; }
 
 # ---- (i) 除外なし・NoNewPrivs 0 → filter なし、両方 run ----
 c="$(new_commit)"; c12="${c:0:12}"
@@ -58,9 +62,11 @@ nextest_line | grep -q -- ' -E ' && fail "a filter was passed without any exclus
 g="$root/state/releases/$c12/gate.json"
 gate_is "$g" "g['host_tests']['sudo']['run'] and g['host_tests']['ssh']['run'] and g['host_tests']['sudo']['off_by'] is None" \
   || fail "host_tests wrong for no exclusion: $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["host_tests"])' "$g")"
-# (iv) gate_env: 4 つの値。既定の CELERIS_USERNS_TESTS=1・ISOLATION=require、LAUNCHER は立てない（null）。
-gate_is "$g" "g['gate_env'] == {'CELERIS_USERNS_TESTS': '1', 'CELERIS_ISOLATION_TESTS': 'require', 'CELERIS_LAUNCHER_TESTS': None, 'SD_GATE_SKIP_HOST_TESTS': None}" \
+# (iv) gate_env: 5 つの値。既定の CELERIS_USERNS_TESTS=1・ISOLATION=require、LAUNCHER は立てない（null）、SECOND_STAGE=require（G7）。
+gate_is "$g" "g['gate_env'] == {'CELERIS_USERNS_TESTS': '1', 'CELERIS_ISOLATION_TESTS': 'require', 'CELERIS_LAUNCHER_TESTS': None, 'CELERIS_SECOND_STAGE_TESTS': 'require', 'SD_GATE_SKIP_HOST_TESTS': None}" \
   || fail "gate_env wrong: $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["gate_env"])' "$g")"
+# G7: NoNewPrivs 0 の gate では試験 7・9 が strict で走る（runner に env が届く）。
+[ "$(second_stage_env)" = require ] || fail "NoNewPrivs 0: runner did not get CELERIS_SECOND_STAGE_TESTS=require: $(cat "$root/cargo-env.log")"
 # release-records.jsonl の要約にも host_tests が残る。
 grep -q '"host_tests"' "$root/state/logs/release-records.jsonl" 2>/dev/null \
   || grep -rq '"host_tests"' "$root/state" --include=release-records.jsonl || fail "release-records has no host_tests"
@@ -89,6 +95,13 @@ case "$line" in *"$SSH_NAME"*) fail "ssh test was excluded by NoNewPrivs: $line"
 g="$root/state/releases/$c12/gate.json"
 gate_is "$g" "not g['host_tests']['sudo']['run'] and g['host_tests']['sudo']['off_by'] == 'no_new_privs' and 'NoNewPrivs: 1' in g['host_tests']['sudo']['reason'] and g['host_tests']['ssh']['run']" \
   || fail "host_tests wrong for NoNewPrivs 1"
+# G7: NoNewPrivs 1 でも env は立つ（試験 9 は filter で skipped、試験 7 は strict で走る）。
+[ "$(second_stage_env)" = require ] || fail "NoNewPrivs 1: runner did not get CELERIS_SECOND_STAGE_TESTS=require: $(cat "$root/cargo-env.log")"
+# G7: 呼び出し元が別の値を立てても、gate は require に揃える（人は env で厳格化を外せない）。
+c="$(new_commit)"; c12="${c:0:12}"
+CELERIS_SECOND_STAGE_TESTS=0 SD_PROC_SELF_STATUS="$(status_file 0)" run_gate "$c" || fail "release with CELERIS_SECOND_STAGE_TESTS=0 failed"
+[ "$(second_stage_env)" = require ] || fail "caller's CELERIS_SECOND_STAGE_TESTS overrode the gate: $(cat "$root/cargo-env.log")"
+gate_is "$root/state/releases/$c12/gate.json" "g['gate_env']['CELERIS_SECOND_STAGE_TESTS'] == 'require'" || fail "gate_env CELERIS_SECOND_STAGE_TESTS wrong"
 # 明示の sudo が先（off_by は env）。
 c="$(new_commit)"
 SD_GATE_SKIP_HOST_TESTS=sudo SD_PROC_SELF_STATUS="$(status_file 1)" run_gate "$c" || fail "explicit+NoNewPrivs release failed"

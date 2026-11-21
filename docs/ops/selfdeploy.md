@@ -149,11 +149,13 @@ scripts/selfdeploy/release.sh celeris/01M2XXX # 自己改善の案件の実装�
   `Starting … across N binaries` / `Summary …` の行が読めない（全部走った証拠が無い）ときは段が落ちる。
   - userns の試験 7（`db_guard::tests::ssh_config_includes_still_parse_inside_the_namespace`）・試験 9
     （`real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch`）は、本体に入った後で ssh・sudo・probe の行が無いと**失敗**する
-    （skip して PASS と数えない）。この host で走れない試験は、人が `SD_GATE_SKIP_HOST_TESTS=sudo,ssh`（comma 区切り、未知の key は gate の前に
+    （skip して PASS と数えない）。失敗にするのは release.sh が立てる `CELERIS_SECOND_STAGE_TESTS=require` があるときだけで（移行の一時の例外。
+    この env が無い旧い release.sh・手元の実行では理由を出して return する。撤去の条件と責任者は ADR の G7）、release.sh は呼び出し元の値を
+    使わない。この host で走れない試験は、人が `SD_GATE_SKIP_HOST_TESTS=sudo,ssh`（comma 区切り、未知の key は gate の前に
     落ちる）で明示して外す。daemon が起こす gate は NoNewPrivs 1 で sudo が使えないので、release.sh は自分の NoNewPrivs を読み、1 なら試験 9
     だけを自動で外す。外した試験は nextest の filter で skipped と数え、gate.json の `host_tests`（`{sudo|ssh: {run, off_by, reason, tests}}`。
     `off_by` は `SD_GATE_SKIP_HOST_TESTS` か `no_new_privs`）と release-records.jsonl の要約に残る。`gate_env` に `CELERIS_USERNS_TESTS`・
-    `CELERIS_ISOLATION_TESTS`・`CELERIS_LAUNCHER_TESTS`・`SD_GATE_SKIP_HOST_TESTS` の実際の値が残る（gate は `CELERIS_LAUNCHER_TESTS` を立てない）。
+    `CELERIS_ISOLATION_TESTS`・`CELERIS_LAUNCHER_TESTS`・`CELERIS_SECOND_STAGE_TESTS`・`SD_GATE_SKIP_HOST_TESTS` の実際の値が残る（gate は `CELERIS_LAUNCHER_TESTS` を立てない）。
     [ADR 2026-11-21-release-gate-second-stage-skip](../../agent-docs/adr/2026-11-21-release-gate-second-stage-skip.md)。試験:
     `scripts/selfdeploy/tests/release_host_tests_gate.sh`。
   - `cargo-nextest` が要る（版は `tools/nextest/VERSION` で固定。入れ方は `docs/ops/nextest.md`）。無ければ作業ツリーを作る前に

@@ -65,6 +65,9 @@ fi
 # NoNewPrivs 1 で sudo が権限を上げられないので、試験 9 だけは NoNewPrivs 1 を読んだら自動で外す（sudo -n の probe では外さない）。
 # 外した試験は nextest の filter（cargo-test runner なら `--skip --exact`）で skipped と数え、gate.json の `host_tests` に理由を残す。
 # この gate は CELERIS_LAUNCHER_TESTS を立てない（G1。実際の値は gate.json の `gate_env`）。
+# G7（移行）: 試験 7・9 が 2 段目の欠けを FAIL にするのは CELERIS_SECOND_STAGE_TESTS=require のときだけで、立てるのはこの台本だけ
+# （下の export。人は外せない。外すなら SD_GATE_SKIP_HOST_TESTS）。current の旧い release.sh はこれを立てないので、この変更を含む
+# 最初の release の gate では試験 7・9 は旧い挙動で通る。撤去の条件と責任者は ADR G7。
 declare -A HOST_OFF_BY=() HOST_REASON=() HOST_NAME=() HOST_FILTER=()
 HOST_NAME[sudo]="real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch"
 HOST_FILTER[sudo]="package(celeris-credentiald) & test(=${HOST_NAME[sudo]})"
@@ -118,7 +121,7 @@ print(json.dumps(out))'
 gate_env_json() {
   python3 -c '
 import json, os
-names = ("CELERIS_USERNS_TESTS", "CELERIS_ISOLATION_TESTS", "CELERIS_LAUNCHER_TESTS", "SD_GATE_SKIP_HOST_TESTS")
+names = ("CELERIS_USERNS_TESTS", "CELERIS_ISOLATION_TESTS", "CELERIS_LAUNCHER_TESTS", "CELERIS_SECOND_STAGE_TESTS", "SD_GATE_SKIP_HOST_TESTS")
 print(json.dumps({n: os.environ.get(n) for n in names}))'
 }
 
@@ -248,6 +251,9 @@ export CELERIS_ISOLATION_TESTS="${CELERIS_ISOLATION_TESTS:-require}"
 # 外したことで今まで release で守っていた退行の検出が消えないよう、ここで既定を 1 に戻す（環境が無ければ fail）。
 # userns が使えない host で release するなら人が CELERIS_USERNS_TESTS=0 を明示する（gate の記録に残る）。
 export CELERIS_USERNS_TESTS="${CELERIS_USERNS_TESTS:-1}"
+# ADR 2026-11-21-release-gate-second-stage-skip G7: 試験 7・9 の 2 段目の前提（ssh・sudo・probe の行）の欠けを FAIL にする。
+# 呼び出し元の値は使わない（gate では常に有効。走れない試験は SD_GATE_SKIP_HOST_TESTS と NoNewPrivs 1 で外す）。
+export CELERIS_SECOND_STAGE_TESTS=require
 
 printf 'step:s exit:i secs:f log:s skipped:b reason:s\n' >"$GATE_TSV"
 GATE_OK=true

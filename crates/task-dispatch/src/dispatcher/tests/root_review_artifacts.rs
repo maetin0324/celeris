@@ -138,7 +138,9 @@ async fn artifact_verdict(task: &Task, dir: &std::path::Path, produced: &[Artifa
 }
 
 /// (1) WU の run だけが出した成果物（`wu/<key>/artifacts/<name>`）を、root の最終 review の `ArtifactExists` が見つける。
-/// 修正前は review する run の成果物だけが候補で、`artifacts/final-report.md` を探して落ちた（本番の seq 2075 と同じ）。
+/// 本番（task 01M7MZTKBPZPQE4XN451F8X84F）と同じ形: WU `finish` の 1 本目の run が成果物を出して question で止まり、
+/// 2 本目の run（review する run）は成果物を出さずに done になった。修正前は review する run の成果物だけが候補で、
+/// `artifacts/final-report.md` を探して落ちた（本番の seq 2075 と同じ理由）。
 #[tokio::test]
 async fn root_review_artifact_finds_work_unit_run_artifact() {
     let dir = tempfile::tempdir().unwrap();
@@ -158,12 +160,13 @@ async fn root_review_artifact_finds_work_unit_run_artifact() {
         &store,
         task.id,
         finish,
-        "run-wu-finish",
+        "run-wu-finish-1",
         &[artifact(
             "final-report.md",
             "wu/finish/artifacts/final-report.md",
         )],
     );
+    unit_run_produced(&store, task.id, finish, REVIEWED_RUN, &[]);
 
     let produced = candidates(&store, task.id);
     let v = artifact_verdict(&task, dir.path(), &produced).await;

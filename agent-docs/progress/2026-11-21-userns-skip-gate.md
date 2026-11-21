@@ -213,3 +213,12 @@ crates/task-worker/tests/browser_launcher_ptrace.rs:403:    if std::env::var("CE
    「残る穴」の末尾に、この ADR で gate の扱いを決めたことへの 1 行の参照を足す（D1 の本文は変えない）。
 
 ## 検査
+### adr の段（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+- `bash scripts/dev/test-affected.sh` → exit 0（19.5 秒）。`test-affected: 試験対象の変更なし（docs のみ等）`、
+  `repo-health: verdict=pass exit=0 … new=0 worsened=0`。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- `sh scripts/dev/progress-index.sh --check` → exit 0（`progress-index --check: ok`）。`sh scripts/dev/check-doc-links.sh` → exit 0（`check-doc-links: ok`）。
+  `sh scripts/dev/check-adr-numbers.sh` → exit 0（`check-adr-numbers: ok (474 files)`）。
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` → この md と ADR の 2 path だけ。
+- test-affected・clippy・fmt は commit「selfdeploy userns-skip-gate adr: release gate の実行文脈の確認と 2 段目の skip の扱いを決める ADR を書く」の HEAD で実行した。
+  その後の commit はこの節を足しただけで、文書の検査（progress-index・doc-links・adr-numbers・範囲）はその後に再実行した。

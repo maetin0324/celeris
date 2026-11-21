@@ -536,6 +536,31 @@ impl Dispatcher {
                 check_failure_signature: check_failure.as_ref().map(|f| f.failure_signature()),
                 misplaced: misplaced_result,
             });
+            // ADR-0079 D7・ADR 2026-11-21-worker-decisions-fail-closed 付記 2026-11-21: leaf の決定の要求は WU の失敗の処理より
+            // 先に読み、`needed_before: self` なら leaf を `blocked(decision)` にして失敗の処理を起こさない。auto-leaf の上限の
+            // 決定の要求は同じ記録に入れる。他の unit を指した決定はその unit だけを止め、この run の遷移は変えない。
+            let mut found = if settled.reads_worker_decisions() {
+                let (site_artifacts, _, _, _) = self.work_unit_checkpoint_site(&task, Some(wu));
+                self.worker_decisions(&task, Some(wu), site_artifacts.as_deref(), &run_id)?
+            } else {
+                None
+            };
+            if let Some(f) = found.as_ref().filter(|f| f.self_hold) {
+                run_settlement::hold_for_worker_decisions(&mut settled, wu, f.count);
+            }
+            if let Some(request) = settled.auto_leaf_request.take() {
+                let f = found.get_or_insert_with(|| WorkerDecisions {
+                    events: vec![],
+                    held_rows: vec![],
+                    self_hold: true,
+                    count: 0,
+                });
+                f.events.push(Event::DecisionRequested {
+                    decision: Box::new(request),
+                });
+                (f.self_hold, f.count) = (true, f.count + 1);
+            }
+            worker_decisions = found;
             if let Some(reason) = settled.integration_repair_exhaust {
                 let (fallback, event) = self.integration_repair_exhaustion(&task, wu, reason)?;
                 integration_exhausted_event = event;
@@ -588,33 +613,6 @@ impl Dispatcher {
                     .unwrap_or_else(|| subject.summary.clone());
                 paragraphs.push(format!("{}: {}", wu.spec.title, this_completed));
                 subject.summary = paragraphs.join("\n");
-            }
-            // ADR-0079 D7（Phase R3a）: 木の節点の leaf の run が `result.json` の `decisions` で人への決定の要求を
-            // 出した。記録し（path 付き）、`needed_before: self` ならこの leaf を done にせず止める。他の unit を指した
-            // 決定はその unit だけを止め、この run の完了は妨げない。
-            if settled.reads_worker_decisions() {
-                let (site_artifacts, _, _, _) = self.work_unit_checkpoint_site(&task, Some(wu));
-                if let Some(found) =
-                    self.worker_decisions(&task, Some(wu), site_artifacts.as_deref(), &run_id)?
-                {
-                    if found.self_hold {
-                        run_settlement::hold_for_worker_decisions(
-                            &mut settled,
-                            &wu.key,
-                            found.count,
-                        );
-                    }
-                    worker_decisions = Some(found);
-                }
-            } else if let Some(request) = settled.auto_leaf_request.take() {
-                worker_decisions = Some(WorkerDecisions {
-                    events: vec![Event::DecisionRequested {
-                        decision: Box::new(request),
-                    }],
-                    held_rows: vec![],
-                    self_hold: true,
-                    count: 1,
-                });
             }
             trigger = settled.trigger;
             outcome_str = settled.outcome;
@@ -678,19 +676,16 @@ impl Dispatcher {
                 });
             }
         }
-        // ADR-0079 D7（Phase R3a）: 木の節点の atomic の run（WU を持たない）が `result.json` の `decisions` を
-        // 書いた。記録し、`needed_before: self` なら最終レビューに進めず `ready` に戻して（`advance`）、答えが
-        // 出るまで run を起こさない（`decision_self_hold`。答えは次の run の前置きの `answers` に入る）。
-        if current_wu.is_none() && run_settlement::task_reads_worker_decisions(&trigger, run_end) {
+        // ADR-0079 D7・ADR 2026-11-21-worker-decisions-fail-closed 付記「atomic の規則」: 木の節点の atomic の run の
+        // `decisions` を記録し、`needed_before: self` なら trigger を `hold_task_for_worker_decisions` で替え、答えまで
+        // run を起こさない（`decision_self_hold`。答えは次の run の前置きの `answers` に入る）。
+        if current_wu.is_none() && run_settlement::task_reads_worker_decisions(run_end) {
             let artifacts_dir = self.task_dir(&task).map(|d| self.artifacts_dir(&task, &d));
-            if let Some(found) =
-                self.worker_decisions(&task, None, artifacts_dir.as_deref(), &run_id)?
-            {
-                if found.self_hold {
-                    (trigger, outcome_str) =
-                        run_settlement::hold_task_for_worker_decisions(found.count);
-                }
-                worker_decisions = Some(found);
+            worker_decisions =
+                self.worker_decisions(&task, None, artifacts_dir.as_deref(), &run_id)?;
+            if let Some(f) = worker_decisions.as_ref().filter(|f| f.self_hold) {
+                (trigger, outcome_str) =
+                    run_settlement::hold_task_for_worker_decisions(trigger, &outcome_str, f.count);
             }
         }
         // ADR-0054 D1（Phase 67）: CoS の対話 run（継続セッション）は、この run の usage を

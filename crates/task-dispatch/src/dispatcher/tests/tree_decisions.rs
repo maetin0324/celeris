@@ -13,13 +13,26 @@ use super::tree::{
 };
 use super::*;
 
-/// planner run には計画の列を順に書き、run の文脈を記録する。worker の run は、`declare` に key（WU の key、
-/// 子 task なら題名の `Child ` の後）があれば最初の run の `result.json` にその `decisions` を書き、それ以外は
-/// `decisions` の無い `result.json` を書く。
+/// planner run には計画の列を順に書き、run の文脈を記録する。worker の run は、`script` に key（WU の key、
+/// 子 task なら題名の `Child ` の後）の台本が残っていれば先頭の 1 run を使い、無ければ `declare` に key があれば
+/// 最初の run の `result.json` にその `decisions` を書き、それ以外は `decisions` の無い `result.json` を書く。`ask` に
+/// key があれば、その key の最初の run は `result.json` に `question` を書いて質問で終わる（`decisions` は上と同じ）。
+/// `fail` に key があれば、その key の最初の run は `result.json` を書いた後に失敗（`Terminal::Error{retryable: true}`）で
+/// 終わる。
 struct DecisionAdapter {
     plans: StdMutex<VecDeque<String>>,
     seen: StdMutex<Vec<task_worker::RunContext>>,
     declare: StdMutex<BTreeMap<String, serde_json::Value>>,
+    script: StdMutex<BTreeMap<String, VecDeque<ScriptedRun>>>,
+    ask: StdMutex<BTreeMap<String, String>>,
+    fail: StdMutex<BTreeMap<String, String>>,
+}
+
+/// `DecisionAdapter` の台本の 1 run。`yielded` があればその checkpoint で yield し（`result.json` の `yield`）、
+/// 無ければ `summary` 付きの完了で終わる。`decisions` があれば `result.json` に書く。
+struct ScriptedRun {
+    yielded: Option<serde_json::Value>,
+    decisions: Option<serde_json::Value>,
 }
 
 impl DecisionAdapter {
@@ -28,7 +41,34 @@ impl DecisionAdapter {
             plans: StdMutex::new(plans.into_iter().collect()),
             seen: StdMutex::new(Vec::new()),
             declare: StdMutex::new(BTreeMap::new()),
+            script: StdMutex::new(BTreeMap::new()),
+            ask: StdMutex::new(BTreeMap::new()),
+            fail: StdMutex::new(BTreeMap::new()),
         }
+    }
+
+    fn asking(self, key: &str, question: &str) -> Self {
+        self.ask
+            .lock()
+            .unwrap()
+            .insert(key.to_string(), question.to_string());
+        self
+    }
+
+    fn failing(self, key: &str, message: &str) -> Self {
+        self.fail
+            .lock()
+            .unwrap()
+            .insert(key.to_string(), message.to_string());
+        self
+    }
+
+    fn scripting(self, key: &str, runs: Vec<ScriptedRun>) -> Self {
+        self.script
+            .lock()
+            .unwrap()
+            .insert(key.to_string(), runs.into_iter().collect());
+        self
     }
 
     fn declaring(self, key: &str, decisions: serde_json::Value) -> Self {
@@ -88,15 +128,52 @@ impl WorkerAdapter for DecisionAdapter {
                     .unwrap_or("atomic")
                     .to_string(),
             };
-            let declared = self.declare.lock().unwrap().remove(&key);
-            let result = match declared {
-                Some(decisions) => {
-                    serde_json::json!({"summary": "ok", "evidence": [], "decisions": decisions})
-                }
-                None => serde_json::json!({"summary": "ok", "evidence": []}),
+            let scripted = self
+                .script
+                .lock()
+                .unwrap()
+                .get_mut(&key)
+                .and_then(VecDeque::pop_front);
+            let run = scripted.unwrap_or_else(|| ScriptedRun {
+                yielded: None,
+                decisions: self.declare.lock().unwrap().remove(&key),
+            });
+            let asked = self.ask.lock().unwrap().remove(&key);
+            let mut result = match (&asked, &run.yielded) {
+                (Some(text), _) => serde_json::json!({"question": text}),
+                (None, Some(checkpoint)) => serde_json::json!({"yield": checkpoint}),
+                (None, None) => serde_json::json!({"summary": "ok", "evidence": []}),
             };
+            if let Some(decisions) = run.decisions {
+                result["decisions"] = decisions;
+            }
             std::fs::write(req.artifacts_dir.join("result.json"), result.to_string())
                 .expect("write result.json");
+            if let Some(text) = asked {
+                return Ok(RunOutcome {
+                    terminal: Terminal::Question { text, usage: None },
+                    exit_code: Some(0),
+                });
+            }
+            if let Some(message) = self.fail.lock().unwrap().remove(&key) {
+                return Ok(RunOutcome {
+                    terminal: Terminal::Error {
+                        message,
+                        retryable: true,
+                        usage: None,
+                    },
+                    exit_code: Some(1),
+                });
+            }
+            if let Some(checkpoint) = run.yielded {
+                return Ok(RunOutcome {
+                    terminal: Terminal::Yielded {
+                        checkpoint,
+                        usage: None,
+                    },
+                    exit_code: Some(0),
+                });
+            }
         }
         Ok(RunOutcome {
             terminal: Terminal::Done {
@@ -894,6 +971,182 @@ async fn rejected_worker_decision_reaches_the_inbox_and_holds_the_leaf() {
     assert_replay_is_clean(&store);
 }
 
+/// ADR 2026-11-21-worker-decisions-fail-closed D2（不変条件 I1・I2・I4）: leaf が `result.json` の `decisions` に
+/// 配列でなく決定 1 件の形の object を書く。要求は受け付けられない（1 件の配列に読み替えない）が、黙って進まない:
+/// decisions に `rejected` の行（open・origin worker・`needed_before = [leaf]`、問いに `#field` と型の誤りの理由）が
+/// できて受信箱の未回答の決定に出て、leaf は done にならず `blocked(decision)`、integrate も root も進まない。答えると
+/// leaf が走り直し、木が終わる。修正の前は `worker_decisions_from_json` が配列でない欄を空にしたので、決定は 0 件で
+/// leaf は done になった。既存の `rejected_worker_decision_reaches_the_inbox_and_holds_the_leaf`・
+/// `worker_declared_decisions` は `decisions` に配列しか渡さないので、これを検出できない。
+#[tokio::test]
+async fn decision_fail_closed_non_array_decisions_hold_the_leaf() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let root = root_task(dir.path());
+    let root_id = root.id;
+    store.create_task(&root, vec![]).unwrap();
+    let plan = v3_plan(
+        vec![stage("s1", false)],
+        vec![leaf("a", "s1", &[]), leaf("b", "s1", &[])],
+    );
+    // 配列でない: 決定 1 件の形の object そのもの。
+    let adapter =
+        Arc::new(DecisionAdapter::new(vec![plan]).declaring("a", decision_spec("trim", &["self"])));
+    let mut d = tree_dispatcher(&store, adapter.clone());
+    run_until_quiet(&mut d, &store, 1500).await;
+
+    // run の結果: leaf は done にならず止まり、integrate も root も進まない。
+    let units = store.work_units_for(root_id).unwrap();
+    assert!(blocked_by_decision(&units, "a"), "{units:?}");
+    assert_eq!(unit(&units, "b").status, task_core::WorkUnitStatus::Done);
+    assert_ne!(
+        unit(&units, "integrate-s1").status,
+        task_core::WorkUnitStatus::Done
+    );
+    assert_eq!(store.get(root_id).unwrap().unwrap().status, Status::Ready);
+    // decisions の行: 型の誤りをまとめた 1 件だけ（object の中の trim は受け付けない）。
+    let rows = store.decisions_list(Some(root_id)).unwrap();
+    assert_eq!(
+        rows.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(),
+        vec![task_core::decision::REJECTED_KEY]
+    );
+    let row = &rows[0];
+    assert_eq!(row.status, task_core::DecisionStatus::Open);
+    assert_eq!(row.task_id, root_id);
+    assert_eq!(row.needed_before, vec!["a".to_string()]);
+    assert_eq!(
+        row.request.raised_by.origin,
+        task_core::DecisionOrigin::Worker
+    );
+    assert_eq!(
+        row.request.raised_by.run_id.as_deref(),
+        unit(&units, "a").last_run_id.as_deref()
+    );
+    assert_eq!(
+        row.request.cost_of_reversal,
+        task_core::CostOfReversal::High
+    );
+    for needle in [
+        "決定の要求 1 件",
+        "1) #field trim question trim",
+        "decisions must be an array of decision objects (got object)",
+    ] {
+        assert!(
+            row.request.question.contains(needle),
+            "{needle:?} in {}",
+            row.request.question
+        );
+    }
+    // 受信箱: 未回答の決定（受信箱・通知の対象）に出る。
+    let inbox = task_ops::decision::open_rows(store.as_ref()).unwrap();
+    assert_eq!(
+        inbox.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+        vec![row.id.as_str()]
+    );
+    // 進行の 1 行（理由）も残る。
+    let events = store.events_for(root_id).unwrap();
+    assert!(events.iter().any(|(_, e)| matches!(
+        e,
+        Event::WorkerProgress { msg, .. } if msg.contains("worker の決定の要求を記録できませんでした")
+            && msg.contains("(got object)")
+    )));
+    assert_eq!(unit_reasons(&events, "a"), vec!["dispatch", "decision"]);
+    no_questions(&store, root_id);
+
+    // 答える → a が走り直し（2 回目の run は `decisions` を書かない）、木が終わる。
+    let outcome = answer(
+        &store,
+        &row.id,
+        Some(task_core::decision::BUNDLE_OPTION_RECOMMENDED),
+        None,
+    );
+    assert_eq!(outcome.resumed, vec!["a".to_string()]);
+    let report = run_until_idle(&mut d, 1500).await;
+    assert!(report.idle, "{report:?}");
+    let units = store.work_units_for(root_id).unwrap();
+    assert_eq!(unit(&units, "a").status, task_core::WorkUnitStatus::Done);
+    assert_eq!(unit(&units, "a").runs, 2);
+    assert_eq!(
+        unit(&units, "integrate-s1").status,
+        task_core::WorkUnitStatus::Done
+    );
+    assert_eq!(store.get(root_id).unwrap().unwrap().status, Status::Done);
+    assert_replay_is_clean(&store);
+}
+
+/// ADR 2026-11-21-worker-decisions-fail-closed D2（不変条件 I1・I2）: 木の子の atomic の節点（WU の無い run）が
+/// `decisions` に文字列を書く。`needed_before = [self]` の `rejected` の行（open・origin worker・節点の task）が
+/// でき、受信箱の未回答の決定に出て、節点は答えるまで done にならない（`ready` のまま run 1 本）。答えると節点が
+/// 走り直して done になり、root も終わる。修正の前は配列でない欄が空になり、決定は 0 件で節点は 1 run で done に
+/// なった。既存の試験の atomic の場面（`worker_declared_decisions` の子 k）は配列しか渡さないので検出できない。
+#[tokio::test]
+async fn decision_fail_closed_non_array_decisions_hold_the_atomic_node() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let root = root_task(dir.path());
+    let root_id = root.id;
+    store.create_task(&root, vec![]).unwrap();
+    let plan = v3_plan(
+        vec![stage("s1", false)],
+        vec![leaf("a", "s1", &[]), task_unit("k", "s1", &[], "true")],
+    );
+    let adapter = Arc::new(
+        DecisionAdapter::new(vec![plan])
+            .declaring("k", serde_json::json!("which vault should the node use?")),
+    );
+    let mut d = tree_dispatcher(&store, adapter.clone());
+    run_until_quiet(&mut d, &store, 1500).await;
+
+    // 節点は止まる（ready、run 1 本）。root は終わらない。
+    let child = child_named(&store, root_id, "k").expect("child k");
+    assert_eq!(store.runs_for_task(child.id).unwrap().len(), 1);
+    assert_eq!(store.get(child.id).unwrap().unwrap().status, Status::Ready);
+    assert_ne!(store.get(root_id).unwrap().unwrap().status, Status::Done);
+    let rows = store.decisions_list(Some(root_id)).unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|r| (r.task_id, r.key.as_str()))
+            .collect::<Vec<_>>(),
+        vec![(child.id, task_core::decision::REJECTED_KEY)]
+    );
+    let row = &rows[0];
+    assert_eq!(row.status, task_core::DecisionStatus::Open);
+    assert_eq!(row.needed_before, vec!["self".to_string()]);
+    assert_eq!(
+        row.request.raised_by.origin,
+        task_core::DecisionOrigin::Worker
+    );
+    assert!(
+        row.request
+            .question
+            .contains("decisions must be an array of decision objects (got string)"),
+        "{}",
+        row.request.question
+    );
+    let inbox = task_ops::decision::open_rows(store.as_ref()).unwrap();
+    assert_eq!(
+        inbox.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+        vec![row.id.as_str()]
+    );
+    no_questions(&store, child.id);
+
+    // 答える → 節点が走り直して done、root も終わる。
+    answer(
+        &store,
+        &row.id,
+        Some(task_core::decision::BUNDLE_OPTION_RECOMMENDED),
+        None,
+    );
+    let report = run_until_idle(&mut d, 1500).await;
+    assert!(report.idle, "{report:?}");
+    assert_eq!(store.runs_for_task(child.id).unwrap().len(), 2);
+    assert_eq!(store.get(child.id).unwrap().unwrap().status, Status::Done);
+    let units = store.work_units_for(root_id).unwrap();
+    assert_eq!(unit(&units, "k").status, task_core::WorkUnitStatus::Done);
+    assert_eq!(store.get(root_id).unwrap().unwrap().status, Status::Done);
+    assert_replay_is_clean(&store);
+}
+
 /// ADR-0079 D15: `[execution.tree] enabled = false`（既定）では何も変わらない: 木でない task の worker が
 /// `result.json` に `decisions` を書いても記録されず止まらず、前置きに決定の要求の節も出ない。
 #[tokio::test]
@@ -999,5 +1252,662 @@ async fn phase_gate_continue_without_note_adds_nothing() {
             .contains(task_core::decision::DECISIONS_HEADING),
         "{}",
         child.objective
+    );
+}
+
+/// yield の checkpoint（`completed` が `n` 件）。同じ `n` の checkpoint を続けると進捗なしになる。
+fn yielded_checkpoint(n: usize) -> serde_json::Value {
+    serde_json::json!({
+        "completed": (0..n).map(|i| format!("step {i}")).collect::<Vec<_>>(),
+        "remaining": ["finish"],
+        "next_action": "finish",
+    })
+}
+
+/// 決定を待つ leaf a の行・決定の行・受信箱・events を確かめる（yield・進捗なしの試験の共通の前半）。`runs` は
+/// 止まるまでの a の run の数。a は done にも continuation にもならず、integrate と root は進まず、質問も出ない。
+fn assert_leaf_held_by_worker_decision(
+    store: &Arc<SqliteStore>,
+    root_id: TaskId,
+    key: &str,
+    runs: u32,
+) -> task_core::DecisionRow {
+    let units = store.work_units_for(root_id).unwrap();
+    assert!(blocked_by_decision(&units, "a"), "{units:?}");
+    assert_eq!(unit(&units, "a").runs, runs, "no continuation run");
+    assert_eq!(unit(&units, "b").status, task_core::WorkUnitStatus::Done);
+    assert_ne!(
+        unit(&units, "integrate-s1").status,
+        task_core::WorkUnitStatus::Done
+    );
+    assert_eq!(store.get(root_id).unwrap().unwrap().status, Status::Ready);
+    let row = decision(store, root_id, key);
+    assert_eq!(row.status, task_core::DecisionStatus::Open);
+    assert_eq!(row.needed_before, vec!["a".to_string()]);
+    assert_eq!(
+        row.request.raised_by.origin,
+        task_core::DecisionOrigin::Worker
+    );
+    assert_eq!(
+        row.request.raised_by.run_id.as_deref(),
+        unit(&units, "a").last_run_id.as_deref()
+    );
+    let inbox = task_ops::decision::open_rows(store.as_ref()).unwrap();
+    assert_eq!(
+        inbox.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+        vec![row.id.as_str()]
+    );
+    let events = store.events_for(root_id).unwrap();
+    assert_eq!(
+        unit_reasons(&events, "a").last().map(String::as_str),
+        Some("decision")
+    );
+    no_questions(store, root_id);
+    row
+}
+
+/// 答えると a が最初から走り直し（continuation の文脈が無い）、木が done になる（yield・進捗なしの試験の共通の後半）。
+async fn answer_and_finish(
+    d: &mut Dispatcher,
+    store: &Arc<SqliteStore>,
+    adapter: &DecisionAdapter,
+    root_id: TaskId,
+    row: &task_core::DecisionRow,
+    runs: u32,
+) {
+    let outcome = answer(store, &row.id, Some("org-vault"), None);
+    assert_eq!(outcome.resumed, vec!["a".to_string()]);
+    let report = run_until_idle(d, 1500).await;
+    assert!(report.idle, "{report:?}");
+    let units = store.work_units_for(root_id).unwrap();
+    assert_eq!(unit(&units, "a").status, task_core::WorkUnitStatus::Done);
+    assert_eq!(unit(&units, "a").runs, runs);
+    let last = adapter
+        .contexts()
+        .into_iter()
+        .rfind(|c| c.work_unit.as_ref().is_some_and(|w| w.key == "a"))
+        .expect("a ran after the answer");
+    assert!(
+        last.continuation.is_none(),
+        "the run after the answer starts over"
+    );
+    assert_eq!(last.work_unit.map(|w| w.human_decisions.len()), Some(1));
+    assert_eq!(
+        unit(&units, "integrate-s1").status,
+        task_core::WorkUnitStatus::Done
+    );
+    assert_eq!(store.get(root_id).unwrap().unwrap().status, Status::Done);
+    assert_replay_is_clean(store);
+}
+
+/// ADR 2026-11-21-worker-decisions-fail-closed D1・付記 2026-11-21（不変条件 I1・I2）: leaf が yield で終わる run の
+/// `result.json` に `needed_before: [self]` の決定を書く。決定が受信箱の未回答の決定に出て、leaf は continuation に
+/// 進まず `blocked(decision)` で止まり、integrate も root も進まない。答えると leaf が最初から走り、木が終わる。
+/// 修正の前は done の遷移でしか `decisions` を読まなかったので、決定は 0 件で leaf は continuation の run で done に
+/// なった。既存の試験の adapter は常に `summary` 付きの完了で終わるので、yield の run の要求を検出できない。
+#[tokio::test]
+async fn decision_fail_closed_yielded_leaf_records_decisions() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let root = root_task(dir.path());
+    let root_id = root.id;
+    store.create_task(&root, vec![]).unwrap();
+    let plan = v3_plan(
+        vec![stage("s1", false)],
+        vec![leaf("a", "s1", &[]), leaf("b", "s1", &[])],
+    );
+    let adapter = Arc::new(DecisionAdapter::new(vec![plan]).scripting(
+        "a",
+        vec![ScriptedRun {
+            yielded: Some(yielded_checkpoint(1)),
+            decisions: Some(serde_json::json!([decision_spec("vault", &["self"])])),
+        }],
+    ));
+    let mut d = tree_dispatcher(&store, adapter.clone());
+    run_until_quiet(&mut d, &store, 1500).await;
+
+    let row = assert_leaf_held_by_worker_decision(&store, root_id, "vault", 1);
+    let events = store.events_for(root_id).unwrap();
+    assert_eq!(unit_reasons(&events, "a"), vec!["dispatch", "decision"]);
+    answer_and_finish(&mut d, &store, &adapter, root_id, &row, 2).await;
+}
+
+/// ADR 2026-11-21-worker-decisions-fail-closed D1・付記 2026-11-21（不変条件 I1・I2・I7）: leaf の 2 回目の run が
+/// 進捗なしの yield（`no_progress_limit = 1`）で終わり、`result.json` に `needed_before: [self]` の決定を書く。
+/// 進捗なしの上限の質問（`blocked(limit)`）にせず、決定が受信箱に出て leaf は `blocked(decision)` で止まる
+/// （止めは 1 か所）。答えると leaf が最初から走り、木が終わる。修正の前は `limit` の遷移で `decisions` を
+/// 読まなかったので、決定は 0 件で leaf は `blocked(limit)`・task は質問になった。既存の試験の adapter は yield
+/// しないので、進捗なしで終わる run の要求を検出できない。
+#[tokio::test]
+async fn decision_fail_closed_no_progress_leaf_records_decisions() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let root = root_task(dir.path());
+    let root_id = root.id;
+    store.create_task(&root, vec![]).unwrap();
+    let plan = v3_plan(
+        vec![stage("s1", false)],
+        vec![leaf("a", "s1", &[]), leaf("b", "s1", &[])],
+    );
+    let adapter = Arc::new(DecisionAdapter::new(vec![plan]).scripting(
+        "a",
+        vec![
+            ScriptedRun {
+                yielded: Some(yielded_checkpoint(1)),
+                decisions: None,
+            },
+            ScriptedRun {
+                yielded: Some(yielded_checkpoint(1)),
+                decisions: Some(serde_json::json!([decision_spec("vault", &["self"])])),
+            },
+        ],
+    ));
+    let mut d = tree_dispatcher(&store, adapter.clone());
+    d.config.execution.no_progress_limit = 1;
+    d.config.execution.max_replans = 0;
+    run_until_quiet(&mut d, &store, 1500).await;
+
+    let row = assert_leaf_held_by_worker_decision(&store, root_id, "vault", 2);
+    let units = store.work_units_for(root_id).unwrap();
+    assert_ne!(
+        unit(&units, "a").blocked_reason,
+        Some(task_core::WorkUnitBlockedReason::Limit)
+    );
+    let events = store.events_for(root_id).unwrap();
+    assert_eq!(
+        unit_reasons(&events, "a"),
+        vec!["dispatch", "continue", "dispatch", "decision"]
+    );
+    answer_and_finish(&mut d, &store, &adapter, root_id, &row, 3).await;
+}
+
+/// 木の leaf の run の `WorkerFinished.outcome`（`run_id` の run）。
+fn finished_outcome(events: &[(u64, Event)], run_id: &str) -> String {
+    events
+        .iter()
+        .find_map(|(_, e)| match e {
+            Event::WorkerFinished {
+                run_id: r, outcome, ..
+            } if r == run_id => Some(outcome.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no worker_finished for {run_id}"))
+}
+
+/// a の最後の run（止めた run）の id。
+fn last_run_of_a(store: &Arc<SqliteStore>, root_id: TaskId) -> String {
+    let units = store.work_units_for(root_id).unwrap();
+    unit(&units, "a").last_run_id.clone().expect("a has run")
+}
+
+/// root の決定の行の key（作った順）。
+fn decision_keys(store: &Arc<SqliteStore>, root_id: TaskId) -> Vec<String> {
+    store
+        .decisions_list(Some(root_id))
+        .unwrap()
+        .into_iter()
+        .map(|r| r.key)
+        .collect()
+}
+
+fn auto_replans(events: &[(u64, Event)]) -> usize {
+    events
+        .iter()
+        .filter(|(_, e)| matches!(e, Event::AutoReplanRequested { .. }))
+        .count()
+}
+
+/// ADR 2026-11-21-worker-decisions-fail-closed D1・付記 2026-11-21（不変条件 I1・I2・I7。数えと checks の不合格の記録を
+/// 変えない）: leaf a の check が落ち続ける。1 回目の run は `summary` だけで終わり check の不合格で再試行（1/2）になる。
+/// 2 回目の run は `summary` と `needed_before: [self]` の決定を書き、check がまた落ちる。決定が受信箱の未回答の決定に
+/// 出て a は `blocked(decision)` で止まり、再試行の run は答えまで起きない。1 回目で数えた retries は 1 のまま残り
+/// （止めた run の遷移は `decision` で数えを動かさない）、`WorkUnitChecksFailed` は 2 run とも残る。答えると a が
+/// 走り直し、その run の文脈に止めた run の check の不合格が載り、check が通れば木が終わる。修正の前は再試行の遷移で
+/// `decisions` を読まなかったので、決定は 0 件で a は 3 回目の run に進んだ。既存の
+/// `a_failed_work_unit_check_is_recorded_and_handed_to_the_next_run` は決定を書かず、
+/// `decision_fail_closed_hold_clears_failure_side_effects` は settlement の関数だけで、check の不合格の記録・再試行の
+/// run の抑止・答えの後の再開を通さないので、これを検出できない。
+#[tokio::test]
+async fn decision_fail_closed_check_failed_leaf_records_decisions() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut root = root_task(dir.path());
+    root.budget.max_retries = 2;
+    let root_id = root.id;
+    store.create_task(&root, vec![]).unwrap();
+    let marker = dir.path().join("fixed");
+    let mut checked = leaf("a", "s1", &[]);
+    checked["checks"] =
+        serde_json::json!([{"cmd": format!("test -f {}", marker.display()), "expect_exit": 0}]);
+    let plan = v3_plan(
+        vec![stage("s1", false)],
+        vec![checked, leaf("b", "s1", &[])],
+    );
+    let adapter = Arc::new(DecisionAdapter::new(vec![plan]).scripting(
+        "a",
+        vec![
+            ScriptedRun {
+                yielded: None,
+                decisions: None,
+            },
+            ScriptedRun {
+                yielded: None,
+                decisions: Some(serde_json::json!([decision_spec("vault", &["self"])])),
+            },
+        ],
+    ));
+    let mut d = tree_dispatcher(&store, adapter.clone());
+    run_until_quiet(&mut d, &store, 1500).await;
+
+    let row = assert_leaf_held_by_worker_decision(&store, root_id, "vault", 2);
+    let units = store.work_units_for(root_id).unwrap();
+    assert_eq!(unit(&units, "a").retries, 1, "the counted retry stays");
+    let events = store.events_for(root_id).unwrap();
+    assert_eq!(
+        unit_reasons(&events, "a"),
+        vec!["dispatch", "retry", "dispatch", "decision"]
+    );
+    let held_run = last_run_of_a(&store, root_id);
+    let failed_runs: Vec<&str> = events
+        .iter()
+        .filter_map(|(_, e)| match e {
+            Event::WorkUnitChecksFailed { run_id, key, .. } if key == "a" => Some(run_id.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(failed_runs.len(), 2, "both runs keep their check failure");
+    assert_eq!(failed_runs[1], held_run.as_str());
+    assert_eq!(
+        finished_outcome(&events, &held_run),
+        "decision: WorkUnit a は人の決定を待ちます（決定の要求 1 件。ADR-0079 D7）"
+    );
+    assert_eq!(auto_replans(&events), 0);
+    // 答えるまで再試行の run は起きない。
+    for _ in 0..10 {
+        d.tick().unwrap();
+    }
+    assert_eq!(adapter.work_unit_contexts("a").len(), 2);
+    assert_eq!(unit(&store.work_units_for(root_id).unwrap(), "a").runs, 2);
+
+    // 答える → a が走り直し、止めた run の check の不合格を受け取る。check が通れば木が終わる。
+    std::fs::write(&marker, "x").unwrap();
+    let outcome = answer(&store, &row.id, Some("org-vault"), None);
+    assert_eq!(outcome.resumed, vec!["a".to_string()]);
+    let report = run_until_idle(&mut d, 1500).await;
+    assert!(report.idle, "{report:?}");
+    let units = store.work_units_for(root_id).unwrap();
+    assert_eq!(unit(&units, "a").status, task_core::WorkUnitStatus::Done);
+    assert_eq!(unit(&units, "a").runs, 3);
+    assert_eq!(unit(&units, "a").retries, 1);
+    let a_contexts = adapter.work_unit_contexts("a");
+    assert_eq!(a_contexts.len(), 3);
+    assert!(
+        a_contexts[2]
+            .previous_check_failures
+            .iter()
+            .any(|l| l.contains("test -f")),
+        "{:?}",
+        a_contexts[2].previous_check_failures
+    );
+    assert_eq!(a_contexts[2].human_decisions.len(), 1);
+    assert_eq!(store.get(root_id).unwrap().unwrap().status, Status::Done);
+    assert_replay_is_clean(&store);
+}
+
+/// ADR 2026-11-21-worker-decisions-fail-closed D1・付記 2026-11-21（不変条件 I1・I2・I7）: leaf a の run が yield の
+/// `plan_issue`（計画の問題の申告）と `needed_before: [self]` の決定を書く。replan の余地（`max_replans` の既定）が
+/// あっても `AutoReplanRequested` は無く、planner は走らず、決定 1 件が受信箱に出て a は `blocked(decision)` で止まる。
+/// 申告の文は止めた run の outcome に残る。答えると a が最初から走り、木が終わる。修正の前は `plan_issue` の遷移で
+/// `decisions` を読まず、決定は 0 件で自動 replan が起きた。既存の試験は計画の問題を申告する run に決定を書かせない
+/// （`decision_fail_closed_hold_clears_failure_side_effects` は settlement の関数だけで、dispatcher が
+/// `AutoReplanRequested` を残さないこと・planner を起こさないことを通さない）ので、これを検出できない。
+#[tokio::test]
+async fn decision_fail_closed_plan_issue_leaf_records_decisions_before_replan() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let root = root_task(dir.path());
+    let root_id = root.id;
+    store.create_task(&root, vec![]).unwrap();
+    let plan = v3_plan(
+        vec![stage("s1", false)],
+        vec![leaf("a", "s1", &[]), leaf("b", "s1", &[])],
+    );
+    let issue = "the check needs the vault choice first";
+    let adapter = Arc::new(DecisionAdapter::new(vec![plan]).scripting(
+        "a",
+        vec![ScriptedRun {
+            yielded: Some(serde_json::json!({
+                "completed": ["step 0"],
+                "remaining": ["finish"],
+                "plan_issue": issue,
+            })),
+            decisions: Some(serde_json::json!([decision_spec("vault", &["self"])])),
+        }],
+    ));
+    let mut d = tree_dispatcher(&store, adapter.clone());
+    assert!(d.config.execution.max_replans > 0, "a replan is available");
+    run_until_quiet(&mut d, &store, 1500).await;
+
+    let events = store.events_for(root_id).unwrap();
+    assert_eq!(auto_replans(&events), 0, "no AutoReplanRequested");
+    let row = assert_leaf_held_by_worker_decision(&store, root_id, "vault", 1);
+    assert_eq!(decision_keys(&store, root_id), vec!["vault".to_string()]);
+    assert_eq!(unit_reasons(&events, "a"), vec!["dispatch", "decision"]);
+    assert_eq!(adapter.planner_contexts().len(), 1, "no replan planner run");
+    assert_eq!(store.execution_plan_list(root_id).unwrap().len(), 1);
+    let held_run = last_run_of_a(&store, root_id);
+    let outcome = finished_outcome(&events, &held_run);
+    assert!(
+        outcome.starts_with("decision: WorkUnit a は人の決定を待ちます（決定の要求 1 件。")
+            && outcome.contains(issue),
+        "{outcome}"
+    );
+    answer_and_finish(&mut d, &store, &adapter, root_id, &row, 2).await;
+    assert_eq!(auto_replans(&store.events_for(root_id).unwrap()), 0);
+    assert_eq!(store.execution_plan_list(root_id).unwrap().len(), 1);
+}
+
+/// ADR 2026-11-21-worker-decisions-fail-closed D1・付記 2026-11-21（不変条件 I1・I7。replan の上限を変えない）:
+/// `max_replans = 0`（replan を使い切った木）で leaf a の check が落ち（`max_retries = 0` で失敗）、その run が
+/// `needed_before: [self]` の決定を書く。leaf を止める決定は worker の決定 1 件だけで、`limit:max_replans` の決定は
+/// 出ない（1 つの leaf を止めるのは 1 か所）。答えた後の run が決定を書かずにまた失敗すると、今までどおり
+/// `limit:max_replans` の決定が出る（上限と数えは変わらない）。修正の前は失敗の遷移で `decisions` を読まず、
+/// worker の決定は 0 件で `limit:max_replans` の決定だけが出た。既存の
+/// `a_tree_node_leaf_failure_after_replans_are_exhausted_raises_the_limit_decision` は決定を書かない run しか通さない
+/// ので、これを検出できない。
+#[tokio::test]
+async fn decision_fail_closed_replan_exhausted_leaf_records_one_decision() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut root = root_task(dir.path());
+    root.budget.max_retries = 0;
+    let root_id = root.id;
+    store.create_task(&root, vec![]).unwrap();
+    let mut failing = leaf("a", "s1", &[]);
+    failing["checks"] = serde_json::json!([{"cmd": "false", "expect_exit": 0}]);
+    let plan = v3_plan(
+        vec![stage("s1", false)],
+        vec![failing, leaf("b", "s1", &[])],
+    );
+    let adapter = Arc::new(
+        DecisionAdapter::new(vec![plan])
+            .declaring("a", serde_json::json!([decision_spec("vault", &["self"])])),
+    );
+    let mut d = tree_dispatcher(&store, adapter.clone());
+    d.config.execution.max_replans = 0;
+    run_until_quiet(&mut d, &store, 1500).await;
+
+    let row = assert_leaf_held_by_worker_decision(&store, root_id, "vault", 1);
+    assert_eq!(
+        decision_keys(&store, root_id),
+        vec!["vault".to_string()],
+        "no limit:max_replans"
+    );
+    let events = store.events_for(root_id).unwrap();
+    assert_eq!(unit_reasons(&events, "a"), vec!["dispatch", "decision"]);
+    assert_eq!(auto_replans(&events), 0);
+    let outcome = finished_outcome(&events, &last_run_of_a(&store, root_id));
+    assert!(!outcome.contains("max_replans"), "{outcome}");
+    assert_eq!(
+        events
+            .iter()
+            .filter(|(_, e)| matches!(e, Event::WorkUnitChecksFailed { key, .. } if key == "a"))
+            .count(),
+        1
+    );
+
+    // 答えた後の run は決定を書かずにまた失敗する → replan の上限が今までどおり効き、`limit:max_replans` が出る。
+    let answered = answer(&store, &row.id, Some("org-vault"), None);
+    assert_eq!(answered.resumed, vec!["a".to_string()]);
+    run_until_quiet(&mut d, &store, 1500).await;
+    let units = store.work_units_for(root_id).unwrap();
+    assert_eq!(unit(&units, "a").runs, 2);
+    assert_eq!(store.get(root_id).unwrap().unwrap().status, Status::Ready);
+    assert_eq!(
+        decision_keys(&store, root_id),
+        vec!["vault".to_string(), "limit:max_replans".to_string()]
+    );
+    let limit = decision(&store, root_id, "limit:max_replans");
+    let inbox = task_ops::decision::open_rows(store.as_ref()).unwrap();
+    assert_eq!(
+        inbox.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+        vec![limit.id.as_str()]
+    );
+    no_questions(&store, root_id);
+    assert_replay_is_clean(&store);
+}
+
+/// ADR 2026-11-21-worker-decisions-fail-closed D1・付記 2026-11-21（不変条件 I1・I2・I7）: leaf a の run が
+/// `result.json` に `question` と `needed_before: [self]` の決定を併記して質問で終わる。質問（`QuestionRaised`・承認の
+/// 行）にせず、決定が受信箱に出て a は `blocked(decision)` で止まり、worker の質問の文は止めた run の outcome
+/// （`。止めた質問: …`）に残る。答えると a が最初から走り、木が終わる。修正の前は質問の遷移で `decisions` を読まず、
+/// 決定は 0 件で a は `blocked(question)`・task は質問になった。既存の試験の adapter は質問で終わらない
+/// （`decision_fail_closed_hold_clears_failure_side_effects` は settlement の関数だけで、`QuestionRaised` を残さない
+/// ことを通さない）ので、これを検出できない。
+#[tokio::test]
+async fn decision_fail_closed_question_leaf_records_decisions() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let root = root_task(dir.path());
+    let root_id = root.id;
+    store.create_task(&root, vec![]).unwrap();
+    let plan = v3_plan(
+        vec![stage("s1", false)],
+        vec![leaf("a", "s1", &[]), leaf("b", "s1", &[])],
+    );
+    let question = "which vault holds the deploy key?";
+    let adapter = Arc::new(
+        DecisionAdapter::new(vec![plan])
+            .declaring("a", serde_json::json!([decision_spec("vault", &["self"])]))
+            .asking("a", question),
+    );
+    let mut d = tree_dispatcher(&store, adapter.clone());
+    run_until_quiet(&mut d, &store, 1500).await;
+
+    let row = assert_leaf_held_by_worker_decision(&store, root_id, "vault", 1);
+    assert_eq!(decision_keys(&store, root_id), vec!["vault".to_string()]);
+    let events = store.events_for(root_id).unwrap();
+    assert_eq!(unit_reasons(&events, "a"), vec!["dispatch", "decision"]);
+    assert_eq!(
+        finished_outcome(&events, &last_run_of_a(&store, root_id)),
+        format!(
+            "decision: WorkUnit a は人の決定を待ちます（決定の要求 1 件。ADR-0079 D7）。止めた質問: {question}"
+        )
+    );
+    answer_and_finish(&mut d, &store, &adapter, root_id, &row, 2).await;
+}
+
+/// 段階 s1 に leaf a と子 k（atomic の節点）を置く計画。
+fn atomic_node_plan() -> String {
+    v3_plan(
+        vec![stage("s1", false)],
+        vec![leaf("a", "s1", &[]), task_unit("k", "s1", &[], "true")],
+    )
+}
+
+/// task の `Transitioned.reason`（古い順）。
+fn task_reasons(events: &[(u64, Event)]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|(_, e)| match e {
+            Event::Transitioned { reason, .. } => Some(reason.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// 子 k（atomic の節点）が worker の決定 `vault`（`needed_before = [self]`）で止まったことを確かめる（yield・失敗の
+/// 試験の共通の前半）。決定は open・origin worker・止めた run の行で受信箱の未回答の決定に出て、k は run 1 本で
+/// `ready` のまま done にならず、unit k と root も終わらず、質問も出ない。tick を回しても答えまで次の run は起きない。
+/// 子 task と決定の行と、止めた run の `WorkerFinished.outcome` を返す。
+fn assert_atomic_node_held_by_worker_decision(
+    d: &mut Dispatcher,
+    store: &Arc<SqliteStore>,
+    root_id: TaskId,
+) -> (Task, task_core::DecisionRow, String) {
+    let child = child_named(store, root_id, "k").expect("child k");
+    let runs = store.runs_for_task(child.id).unwrap();
+    assert_eq!(runs.len(), 1, "no next run before the answer");
+    assert_eq!(store.get(child.id).unwrap().unwrap().status, Status::Ready);
+    let units = store.work_units_for(root_id).unwrap();
+    assert_ne!(unit(&units, "k").status, task_core::WorkUnitStatus::Done);
+    assert_ne!(store.get(root_id).unwrap().unwrap().status, Status::Done);
+    let row = decision(store, root_id, "vault");
+    assert_eq!(row.task_id, child.id);
+    assert_eq!(row.status, task_core::DecisionStatus::Open);
+    assert_eq!(row.needed_before, vec!["self".to_string()]);
+    assert_eq!(
+        row.request.raised_by.origin,
+        task_core::DecisionOrigin::Worker
+    );
+    assert_eq!(
+        row.request.raised_by.run_id.as_deref(),
+        Some(runs[0].run_id.as_str())
+    );
+    let inbox = task_ops::decision::open_rows(store.as_ref()).unwrap();
+    assert_eq!(
+        inbox.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+        vec![row.id.as_str()]
+    );
+    no_questions(store, child.id);
+    for _ in 0..10 {
+        d.tick().unwrap();
+    }
+    assert_eq!(store.runs_for_task(child.id).unwrap().len(), 1);
+    assert_eq!(store.get(child.id).unwrap().unwrap().status, Status::Ready);
+    let outcome = finished_outcome(&store.events_for(child.id).unwrap(), &runs[0].run_id);
+    (child, row, outcome)
+}
+
+/// 答えると k の次の run が走って done になり（答えは `Answered` の event と前置きの `answers` に入る）、root も終わる
+/// （yield・失敗の試験の共通の後半）。答えの後の k の run の文脈（WU・planner・review でない最後の run。この木で
+/// それに当たるのは k の run だけ）を返す。
+async fn answer_atomic_node_and_finish(
+    d: &mut Dispatcher,
+    store: &Arc<SqliteStore>,
+    adapter: &DecisionAdapter,
+    root_id: TaskId,
+    child: &Task,
+    row: &task_core::DecisionRow,
+) -> task_worker::RunContext {
+    answer(store, &row.id, Some("org-vault"), None);
+    let report = run_until_idle(d, 1500).await;
+    assert!(report.idle, "{report:?}");
+    assert_eq!(store.runs_for_task(child.id).unwrap().len(), 2);
+    assert_eq!(store.get(child.id).unwrap().unwrap().status, Status::Done);
+    assert!(
+        store
+            .events_for(child.id)
+            .unwrap()
+            .iter()
+            .any(|(_, e)| matches!(e, Event::Answered { answer, .. }
+                if answer.starts_with("- vault question vault: org vault")))
+    );
+    let last = adapter
+        .contexts()
+        .into_iter()
+        .rfind(|c| c.work_unit.is_none() && c.execution_planner.is_none() && c.review.is_none())
+        .expect("k ran after the answer");
+    assert!(
+        last.answers
+            .iter()
+            .any(|a| a.answer.starts_with("- vault question vault: org vault")),
+        "{:?}",
+        last.answers
+    );
+    let units = store.work_units_for(root_id).unwrap();
+    assert_eq!(unit(&units, "k").status, task_core::WorkUnitStatus::Done);
+    assert_eq!(store.get(root_id).unwrap().unwrap().status, Status::Done);
+    no_questions(store, root_id);
+    assert_replay_is_clean(store);
+    last
+}
+
+/// ADR 2026-11-21-worker-decisions-fail-closed D1・付記「atomic の規則」（不変条件 I1・I2。continuation の数えと
+/// checkpoint を変えない）: 木の子の atomic の節点 k の run が yield で終わり、`result.json` に `needed_before: [self]`
+/// の決定を書く。決定が受信箱の未回答の決定に出て、k は答えるまで次の run（continuation）を起こさず done にならない。
+/// continuation の trigger（遷移 `continue`）と checkpoint は残り、止めた run の outcome は `continue: ` の文の末尾に
+/// 決定を待つことを足したものになる。答えると k の次の run が checkpoint の続き（continuation）として走って done になり、
+/// root も終わる。修正の前は atomic の run は done の run でしか `decisions` を読まなかったので、決定は 0 件で k は
+/// continuation の run で done になった。既存の試験（`worker_declared_decisions` の子 k・
+/// `decision_fail_closed_non_array_decisions_hold_the_atomic_node`）は atomic の節点を done の run でしか通さないので、
+/// yield の run の要求を検出できない。
+#[tokio::test]
+async fn decision_fail_closed_yielded_atomic_node_records_decisions() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let root = root_task(dir.path());
+    let root_id = root.id;
+    store.create_task(&root, vec![]).unwrap();
+    let adapter = Arc::new(DecisionAdapter::new(vec![atomic_node_plan()]).scripting(
+        "k",
+        vec![ScriptedRun {
+            yielded: Some(yielded_checkpoint(1)),
+            decisions: Some(serde_json::json!([decision_spec("vault", &["self"])])),
+        }],
+    ));
+    let mut d = tree_dispatcher(&store, adapter.clone());
+    run_until_quiet(&mut d, &store, 1500).await;
+
+    let (child, row, outcome) = assert_atomic_node_held_by_worker_decision(&mut d, &store, root_id);
+    let events = store.events_for(child.id).unwrap();
+    assert_eq!(
+        task_reasons(&events).last().map(String::as_str),
+        Some("continue")
+    );
+    assert!(
+        events
+            .iter()
+            .any(|(_, e)| matches!(e, Event::CheckpointSaved { .. })),
+        "the checkpoint stays"
+    );
+    assert!(
+        outcome.starts_with("continue: ")
+            && outcome.ends_with("。人の決定を待ちます（決定の要求 1 件。ADR-0079 D7）"),
+        "{outcome}"
+    );
+    let last = answer_atomic_node_and_finish(&mut d, &store, &adapter, root_id, &child, &row).await;
+    assert!(
+        last.continuation.is_some(),
+        "the run after the answer continues from the checkpoint"
+    );
+}
+
+/// ADR 2026-11-21-worker-decisions-fail-closed D1・付記「atomic の規則」（不変条件 I1・I2）: 木の子の atomic の節点 k の
+/// run が `result.json` に `needed_before: [self]` の決定を書いて失敗（`Terminal::Error{retryable: true}`）で終わる。
+/// 決定が受信箱の未回答の決定に出て、k は再試行の run を起こさず、`failed` にも done にもならない（遷移 `advance` で
+/// `ready`。試行を消費しない）。止めた run の outcome は決定を待つ文になる。答えると k の次の run が最初から走って done
+/// になり、root も終わる。修正の前は失敗の run で `decisions` を読まなかったので、決定は 0 件で k は再試行の run で
+/// done になった。既存の試験は atomic の節点を done の run でしか通さないので、失敗の run の要求を検出できない。
+#[tokio::test]
+async fn decision_fail_closed_failed_atomic_node_records_decisions() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let root = root_task(dir.path());
+    let root_id = root.id;
+    store.create_task(&root, vec![]).unwrap();
+    let adapter = Arc::new(
+        DecisionAdapter::new(vec![atomic_node_plan()])
+            .declaring("k", serde_json::json!([decision_spec("vault", &["self"])]))
+            .failing("k", "the vault is not configured"),
+    );
+    let mut d = tree_dispatcher(&store, adapter.clone());
+    run_until_quiet(&mut d, &store, 1500).await;
+
+    let (child, row, outcome) = assert_atomic_node_held_by_worker_decision(&mut d, &store, root_id);
+    let events = store.events_for(child.id).unwrap();
+    assert_eq!(
+        task_reasons(&events).last().map(String::as_str),
+        Some("advance")
+    );
+    assert_eq!(store.get(child.id).unwrap().unwrap().attempts, 0);
+    assert_eq!(
+        outcome,
+        "decision: 人の決定を待ちます（決定の要求 1 件。ADR-0079 D7）"
+    );
+    let last = answer_atomic_node_and_finish(&mut d, &store, &adapter, root_id, &child, &row).await;
+    assert!(
+        last.continuation.is_none(),
+        "the run after the answer starts over"
     );
 }

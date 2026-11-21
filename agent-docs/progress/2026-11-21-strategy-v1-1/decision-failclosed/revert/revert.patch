@@ -1,0 +1,35 @@
+diff --git a/crates/task-core/src/decision.rs b/crates/task-core/src/decision.rs
+index d3ea57d5..5c2fb621 100644
+--- a/crates/task-core/src/decision.rs
++++ b/crates/task-core/src/decision.rs
+@@ -711,15 +711,6 @@ pub fn prepare_worker_decisions(
+             out.accepted.push(bundle);
+         }
+     }
+-    if !lost.is_empty() {
+-        let key = free_key(REJECTED_KEY, &used);
+-        let target = self_key.unwrap_or(NEEDED_BEFORE_SELF);
+-        let escalated = rejected_decision(&key, &lost, target);
+-        // D3: 同じ問いのまとめがこの節点に記録済みなら（古い `result.json` の読み直し）出し直さない。
+-        if !taken.values().any(|q| *q == escalated.question) {
+-            out.escalated = Some(escalated);
+-        }
+-    }
+     out
+ }
+ 
+diff --git a/crates/task-dispatch/src/dispatcher/tree_units.rs b/crates/task-dispatch/src/dispatcher/tree_units.rs
+index e45d1de4..c151c510 100644
+--- a/crates/task-dispatch/src/dispatcher/tree_units.rs
++++ b/crates/task-dispatch/src/dispatcher/tree_units.rs
+@@ -432,9 +432,7 @@ impl Dispatcher {
+                 ),
+             ));
+         }
+-        // ADR 2026-11-18-rejected-worker-decisions-reach-human D1: 受け付けなかった要求は 1 件の決定（`needed_before:
+-        // self`）にまとめて受け付けた決定と同じく記録する（受信箱・通知に出て、要求を出した仕事を止める）。
+-        let recorded: Vec<&task_core::DecisionSpec> = batch.recorded().collect();
++        let recorded: Vec<&task_core::DecisionSpec> = batch.accepted.iter().collect();
+         if recorded.is_empty() {
+             return Ok(Some(WorkerDecisions {
+                 events,

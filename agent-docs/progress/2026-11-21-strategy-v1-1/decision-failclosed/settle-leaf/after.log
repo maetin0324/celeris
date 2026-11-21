@@ -1,0 +1,20 @@
+warning: use of deprecated method `tokio::net::TcpStream::set_linger`: `SO_LINGER` causes the socket to block the thread on drop
+   --> crates/script-runtime/vendor/deno_core/uv_compat/tcp.rs:818:17
+    |
+818 |       && stream.set_linger(Some(std::time::Duration::ZERO)).is_err()
+    |                 ^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: `deno_core` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.93s
+────────────
+ Nextest run ID 135fc848-1e52-4539-8706-9247b83678c2 with nextest profile: default
+    Starting 4 tests across 5 binaries (3297 tests skipped)
+        PASS [   0.012s] (1/4) task-dispatch run_settlement::work_unit::tests::decision_fail_closed_hold_clears_failure_side_effects
+        PASS [   0.012s] (2/4) task-dispatch run_settlement::work_unit::tests::decision_fail_closed_reads_every_end_but_reset_and_cluster_jobs
+        PASS [   2.212s] (3/4) task-dispatch dispatcher::tests::tree_decisions::decision_fail_closed_yielded_leaf_records_decisions
+        PASS [   2.342s] (4/4) task-dispatch dispatcher::tests::tree_decisions::decision_fail_closed_no_progress_leaf_records_decisions
+────────────
+     Summary [   2.360s] 4 tests run: 4 passed, 3297 skipped
+exit=0

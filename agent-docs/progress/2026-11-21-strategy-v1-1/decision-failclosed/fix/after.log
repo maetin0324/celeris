@@ -1,0 +1,21 @@
+   Compiling task-core v0.1.0 (/local/celeris/data/workspaces/01M7XSGW4FH258N1K3AMW76Y6F/wu/fix/repos/agent-platform/crates/task-core)
+warning: use of deprecated method `tokio::net::TcpStream::set_linger`: `SO_LINGER` causes the socket to block the thread on drop
+   --> crates/script-runtime/vendor/deno_core/uv_compat/tcp.rs:818:17
+    |
+818 |       && stream.set_linger(Some(std::time::Duration::ZERO)).is_err()
+    |                 ^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: `deno_core` (lib) generated 1 warning
+   Compiling task-dispatch v0.1.0 (/local/celeris/data/workspaces/01M7XSGW4FH258N1K3AMW76Y6F/wu/fix/repos/agent-platform/crates/task-dispatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 40.17s
+────────────
+ Nextest run ID ab249de1-15b1-49d7-8e04-22923f2afe3e with nextest profile: default
+    Starting 3 tests across 5 binaries (3294 tests skipped)
+        PASS [   0.008s] (1/3) task-core decision::tests::decision_fail_closed_non_array_decisions_become_one_rejected_decision
+        PASS [   2.114s] (2/3) task-dispatch dispatcher::tests::tree_decisions::decision_fail_closed_non_array_decisions_hold_the_leaf
+        PASS [   2.216s] (3/3) task-dispatch dispatcher::tests::tree_decisions::decision_fail_closed_non_array_decisions_hold_the_atomic_node
+────────────
+     Summary [   2.233s] 3 tests run: 3 passed, 3294 skipped
+exit=0

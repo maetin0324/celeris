@@ -825,6 +825,8 @@ struct AutoLeafAdapter {
     tree: TreeAdapter,
     steps: StdMutex<std::collections::VecDeque<AutoLeafStep>>,
     resumed: StdMutex<Vec<bool>>,
+    /// 最後の台本の run（`steps` を使い切る run）が `result.json` に書く `decisions`。
+    last_decisions: StdMutex<Option<serde_json::Value>>,
 }
 
 impl AutoLeafAdapter {
@@ -842,7 +844,13 @@ impl AutoLeafAdapter {
             ),
             steps: StdMutex::new(steps.into()),
             resumed: StdMutex::new(vec![]),
+            last_decisions: StdMutex::new(None),
         }
+    }
+
+    fn deciding_on_last_run(self, decisions: serde_json::Value) -> Self {
+        *self.last_decisions.lock().unwrap() = Some(decisions);
+        self
     }
 }
 
@@ -870,12 +878,21 @@ impl WorkerAdapter for AutoLeafAdapter {
             .lock()
             .unwrap()
             .push(req.context.continuation.is_some());
-        let step = self
-            .steps
-            .lock()
-            .unwrap()
-            .pop_front()
-            .unwrap_or(AutoLeafStep::Done(0));
+        let (step, last) = {
+            let mut steps = self.steps.lock().unwrap();
+            let step = steps.pop_front();
+            (
+                step.unwrap_or(AutoLeafStep::Done(0)),
+                step.is_some() && steps.is_empty(),
+            )
+        };
+        if last && let Some(decisions) = self.last_decisions.lock().unwrap().take() {
+            std::fs::create_dir_all(&req.artifacts_dir).ok();
+            let result =
+                serde_json::json!({"summary": "partial", "evidence": [], "decisions": decisions});
+            std::fs::write(req.artifacts_dir.join("result.json"), result.to_string())
+                .expect("write result.json");
+        }
         let n = match step {
             AutoLeafStep::Done(n)
             | AutoLeafStep::CompactAndWait(n)
@@ -1099,6 +1116,71 @@ async fn auto_leaf_context_rollover_and_continuation_each_raise_a_decision() {
             }),
             "{}",
             decisions[0].request.question
+        );
+        assert_replay_is_clean(&store);
+    }
+}
+
+/// 不変条件（ADR 2026-11-21-worker-decisions-fail-closed 付記 2026-11-21）: auto-leaf の測った回数が上限を超えた run の
+/// 決定の要求（`auto_leaf_budget:…`）は、同じ run の `result.json` に worker の `decisions`（`needed_before: [self]`）が
+/// あってもなくても記録され、leaf は `blocked(decision)` で止まり、WU の遷移の理由は `auto_leaf_budget`（continuation を
+/// 数える）のまま。修正の前も後も通る守り: 読み取りを失敗の処理の前に移し、auto-leaf の要求と worker の決定を
+/// 1 つの記録にまとめる変更で、auto-leaf の要求が worker の決定に置き換わって消えないことを確かめる。既存の
+/// `auto_leaf_context_rollover_and_continuation_each_raise_a_decision` は `result.json` に `decisions` を書かないので、
+/// worker の決定と並ぶ場面を検出できない。
+#[tokio::test]
+async fn decision_fail_closed_auto_leaf_request_recorded_with_and_without_worker_decisions() {
+    for with_worker_decisions in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let root = gate_root(dir.path());
+        store.create_task(&root, vec![]).unwrap();
+        let mut adapter =
+            AutoLeafAdapter::new(vec![
+                AutoLeafStep::Continue(task_core::BudgetKind::Turns, 0);
+                3
+            ]);
+        if with_worker_decisions {
+            adapter = adapter.deciding_on_last_run(serde_json::json!([{
+                "key": "vault",
+                "question": "which vault?",
+                "options": [{"key": "org", "label": "org vault"}, {"key": "manual", "label": "manual entry"}],
+                "recommended": "org",
+                "cost_of_reversal": "medium",
+                "needed_before": ["self"],
+            }]));
+        }
+        let mut d = tree_dispatcher(&store, Arc::new(adapter));
+        d.config.execution.limits.tree.max_depth = 1;
+        run_until_quiet_approving(&mut d, &store, root.id, 500).await;
+        let units = store.work_units_for(root.id).unwrap();
+        let big = unit(&units, "big");
+        assert_eq!(big.runs, 3, "with_worker_decisions={with_worker_decisions}");
+        assert_eq!(
+            big.blocked_reason,
+            Some(task_core::WorkUnitBlockedReason::Decision)
+        );
+        let events = store.events_for(root.id).unwrap();
+        assert_eq!(
+            unit_reasons(&events, "big").last().map(String::as_str),
+            Some("auto_leaf_budget")
+        );
+        let auto_leaf: Vec<_> = store
+            .decisions_list(Some(root.id))
+            .unwrap()
+            .into_iter()
+            .filter(|r| r.key.starts_with(&format!("auto_leaf_budget:{}:", big.id)))
+            .collect();
+        assert_eq!(
+            auto_leaf.len(),
+            1,
+            "with_worker_decisions={with_worker_decisions}"
+        );
+        assert_eq!(auto_leaf[0].status, task_core::DecisionStatus::Open);
+        assert!(
+            auto_leaf[0].request.question.contains("continuation 3 回"),
+            "{}",
+            auto_leaf[0].request.question
         );
         assert_replay_is_clean(&store);
     }

@@ -588,14 +588,17 @@ impl WorkerDecisionBatch {
 
 /// ADR 2026-11-18-rejected-worker-decisions-reach-human D1: 受け付けなかった要求 1 件（まとめの問いの 1 行の材料）。
 struct RejectedRequest {
-    /// 元の要求の 1 行（読めた要求は [`spec_summary`]、読めなかった要素は位置 `#n`）。
+    /// 元の要求の 1 行（読めた要求は [`spec_summary`]、読めなかった要素は位置 `#n`、配列でない欄は `#field`）。
     summary: String,
     reason: String,
     /// 読めた要求の後戻りの大きさ（読めなければ `None` = 分からない）。
     cost: Option<CostOfReversal>,
 }
 
-/// R3a: worker の決定を検証する（形・`needed_before` の指す先・key の重複）。`self_key` は leaf（WU）の run
+/// R3a: worker の決定を検証する（形・`needed_before` の指す先・key の重複）。`field` は `result.json` の `decisions` の
+/// 欄の値（[`worker_decisions_from_json`]）: 配列なら要素を読み、`null` なら何もしない。配列でない値（object・文字列・
+/// 数・真偽値）は、決定 1 件の形の object でも受け付けず、受け付けなかった要求 1 件（位置 `#field`）にする
+/// （ADR 2026-11-21-worker-decisions-fail-closed D2）。`self_key` は leaf（WU）の run
 /// ならその key（`self` をこれに書き換える）、atomic の run なら `None`（`self` のまま = 節点を止める）。
 /// `units` / `stages` は計画の unit と段階の key（atomic なら空: `self` 以外は指せない）。`taken` は
 /// この節点で既に使われている決定の key とその問い。`cap` は新しく開ける決定の数（D3 の `max_open_decisions`
@@ -603,7 +606,7 @@ struct RejectedRequest {
 /// 受け付けなかった要求は `rejected`（進行の 1 行の理由）に入れ、人に出すものを 1 件の決定 `escalated` にまとめる
 /// （ADR 2026-11-18-rejected-worker-decisions-reach-human）。
 pub fn prepare_worker_decisions(
-    raw: &[serde_json::Value],
+    field: &serde_json::Value,
     self_key: Option<&str>,
     units: &BTreeSet<String>,
     stages: &BTreeSet<String>,
@@ -614,13 +617,30 @@ pub fn prepare_worker_decisions(
     // key → 問い（記録済みと、この run で受け付けたもの）。
     let mut used: BTreeMap<String, String> = taken.clone();
     let mut lost: Vec<RejectedRequest> = Vec::new();
+    let raw: &[serde_json::Value] = match field {
+        serde_json::Value::Array(items) => items,
+        serde_json::Value::Null => &[],
+        other => {
+            let reason = format!(
+                "decisions must be an array of decision objects (got {})",
+                json_type(other)
+            );
+            lost.push(RejectedRequest {
+                summary: raw_summary("#field", other),
+                reason: reason.clone(),
+                cost: None,
+            });
+            out.rejected.push(reason);
+            &[]
+        }
+    };
     for (i, item) in raw.iter().enumerate() {
         let mut spec: DecisionSpec = match serde_json::from_value(item.clone()) {
             Ok(s) => s,
             Err(e) => {
                 let reason = format!("decision #{}: {e}", i + 1);
                 lost.push(RejectedRequest {
-                    summary: raw_summary(i, item),
+                    summary: raw_summary(&format!("#{}", i + 1), item),
                     reason: reason.clone(),
                     cost: None,
                 });
@@ -754,9 +774,9 @@ fn spec_summary(d: &DecisionSpec) -> String {
     )
 }
 
-/// 読めなかった要素の 1 行の要約（位置 `#n` と、読めれば文字列の `key` と `question`）。
-fn raw_summary(i: usize, item: &serde_json::Value) -> String {
-    let mut out = format!("#{}", i + 1);
+/// 読めなかった要求の 1 行の要約（位置〈要素は `#n`、配列でない欄は `#field`〉と、読めれば文字列の `key` と `question`）。
+fn raw_summary(position: &str, item: &serde_json::Value) -> String {
+    let mut out = position.to_string();
     for field in ["key", "question"] {
         if let Some(v) = item.get(field).and_then(|v| v.as_str()) {
             out.push(' ');
@@ -764,6 +784,18 @@ fn raw_summary(i: usize, item: &serde_json::Value) -> String {
         }
     }
     out
+}
+
+/// JSON の値の型の名前（配列でない `decisions` の欄の拒否の理由）。
+fn json_type(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "boolean",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
+    }
 }
 
 /// 後戻りの大きさの大きい方。
@@ -867,13 +899,17 @@ fn bundle_decisions(key: &str, rest: &[DecisionSpec], cap: usize) -> DecisionSpe
     }
 }
 
-/// R3a: worker の `result.json` の本文から `decisions` の配列を取り出す（無い・配列でない・JSON でない
-/// ときは空。形の検証は [`prepare_worker_decisions`]）。
-pub fn worker_decisions_from_json(text: &str) -> Vec<serde_json::Value> {
-    serde_json::from_str::<serde_json::Value>(text)
-        .ok()
-        .and_then(|v| v.get("decisions").and_then(|d| d.as_array()).cloned())
-        .unwrap_or_default()
+/// R3a: worker の `result.json` の本文から `decisions` の欄の値を取り出す。要求が無い（欄が無い・`null`・空の配列・
+/// 本文が JSON でない）ときは `None`。配列でない値もそのまま返す: 型の誤りは [`prepare_worker_decisions`] が受け付けなかった
+/// 要求 1 件にする（ADR 2026-11-21-worker-decisions-fail-closed D2。空にして要求を消さない）。
+pub fn worker_decisions_from_json(text: &str) -> Option<serde_json::Value> {
+    let mut value = serde_json::from_str::<serde_json::Value>(text).ok()?;
+    let field = value.get_mut("decisions")?.take();
+    match &field {
+        serde_json::Value::Null => None,
+        serde_json::Value::Array(items) if items.is_empty() => None,
+        _ => Some(field),
+    }
 }
 
 /// R3a: 計画・worker の決定の spec から、daemon が id と path を付けた要求を作る。

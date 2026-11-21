@@ -149,20 +149,48 @@ pub(crate) fn settle_task_run(input: TaskRunInput<'_>) -> TaskRunSettlement {
     }
 }
 
-/// ADR-0079 D7（Phase R3a）: atomic task の run が worker の `result.json` の `decisions` を読むか（done で終わった run だけ）。
-pub(crate) fn task_reads_worker_decisions(trigger: &Trigger, end: Option<RunEnd>) -> bool {
-    matches!(trigger, Trigger::WorkerDone) && end == Some(RunEnd::Completed)
+/// ADR-0079 D7（Phase R3a）・ADR 2026-11-21-worker-decisions-fail-closed 付記「atomic の規則」: atomic task の run が
+/// worker の `result.json` の `decisions` を読むか。終わり方が分かり（`Some`）、状態だけを戻す run（harness_error・
+/// 取り消し。run をやり直し、次の run が要求を出し直す）とクラスタ job の wait（`Waiting`）でなければ読む。trigger は
+/// 見ない（done・yield・予算切れ・質問・失敗のどれで終わった run でも読む）。
+pub(crate) fn task_reads_worker_decisions(end: Option<RunEnd>) -> bool {
+    end.is_some_and(|end| {
+        !matches!(
+            end,
+            RunEnd::HarnessError { .. } | RunEnd::Cancelled | RunEnd::Waiting
+        )
+    })
 }
 
-/// ADR-0079 D7: `needed_before: self` の決定の要求を出した atomic task の run は、最終レビューに進めず `ready` に戻す
-/// （`advance`。答えが出るまで run を起こさない）。返すのは置き換える trigger と outcome の文。
-pub(crate) fn hold_task_for_worker_decisions(count: usize) -> (Trigger, String) {
-    (
-        Trigger::Continue {
-            why: ContinueWhy::Advance,
-        },
-        format!("decision: 人の決定を待ちます（決定の要求 {count} 件。ADR-0079 D7）"),
-    )
+/// ADR-0079 D7・付記「atomic の規則」: `needed_before: self` の決定の要求を出した atomic task の run の trigger と
+/// outcome の文。done・質問・失敗（`WorkerDone`・`WorkerQuestion`・`WorkerError`）は `Continue{advance}` に置き換え、
+/// 最終レビュー・質問・再試行・失敗に進めず `ready` に戻す。質問で終わる提案（worker の質問・進捗なし・固い上限）を
+/// 止めたときは、質問の文を outcome の末尾（`。止めた質問: …`）に残す。それ以外の trigger（continuation の
+/// `Continue{continue}`・子 task 待ちの `Continue{children_wait}`）は trigger と outcome の文を残し、文の末尾に決定を
+/// 待つことを足す（checkpoint・continuation の数え・子の待ちは変えない）。どれでも次の run は `dispatch_admission` の
+/// `decision_self_hold` が答えまで起こさない（止めの正本は decisions の行 1 つ）。
+pub(crate) fn hold_task_for_worker_decisions(
+    trigger: Trigger,
+    outcome: &str,
+    count: usize,
+) -> (Trigger, String) {
+    let waits = format!("人の決定を待ちます（決定の要求 {count} 件。ADR-0079 D7）");
+    match trigger {
+        Trigger::WorkerDone | Trigger::WorkerQuestion | Trigger::WorkerError { .. } => {
+            let mut text = format!("decision: {waits}");
+            if matches!(trigger, Trigger::WorkerQuestion) {
+                let question = outcome.strip_prefix("question: ").unwrap_or(outcome);
+                text.push_str(&format!("。止めた質問: {question}"));
+            }
+            (
+                Trigger::Continue {
+                    why: ContinueWhy::Advance,
+                },
+                text,
+            )
+        }
+        kept => (kept, format!("{outcome}。{waits}")),
+    }
 }
 
 /// [`phase_step_after_write`] の提案。

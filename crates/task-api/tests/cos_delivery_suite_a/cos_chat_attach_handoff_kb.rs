@@ -112,6 +112,7 @@ async fn cos_chat_attach_handoff_kb_candidate_keeps_provenance() {
                 reply_to_id: None,
                 mode: ChatSendMode::Queue,
                 resume_queue: false,
+                discussion_mode: None,
             },
             OffsetDateTime::now_utc(),
         )
@@ -175,6 +176,7 @@ async fn cos_chat_attach_handoff_pin_missing_owner_404() {
                 reply_to_id: None,
                 mode: ChatSendMode::Queue,
                 resume_queue: false,
+                discussion_mode: None,
             },
             OffsetDateTime::now_utc(),
         )

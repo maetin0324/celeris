@@ -11,6 +11,9 @@ mod credential_tests;
 pub mod digest;
 pub mod digest_apply;
 mod digest_fixture;
+mod discussion_mode;
+#[cfg(test)]
+mod discussion_mode_tests;
 mod human_post;
 pub mod intent;
 #[cfg(test)]
@@ -44,6 +47,7 @@ mod window;
 mod window_tests;
 pub use credential::{ChatCheckpointSaved, CosRunCredentialError, CosRunIdentity};
 pub use digest_fixture::{COS_DIGEST_GENERATED_CASES, cos_digest_fixture_jsonl};
+pub use discussion_mode::ChatDiscussionMode;
 pub use human_post::chat_posted_project_tx;
 pub use operations::{AuditContext, CosOperation};
 pub use override_op::{OverrideAction, OverrideResult};
@@ -243,6 +247,10 @@ pub struct ChatMessage {
     /// person's instruction, and `instructed_by` can never cite it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cos_proposal: Option<Box<ChatCosProposal>>,
+    /// ADR 2026-11-21-chat-discussion-mode D1.1: the mode the sender picked (`discuss` / `propose`).
+    /// Absent for `execute` and for messages that did not choose one (today's behaviour).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discussion_mode: Option<ChatDiscussionMode>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -514,6 +522,10 @@ pub struct ChatPostMessageRequest {
     pub reply_to_id: Option<String>,
     pub mode: ChatSendMode,
     pub resume_queue: bool,
+    /// ADR 2026-11-21-chat-discussion-mode D1.1: what the CoS run answering this message may do.
+    /// Absent = `execute` (today's behaviour; nothing is recorded).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discussion_mode: Option<ChatDiscussionMode>,
 }
 /// ADR 2026-10-27-relayed-instructions D2: `POST /chat/threads/{t}/relays`. `text` is the
 /// person's words verbatim; the relaying principal comes from the authentication, never from here.
@@ -530,6 +542,9 @@ pub struct ChatRelayRequest {
     /// RFC 3339: optional expiry (must be after `said_at`).
     #[serde(default)]
     pub expires_at: Option<String>,
+    /// ADR 2026-11-21-chat-discussion-mode D1.1: the mode the person picked, carried verbatim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discussion_mode: Option<ChatDiscussionMode>,
 }
 /// ADR 2026-10-28-single-human-window-general-cos D3: `POST /chat/threads/{t}/forwards`
 /// (CoS operation `chat.relay_forward` only). No text: the forwarded text is the person's

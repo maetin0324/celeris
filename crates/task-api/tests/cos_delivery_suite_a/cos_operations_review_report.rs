@@ -214,6 +214,7 @@ async fn review_report_from_another_run_a_person_or_a_wrong_input_is_422() {
                 reply_to_id: None,
                 mode: task_core::chat::ChatSendMode::Queue,
                 resume_queue: false,
+                discussion_mode: None,
             },
             now,
         )

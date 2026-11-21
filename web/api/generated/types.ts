@@ -751,6 +751,8 @@ export type ChatCosProposal = {
 
 export type ChatCostState = "known" | "unknown" | "not_launched";
 
+export type ChatDiscussionMode = "discuss" | "propose" | "execute";
+
 export type ChatEscalationRef = {
   "item_id": string;
   "open": boolean;
@@ -796,6 +798,7 @@ export type ChatMessage = {
   "client_message_id"?: string | null;
   "cos_proposal"?: ChatCosProposal | null;
   "created_at": string;
+  "discussion_mode"?: ChatDiscussionMode | null;
   "escalation"?: ChatEscalationRef | null;
   "id": string;
   "provenance"?: ChatProvenance | null;
@@ -843,6 +846,7 @@ export type ChatPatchThreadRequest = {
 export type ChatPostMessageRequest = {
   "attachment_ids": Array<string>;
   "client_message_id": string;
+  "discussion_mode"?: ChatDiscussionMode | null;
   "mode": ChatSendMode;
   "reply_to_id"?: string | null;
   "resume_queue": boolean;
@@ -899,6 +903,7 @@ export type ChatRelay = {
 
 export type ChatRelayRequest = {
   "client_message_id": string;
+  "discussion_mode"?: ChatDiscussionMode | null;
   "expires_at"?: string | null;
   "said_at": string;
   "task_ids"?: Array<string>;

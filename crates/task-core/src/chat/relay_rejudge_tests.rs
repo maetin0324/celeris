@@ -33,6 +33,7 @@ fn relay(s: &SqliteStore, thread: &str, key: &str, now: OffsetDateTime, expires:
             said_at: rfc3339(now),
             task_ids: Vec::new(),
             expires_at: expires.map(|n| rfc3339(at(n))),
+            discussion_mode: None,
         },
         "operator:claude-code",
         now,

@@ -336,6 +336,7 @@ impl CosChatLaunch {
             reply_to_id: Some(run.input_message_id.clone()),
             mode: ChatSendMode::Interrupt,
             resume_queue: false,
+            discussion_mode: None,
         };
         if run.launched_at.is_none() {
             // ADR 2026-11-06-cos-run-launch-accounting-and-drain D4-4: `launched_at` is written before the

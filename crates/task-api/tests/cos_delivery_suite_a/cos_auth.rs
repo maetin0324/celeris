@@ -21,6 +21,7 @@ fn live_run(env: &TestEnv, key: &str) -> (String, String, u64) {
                 reply_to_id: None,
                 mode: ChatSendMode::Queue,
                 resume_queue: false,
+                discussion_mode: None,
             },
             now,
         )

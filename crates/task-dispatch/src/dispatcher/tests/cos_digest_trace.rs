@@ -843,6 +843,7 @@ fn trace_interrupt(f: &Fixture) {
                 reply_to_id: None,
                 mode: ChatSendMode::Interrupt,
                 resume_queue: false,
+                discussion_mode: None,
             },
             f.d.now_utc(),
         )

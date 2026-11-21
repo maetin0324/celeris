@@ -72,6 +72,7 @@ fn finished_run_with_events(f: &Fixture) {
                 reply_to_id: None,
                 mode: ChatSendMode::Queue,
                 resume_queue: false,
+                discussion_mode: None,
             },
             at(1),
         )

@@ -254,6 +254,7 @@ pub fn chat_relay_forward_tx(
         said_at: source.created_at.clone(),
         task_ids: req.task_ids.clone(),
         expires_at: req.expires_at.clone(),
+        discussion_mode: None,
     };
     let mut relay = relay_record(tx, to_thread, &relay_req, relayed_by, now)?;
     relay.grant_id = req.grant_id.clone();
@@ -272,6 +273,7 @@ pub fn chat_relay_forward_tx(
             reply_to_id: None,
             mode: ChatSendMode::Queue,
             resume_queue: false,
+            discussion_mode: None,
         },
         &MessageProvenance {
             author: Some(relayed_by.to_owned()),

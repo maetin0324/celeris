@@ -66,6 +66,7 @@ fn req(key: &str, text: &str) -> ChatPostMessageRequest {
         reply_to_id: None,
         mode: ChatSendMode::Queue,
         resume_queue: false,
+        discussion_mode: None,
     }
 }
 
@@ -1322,7 +1323,7 @@ fn cos_workspace_files_attach_to_assistant_reply() {
 fn cos_chat_mcp_metadata_and_atomic_validation() {
     let s = store();
     let input = s
-        .chat_mcp_instruct("chatgpt-rdc", None, None, "依頼", None, at(0))
+        .chat_mcp_instruct("chatgpt-rdc", None, None, "依頼", None, None, at(0))
         .unwrap()
         .response
         .message;
@@ -1336,11 +1337,11 @@ fn cos_chat_mcp_metadata_and_atomic_validation() {
         Ok(())
     }).unwrap();
     assert!(
-        s.chat_mcp_instruct("chatgpt", None, None, "", None, at(1))
+        s.chat_mcp_instruct("chatgpt", None, None, "", None, None, at(1))
             .is_err()
     );
     assert!(
-        s.chat_mcp_instruct("chatgpt", None, Some("missing"), "依頼", None, at(1))
+        s.chat_mcp_instruct("chatgpt", None, Some("missing"), "依頼", None, None, at(1))
             .is_err()
     );
     let threads = s.chat_thread_list(&ChatThreadQuery::default()).unwrap();
@@ -1352,7 +1353,7 @@ fn cos_chat_mcp_input_goes_to_the_general_cos_without_a_new_thread() {
     let s = store();
     let text = format!("{}\nsecond line", "調".repeat(80));
     let input = s
-        .chat_mcp_instruct("chatgpt", None, None, &text, None, at(0))
+        .chat_mcp_instruct("chatgpt", None, None, &text, None, None, at(0))
         .unwrap()
         .response
         .message;
@@ -1360,7 +1361,7 @@ fn cos_chat_mcp_input_goes_to_the_general_cos_without_a_new_thread() {
     let thread = s.chat_thread_get(&input.thread_id).unwrap().unwrap();
     assert_eq!(thread.kind, ChatThreadKind::General);
     let again = s
-        .chat_mcp_instruct("chatgpt", None, None, "next", None, at(1))
+        .chat_mcp_instruct("chatgpt", None, None, "next", None, None, at(1))
         .unwrap()
         .response
         .message;
@@ -1386,6 +1387,7 @@ fn cos_chat_relay_post_records_author_time_and_scope() {
         said_at: "2026-10-04T03:50:00Z".into(),
         task_ids: vec![task.id.to_string()],
         expires_at: Some("2026-10-06T00:00:00Z".into()),
+        discussion_mode: None,
     };
     let now = OffsetDateTime::parse(
         "2026-10-04T04:01:00Z",
@@ -1475,6 +1477,7 @@ fn cos_chat_relay_post_validates_times_and_tasks() {
         said_at: "2026-10-04T00:00:00Z".into(),
         task_ids: vec![],
         expires_at: None,
+        discussion_mode: None,
     };
     let invalid = |req: ChatRelayRequest| {
         let err = s
@@ -1545,9 +1548,18 @@ fn cos_chat_mcp_instruct_relay_is_recorded_with_the_client_as_relayer() {
         said_at: "2026-10-04T10:00:00Z".into(),
         task_ids: vec![],
         expires_at: None,
+        discussion_mode: None,
     };
     let message = s
-        .chat_mcp_instruct("chatgpt", None, None, "sonnet で", Some(&relay), at(0))
+        .chat_mcp_instruct(
+            "chatgpt",
+            None,
+            None,
+            "sonnet で",
+            Some(&relay),
+            None,
+            at(0),
+        )
         .expect("instruct")
         .response
         .message;
@@ -1558,7 +1570,7 @@ fn cos_chat_mcp_instruct_relay_is_recorded_with_the_client_as_relayer() {
     let receipt = s.chat_mcp_reply(Some(&message.id), None).expect("reply");
     assert!(receipt.is_some(), "the receipt still resolves");
     let plain = s
-        .chat_mcp_instruct("chatgpt", None, None, "plain", None, at(1))
+        .chat_mcp_instruct("chatgpt", None, None, "plain", None, None, at(1))
         .expect("plain")
         .response
         .message;
@@ -1661,13 +1673,14 @@ fn cos_review_thread_refuses_every_input_but_the_review_input() {
         said_at: super::store::chat_ts(at(0)),
         task_ids: vec![],
         expires_at: None,
+        discussion_mode: None,
     };
     let e = s
         .chat_relay_post(&review, &relay, "operator:claude-code", at(1))
         .expect_err("relay");
     assert_eq!(status(e), 403);
     let e = s
-        .chat_mcp_instruct("c", Some(&review), None, "続けて", None, at(1))
+        .chat_mcp_instruct("c", Some(&review), None, "続けて", None, None, at(1))
         .expect_err("mcp");
     assert_eq!(status(e), 403);
     let rev = s

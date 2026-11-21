@@ -33,6 +33,7 @@ fn live_run(env: &TestEnv, key: &str) -> (task_core::ProjectId, String, String) 
                 reply_to_id: None,
                 mode: ChatSendMode::Queue,
                 resume_queue: false,
+                discussion_mode: None,
             },
             now,
         )

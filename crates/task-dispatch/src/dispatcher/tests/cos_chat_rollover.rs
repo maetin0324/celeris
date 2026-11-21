@@ -193,6 +193,7 @@ fn post(store: &SqliteStore, thread: &str, key: &str) {
                 reply_to_id: None,
                 mode: ChatSendMode::Queue,
                 resume_queue: false,
+                discussion_mode: None,
             },
             OffsetDateTime::now_utc(),
         )
@@ -874,6 +875,7 @@ async fn cos_chat_launch_delivers_stored_relay_evidence_to_later_runs() {
                     .expect("time"),
                 task_ids: vec![],
                 expires_at: None,
+                discussion_mode: None,
             },
             "operator:test",
             now,

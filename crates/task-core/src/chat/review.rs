@@ -117,6 +117,7 @@ impl SqliteStore {
                 reply_to_id: None,
                 mode: ChatSendMode::Queue,
                 resume_queue: true,
+                discussion_mode: None,
             },
             &MessageProvenance {
                 review_input: true,

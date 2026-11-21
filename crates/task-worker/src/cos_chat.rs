@@ -247,6 +247,13 @@ fn inputs_section(chat: &CosChatContext) -> String {
         chat.inline_read_max_commands
             .unwrap_or(crate::tool_policy::COS_INLINE_READ_MAX_COMMANDS_DEFAULT)
     ));
+    if let Some(mode) = chat.discussion_mode {
+        out.push_str(&format!(
+            "議論の mode: {}（人が選んだ。この run の CoS operation と受信箱の resolve は API がすべて 403 \
+             `discussion_mode_forbidden` で拒否する。読む・話す・案を返事の file に書くだけにする）\n\n",
+            mode.as_str()
+        ));
+    }
     for input in &chat.inputs {
         let marker = if input.interrupt {
             "【割り込み】 "

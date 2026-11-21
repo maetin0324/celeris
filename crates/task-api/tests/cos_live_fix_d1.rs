@@ -53,6 +53,7 @@ fn cos_bearer(env: &TestEnv, thread: &str) -> String {
                 reply_to_id: None,
                 mode: ChatSendMode::Queue,
                 resume_queue: false,
+                discussion_mode: None,
             },
             now,
         )

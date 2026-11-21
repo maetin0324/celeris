@@ -16,6 +16,7 @@ use task_core::chat::{
     ChatStatusPhase, ChatThreadKind, chat_run_state_is_terminal,
 };
 use task_worker::adapter::{RunLimits, WorkerAdapter};
+use task_worker::cos_chat::HarnessCapabilities;
 use task_worker::protocol::{
     COS_RUN_CREDENTIAL_ENV, CosChatAttachment, CosChatContext, CosChatDelivery, CosChatInput,
     RunRequest,
@@ -764,6 +765,7 @@ impl CosChatLaunch {
         let chat = CosChatContext {
             thread_id: thread_id.to_string(),
             run_id: run_id.to_owned(),
+            discussion_mode: crate::cos_context::discussion_mode(&self.store, thread_id, run_id)?,
             inline_read_max_commands: Some(self.config.inline_read_max_commands),
             relayed_instructions,
             inputs: vec![CosChatInput {
@@ -783,12 +785,8 @@ impl CosChatLaunch {
             // These two concrete CLI adapters implement native image input. ACP abilities
             // are negotiated by the agent at runtime, so they stay unconfirmed here.
             harness_capabilities: match pick.harness.as_ref() {
-                "claude_code" => {
-                    task_worker::cos_chat::HarnessCapabilities::for_adapter("claude-code")
-                }
-                "claude-code" | "codex" => {
-                    task_worker::cos_chat::HarnessCapabilities::for_adapter(pick.harness.as_ref())
-                }
+                "claude_code" | "claude-code" => HarnessCapabilities::for_adapter("claude-code"),
+                "codex" => HarnessCapabilities::for_adapter("codex"),
                 _ => None,
             },
             skills: skill_names.clone(),

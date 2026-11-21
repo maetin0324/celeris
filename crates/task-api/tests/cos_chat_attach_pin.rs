@@ -45,6 +45,7 @@ async fn attachment_and_bearer(env: &TestEnv, app: &axum::Router) -> (String, St
                 reply_to_id: None,
                 mode: ChatSendMode::Queue,
                 resume_queue: false,
+                discussion_mode: None,
             },
             now,
         )

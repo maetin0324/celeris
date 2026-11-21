@@ -205,6 +205,7 @@ fn continuation(key: &str, reply_to: Option<&str>) -> ChatPostMessageRequest {
             ChatSendMode::Queue
         },
         resume_queue: false,
+        discussion_mode: None,
     }
 }
 

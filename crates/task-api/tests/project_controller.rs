@@ -434,6 +434,7 @@ async fn project_wake_api_budget_today_counts_not_launched_runs() {
                     reply_to_id: None,
                     mode: ChatSendMode::Queue,
                     resume_queue: false,
+                    discussion_mode: None,
                 },
                 now,
             )

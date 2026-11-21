@@ -646,6 +646,26 @@
       ],
       "type": "object"
     },
+    "ChatDiscussionMode": {
+      "description": "D1.1: what a person allows the CoS run that answers this message to do. Distinct from\n[`super::ChatSendMode`] (the queue handling of a send).",
+      "oneOf": [
+        {
+          "const": "discuss",
+          "description": "Talk and read only: every `/cos/operations` action is refused.",
+          "type": "string"
+        },
+        {
+          "const": "propose",
+          "description": "Talk and leave unapproved drafts as reply files: every `/cos/operations` action is refused.",
+          "type": "string"
+        },
+        {
+          "const": "execute",
+          "description": "Today's behaviour: the existing checks of `/cos/operations` decide.",
+          "type": "string"
+        }
+      ]
+    },
     "Check": {
       "description": "DESIGN §5.3/§5.7 の `Check` 種別。",
       "oneOf": [
@@ -1071,6 +1091,17 @@
             "integer",
             "null"
           ]
+        },
+        "discussion_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatDiscussionMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-11-21-chat-discussion-mode D1.2: the run's mode when its inputs chose `discuss` or\n`propose` (derived by `task_core::discussion_mode::discussion_mode_of_run`). A prompt hint only: the API\nrefuses the run's CoS operations whatever the prompt says. Absent for `execute`."
         },
         "harness_capabilities": {
           "anyOf": [

@@ -51,6 +51,7 @@ pub mod delegate;
 pub mod design_review;
 /// ADR-0124: atomic coding task の決定的な直行経路判定。
 pub mod direct_route;
+pub mod discussion_mode;
 /// ADR 2026-10-07-build-tmp-hygiene D4.4: ディスク使用率の監視の状態。
 pub mod disk_watch;
 /// ADR-0072（Phase E1）: Run lifecycle / checkpoint / continuation の純粋な型と関数。

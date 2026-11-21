@@ -3662,6 +3662,26 @@
       ],
       "type": "string"
     },
+    "ChatDiscussionMode": {
+      "description": "D1.1: what a person allows the CoS run that answers this message to do. Distinct from\n[`super::ChatSendMode`] (the queue handling of a send).",
+      "oneOf": [
+        {
+          "const": "discuss",
+          "description": "Talk and read only: every `/cos/operations` action is refused.",
+          "type": "string"
+        },
+        {
+          "const": "propose",
+          "description": "Talk and leave unapproved drafts as reply files: every `/cos/operations` action is refused.",
+          "type": "string"
+        },
+        {
+          "const": "execute",
+          "description": "Today's behaviour: the existing checks of `/cos/operations` decide.",
+          "type": "string"
+        }
+      ]
+    },
     "ChatEscalationRef": {
       "description": "D2: the item a card of the general thread stands for.",
       "properties": {
@@ -3892,6 +3912,17 @@
         "created_at": {
           "type": "string"
         },
+        "discussion_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatDiscussionMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-11-21-chat-discussion-mode D1.1: the mode the sender picked (`discuss` / `propose`).\nAbsent for `execute` and for messages that did not choose one (today's behaviour)."
+        },
         "escalation": {
           "anyOf": [
             {
@@ -4114,6 +4145,17 @@
         "client_message_id": {
           "type": "string"
         },
+        "discussion_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatDiscussionMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-11-21-chat-discussion-mode D1.1: what the CoS run answering this message may do.\nAbsent = `execute` (today's behaviour; nothing is recorded)."
+        },
         "mode": {
           "$ref": "#/$defs/ChatSendMode"
         },
@@ -4334,6 +4376,17 @@
       "properties": {
         "client_message_id": {
           "type": "string"
+        },
+        "discussion_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatDiscussionMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-11-21-chat-discussion-mode D1.1: the mode the person picked, carried verbatim."
         },
         "expires_at": {
           "default": null,

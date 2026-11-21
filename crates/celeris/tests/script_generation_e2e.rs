@@ -279,6 +279,7 @@ impl World {
                     reply_to_id: None,
                     mode: ChatSendMode::Queue,
                     resume_queue: false,
+                    discussion_mode: None,
                 },
                 now,
             )

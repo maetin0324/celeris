@@ -47,3 +47,12 @@ config・DB・unit の変更は無い（`~/.config/celeris`・systemd の unit�
    期待: 1 passed。FAIL したら 2 段目の前提（sudo・probe の行）が欠けている。
 
 ## 証拠
+提出時の HEAD で実行（Rust のコードはこの WorkUnit で変えていない。clippy は走らせていない）。
+- acceptance 0: `git grep -n CELERIS_SECOND_STAGE_TESTS -- crates scripts docs` → 出力なし、exit 1（0 件）。ADR・進捗の記録は agent-docs 側にある。
+- `for t in scripts/selfdeploy/tests/release_*.sh; do bash $t; done` → 12 本すべて exit 0（`release_host_tests_gate: ok` を含む）。
+- `bash scripts/dev/test-affected.sh` → exit 0（試験対象の変更なし。repo_health_gate: all checks passed）。
+- `sh scripts/dev/progress-index.sh --check` → ok。`sh scripts/dev/check-doc-links.sh` → ok。`cargo fmt --all -- --check` → exit 0。
+- 範囲 check（`CELERIS_WU_SCOPE_PATHS`）: 変更 path は ADR・進捗 2 件・`docs/ops/selfdeploy.md`・release.sh・shell の試験 2 件だけ。
+
+## 未解決
+- 試験 9 の host 実行（sudo が要る）は operator に任せる。本番への移行 2 の command。

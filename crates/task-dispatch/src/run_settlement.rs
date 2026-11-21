@@ -42,9 +42,8 @@ pub(crate) use task_run::{
 };
 mod work_unit;
 pub(crate) use work_unit::{
-    WorkUnitFailureStep, WorkUnitRunInput, WorkUnitSettlement, hold_for_worker_decisions,
-    integration_repair_exhausted, settle_work_unit, settle_work_unit_failure, work_unit_run_end,
-    work_unit_saves_checkpoint,
+    WorkUnitFailureStep, WorkUnitRunInput, hold_for_worker_decisions, integration_repair_exhausted,
+    settle_work_unit, settle_work_unit_failure, work_unit_run_end, work_unit_saves_checkpoint,
 };
 
 /// [`replan_or_ask`] の入力。各経路が読んだ値を詰める。

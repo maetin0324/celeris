@@ -446,12 +446,13 @@ pub(crate) fn settle_work_unit_failure(
 /// （`continue` の continuation・`retry` の再試行）は動かさない（replay は `decision` の遷移で数えを動かさない。
 /// 答えの後の run で同じ条件なら、そこで数えと上限が効く）。auto-leaf の上限の遷移（`auto_leaf_budget`）は理由と
 /// continuation の数えを残す。質問で終わる提案（trigger が `WorkerQuestion`）なら質問の文を outcome に残す。
-/// `count` は記録する決定の要求の数。
+/// `count` は記録する worker の決定の要求の数（settlement に auto-leaf の上限の決定の要求があれば 1 件足して示す）。
 pub(crate) fn hold_for_worker_decisions(
     s: &mut WorkUnitSettlement,
     wu: &WorkUnitRow,
     count: usize,
 ) {
+    let count = count + usize::from(s.auto_leaf_request.is_some());
     if let Some(decision) = s.decision.as_mut() {
         if decision.reason != AUTO_LEAF_BUDGET_REASON {
             let mut held = wu.clone();

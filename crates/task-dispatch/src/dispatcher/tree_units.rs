@@ -354,46 +354,6 @@ impl Dispatcher {
             }))
     }
 
-    /// ADR-0079 D7（Phase R3a）・ADR 2026-11-21-worker-decisions-fail-closed D1・付記 2026-11-21: 木の節点の leaf の
-    /// run が `result.json` の `decisions` で出した人への決定の要求を、worker 完了の経路が WU の失敗の処理
-    /// （integration repair の打ち切り・自動 replan・質問・replan の使い切りの決定）より先に読む。`needed_before: self`
-    /// なら `run_settlement::hold_for_worker_decisions` でこの leaf を `blocked(decision)` にし、失敗の処理を起こさない。
-    /// 他の unit を指した決定はその unit だけを止め、この run の遷移は変えない。auto-leaf の上限の決定の要求は worker の
-    /// 決定と同じ記録に入れる。書き込みはしない（記録する event と止める unit を返す）。
-    pub(super) fn work_unit_decisions(
-        &self,
-        task: &Task,
-        wu: &task_core::WorkUnitRow,
-        run_id: &str,
-        settled: &mut run_settlement::WorkUnitSettlement,
-    ) -> Result<Option<WorkerDecisions>, DispatchError> {
-        let mut found = if settled.reads_worker_decisions() {
-            let (site_artifacts, _, _, _) = self.work_unit_checkpoint_site(task, Some(wu));
-            self.worker_decisions(task, Some(wu), site_artifacts.as_deref(), run_id)?
-        } else {
-            None
-        };
-        let auto_leaf_request = settled.auto_leaf_request.take();
-        if let Some(f) = found.as_ref().filter(|f| f.self_hold) {
-            let count = f.count + usize::from(auto_leaf_request.is_some());
-            run_settlement::hold_for_worker_decisions(settled, wu, count);
-        }
-        if let Some(request) = auto_leaf_request {
-            let f = found.get_or_insert_with(|| WorkerDecisions {
-                events: vec![],
-                held_rows: vec![],
-                self_hold: false,
-                count: 0,
-            });
-            f.events.push(Event::DecisionRequested {
-                decision: Box::new(request),
-            });
-            f.self_hold = true;
-            f.count += 1;
-        }
-        Ok(found)
-    }
-
     /// ADR-0079 D7（Phase R3a）: 木の節点の worker の run の `result.json` の `decisions` を読み、検証して
     /// （`task_core::decision::prepare_worker_decisions`: 形・指す先・key の重複・`max_open_decisions` の残りを超えた分の
     /// 束ね・受け付けなかった要求のまとめ〈ADR 2026-11-18-rejected-worker-decisions-reach-human〉）、記録する event と

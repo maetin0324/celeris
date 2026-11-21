@@ -536,8 +536,31 @@ impl Dispatcher {
                 check_failure_signature: check_failure.as_ref().map(|f| f.failure_signature()),
                 misplaced: misplaced_result,
             });
-            // ADR-0079 D7・ADR 2026-11-21-worker-decisions-fail-closed 付記 2026-11-21: 決定の要求は失敗の処理より先に読む。
-            worker_decisions = self.work_unit_decisions(&task, wu, &run_id, &mut settled)?;
+            // ADR-0079 D7・ADR 2026-11-21-worker-decisions-fail-closed 付記 2026-11-21: leaf の決定の要求は WU の失敗の処理より
+            // 先に読み、`needed_before: self` なら leaf を `blocked(decision)` にして失敗の処理を起こさない。auto-leaf の上限の
+            // 決定の要求は同じ記録に入れる。他の unit を指した決定はその unit だけを止め、この run の遷移は変えない。
+            let mut found = if settled.reads_worker_decisions() {
+                let (site_artifacts, _, _, _) = self.work_unit_checkpoint_site(&task, Some(wu));
+                self.worker_decisions(&task, Some(wu), site_artifacts.as_deref(), &run_id)?
+            } else {
+                None
+            };
+            if let Some(f) = found.as_ref().filter(|f| f.self_hold) {
+                run_settlement::hold_for_worker_decisions(&mut settled, wu, f.count);
+            }
+            if let Some(request) = settled.auto_leaf_request.take() {
+                let f = found.get_or_insert_with(|| WorkerDecisions {
+                    events: vec![],
+                    held_rows: vec![],
+                    self_hold: true,
+                    count: 0,
+                });
+                f.events.push(Event::DecisionRequested {
+                    decision: Box::new(request),
+                });
+                (f.self_hold, f.count) = (true, f.count + 1);
+            }
+            worker_decisions = found;
             if let Some(reason) = settled.integration_repair_exhaust {
                 let (fallback, event) = self.integration_repair_exhaustion(&task, wu, reason)?;
                 integration_exhausted_event = event;

@@ -61,7 +61,8 @@ completed: 2026-11-21
 
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 
-- `bash scripts/dev/test-affected.sh` → exit 0。対象は `e2e`（`--list` の出力）。e2e の 11 binary の試験と repo-health が通った（件数は報告に書く）。
+- `bash scripts/dev/test-affected.sh` → exit 0（3 分 32 秒）。対象 crate は `e2e`。`Starting 45 tests across 11 binaries`、
+  `45 tests run: 45 passed, 0 skipped`。repo-health は `verdict=pass`（fail_grade=0、new=0、worsened=0）。
 - `cargo clippy --workspace -- -D warnings` → exit 0。
 - `cargo fmt --all -- --check` → exit 0。
 - `sh scripts/dev/progress-index.sh --check` → exit 0。
@@ -84,7 +85,7 @@ completed: 2026-11-21
 ## 未解決
 
 - release gate の全体の試験（`cargo nextest run --workspace`）はこの WU では走らせていない（ADR 2026-10-20-full-tests-at-release-only）。
-  e2e の版 5 の literal は他の file に無い（`git grep -n '"protocol":4' -- tests crates` で確かめる）。
+  版 4 の literal は他の file に残っていない（`git grep -n '"protocol":4' -- tests crates` → 0 件、exit 1）。
 
 ## 提案
 

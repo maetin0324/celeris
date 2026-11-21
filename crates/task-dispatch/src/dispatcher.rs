@@ -73,10 +73,10 @@ use task_ops::daemon::{
 use task_ops::delegate::{pending_children, plan_delegation};
 use task_ops::derive::{
     AnswerNote, INFRA_FAILURE_MARKER, REVIEWER_INFRA_FAILURE_PREFIX, REVIEWER_REQUEUED_PREFIX,
-    ReviewNote, answers_from_events, approval_decision_note, artifacts_for_run,
-    consecutive_continuations, consecutive_infra_requeues, consecutive_reviewer_infra_failures,
-    consecutive_reviewer_requeues, current_run_seq, human_approval_title, last_run_id,
-    latest_checkpoint, no_progress_streak, prior_review_from_events, retry_backoff,
+    ReviewNote, answers_from_events, approval_decision_note, consecutive_continuations,
+    consecutive_infra_requeues, consecutive_reviewer_infra_failures, consecutive_reviewer_requeues,
+    current_run_seq, human_approval_title, last_run_id, latest_checkpoint, no_progress_streak,
+    prior_review_from_events, retry_backoff,
 };
 use task_worker::{
     ActiveProjectContext, AdapterError, Answer, ChildSummary, CommentContext,

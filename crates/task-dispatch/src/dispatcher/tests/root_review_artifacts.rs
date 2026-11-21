@@ -1,5 +1,5 @@
 //! ADR 2026-11-21-root-review-work-unit-artifacts: 最終 review の `ArtifactExists` が名前の照合に使う成果物の候補
-//! （`review_spawn::review_artifact_candidates`）。
+//! （`crate::review::artifact_candidates`）。
 //!
 //! 守る不変条件:
 //! - 計画を持つ task の最終 review は、同じ task の WorkUnit の run が出した `ArtifactProduced` を名前で見つける
@@ -107,7 +107,7 @@ fn run_produced(store: &SqliteStore, task_id: TaskId, run_id: &str, produced: &[
 
 /// dispatcher の最終 review と同じ読み方（対象 task の events と WorkUnit の行）で候補を作る。
 fn candidates(store: &SqliteStore, task_id: TaskId) -> Vec<ArtifactRef> {
-    review_spawn::review_artifact_candidates(
+    crate::review::artifact_candidates(
         &store.events_for(task_id).unwrap(),
         &store.work_units_for(task_id).unwrap(),
         REVIEWED_RUN,

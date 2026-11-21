@@ -628,11 +628,53 @@ pub(crate) async fn exec_check_outcome(
     first
 }
 
+/// ADR 2026-11-21-root-review-work-unit-artifacts: 最終 review の `ArtifactExists` が名前を照合する成果物の候補
+/// （[`review_task`] の `produced`。後ろほど優先）。`events`・`units` は対象 task のもの（`events_for`・`work_units_for`）。
+/// 並びは「同じ task の WorkUnit の run の `ArtifactProduced`（古い順）→ review する run（`run_id`）の
+/// `ArtifactProduced`」なので、名前が重なれば review する run の分 → WorkUnit の新しい run の分の順に選ばれる。
+/// WorkUnit の run は `WorkUnitTransitioned{to: running, run_id}` の `work_unit_id` が `units` にあるものだけ（子 task に
+/// 任せた unit は run_id を持たず、子 task の成果物は子の events にあるので入らない）。path が workspace の外を指すもの
+/// （`task_worker::artifact::check_relative` が拒むもの）は候補にしない。計画の無い task では review する run の分だけになる。
+pub(crate) fn artifact_candidates(
+    events: &[(u64, task_core::Event)],
+    units: &[task_core::WorkUnitRow],
+    run_id: &str,
+) -> Vec<ArtifactRef> {
+    use task_core::Event;
+    let unit_ids: std::collections::HashSet<&str> = units.iter().map(|u| u.id.as_str()).collect();
+    let unit_runs: std::collections::HashSet<&str> = events
+        .iter()
+        .filter_map(|(_, event)| match event {
+            Event::WorkUnitTransitioned {
+                work_unit_id,
+                to: task_core::WorkUnitStatus::Running,
+                run_id: Some(unit_run),
+                ..
+            } if unit_ids.contains(work_unit_id.as_str()) && unit_run != run_id => {
+                Some(unit_run.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    events
+        .iter()
+        .filter_map(|(_, event)| match event {
+            Event::ArtifactProduced {
+                run_id: produced_by,
+                artifact,
+            } if unit_runs.contains(produced_by.as_str()) => Some(artifact.clone()),
+            _ => None,
+        })
+        .chain(task_ops::derive::artifacts_for_run(events, run_id))
+        .filter(|artifact| task_worker::artifact::check_relative(&artifact.path).is_ok())
+        .collect()
+}
+
 pub const SUMMARY_FILE_NAME: &str = "summary.md";
 
 /// `task.acceptance` を順に判定する。`produced` は `ArtifactExists` の名前の照合に使う成果物の候補で、同じ名前なら後ろの
 /// ものを使う（最終 review では review する run と同じ task の WorkUnit の run の `ArtifactProduced`。組み立ては
-/// `dispatcher::review_spawn::review_artifact_candidates`、ADR 2026-11-21-root-review-work-unit-artifacts）。
+/// [`artifact_candidates`]、ADR 2026-11-21-root-review-work-unit-artifacts）。
 /// `artifacts_dir` はそのタスクの成果物ディレクトリ（ADR-0036 D1。ディスパッチャが決める）。
 /// `plan.json` / `review.json` / `summary.md` と `Check::ArtifactExists` の既定のパスはここを基準にする。
 pub async fn review_task(

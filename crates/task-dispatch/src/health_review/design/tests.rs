@@ -258,3 +258,73 @@ fn prompt_full_objective_design_review_keeps_objective_tail() {
     );
     assert_review_prompt_keeps_subject(&prompt, &subject, "design review");
 }
+
+/// 不変条件（ADR 2026-11-21-ancestor-objective-in-prompts D3）: 子 task の計画の設計 review の reviewer の prompt
+/// （`run_design_reviewer` と同じく `ReviewRequest { design: Some(..) }` と `ReviewerRun.ancestors` を写した `RunContext`）
+/// に、store から `prompt_ancestors::ancestor_contexts` で組んだ親の 3,000 文字の objective の末尾の印と受入条件の末尾の
+/// 印がちょうど 1 回ずつ載る。設計 review は計画が人の元の目的（親の禁止事項・不変条件）を満たすかを判定する。
+/// 既存の試験で検出できない理由: `prompt_full_objective_design_review_keeps_objective_tail` は対象 task 自身の objective と
+/// 受入条件だけを見て、祖先を持つ task を使わない。
+#[test]
+fn prompt_ancestor_objective_design_review_carries_the_parent() {
+    use task_core::{Check, Criterion, Status};
+    use task_worker::protocol::DesignReviewRequest;
+    use task_worker::{ReviewRequest, RunContext};
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = task_core::SqliteStore::open_in_memory().unwrap();
+    let mut parent = crate::review::tests::long_objective_subject(dir.path());
+    parent.status = Status::Draft;
+    parent.objective = format!("{}PARENT-DESIGN-OBJECTIVE-TAIL", "親".repeat(3000));
+    parent.acceptance = vec![Criterion {
+        text: format!("{}PARENT-DESIGN-ACCEPTANCE-TAIL", "条".repeat(3000)),
+        check: Check::Human,
+    }];
+    store.insert(&parent).unwrap();
+    let mut subject = crate::review::tests::long_objective_subject(dir.path());
+    subject.id = task_core::TaskId::new();
+    subject.parent_id = Some(parent.id);
+    store.insert(&subject).unwrap();
+    let plan = spec(
+        serde_json::json!([leaf("a", &["store/a.rs"], None)]),
+        Some(brief_with_new_state()),
+    );
+    let policies = vec![(
+        "core".to_string(),
+        policy("store", "^store/", &"a".repeat(64)),
+    )];
+    let (risk, _) = merge_risk(&policies, &write_paths_by_repo(&plan, "core"), &plan);
+    let request = DesignReviewRequest {
+        brief: plan.design_brief.clone(),
+        plan_summary: plan_summary(&plan),
+        risk,
+        review_policy: None,
+        owner_rows: Vec::new(),
+    };
+    let review = crate::review::synthetic_review_task(
+        &subject,
+        "design-ancestor",
+        &crate::review::reviewer_hint(),
+    );
+    let context = RunContext {
+        review: Some(ReviewRequest {
+            design: Some(Box::new(request)),
+            ..Default::default()
+        }),
+        ancestors: crate::prompt_ancestors::ancestor_contexts(&store, &subject).unwrap(),
+        ..RunContext::default()
+    };
+    let prompt =
+        task_worker::claude_code::build_prompt(&review, &context, "design-ancestor", "artifacts");
+    assert!(prompt.contains(task_worker::change_rules::review::DESIGN_HEADING));
+    for tail in [
+        "PARENT-DESIGN-OBJECTIVE-TAIL",
+        "PARENT-DESIGN-ACCEPTANCE-TAIL",
+    ] {
+        assert_eq!(
+            prompt.matches(tail).count(),
+            1,
+            "`{tail}` must appear exactly once:\n{prompt}"
+        );
+    }
+}

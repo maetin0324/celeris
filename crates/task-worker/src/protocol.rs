@@ -504,6 +504,11 @@ pub struct RunContext {
     /// ファイル名を基準にレビュアーが不合格にした事故から）。決定的（設定を引くだけ）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subject_genre: Option<GenreContext>,
+    /// ADR 2026-11-21-ancestor-objective-in-prompts D1: この run の task の祖先（`parent_id` を root まで辿る。root が先頭、
+    /// 親が末尾）の objective と受入条件の全文。dispatcher が store から組む（worker・planner・WU・reviewer の run）。
+    /// 親の無い task（root）では空で、wire にも prompt にも出ない。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ancestors: Vec<AncestorContext>,
     /// ADR 2026-11-07-health-review-integration 付記 B1: dispatcher が task の作業場所から決めた、この run の作業場所の
     /// 情報（場所の説明と、repo の review 方針）。どちらも無い run（対話 run・作業場所を決めていない案件の run・
     /// reviewer の run）では `None`。
@@ -845,15 +850,34 @@ pub struct TreePlannerContext {
     pub stages_hint: Vec<task_core::StageHint>,
 }
 
-/// `context.execution_planner.tree.ancestors[]`（ADR-0079 D4 (2)）: 祖先 1 つ。
+/// `context.execution_planner.tree.ancestors[]`（ADR-0079 D4 (2)）: 木の祖先 1 つ（題名と段階）。目的と受入条件の全文は
+/// `RunContext.ancestors` が運ぶ（ADR 2026-11-21-ancestor-objective-in-prompts D2。ここに写さない）。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct TreeAncestorContext {
     pub title: String,
     /// この祖先の計画の中で、次の節点（無ければこの task）が属する段階。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stage: Option<String>,
-    /// 目的の先頭 300 文字。
-    pub objective_excerpt: String,
+}
+
+/// `context.ancestors[]`（ADR 2026-11-21-ancestor-objective-in-prompts D1）: 祖先の task 1 つの題名・objective・受入条件
+/// （どれも全文。切らない）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AncestorContext {
+    pub title: String,
+    pub objective: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub acceptance: Vec<task_core::Criterion>,
+}
+
+impl From<&task_core::Task> for AncestorContext {
+    fn from(task: &task_core::Task) -> Self {
+        Self {
+            title: task.title.clone(),
+            objective: task.objective.clone(),
+            acceptance: task.acceptance.clone(),
+        }
+    }
 }
 
 fn is_zero_usize(n: &usize) -> bool {

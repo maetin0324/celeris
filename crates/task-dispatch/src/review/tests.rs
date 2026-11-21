@@ -789,6 +789,7 @@ fn reviewer_run(adapter: Arc<dyn WorkerAdapter>) -> ReviewerRun {
         session_diff: Vec::new(),
         token_budget: None,
         material: Default::default(),
+        ancestors: Vec::new(),
     }
 }
 
@@ -905,6 +906,7 @@ async fn reviewer_provider_failure_is_reported_instead_of_failing_criteria() {
         session_diff: Vec::new(),
         token_budget: None,
         material: Default::default(),
+        ancestors: Vec::new(),
     };
     let out = review_task(
         &task,

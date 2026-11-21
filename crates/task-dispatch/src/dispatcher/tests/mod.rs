@@ -3211,6 +3211,7 @@ mod knowledge_usage;
 /// ADR-0074「R7-11 実装時の明確化」: planner / WU の run の予算が `RunRequest.task.budget` に届く
 /// （`src/dispatcher/tests/planner_budget.rs`）。
 mod planner_budget;
+mod prompt_ancestor_objective;
 /// ADR-0079 付記 R7-9: 統合済みの段階に unit が増えたら段階の統合をやり直す（replan・修正前の行の reopen）
 /// （`src/dispatcher/tests/stage_reopen.rs`）。
 mod stage_reopen;

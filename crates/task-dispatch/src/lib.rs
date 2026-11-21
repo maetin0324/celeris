@@ -48,6 +48,8 @@ pub mod project_controller;
 pub mod project_decider_ts;
 /// ADR 2026-11-11 dispatcher-state-ownership D1: 案件の停滞の見張りと CoS chat の起動の待ちの owner。
 pub(crate) mod project_orchestration;
+/// ADR 2026-11-21-ancestor-objective-in-prompts D1: run の文脈に載せる祖先の objective と受入条件を store から組む。
+pub(crate) mod prompt_ancestors;
 /// ADR-0033 D3（Phase 25）: run の終端から決定的に作る報告。
 pub(crate) mod reports;
 pub mod review;

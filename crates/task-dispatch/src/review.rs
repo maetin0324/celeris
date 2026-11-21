@@ -79,6 +79,9 @@ pub struct ReviewerRun {
     /// final review の材料（`ReviewRequest.health`・`diff_design`）。`spawn_review` が reviewer run の非同期 task の
     /// 中で入れる（`health_review::input`）。WU の review・材料を作らない review では空。
     pub material: FinalReviewMaterial,
+    /// ADR 2026-11-21-ancestor-objective-in-prompts D3: 対象 task の祖先の objective と受入条件の全文（`RunContext.ancestors`
+    /// に写す。final review と設計 review の両方）。`pick_reviewer` が store から組む。親の無い task では空。
+    pub ancestors: Vec<task_worker::protocol::AncestorContext>,
 }
 
 /// final review の reviewer に渡す材料（`health_review::input::HealthInputJob::attach` が 1 回の材料作りで作る）。
@@ -1243,6 +1246,7 @@ async fn run_reviewer_inner(
             profile: run.profile.clone(),
             skills: run.skills.clone(),
             prior_review: vec![],
+            ancestors: run.ancestors.clone(),
             inputs: produced.to_vec(),
             // ADR-0117 D1: `RunContext.answers` は worker run 用。人の回答は `ReviewRequest.answers` に載せる。
             answers: vec![],

@@ -55,6 +55,28 @@
       ],
       "type": "object"
     },
+    "AncestorContext": {
+      "description": "`context.ancestors[]`（ADR 2026-11-21-ancestor-objective-in-prompts D1）: 祖先の task 1 つの題名・objective・受入条件\n（どれも全文。切らない）。",
+      "properties": {
+        "acceptance": {
+          "items": {
+            "$ref": "#/$defs/Criterion"
+          },
+          "type": "array"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "objective"
+      ],
+      "type": "object"
+    },
     "Answer": {
       "description": "以前の `question` への人間の回答（`context.answers[]`。ADR-0010 D3, P-10）。",
       "properties": {
@@ -4194,6 +4216,13 @@
           },
           "type": "array"
         },
+        "ancestors": {
+          "description": "ADR 2026-11-21-ancestor-objective-in-prompts D1: この run の task の祖先（`parent_id` を root まで辿る。root が先頭、\n親が末尾）の objective と受入条件の全文。dispatcher が store から組む（worker・planner・WU・reviewer の run）。\n親の無い task（root）では空で、wire にも prompt にも出ない。",
+          "items": {
+            "$ref": "#/$defs/AncestorContext"
+          },
+          "type": "array"
+        },
         "answers": {
           "description": "`celerisctl answer` で与えられた回答の履歴（時系列）。無ければ省略（ADR-0010 D3）。",
           "items": {
@@ -5216,12 +5245,8 @@
       ]
     },
     "TreeAncestorContext": {
-      "description": "`context.execution_planner.tree.ancestors[]`（ADR-0079 D4 (2)）: 祖先 1 つ。",
+      "description": "`context.execution_planner.tree.ancestors[]`（ADR-0079 D4 (2)）: 木の祖先 1 つ（題名と段階）。目的と受入条件の全文は\n`RunContext.ancestors` が運ぶ（ADR 2026-11-21-ancestor-objective-in-prompts D2。ここに写さない）。",
       "properties": {
-        "objective_excerpt": {
-          "description": "目的の先頭 300 文字。",
-          "type": "string"
-        },
         "stage": {
           "description": "この祖先の計画の中で、次の節点（無ければこの task）が属する段階。",
           "type": [
@@ -5234,8 +5259,7 @@
         }
       },
       "required": [
-        "title",
-        "objective_excerpt"
+        "title"
       ],
       "type": "object"
     },

@@ -1395,6 +1395,16 @@ impl Dispatcher {
             return None;
         }
         let org = self.store.org_list().ok()?;
+        // ADR 2026-11-21-ancestor-objective-in-prompts D3: 対象 task の祖先の objective と受入条件の全文。読めなければ人の
+        // 元の目的の無い prompt で review を起こさない（fail closed: 次の tick を待つ）。
+        let ancestors = match crate::prompt_ancestors::ancestor_contexts(self.store.as_ref(), task)
+        {
+            Ok(ancestors) => ancestors,
+            Err(e) => {
+                tracing::warn!(task_id = %task.id, error = %e, "could not read the subject task's ancestors; not starting the reviewer");
+                return None;
+            }
+        };
         let department = task
             .assignee
             .as_deref()
@@ -1591,6 +1601,7 @@ impl Dispatcher {
                 session_diff,
                 token_budget,
                 material: Default::default(),
+                ancestors,
             },
             pick,
         })

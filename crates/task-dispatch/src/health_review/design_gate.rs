@@ -470,6 +470,8 @@ async fn run_design_reviewer(
             subject_genre: run.subject_genre.clone(),
             session: run.session.clone(),
             session_diff: run.session_diff.clone(),
+            // ADR 2026-11-21-ancestor-objective-in-prompts D3: 対象 task の祖先の目的と受入条件の全文。
+            ancestors: run.ancestors.clone(),
             ..RunContext::default()
         },
     };

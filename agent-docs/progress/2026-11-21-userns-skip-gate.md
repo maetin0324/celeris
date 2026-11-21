@@ -1,12 +1,12 @@
 ---
 title: release gate で userns の試験の本体の中の skip（試験 7 の ssh 無し・試験 9 の missing()）を PASS と数えない
 tasks: [01M7YWAC1BVNG09WKDQJ6CA86Z]
-status: running
+status: done
 updated: 2026-11-21
 ---
 # release gate で userns の試験の本体の中の skip（試験 7 の ssh 無し・試験 9 の missing()）を PASS と数えない
 
-完了日: 未完了（WorkUnit impl まで。record は後の WorkUnit）
+完了日: 2026-11-21（WorkUnit record まで。統合は celeris）
 
 ## 結論（WorkUnit adr）
 
@@ -237,14 +237,32 @@ cargo は `$CARGO_TARGET_DIR`、修正を外して試験を走らせ、直した
   `SD_GATE_SKIP_HOST_TESTS` は旧い台本は読まないので、operator が login shell で release.sh を起こす（NoNewPrivs 0 なら sudo が通る）。
   未確認: 実際に落ちるか（試験 9 は env 有りの build でだけ走る。gate の build は `CELERIS_USERNS_TESTS=1` なので走る）。
 
-## 本番への移行（人が実行する手順。record の WorkUnit が整える）
-1. この変更の release が昇格した後、最初の daemon の gate の gate.json を読む:
-   `python3 -I -c 'import json,sys; g=json.load(open(sys.argv[1])); print(json.dumps({k:g[k] for k in ("host_tests","gate_env")}, indent=1)); print(g["cargo_test"]["nextest_skipped"])' $CELERIS_STATE_DIR/releases/<sha12>/gate.json`
-   期待: `host_tests.sudo.run=false`・`off_by="no_new_privs"`、`host_tests.ssh.run=true`、`gate_env.CELERIS_LAUNCHER_TESTS=null`、
-   `nextest_skipped` が前の gate より 1 増える。release-records.jsonl の gate の行にも `host_tests` がある。
-2. 試験 9 の本体は daemon の gate では走らない。credentiald を変えた release では operator が login shell で流す:
+## 本番への移行（人が実行する手順）
+
+設定・unit・本番 DB は変えない。この変更の release が昇格した後の、最初の daemon の gate で次を確かめる。
+`<sha12>` は昇格した release の sha12、`$CELERIS_STATE_DIR` は本番の state dir（`/local/celeris/state`）。
+
+1. 前提: この変更を含む release 自身の gate は、current の旧い release.sh で走る（filter を渡さない）。その gate の cargo-test の段で
+   試験 9 が NoNewPrivs 1 のため panic して落ちたら、原因はこの点である。そのときは operator が login shell（NoNewPrivs 0・sudo が通る）で
+   `bash scripts/selfdeploy/release.sh <sha>` を起こして gate を通す。新しい release.sh が効くのは、その release が昇格した後の gate から。
+2. 昇格後の最初の daemon の gate の gate.json を読む:
+   ```
+   python3 -I -c 'import json,sys; g=json.load(open(sys.argv[1])); print(json.dumps({k:g[k] for k in ("host_tests","gate_env")}, indent=1)); print(g["cargo_test"]["nextest_skipped"])' $CELERIS_STATE_DIR/releases/<sha12>/gate.json
+   ```
+   期待: `host_tests.sudo.run=false`・`off_by="no_new_privs"`、`host_tests.ssh.run=true`（試験 7 が本体まで走った）、
+   `gate_env.CELERIS_LAUNCHER_TESTS=null`、`nextest_skipped` が前の gate より 1 増える。`host_tests.sudo.run` が true なら、
+   gate が NoNewPrivs を読めていない。`ssh.run=false` なら外した理由（`off_by`・`reason`）を読む。
+3. release-records.jsonl の gate の行にも同じ `host_tests` がある:
+   `tail -1 $CELERIS_STATE_DIR/logs/release-records.jsonl | python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("host_tests"))'`
+4. sudo・ssh が無い host で release するとき: 人が外す試験を明示する。`SD_GATE_SKIP_HOST_TESTS=sudo,ssh bash scripts/selfdeploy/release.sh <sha>`
+   （`sudo` = 試験 9、`ssh` = 試験 7。comma 区切り。未知の key は gate の前に落ちる）。ssh が無いのに外さないと、試験 7 が panic して gate が落ちる
+   （PASS と数えない）。外した試験は nextest の filter で skipped と数え、gate.json の `host_tests.<key>.off_by="SD_GATE_SKIP_HOST_TESTS"` と
+   `reason` に残る。2 の command で見る。`CELERIS_USERNS_TESTS=0`（ADR-0126 B4）で userns の試験全体を外す場合は `gate_env.CELERIS_USERNS_TESTS="0"` で読める。
+5. 試験 9 の本体は daemon の gate では走らない。credentiald を変えた release では operator が login shell で流す:
    `CELERIS_USERNS_TESTS=1 TMPDIR=/tmp cargo nextest run -p celeris-credentiald --test injection_peer_uid --no-capture --status-level all -E 'test(=real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch)'`
-3. config・unit は変えない。
+6. 「未確認」の 3 項目（上の 2〜4。unit の `NoNewPrivileges`、gate の文脈の `sudo`、`/usr/bin/ssh`）は host で次を実行して確かめる:
+   `systemctl --user show celeris@<sha12>.service -p NoNewPrivileges`（期待 `yes`）、
+   `setpriv --no-new-privs sudo -n -u celeris-browser true; echo rc=$?`（期待 `rc=1`）、`ls -l /usr/bin/ssh; ls -ld /etc/ssh/ssh_config.d`。
 
 ## 未解決（impl の段で追加）
 - 人に聞く問い: (a) gate 自身で試験 9 を走らせたい場合の daemon の環境の変更（`SD_GATE_SKIP_HOST_TESTS` や unit の変更）、(b) release を operator が手で起こす運用への切り替え。
@@ -264,7 +282,7 @@ cargo は `$CARGO_TARGET_DIR`、修正を外して試験を走らせ、直した
 - 下の「検査」に書く。
 
 ## 未解決
-- 人の決定 `daemon-gate-no-new-privs`（daemon の gate で試験 9 をどう扱うか）。WorkUnit impl はこの答えを待つ。
+- 人の決定 `daemon-gate-no-new-privs` は CoS が推奨どおり回答済み（impl で反映）。
 - 上の 2〜4 の「未確認」の 3 項目は、人が host で command を実行して確かめる。
 - daemon の gate（NoNewPrivs 1）では、どの選択肢でも試験 9 の本体は走らない。U1 のような試験 9 の読み取りの不具合は、NoNewPrivs 0 の文脈
   （人・operator の login shell）で試験 9 を流したときにしか見つからない（ADR の「残る穴」）。
@@ -289,3 +307,9 @@ cargo は `$CARGO_TARGET_DIR`、修正を外して試験を走らせ、直した
 - 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` → この md と ADR の 2 path だけ。
 - test-affected・clippy・fmt は commit「selfdeploy userns-skip-gate adr: release gate の実行文脈の確認と 2 段目の skip の扱いを決める ADR を書く」の HEAD で実行した。
   その後の commit はこの節を足しただけで、文書の検査（progress-index・doc-links・adr-numbers・範囲）はその後に再実行した。
+
+### record の段（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`。この段はコードを変えていない）
+- `bash scripts/dev/test-affected.sh` → exit 0（`test-affected: 試験対象の変更なし（docs のみ等）`、repo_health_gate: all checks passed）。
+  コードの試験は impl の段で 6266 passed を確認済み。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- commit: 「selfdeploy userns-skip-gate record: 進捗の本番への移行と提出時の検査を書く」（この段）。最後の同期の後の再実行は integrate-record が行う。

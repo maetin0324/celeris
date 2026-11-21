@@ -426,7 +426,7 @@ pub(super) async fn run_worker(
             answers: to_answers(answers_from_events(&events)),
             review: None,
             role: extras.role,
-            children: extras.children,
+            lineage: extras.lineage,
             available_genres: extras.available_genres,
             node: extras.node,
             memory: extras.memory,

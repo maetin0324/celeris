@@ -2,7 +2,7 @@
 //! （`ReviewRequest.health`）と、reviewer が `review.json` に返す構造化 health verdict
 //! （`ReviewOutput.health`）の wire 型。
 //!
-//! 追加の欄だけで、省略した JSON は従来の review と同じに読める（`PROTOCOL_VERSION` は 4 のまま）。
+//! 追加の欄だけで、省略した JSON は従来の review と同じに読める（`PROTOCOL_VERSION` は上げない）。
 //! finding 種別（[`HealthFindingKind`]）と重さ（[`HealthSeverity`]）は固定で、未知の値は
 //! `review.json` の読み込みエラーになる（I6）。
 

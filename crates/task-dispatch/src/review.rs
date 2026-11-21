@@ -269,11 +269,8 @@ pub struct ReviewExtras {
     /// ADR-0046 D4（Phase 59）: `mode = research` のタスクだけ true。暗黙の条件として
     /// 「結果に出典（`sources`）か計測の記録がある」を足す（[`research_evidence`] が決定的に判定する）。
     pub research: bool,
-    /// ADR-0117 D1: 対象 task と祖先で回答済みの人の決定（ディスパッチャが store から集める）。
-    /// reviewer run の `ReviewRequest.decisions` にそのまま渡す。
-    pub decisions: Vec<ReviewDecision>,
-    /// ADR-0117 D1: 対象 task と祖先の `question` への人の回答（`ReviewRequest.answers`）。
-    pub answers: Vec<Answer>,
+    /// ADR-0117 D1: 対象 task と祖先の人の決定・回答と、祖先の目的と受入条件の全文（ディスパッチャが store から集める）。
+    pub human_inputs: ReviewHumanInputs,
     /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D6: 対象 run で検出された subagent 道具・別 LLM CLI / API の
     /// 起動（dispatcher が `Event::WorkerPolicyViolation` から集める）。`ReviewRequest.policy_violations` に渡す。
     pub policy_violations: Vec<ReviewPolicyViolation>,
@@ -281,6 +278,29 @@ pub struct ReviewExtras {
     /// 決定的な条件が全 pass のとき `Check::Reviewer` の条件をその理由で合格にする（同期前の HEAD に束縛された
     /// reviewer の合格を、target の進みが候補の差分と重ならないまま持ち越す）。
     pub reviewer_reuse: Option<String>,
+}
+
+/// `ReviewExtras.human_inputs`: 対象 task から root への列（`prompt_ancestors::chain_to_root`）から store で集めた、人の文脈。
+#[derive(Debug, Default)]
+pub struct ReviewHumanInputs {
+    /// ADR-0117 D1: 対象 task と祖先で回答済みの人の決定。reviewer run の `ReviewRequest.decisions` にそのまま渡す。
+    pub decisions: Vec<ReviewDecision>,
+    /// ADR-0117 D1: 対象 task と祖先の `question` への人の回答（`ReviewRequest.answers`）。
+    pub answers: Vec<Answer>,
+    /// ADR 2026-11-21-ancestor-objective-in-prompts D3: 祖先（root が先頭、親が末尾）の objective と受入条件の全文。
+    /// reviewer run の `RunContext.lineage.ancestors` に写す。親の無い task では空。
+    pub ancestors: Vec<task_worker::protocol::AncestorContext>,
+}
+
+impl ReviewHumanInputs {
+    /// reviewer run の `RunContext.lineage`（ADR 2026-11-21-ancestor-objective-in-prompts D3。祖先の目的と受入条件の全文
+    /// だけで、reviewer は子の要約を受け取らない）。`run_reviewer_inner` は `review` に `into_request` で移す前にこれを写す。
+    fn lineage(&self) -> task_worker::protocol::TaskLineageContext {
+        task_worker::protocol::TaskLineageContext {
+            ancestors: self.ancestors.clone(),
+            children: Vec::new(),
+        }
+    }
 }
 
 /// ADR-0117 D2: `ReviewCheckResult.reason` に残す末尾の文字数。
@@ -651,8 +671,7 @@ pub async fn review_task(
         aggregate,
         repo_checks,
         research,
-        decisions,
-        answers,
+        human_inputs,
         policy_violations,
         reviewer_reuse,
     } = extras;
@@ -844,8 +863,7 @@ pub async fn review_task(
                     .collect(),
                 Some(run) => {
                     let human_context = ReviewHumanContext {
-                        decisions,
-                        answers,
+                        inputs: human_inputs,
                         checks: deterministic_check_results(task, &verdicts, &implicit),
                         policy_violations,
                     };
@@ -1061,8 +1079,7 @@ pub fn synthetic_review_task(subject_task: &Task, run_id: &str, hint: &WorkerHin
 
 /// ADR-0117 D1/D2: `ReviewRequest` に載せる人の決定・回答と、先に出た決定的 check の結果。
 struct ReviewHumanContext {
-    decisions: Vec<ReviewDecision>,
-    answers: Vec<Answer>,
+    inputs: ReviewHumanInputs,
     checks: Vec<ReviewCheckResult>,
     /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D6。
     policy_violations: Vec<ReviewPolicyViolation>,
@@ -1086,8 +1103,8 @@ impl ReviewHumanContext {
             summary: subject.summary.clone(),
             evidence: subject.evidence.clone(),
             criteria: criteria.to_vec(),
-            decisions: self.decisions,
-            answers: self.answers,
+            decisions: self.inputs.decisions,
+            answers: self.inputs.answers,
             checks: self.checks,
             policy_violations: self.policy_violations,
             // ADR 2026-11-07-health-review-integration D4.2: candidate SHA ごとに 1 回作った材料。
@@ -1243,12 +1260,12 @@ async fn run_reviewer_inner(
             profile: run.profile.clone(),
             skills: run.skills.clone(),
             prior_review: vec![],
+            lineage: human_context.inputs.lineage(),
             inputs: produced.to_vec(),
             // ADR-0117 D1: `RunContext.answers` は worker run 用。人の回答は `ReviewRequest.answers` に載せる。
             answers: vec![],
             review: Some(human_context.into_request(subject, criteria, run.material.clone())),
             role: None,
-            children: Vec::new(),
             // ADR-0027 D1: Reviewer run は委譲しない（M8 相当）。
             available_genres: Vec::new(),
             // Phase 38（ADR-0028 追記）: 対象タスクの分野の manifest だけは渡す（ハーネスで動く分野の

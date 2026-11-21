@@ -1333,8 +1333,11 @@ async fn review_passes_human_decisions_and_check_results_to_reviewer() {
         Duration::from_secs(5),
         ReviewExtras {
             reviewer: Some(reviewer_run(adapter.clone())),
-            decisions: vec![decision.clone()],
-            answers: vec![answer.clone()],
+            human_inputs: ReviewHumanInputs {
+                decisions: vec![decision.clone()],
+                answers: vec![answer.clone()],
+                ancestors: Vec::new(),
+            },
             ..Default::default()
         },
     )
@@ -1954,8 +1957,7 @@ fn review_risk_final_review_sets_diff_design_not_design() {
         review_policy: None,
     });
     let context = ReviewHumanContext {
-        decisions: Vec::new(),
-        answers: Vec::new(),
+        inputs: ReviewHumanInputs::default(),
         checks: Vec::new(),
         policy_violations: Vec::new(),
     };

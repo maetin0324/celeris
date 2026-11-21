@@ -675,7 +675,6 @@ impl Dispatcher {
                     .and_then(|next| next.tree.as_ref())
                     .and_then(|tr| tr.parent_unit.as_ref())
                     .map(|u| u.stage.clone()),
-                objective_excerpt: t.objective.chars().take(300).collect(),
             })
             .collect();
         Ok(task_worker::protocol::TreePlannerContext {

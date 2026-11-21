@@ -219,7 +219,7 @@ async fn unknown_type_is_protocol_violation() {
 
 /// ADR-0044 D2（Phase 53）: `{"type":"comment","body":"…"}` は**非終端**で、シンクの
 /// `comment` に渡る（`progress` とは別の口）。run はそのまま続いて `done` で終わる。
-/// `PROTOCOL_VERSION` は上げない（追加のみ。この行を出さないワーカーはそのまま動く）。
+/// 追加のみの行で、この行を出さないワーカーはそのまま動く。
 #[tokio::test]
 async fn a_comment_line_is_passed_to_the_sink_and_does_not_end_the_run() {
     let dir = tempfile::tempdir().unwrap();
@@ -251,7 +251,6 @@ async fn a_comment_line_is_passed_to_the_sink_and_does_not_end_the_run() {
         vec!["next".to_string()],
         "コメントは progress には入らない"
     );
-    assert_eq!(PROTOCOL_VERSION, 4, "追加のみなので版数は上げない");
 }
 
 #[tokio::test]

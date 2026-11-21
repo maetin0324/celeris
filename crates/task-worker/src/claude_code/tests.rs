@@ -12,6 +12,9 @@ mod cos_chat_tests;
 #[path = "planner_prompt_tests.rs"]
 mod planner_prompt_tests;
 
+#[path = "ancestor_prompt_tests.rs"]
+mod ancestor_prompt_tests;
+
 #[derive(Default)]
 struct RecordingSink {
     progress: Mutex<Vec<String>>,
@@ -2414,23 +2417,26 @@ fn build_review_prompt_states_the_artifact_convention_only_for_harness_genres() 
     assert!(!none.contains("この担当の成果物"), "{none}");
 }
 
-/// ADR-0016 D3 / M4: `context.children` が非空なら集約 run の節が入り、成果物のまとめ方の指示が付く。
+/// ADR-0016 D3 / M4: `context.lineage.children` が非空なら集約 run の節が入り、成果物のまとめ方の指示が付く。
 /// 無ければ節自体が出ない。
 #[test]
 fn build_prompt_includes_children_section_only_when_present() {
     let mut task = crate::protocol::tests::sample_task();
     task.aggregate = true;
     let context = RunContext {
-        children: vec![crate::protocol::ChildSummary {
-            id: task_core::TaskId::new(),
-            title: "implement parser".into(),
-            role: Some("implementer".into()),
-            status: task_core::Status::Done,
-            branch: None,
-            outcome: Some("done".into()),
-            artifacts: vec![],
-            workspace: Some(std::path::PathBuf::from("/tmp/child-ws")),
-        }],
+        lineage: crate::protocol::TaskLineageContext {
+            children: vec![crate::protocol::ChildSummary {
+                id: task_core::TaskId::new(),
+                title: "implement parser".into(),
+                role: Some("implementer".into()),
+                status: task_core::Status::Done,
+                branch: None,
+                outcome: Some("done".into()),
+                artifacts: vec![],
+                workspace: Some(std::path::PathBuf::from("/tmp/child-ws")),
+            }],
+            ..Default::default()
+        },
         ..RunContext::default()
     };
     let prompt = build_prompt(&task, &context, "run-agg-1", "artifacts");
@@ -3458,12 +3464,10 @@ fn planner_prompt_carries_depth_and_leaf_criteria() {
             crate::protocol::TreeAncestorContext {
                 title: "browser capability".to_string(),
                 stage: Some("phase-2".to_string()),
-                objective_excerpt: "ship the browser".to_string(),
             },
             crate::protocol::TreeAncestorContext {
                 title: "policy contract".to_string(),
                 stage: Some("build".to_string()),
-                objective_excerpt: "define the policy".to_string(),
             },
         ],
         stages_hint: Vec::new(),
@@ -3480,10 +3484,9 @@ fn planner_prompt_carries_depth_and_leaf_criteria() {
     assert!(prompt.contains("**Remaining depth: 0**"), "{prompt}");
     assert!(prompt.contains("**do NOT write any unit with `\"kind\":\"task\"`**"));
     assert!(!prompt.contains("You may declare units with"));
-    assert!(
-        prompt.contains("depth 1: \"browser capability\" (stage `phase-2`) — ship the browser")
-    );
-    assert!(prompt.contains("depth 2: \"policy contract\" (stage `build`) — define the policy"));
+    // ADR 2026-11-21-ancestor-objective-in-prompts D2: 木の祖先の行は題名と段階だけ（目的の全文は祖先の節が出す）。
+    assert!(prompt.contains("  - depth 1: \"browser capability\" (stage `phase-2`)\n"));
+    assert!(prompt.contains("  - depth 2: \"policy contract\" (stage `build`)\n"));
     assert!(!prompt.contains("stages_hint"));
 
     // replan: 差分でなく全体、done の unit は持ち越し、失敗した子の扱い。

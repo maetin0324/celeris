@@ -4,9 +4,10 @@
   隣の `worker-protocol.schema.json`（その型から `schemars` で生成。`task-worker` のテスト
   `committed_schema_matches_generated` が一致を検証し、`UPDATE_SCHEMA=1 cargo test -p task-worker` で再生成する）。
   本文書と食い違うときは型と schema が正
-- 版: `PROTOCOL_VERSION = 4`（`run.protocol` に載る）。欄・メッセージの**追加のみ**では上げない（受信側は未知の
+- 版: `PROTOCOL_VERSION = 5`（`run.protocol` に載る）。欄・メッセージの**追加のみ**では上げない（受信側は未知の
   欄を無視し、新しい欄を出さない・読まないワーカーはそのまま動く）。上げるのは既存の形を変えるときだけ。
-  ワーカーはこの値を検査しなくてよい
+  ワーカーはこの値を検査しなくてよい。v5 は `context.children` を消して `context.lineage.children` に移し、
+  `context.lineage.ancestors` を足した（[ADR 2026-11-21-ancestor-objective-in-prompts](../../agent-docs/adr/2026-11-21-ancestor-objective-in-prompts.md) D1/D2）
 - 経緯（どの Phase で何を足したか）は各 ADR を参照: 基本形 [ADR-0003](../../agent-docs/adr/0003-worker-protocol.md)、
   CLI 系アダプタの結果ファイル [ADR-0006](../../agent-docs/adr/0006-phase4-claude-code-adapter.md)、kind 別出力
   [ADR-0007](../../agent-docs/adr/0007-phase5-planner-and-reviewer.md)、役割と委譲（v2）
@@ -49,7 +50,7 @@ celeris ◀─stdout── {"type":"progress", ...}\n
 | 未知 `type` | JSON として妥当だが `WorkerMessage` に読めない行（未知の `type`・必須欄の欠落・型違い）はプロトコル違反。run を `error{retryable:false, message:"protocol violation: …"}` で打ち切り、プロセスグループを止める |
 | 非 JSON 行・空行 | 破棄し警告ログ（ワーカーの stderr は別途 `runs/<run_id>/stderr.log` へ） |
 | 行長 | 1 MiB 以下。超過はプロトコル違反（`error{retryable:false}`） |
-| バージョン | `run.protocol = 4`（`PROTOCOL_VERSION`）。既存の形を変えるときだけ上げる（追加のみでは上げない） |
+| バージョン | `run.protocol = 5`（`PROTOCOL_VERSION`）。既存の形を変えるときだけ上げる（追加のみでは上げない） |
 
 ## 3. celeris → ワーカー
 
@@ -57,7 +58,7 @@ celeris ◀─stdout── {"type":"progress", ...}\n
 
 ```json
 {"type":"run",
- "protocol":4,
+ "protocol":5,
  "task":{ "...": "task-core::Task を serde でそのまま直列化したもの（role・aggregate を含む）" },
  "workspace":"/abs/path/to/workspace/<task_id>",
  "work_dir":"/abs/path/to/workspace/<task_id>/tree",
@@ -75,7 +76,7 @@ celeris ◀─stdout── {"type":"progress", ...}\n
 
 | フィールド | 型 | 必須 | 説明 |
 |---|---|---|---|
-| `protocol` | integer | ✓ | `PROTOCOL_VERSION`（現在 `4`）。ワーカーはこの値を検査する必要はない |
+| `protocol` | integer | ✓ | `PROTOCOL_VERSION`（現在 `5`）。ワーカーはこの値を検査する必要はない |
 | `task` | object | ✓ | `Task`（id, kind, title, objective, acceptance[], inputs[], depends_on[], status, priority, worker_hint, workspace, budget, attempts, `role`, `aggregate`, …）。`task.role`（`Option<string>`）はタスクの役割名、`task.aggregate`（`bool`。既定 false）は集約 run の親かどうか（ADR-0016 D1/D3） |
 | `workspace` | string | ✓ | 絶対パス。`artifact.path` の基準で、`runs/` `inputs/` `artifacts/` の親。`work_dir` が無ければワーカーの cwd でもある |
 | `work_dir` | string | –（省略可。Phase 49, ADR-0041 D1） | 絶対パス。ワーカーの cwd。タスクごとの `git worktree`（`<workspace>/tree`。ブランチ `celeris/<task_id>`）を切った run にだけ載る。このとき成果物は作業ツリーの**外**にあるので、前置きの成果物のパスは絶対パスになる |
@@ -85,7 +86,9 @@ celeris ◀─stdout── {"type":"progress", ...}\n
 | `context.inputs` | array | ✓（空可） | 依存成果物の `ArtifactRef`。`prepare()` で `workspace/inputs/` に配置済み |
 | `context.answers` | array | –（省略可、空なら省略） | `celerisctl answer` で記録された `question` → 人間の回答の履歴（時系列、`{question: string, answer: string}`）。ADR-0010 D3, P-10。前方互換のため未知のワーカーは無視してよい |
 | `context.role` | object | –（省略可。v2, ADR-0016 D1/M3） | タスクに役割があるときだけ `Some`。`{id: string, instructions: string}`（`instructions` は `[[roles]]` に指示文が無ければ空文字列）。`claude-code`/`codex` はプロンプトの前置きにする（`## Role: <id>`） |
-| `context.children` | array | –（省略可。空なら省略。v2, ADR-0016 D3/M4） | 集約 run（`task.aggregate == true` の親の、子が全て終端になった後の run）でのみ非空。`ChildSummary`: `{id, title, role?, status, outcome?, artifacts: ArtifactRef[], workspace?, branch?}`。`branch` はその子が worktree で作業したときのブランチ（`celeris/<child_id>`。Phase 49, ADR-0041 D1）で、親はこれを merge して子の成果を統合する |
+| `context.lineage` | object | –（省略可。祖先も子も無ければ省略。ADR 2026-11-21-ancestor-objective-in-prompts D1） | この run の task の木の上下。`{ancestors?: AncestorContext[], children?: ChildSummary[]}`（どちらも空なら省略）。dispatcher が store から組む |
+| `context.lineage.ancestors` | array | –（省略可。空なら省略。ADR 2026-11-21-ancestor-objective-in-prompts D1） | この run の task の祖先（木の親、無ければ `parent_id` を root まで辿る。root が先頭、親が末尾）の `AncestorContext`: `{title, objective, acceptance?: Criterion[]}`。objective と受入条件はどれも全文で、切らない。worker・planner・WU・reviewer（final review と設計 review）の run に載る。親の無い task（root）では省略。`claude-code`・`codex`・`acp`・`pi` は task の目的の直後に「祖先の task の目的と受け入れ条件」節として出す。`context.execution_planner.tree.ancestors[]` は題名と段階だけを持ち、目的の全文はこの欄が運ぶ |
+| `context.lineage.children` | array | –（省略可。空なら省略。v2, ADR-0016 D3/M4。ADR 2026-11-21-ancestor-objective-in-prompts D1 で `context.children` から移した） | 集約 run（`task.aggregate == true` の親の、子が全て終端になった後の run）・子の失敗によるやり直し run・子を起票できる run でだけ非空。`ChildSummary`: `{id, title, role?, status, outcome?, artifacts: ArtifactRef[], workspace?, branch?}`。`branch` はその子が worktree で作業したときのブランチ（`celeris/<child_id>`。Phase 49, ADR-0041 D1）で、親はこれを merge して子の成果を統合する |
 | `context.node` | object | –（省略可。v4, ADR-0033 D4） | `task.assignee` の組織ノード（担当が決まっている run だけ）。`{id, name, brief?}`。プロンプトの一番前に「あなたは誰で、何の担当か」として置かれる |
 | `context.memory` | object | –（省略可。v4, ADR-0033 D6） | `[memory]` を設定し、担当が決まっている run だけ。`{notes?: string, project?: string}`（`<memory_dir>/<node_id>/notes.md` と `projects/<project_id>.md` の中身。それぞれ 8,000 字で切る） |
 | `context.conversation` | array | –（省略可。空なら省略。v4, ADR-0033 D4） | その案件でのこのノードと人の**直近のやり取り**（既定 20 件、古い順）。`{role: "user"\|"node", text: string}` |
@@ -123,7 +126,7 @@ celeris ◀─stdout── {"type":"progress", ...}\n
 Review プロンプトには含めない）。JSON Lines プロトコルを直接話す `fake` 等のワーカーは、この配列を読んで
 自由に扱ってよい（celeris 側は解釈を強制しない）。
 
-`context.role` / `context.children` も同様に、JSON Lines を直接話すワーカーは自由に解釈してよい
+`context.role` / `context.lineage` も同様に、JSON Lines を直接話すワーカーは自由に解釈してよい
 （celeris 側は解釈を強制しない）。`claude-code`/`codex` の反映のしかたは §9 M8 を参照。
 
 **v4 の前置き（ADR-0033 D4/D6, Phase 24。Phase 28 で末尾に対話専用の指示を追加。Phase 30 で役職と brief の
@@ -184,7 +187,7 @@ Phase 53（ADR-0044 D2）: `context.comments` か `context.interrupt` がある�
 （`docs/api/v1/event.schema.json`。**追加のみ**なので導入前のイベントもそのまま読める）。無出力タイムアウトの
 カウンタをリセットする。
 
-**`PROTOCOL_VERSION` は 4 のまま**（追加のみ。この 6 つを出さないワーカーも、読まない celeris も従来どおり動く）。
+**`PROTOCOL_VERSION` は上げない**（追加のみ。この 6 つを出さないワーカーも、読まない celeris も従来どおり動く）。
 
 **アダプタごとの写像**（ここだけがアダプタ固有。ADR-0048 D2）:
 
@@ -406,7 +409,7 @@ celeris 側の扱い（ADR-0016 D2, 実装メモ M2/M6/M7）:
 - 空白だけの本文・20,000 文字超は捨てる（警告だけ。run は続く）。
 - 前置きには「短い進捗や判断の記録はコメントに書け」と書いてある（`context.comments_enabled`）。
   長い成果は成果物（`artifact`）に書くこと。
-- **追加のみ**なので `PROTOCOL_VERSION` は 4 のまま。この行を出さない既存のワーカーは何も変わらない。
+- **追加のみ**なので `PROTOCOL_VERSION` は上げない。この行を出さない既存のワーカーは何も変わらない。
 
 ### 4.8 `wait`（終端。ADR-0090 D1）
 
@@ -507,7 +510,7 @@ checkpoint は [`checkpoint.schema.json`](checkpoint.schema.json)、計画は [`
 stdin:
 
 ```json
-{"type":"run","protocol":4,"task":{"id":"01J8…","kind":"execute","title":"add README example","acceptance":[{"text":"cargo test exits 0","check":{"type":"command","cmd":"cargo test","expect_exit":0}}}],"budget":{"max_turns":20,"max_wall_secs":600,"max_retries":1},"attempts":0},"workspace":"/srv/ws/01J8…","artifacts_dir":"/srv/ws/01J8…/artifacts","context":{"prior_review":[],"inputs":[]}}
+{"type":"run","protocol":5,"task":{"id":"01J8…","kind":"execute","title":"add README example","acceptance":[{"text":"cargo test exits 0","check":{"type":"command","cmd":"cargo test","expect_exit":0}}}],"budget":{"max_turns":20,"max_wall_secs":600,"max_retries":1},"attempts":0},"workspace":"/srv/ws/01J8…","artifacts_dir":"/srv/ws/01J8…/artifacts","context":{"prior_review":[],"inputs":[]}}
 ```
 
 stdout:
@@ -610,7 +613,7 @@ run 終了時にそのファイルへフォールバックし、正しい置き�
   `done` を返しながら `"bad_news"` を名乗っても悪い知らせにはならない。
 - 効くのは「レビューを通って `Status::Done` になった」ときの報告 1 件だけ。`assignee` の無いタスク・
   対話用タスクは報告を作らないので、宣言も無視される。
-- `PROTOCOL_VERSION` は 4 のまま（追加のみで、既存のワーカーは何も変えなくてよい）。
+- `PROTOCOL_VERSION` は上げない（追加のみで、既存のワーカーは何も変えなくてよい）。
 
 判定順序（ADR-0006 D4）: stream-json の最後の `{"type":"result",...}` が `is_error:true` か
 `subtype != "success"` なら、結果ファイルの内容によらず `error{retryable:true}` とする（自己申告の

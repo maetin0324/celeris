@@ -378,7 +378,7 @@ impl Dispatcher {
             auto_leaf: None,
             token_budget: None,
             role,
-            children,
+            lineage: crate::prompt_ancestors::lineage(self.store.as_ref(), task, children)?,
             available_genres,
             node,
             memory,

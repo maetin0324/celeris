@@ -28,8 +28,11 @@ use task_core::{
 /// `context.organization[].skills` / `.harnesses` を追加（版数は据え置き。追加だけなので v4 のまま）。
 /// Phase 67（ADR-0054 D1）: `context.session`（継続セッションの手がかり）を追加（版数は据え置き）。
 /// ADR 2026-10-06 cos-chat-run-dispatch: `context.cos_chat`（CoS chat run の入力）を追加（版数は据え置き）。
-/// 全て追加のみで v1〜v3 のワーカーはそのまま動く。
-pub const PROTOCOL_VERSION: u32 = 4;
+/// v4 までの上の変更は全て追加のみで、v1〜v3 のワーカーはそのまま動いた。
+/// v5（ADR 2026-11-21-ancestor-objective-in-prompts D1/D2）: `context.children` を消して `context.lineage.children` に移し、
+/// `context.lineage.ancestors` を足した。木の planner の祖先の `objective_excerpt` を消した。既存の形を変えたので版を上げる。
+/// daemon とワーカーの production のコードは版を数値で比べない（ワーカーはこの値を検査しない）。
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// 直前のレビュー結果（`context.prior_review[]`）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -226,7 +229,7 @@ impl From<&GenreSpec> for GenreContext {
     }
 }
 
-/// `context.children[]`（ADR-0016 D3 / M4）: 集約 run に渡す、委譲した子の要約。
+/// `context.lineage.children[]`（ADR-0016 D3 / M4）: 集約 run に渡す、委譲した子の要約。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ChildSummary {
     pub id: TaskId,
@@ -452,9 +455,11 @@ pub struct RunContext {
     /// タスクに役割があるときだけ `Some`（ADR-0016 D1）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<RoleContext>,
-    /// 集約 run（`aggregate = true` の親の、子が全て終端になった後の run）でのみ非空（ADR-0016 D3）。
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub children: Vec<ChildSummary>,
+    /// ADR 2026-11-21-ancestor-objective-in-prompts D1: この run の task の木の上下（祖先の目的と受入条件の全文、子の
+    /// 要約）。dispatcher が store から組む。祖先も子も無い run（親の無い root の task・対話 run）では wire にも
+    /// prompt にも出ない。
+    #[serde(default, skip_serializing_if = "TaskLineageContext::is_empty")]
+    pub lineage: TaskLineageContext,
     /// ADR-0027 D1: 委譲できる run（`build_execute_prompt` を使う run）にだけ、設定済みの分野と
     /// その役割の一覧を渡す。委譲できない run（`Plan`/`Review`）や `[[genres]]` が空の設定では空。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -845,15 +850,52 @@ pub struct TreePlannerContext {
     pub stages_hint: Vec<task_core::StageHint>,
 }
 
-/// `context.execution_planner.tree.ancestors[]`（ADR-0079 D4 (2)）: 祖先 1 つ。
+/// `context.execution_planner.tree.ancestors[]`（ADR-0079 D4 (2)）: 木の祖先 1 つ（題名と段階）。目的と受入条件の全文は
+/// `RunContext.lineage.ancestors` が運ぶ（ADR 2026-11-21-ancestor-objective-in-prompts D2。ここに写さない）。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct TreeAncestorContext {
     pub title: String,
     /// この祖先の計画の中で、次の節点（無ければこの task）が属する段階。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stage: Option<String>,
-    /// 目的の先頭 300 文字。
-    pub objective_excerpt: String,
+}
+
+/// `context.lineage`（ADR 2026-11-21-ancestor-objective-in-prompts D1）: run の task の木の上下。どちらも store の
+/// task の木（祖先は木の親、無ければ `parent_id` を root まで。子は `parent_id`）から dispatcher が組む。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TaskLineageContext {
+    /// 祖先（root が先頭、親が末尾）の題名・objective・受入条件の全文。親の無い task では空。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ancestors: Vec<AncestorContext>,
+    /// 委譲した子の要約。集約 run・子の失敗によるやり直し run・子を起票できる run でだけ非空（ADR-0016 D3）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<ChildSummary>,
+}
+
+impl TaskLineageContext {
+    pub fn is_empty(&self) -> bool {
+        self.ancestors.is_empty() && self.children.is_empty()
+    }
+}
+
+/// `context.lineage.ancestors[]`（ADR 2026-11-21-ancestor-objective-in-prompts D1）: 祖先の task 1 つの題名・objective・
+/// 受入条件（どれも全文。切らない）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AncestorContext {
+    pub title: String,
+    pub objective: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub acceptance: Vec<task_core::Criterion>,
+}
+
+impl From<&task_core::Task> for AncestorContext {
+    fn from(task: &task_core::Task) -> Self {
+        Self {
+            title: task.title.clone(),
+            objective: task.objective.clone(),
+            acceptance: task.acceptance.clone(),
+        }
+    }
 }
 
 fn is_zero_usize(n: &usize) -> bool {
@@ -1216,7 +1258,7 @@ pub struct Evidence {
 pub enum WorkerMessage {
     /// ADR-0048 D2（Phase 60a）: `msg` は従来どおり人が読む 1 行。`kind` / `tool` / `summary` /
     /// `detail` / `truncated` / `error` は**任意の追加**で、出さないワーカーはそのまま動く
-    /// （`PROTOCOL_VERSION` は 4 のまま）。`detail` は 4 KiB で切る（`truncated`）。
+    /// （`PROTOCOL_VERSION` は上げない）。`detail` は 4 KiB で切る（`truncated`）。
     Progress {
         msg: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1234,7 +1276,7 @@ pub enum WorkerMessage {
     },
     /// ADR-0044 D2（Phase 53）: タスクのコメント（任意回、非終端）。`progress` と違って**残る**
     /// （`task_comments` に `author_kind = node` で入り、次の run の前置きにも載る）。
-    /// **追加のみ**なので `PROTOCOL_VERSION` は 4 のまま（この行を出さないワーカーはそのまま動く）。
+    /// **追加のみ**なので `PROTOCOL_VERSION` は上げない（この行を出さないワーカーはそのまま動く）。
     Comment { body: String },
     /// ADR-0016 D2: 実行中の委譲の提案（任意回、非終端）。celeris は検証を通ったものだけ子タスクとして挿入し、
     /// 拒否した提案は理由を `WorkerProgress` に残す。run は失敗しない。

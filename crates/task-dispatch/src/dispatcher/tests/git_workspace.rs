@@ -1332,6 +1332,7 @@ async fn each_delegated_child_gets_its_own_worktree_and_the_parent_sees_the_bran
     );
     let extras = d.run_extras(&parent, None, None, "claude-code").unwrap();
     let mut branches: Vec<String> = extras
+        .lineage
         .children
         .iter()
         .filter_map(|c| c.branch.clone())
@@ -1355,7 +1356,7 @@ async fn each_delegated_child_gets_its_own_worktree_and_the_parent_sees_the_bran
     );
     // 子でも成果物はタスクごとのディレクトリの中（`.taskd/artifacts/<id>` ではない）。
     assert_eq!(
-        extras.children[0].workspace.as_deref(),
+        extras.lineage.children[0].workspace.as_deref(),
         Some(root.path().join(children[0].id.to_string()).as_path())
     );
 }

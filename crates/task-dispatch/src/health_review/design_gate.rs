@@ -281,6 +281,9 @@ impl Dispatcher {
         // 付記 C2: final review と同じ task 木の token 予算の watch（`run_watch`）を run と sink に付ける。読めなければ
         // run を起こさず次の tick でやり直す（`?`。C1 の判定と同じ扱い）。
         let watch = token_budget::run_watch(self.store.as_ref(), task, None)?;
+        // ADR 2026-11-21-ancestor-objective-in-prompts D3: 対象 task の祖先の目的と受入条件の全文（final review と同じ列）。
+        // 読めなければ WorkerStarted・runs の行・quota_begin の前に返り、run を起こさない（`?`。予算の watch と同じ扱い）。
+        let lineage = crate::prompt_ancestors::lineage(self.store.as_ref(), task, Vec::new())?;
         let Some(reviewer) = self.pick_reviewer(task, &subject, Ok(watch)) else {
             tracing::debug!(task_id = %task.id, "design review deferred (no admissible reviewer route)");
             return Ok(());
@@ -352,7 +355,8 @@ impl Dispatcher {
         let tx = self.coord.completion_sender();
         let handle = tokio::spawn(async move {
             let result =
-                run_design_reviewer(&subject_task, &dir, &artifacts_dir, request, run).await;
+                run_design_reviewer(&subject_task, &dir, &artifacts_dir, request, lineage, run)
+                    .await;
             let _ = tx.send(Completion::DesignReview(Box::new(DesignReviewEnd {
                 task_id,
                 run_id: end_run_id,
@@ -444,6 +448,7 @@ async fn run_design_reviewer(
     workspace_dir: &Path,
     artifacts_dir: &Path,
     request: DesignReviewRequest,
+    lineage: task_worker::protocol::TaskLineageContext,
     run: crate::review::ReviewerRun,
 ) -> Result<RunOutcome, AdapterError> {
     let _ = std::fs::remove_file(artifacts_dir.join(crate::review::REVIEW_FILE_NAME));
@@ -470,6 +475,8 @@ async fn run_design_reviewer(
             subject_genre: run.subject_genre.clone(),
             session: run.session.clone(),
             session_diff: run.session_diff.clone(),
+            // ADR 2026-11-21-ancestor-objective-in-prompts D3: 対象 task の祖先の目的と受入条件の全文。
+            lineage,
             ..RunContext::default()
         },
     };

@@ -180,6 +180,7 @@ fn prompt_header(task: &Task, context: &RunContext, run_id: &str, artifacts: &st
                 "## このタスク全体の目的（全文。目標・禁止事項・不変条件はこの WorkUnit にも掛かる）\n{}\n\n",
                 wu.task_objective
             ));
+            out.push_str(&ancestors_section(context));
             if !wu.plan_overview.is_empty() {
                 out.push_str("## 計画の中のこの WorkUnit\n");
                 for line in &wu.plan_overview {
@@ -211,11 +212,44 @@ fn prompt_header(task: &Task, context: &RunContext, run_id: &str, artifacts: &st
         }
         None => {
             out.push_str(&format!("## Objective\n{}\n\n", task.objective));
+            out.push_str(&ancestors_section(context));
         }
     }
     // ADR-0079 D7（Phase R3a）: 木の節点の worker の run だけ（`false` ならプロンプトは変わらない）。
     if context.decision_requests {
         out.push_str(&crate::preamble::decision_requests_section(artifacts));
+    }
+    out
+}
+
+/// ADR 2026-11-21-ancestor-objective-in-prompts D1: 祖先の task（`context.lineage.ancestors`。root が先頭）の objective と受入条件の
+/// 全文の節。worker・planner・WU・reviewer の prompt が `prompt_header` を通してこの 1 か所から出す（harness ごとの分岐は
+/// 無い）。受入条件の行は `acceptance_lines` を使う。`context.lineage.ancestors` が空（親の無い root の task）なら空文字列で、
+/// prompt は 1 バイトも変わらない。
+fn ancestors_section(context: &RunContext) -> String {
+    if context.lineage.ancestors.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from(
+        "## 祖先の task の目的と受け入れ条件（全文。root が先頭、親が末尾。目標・禁止事項・不変条件はこの task にも掛かる）\n",
+    );
+    let last = context.lineage.ancestors.len();
+    for (i, a) in context.lineage.ancestors.iter().enumerate() {
+        let place = match (i, last - i) {
+            (0, 1) => "root・親",
+            (0, _) => "root",
+            (_, 1) => "親",
+            _ => "途中",
+        };
+        out.push_str(&format!("### 祖先 {}（{place}）: {}\n", i + 1, a.title));
+        out.push_str(&format!("#### 目的\n{}\n", a.objective));
+        out.push_str("#### 受け入れ条件\n");
+        if a.acceptance.is_empty() {
+            out.push_str("無し\n");
+        } else {
+            out.push_str(&acceptance_lines(&a.acceptance));
+        }
+        out.push('\n');
     }
     out
 }
@@ -381,10 +415,10 @@ fn organization_section(context: &RunContext) -> String {
     out
 }
 
-/// `context.children` があれば「集約 run」節を足す（ADR-0016 D3 / M4）。
+/// `context.lineage.children` があれば「集約 run」節を足す（ADR-0016 D3 / M4）。
 fn children_section(task: &Task, context: &RunContext, artifacts: &str) -> String {
     let mut out = String::new();
-    if context.children.is_empty() {
+    if context.lineage.children.is_empty() {
         return out;
     }
     if task.aggregate {
@@ -392,7 +426,7 @@ fn children_section(task: &Task, context: &RunContext, artifacts: &str) -> Strin
     } else {
         out.push_str("## Existing child tasks (do not duplicate)\n");
     }
-    for c in &context.children {
+    for c in &context.lineage.children {
         let role = c.role.as_deref().unwrap_or("-");
         let status = serde_json::to_string(&c.status).unwrap_or_default();
         let status = status.trim_matches('"');
@@ -1351,19 +1385,16 @@ fn tree_plan_shape_section(
         );
     }
     if !tree.ancestors.is_empty() {
-        out.push_str("- Ancestors (root first):\n");
+        // ADR 2026-11-21-ancestor-objective-in-prompts D2: 目的と受入条件の全文は冒頭の祖先の節（`ancestors_section`）に
+        // あるので、ここは木の深さと段階だけを出す。
+        out.push_str("- Ancestors (root first; their full objectives and acceptance are in the ancestors section above):\n");
         for (i, a) in tree.ancestors.iter().enumerate() {
             let stage = a
                 .stage
                 .as_deref()
                 .map(|s| format!(" (stage `{s}`)"))
                 .unwrap_or_default();
-            out.push_str(&format!(
-                "  - depth {}: \"{}\"{stage} — {}\n",
-                i + 1,
-                a.title,
-                a.objective_excerpt.replace('\n', " ")
-            ));
+            out.push_str(&format!("  - depth {}: \"{}\"{stage}\n", i + 1, a.title));
         }
     }
     out.push('\n');

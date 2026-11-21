@@ -938,7 +938,7 @@ struct RunExtras {
     /// ADR 2026-10-20-mlsys-main2-fixes D1-3: task 木に token 予算があれば、run の途中で止める watch。
     token_budget: Option<Arc<token_budget::TokenBudgetWatch>>,
     role: Option<RoleContext>,
-    children: Vec<ChildSummary>,
+    lineage: task_worker::protocol::TaskLineageContext,
     /// ADR-0027 D1: 委譲できる run（`build_execute_prompt` を使う run）にだけ非空。
     available_genres: Vec<GenreContext>,
     /// ADR-0033 D4: `task.assignee` の組織ノード（担当が無いタスクでは `None`）。
@@ -2066,7 +2066,7 @@ fn has_aggregate_transition(events: &[(u64, Event)]) -> bool {
 }
 
 /// ADR-0021 D1: イベント列に子の失敗による遷移（`Transitioned{reason: "child_failed"}`）があるか。
-/// 以後の run は「子が失敗した後のやり直し」なので、子の結果（`context.children`）を渡す。
+/// 以後の run は「子が失敗した後のやり直し」なので、子の結果（`context.lineage.children`）を渡す。
 fn has_child_failed_transition(events: &[(u64, Event)]) -> bool {
     events
         .iter()

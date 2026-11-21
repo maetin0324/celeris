@@ -119,6 +119,7 @@ build した後に env を変えて test binary を直接走らせても、cfg �
   `CELERIS_LAUNCHER_TESTS=require` のときだけ panic し、その判定は試験の中で env を読む（「走らせるか」ではなく「環境が無いとき
   fail にするか」の規則で、D1 の規則とは別）。release gate は `CELERIS_LAUNCHER_TESTS=require` を立てないので、sudo が使えない host
   では試験 9 は本体に入ってから return して pass になる。
+  - 試験 7・9 の gate の扱いは [ADR 2026-11-21-release-gate-second-stage-skip](2026-11-21-release-gate-second-stage-skip.md) が置き換えた（本体の中の欠けは常に失敗、gate が走れない試験は明示して外し gate.json に残す）。D1 の本文は変えない。
 - 同じ「env 無しで return して pass」の試験は他にもある（進捗の提案 1: ADR-0126 の helper 経由 28 件、自前の規則 7 件など）。
   task-worker の lib の 9 件（`browser_tests.rs` 8 件と `browser_launcher/userns.rs` 1 件）は同じ cfg を読む `skip_unless_userns_tests`
   を通るので、別の task で `cfg_attr` に移せる。`crates/task-worker/tests/userns_gate/mod.rs`・task-api・campaign は env を

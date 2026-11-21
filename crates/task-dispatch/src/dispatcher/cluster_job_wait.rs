@@ -18,8 +18,9 @@ use task_core::cluster_job::{
 use task_core::{Event, Status, Task, TaskId, Trigger, WorkUnitBlockedReason, WorkUnitStatus};
 use time::OffsetDateTime;
 
-use super::{DispatchError, Dispatcher, rfc3339};
+use super::{DispatchError, Dispatcher, ops_to_store, rfc3339};
 use crate::cluster_runtime::{ClusterJobPoller, ClusterRuntime, JobPollSlot};
+use task_ops::decision::job_end_target;
 
 fn parse_ts(s: &str) -> Option<OffsetDateTime> {
     OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()
@@ -405,7 +406,9 @@ impl Dispatcher {
         Ok(())
     }
 
-    /// wait を持つ unit の新しい行（`blocked(cluster_jobs)` のときだけ）と `WorkUnitTransitioned`。
+    /// wait を持つ unit の新しい行（`blocked(cluster_jobs)` のときだけ）と `WorkUnitTransitioned`。ADR
+    /// 2026-11-21-cluster-job-wait-worker-decisions D2: unit を止める決定がある（`task_ops::decision::holds_unit`）なら、
+    /// `to` の代わりに `blocked(decision)`（遷移の理由 `decision`）にし、再開は答えの解放（`release_rows`）に任せる。
     #[allow(clippy::too_many_arguments)]
     fn cluster_wait_unit_row(
         &self,
@@ -425,6 +428,9 @@ impl Dispatcher {
         }) else {
             return Ok(None);
         };
+        let (to, blocked_reason, reason) =
+            job_end_target(self.store.as_ref(), &u, (to, blocked_reason, reason))
+                .map_err(ops_to_store)?;
         let mut row = u.clone();
         row.status = to;
         row.blocked_reason = blocked_reason;

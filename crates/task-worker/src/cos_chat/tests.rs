@@ -42,6 +42,7 @@ fn chat() -> CosChatContext {
     CosChatContext {
         thread_id: "thr1".into(),
         run_id: "crun1".into(),
+        discussion_mode: None,
         inputs: vec![
             CosChatInput {
                 id: "m10".into(),
@@ -970,5 +971,29 @@ fn general_cos_consult_prompt_carries_the_intent_hint_and_the_guidance() {
         "inline_read_max_commands",
     ] {
         assert!(consult.contains(needle), "consult.md lacks {needle}");
+    }
+}
+
+/// ADR 2026-11-21-chat-discussion-mode D1.2: a discuss / propose run's prompt names the mode and
+/// says the API refuses its operations; an execute run (no mode) gets no such line, as before.
+/// The refusal itself is the API's (task-api `discussion_mode_*`); this only guards the hint.
+#[test]
+fn discussion_mode_prompt_names_discuss_and_propose_runs() {
+    let mut c = chat();
+    assert!(!super::inputs_section(&c).contains("議論の mode"));
+    for (mode, word) in [
+        (
+            task_core::chat::ChatDiscussionMode::Discuss,
+            "議論の mode: discuss",
+        ),
+        (
+            task_core::chat::ChatDiscussionMode::Propose,
+            "議論の mode: propose",
+        ),
+    ] {
+        c.discussion_mode = Some(mode);
+        let inputs = super::inputs_section(&c);
+        assert!(inputs.contains(word), "{word} missing in\n{inputs}");
+        assert!(inputs.contains("`discussion_mode_forbidden`"), "{inputs}");
     }
 }

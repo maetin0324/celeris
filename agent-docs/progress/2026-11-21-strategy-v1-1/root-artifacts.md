@@ -87,7 +87,7 @@ exit=100
 ## 証拠
 
 - 修正前・修正後の試験: 上の節。完全な出力は run の成果物 dir の `logs/before.log`・`logs/after.log`。
-- 検査（下の結果は提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）: 下の「検査」節。
+- 検査: 下の「検査」節。
 
 ## LoC 差分（`scripts/dev/source-size-report.py --exclusive-classes --rev <rev> --format json`。script と toml は `$CELERIS_WU_BASE` から `git show` で取り出し、base と HEAD の両方に当てた）
 
@@ -106,9 +106,19 @@ docs は ADR と進捗 file。
 本体の純増 53 行の理由: 候補の組み立て（WU の run の見分けと path の除外、doc comment 7 行を含む）と、`check_relative` の
 切り出し（doc comment と関数の枠）。この task は行数の純減を目的にしていない。
 
-## 検査
+## 検査（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`。この節を書いた後の commit は進捗 file だけ）
 
-（提出時の HEAD で実行した結果を書く）
+- `bash scripts/dev/test-affected.sh` → exit 0（858 秒）。repo-health `verdict=pass worsened=0 new=0`、
+  nextest `6163 tests run: 6163 passed (11 slow), 21 skipped`、doc test は全 crate で失敗 0。
+  対象 crate は `--list` で celeris・celeris-campaign・celerisctl・llm-proxy・task-api・task-dispatch・task-worker。
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
+- `cargo nextest run -p task-dispatch --lib -E 'test(root_review_artifact_)'` → 修正前の本体で exit 100（3 failed）、
+  修正後 exit 0（5 passed）
+- `sh scripts/dev/progress-index.sh --check` → exit 0、`sh scripts/dev/check-adr-numbers.sh` → exit 0
+- `sh "$CELERIS_WU_SCOPE_PATHS"` → 変えた path は ADR・この進捗 file・`crates/task-dispatch/src/{review.rs,dispatcher.rs,
+  dispatcher/review_spawn.rs,dispatcher/tests/mod.rs,dispatcher/tests/root_review_artifacts.rs}`・`crates/task-worker/src/artifact.rs`
+  だけ（他の WorkUnit の担当の file に触れていない）
 
 ## 回帰の条件
 

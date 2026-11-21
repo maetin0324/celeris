@@ -120,7 +120,8 @@ unit settle-leaf（WU の run）で D3 の直し方を確かめ、次のとお�
     欄は 1 つなので、`blocked(decision)` に置き換えると job の待ちの正本が 2 つになり、job が終わっても再開できない。
     直すには `cluster_job_wait.rs`・`task_ops::decision` の変更が要り、この段の範囲の外なので読まない（要求は job の後の
     run の `result.json` が出し直す。close の未解決に入れる）。
-- 止め方の順（`worker_finish.rs`）: `settle_work_unit` の直後に決定を読み、`needed_before: self` の要求があれば
+- 止め方の順（`worker_finish.rs`）: `settle_work_unit` の直後に `Dispatcher::work_unit_decisions`（`tree_units.rs`。
+  `worker_finish.rs` の関数を大きくしないためにここに置いた）で決定を読み、`needed_before: self` の要求があれば
   `hold_for_worker_decisions` で止める。その後に integration repair の打ち切り（`integration_repair_exhaustion`）と WU の
   失敗の処理（`settle_work_unit_failure`。自動 replan・質問・replan の使い切りの `limit:max_replans` の決定）を回すが、
   止めた settlement では `failure`・`integration_repair_exhaust`・`auto_replan` が空なので何も起きない。1 つの leaf を

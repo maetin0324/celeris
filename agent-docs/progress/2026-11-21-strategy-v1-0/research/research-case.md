@@ -17,7 +17,7 @@ BenchFS 案件の task 01M7C56WK4E86BTZNDKAX7SP7C（ISC27 C、status Done）が�
 - 早すぎた結論（30 cell・0/240 で「止まらない」と一般化）は、rubric の unsupported claims を採点する実例になる。事前の情報（k=23 でも 1/192 の停止、49898）が slice 11.17 の時点で既にあり、反復を待つべきだったと判定できる。
 - 測定は終わっている。新しい実験は要らない。
 
-検討して選ばなかったもの: BenchFS strict fsync の不具合（KB `benchfs-strict-fsync-before-3c9db68-did-no-data.md`。修正の前後の比較で、仮説の改めの過程の記録が薄い）、
+検討して選ばなかったもの: BenchFS strict fsync の不具合（KB の project:benchfs の fsync の頁。修正の前後の比較で、仮説の改めの過程の記録が薄い）、
 Pluvio の 2 つの調査（文献・Web の調査で、反証できる実験の記録が無い）。
 
 ## データの所在（read-only）

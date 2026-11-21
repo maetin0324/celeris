@@ -165,6 +165,7 @@ async fn unblocks_cos_task_create_writes_the_link_in_the_audited_transaction() {
                 reply_to_id: None,
                 mode: ChatSendMode::Queue,
                 resume_queue: false,
+                discussion_mode: None,
             },
             now,
         )

@@ -104,6 +104,7 @@ impl Fixture {
                     reply_to_id: None,
                     mode: ChatSendMode::Queue,
                     resume_queue: false,
+                    discussion_mode: None,
                 },
                 self.d.now_utc(),
             )

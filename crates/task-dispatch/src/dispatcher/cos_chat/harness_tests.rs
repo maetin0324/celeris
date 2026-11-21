@@ -91,6 +91,7 @@ fn post(store: &SqliteStore, d: &Dispatcher, thread: &str, key: &str, attachment
                 reply_to_id: None,
                 mode: ChatSendMode::Queue,
                 resume_queue: false,
+                discussion_mode: None,
             },
             d.now_utc(),
         )
@@ -368,6 +369,7 @@ impl WorkerAdapter for DeltaProbe {
                             reply_to_id: Some(input.id.clone()),
                             mode: ChatSendMode::Interrupt,
                             resume_queue: false,
+                            discussion_mode: None,
                         },
                         crate::dispatcher::cos_chat::control::ORPHAN_TAKEOVER_REASON,
                         OffsetDateTime::from_unix_timestamp(1_791_158_400).expect("clock"),
@@ -608,6 +610,7 @@ async fn cos_chat_resume_delta_interrupt_and_queued_inputs_are_always_delivered(
                 reply_to_id: None,
                 mode: ChatSendMode::Interrupt,
                 resume_queue: false,
+                discussion_mode: None,
             },
             d.now_utc(),
         )

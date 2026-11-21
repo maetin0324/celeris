@@ -125,6 +125,7 @@ fn post_message(store: &SqliteStore, thread: &str, key: &str) -> String {
                 reply_to_id: None,
                 mode: ChatSendMode::Queue,
                 resume_queue: false,
+                discussion_mode: None,
             },
             OffsetDateTime::now_utc(),
         )

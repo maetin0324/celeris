@@ -364,6 +364,7 @@ async fn project_escalation_is_answered_through_the_general_cos_and_relayed_to_t
                 reply_to_id: None,
                 mode: task_core::chat::ChatSendMode::Queue,
                 resume_queue: false,
+                discussion_mode: None,
             },
             "human:web",
             earlier,

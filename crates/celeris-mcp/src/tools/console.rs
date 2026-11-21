@@ -85,6 +85,7 @@ async fn instruct_impl(
             said_at: relay.said_at.clone(),
             task_ids: relay.task_ids.clone(),
             expires_at: relay.expires_at.clone(),
+            discussion_mode: None,
         });
     let posted = state
         .blocking(move |store| {

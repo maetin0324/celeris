@@ -77,6 +77,7 @@ pub fn chat_proposal_forward_tx(
             said_at: chat_ts(now),
             task_ids: req.task_ids.clone(),
             expires_at: Some(req.expires_at.clone()),
+            discussion_mode: None,
         },
         "cos",
         now,

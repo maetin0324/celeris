@@ -25,6 +25,7 @@ fn live_run(store: &SqliteStore, key: &str, now: i64) -> (String, String) {
                 reply_to_id: None,
                 mode: ChatSendMode::Queue,
                 resume_queue: false,
+                discussion_mode: None,
             },
             at(now + 1),
         )
@@ -206,6 +207,7 @@ fn cos_chat_ops_checkpoint_rejects_queued_gap_before_interrupt_input() {
                     reply_to_id: None,
                     mode,
                     resume_queue: false,
+                    discussion_mode: None,
                 },
                 at(1),
             )

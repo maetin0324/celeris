@@ -66,6 +66,7 @@ fn req(key: &str, text: &str) -> ChatPostMessageRequest {
         reply_to_id: None,
         mode: ChatSendMode::Queue,
         resume_queue: false,
+        discussion_mode: None,
     }
 }
 
@@ -1386,6 +1387,7 @@ fn cos_chat_relay_post_records_author_time_and_scope() {
         said_at: "2026-10-04T03:50:00Z".into(),
         task_ids: vec![task.id.to_string()],
         expires_at: Some("2026-10-06T00:00:00Z".into()),
+        discussion_mode: None,
     };
     let now = OffsetDateTime::parse(
         "2026-10-04T04:01:00Z",
@@ -1475,6 +1477,7 @@ fn cos_chat_relay_post_validates_times_and_tasks() {
         said_at: "2026-10-04T00:00:00Z".into(),
         task_ids: vec![],
         expires_at: None,
+        discussion_mode: None,
     };
     let invalid = |req: ChatRelayRequest| {
         let err = s
@@ -1545,6 +1548,7 @@ fn cos_chat_mcp_instruct_relay_is_recorded_with_the_client_as_relayer() {
         said_at: "2026-10-04T10:00:00Z".into(),
         task_ids: vec![],
         expires_at: None,
+        discussion_mode: None,
     };
     let message = s
         .chat_mcp_instruct("chatgpt", None, None, "sonnet で", Some(&relay), at(0))
@@ -1661,6 +1665,7 @@ fn cos_review_thread_refuses_every_input_but_the_review_input() {
         said_at: super::store::chat_ts(at(0)),
         task_ids: vec![],
         expires_at: None,
+        discussion_mode: None,
     };
     let e = s
         .chat_relay_post(&review, &relay, "operator:claude-code", at(1))

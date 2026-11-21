@@ -67,6 +67,7 @@ pub(super) fn post(store: &SqliteStore, thread: &str, key: &str) {
                 reply_to_id: None,
                 mode: ChatSendMode::Queue,
                 resume_queue: false,
+                discussion_mode: None,
             },
             OffsetDateTime::now_utc(),
         )
@@ -245,6 +246,7 @@ async fn cos_chat_run_control_interrupt_precedes_queue_without_changing_pause() 
                 reply_to_id: None,
                 mode: ChatSendMode::Interrupt,
                 resume_queue: false,
+                discussion_mode: None,
             },
             d.now_utc(),
         )
@@ -349,6 +351,7 @@ async fn cos_chat_run_control_live_interrupt_waits_for_old_worker_exit() {
                 reply_to_id: None,
                 mode: ChatSendMode::Interrupt,
                 resume_queue: false,
+                discussion_mode: None,
             },
             d.now_utc(),
         )
@@ -516,6 +519,7 @@ async fn cos_chat_run_control_pending_side_effect_waits_for_human() {
                 reply_to_id: None,
                 mode: ChatSendMode::Interrupt,
                 resume_queue: false,
+                discussion_mode: None,
             },
             d.now_utc(),
         )
@@ -844,6 +848,7 @@ async fn cos_chat_run_launch_stages_image_manifest_for_worker() {
                 reply_to_id: None,
                 mode: ChatSendMode::Queue,
                 resume_queue: false,
+                discussion_mode: None,
             },
             OffsetDateTime::now_utc(),
         )
@@ -1044,6 +1049,7 @@ async fn cos_chat_run_e2e_send_stream_interrupt_stop_resume_and_restart() {
                 reply_to_id: None,
                 mode: ChatSendMode::Interrupt,
                 resume_queue: false,
+                discussion_mode: None,
             },
             d.now_utc(),
         )

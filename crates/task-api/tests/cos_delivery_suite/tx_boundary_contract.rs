@@ -378,6 +378,7 @@ async fn admin_record_pins_attachments_and_serves_provenance() {
                 reply_to_id: None,
                 mode: ChatSendMode::Queue,
                 resume_queue: false,
+                discussion_mode: None,
             },
             time::OffsetDateTime::now_utc(),
         )

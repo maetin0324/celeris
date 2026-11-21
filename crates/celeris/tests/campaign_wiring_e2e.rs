@@ -324,6 +324,7 @@ async fn post_tasks_to_export_connects_children_retries_review_cos_jev_and_inter
                 reply_to_id: None,
                 mode: ChatSendMode::Queue,
                 resume_queue: false,
+                discussion_mode: None,
             },
             now,
         )
@@ -469,6 +470,7 @@ async fn post_tasks_to_export_connects_children_retries_review_cos_jev_and_inter
                 reply_to_id: None,
                 mode: ChatSendMode::Queue,
                 resume_queue: false,
+                discussion_mode: None,
             },
             later,
         )

@@ -218,6 +218,7 @@ fn cos_standing_relayed_list_follows_the_grant_of_a_standing_forward() {
                 reply_to_id: None,
                 mode: task_core::chat::ChatSendMode::Queue,
                 resume_queue: false,
+                discussion_mode: None,
             },
             "human:web",
             now,

@@ -835,6 +835,7 @@ fn inbox_human_post(env: &TestEnv, key: &str, text: &str) -> String {
                 reply_to_id: None,
                 mode: ChatSendMode::Queue,
                 resume_queue: false,
+                discussion_mode: None,
             },
             OffsetDateTime::now_utc(),
         )

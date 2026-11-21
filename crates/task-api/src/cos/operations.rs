@@ -789,9 +789,12 @@ async fn create_operation(
             bind_run_policy(store, &mut audit, "api", &path)?;
             // Refuse excluded/unknown routes before interpreting a relayed instruction or body.
             // The registry reason is authoritative and no secret body reaches domain validation.
-            if matched.is_none() {
+            let Some(action) = matched.as_ref().map(|m| m.action) else {
                 return dispatch(store, &env, &audit, &method, &path, req.request.body);
-            }
+            };
+            // ADR 2026-11-21-chat-discussion-mode D2.3: a discuss / propose run changes nothing,
+            // whatever it cites below.
+            super::discussion_gate::check(store, &mut audit, "api", &path, action)?;
             if let Some(message_id) = instructed_by.as_deref() {
                 // D3: the instruction must be the human message that started this very run, or a
                 // relayed instruction of this thread in scope (ADR 2026-10-27-relayed-instructions

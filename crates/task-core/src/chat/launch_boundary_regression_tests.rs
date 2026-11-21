@@ -50,6 +50,7 @@ fn claim_marks_new_rows_as_launch_tracked_with_no_launch_time() {
             reply_to_id: None,
             mode: ChatSendMode::Queue,
             resume_queue: false,
+            discussion_mode: None,
         },
         at(1),
     )
@@ -105,6 +106,7 @@ fn claim(s: &SqliteStore, thread: &str, run: &str, secs: i64) -> ChatRun {
             reply_to_id: None,
             mode: ChatSendMode::Queue,
             resume_queue: false,
+            discussion_mode: None,
         },
         at(secs),
     )

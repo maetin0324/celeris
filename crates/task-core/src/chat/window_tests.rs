@@ -158,6 +158,7 @@ fn human_post(s: &SqliteStore, thread: &str, key: &str, text: &str, author: &str
             reply_to_id: None,
             mode: ChatSendMode::Queue,
             resume_queue: false,
+            discussion_mode: None,
         },
         author,
         at(10),

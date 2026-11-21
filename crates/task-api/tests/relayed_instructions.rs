@@ -324,6 +324,7 @@ async fn triage_run_cites_a_relay_in_scope_and_refuses_out_of_scope_or_expired_o
                 said_at: rfc3339(earlier - Duration::minutes(1)),
                 task_ids: vec![],
                 expires_at: Some(rfc3339(earlier + Duration::hours(1))),
+                discussion_mode: None,
             },
             "operator:claude-code",
             earlier,

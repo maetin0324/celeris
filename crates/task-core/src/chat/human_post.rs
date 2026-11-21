@@ -80,6 +80,7 @@ impl SqliteStore {
                 reply_to_id: None,
                 mode: ChatSendMode::Queue,
                 resume_queue: false,
+                discussion_mode: req.discussion_mode,
             },
             &MessageProvenance {
                 author: Some(relayed_by.to_owned()),

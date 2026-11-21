@@ -6,6 +6,7 @@
 //! [`CosCaller`] request extension; actor, thread and run claims in headers or JSON are never read.
 
 pub mod basis;
+pub(crate) mod discussion_gate;
 pub(crate) mod goal_guard;
 pub mod inbox;
 /// ADR 2026-11-12-knowledge-usage-per-run: CoS run の KB の操作の回数（API の受け側）。

@@ -420,6 +420,7 @@ pub(crate) fn message_from_raw(conn: &Connection, r: MessageRaw) -> Result<ChatM
         escalation,
         provenance,
         cos_proposal,
+        discussion_mode: super::ChatDiscussionMode::of_metadata(&meta),
         created_at: r.created_at,
         updated_at: r.updated_at,
     })
@@ -627,6 +628,7 @@ impl SqliteStore {
                 reply_to_id: None,
                 mode: ChatSendMode::Queue,
                 resume_queue: false,
+                discussion_mode: None,
             },
             &MessageProvenance {
                 author: Some(author),
@@ -1409,7 +1411,9 @@ pub(crate) fn message_post_with(
         .optional()?;
     if let Some(raw) = existing {
         let meta: Value = serde_json::from_str(&raw.metadata_json).unwrap_or(Value::Null);
-        let same_mode = meta.get("mode").and_then(Value::as_str) == Some(mode.as_str());
+        let same_mode = meta.get("mode").and_then(Value::as_str) == Some(mode.as_str())
+            && super::ChatDiscussionMode::of_metadata(&meta)
+                == super::ChatDiscussionMode::recorded(req.discussion_mode);
         let message = message_from_raw(tx, raw)?;
         if message.text != req.text
             || message.attachment_ids != req.attachment_ids
@@ -1455,6 +1459,9 @@ pub(crate) fn message_post_with(
     }
     if provenance.mcp_receipt {
         meta["mcp_receipt"] = json!(1);
+    }
+    if let Some(m) = super::ChatDiscussionMode::recorded(req.discussion_mode) {
+        meta[super::discussion_mode::METADATA_KEY] = json!(m.as_str());
     }
     let id = insert_message(
         tx,

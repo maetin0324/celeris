@@ -122,6 +122,7 @@ fn live_cos_bearer(env: &TestEnv, key: &str) -> String {
                 reply_to_id: None,
                 mode: ChatSendMode::Queue,
                 resume_queue: false,
+                discussion_mode: None,
             },
             now,
         )
@@ -316,6 +317,7 @@ async fn cos_chat_triage_override_rejects_cos_credential_and_missing_reason() {
                 reply_to_id: None,
                 mode: ChatSendMode::Queue,
                 resume_queue: false,
+                discussion_mode: None,
             },
             now,
         )

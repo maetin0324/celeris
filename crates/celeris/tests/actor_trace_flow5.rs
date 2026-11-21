@@ -64,6 +64,7 @@ fn relay(h: &Harness) -> task_core::chat::ChatMessagePosted {
                 said_at: ts(7),
                 task_ids: vec![h.task.id.to_string()],
                 expires_at: None,
+                discussion_mode: None,
             },
             "operator:claude-code",
             at(7),

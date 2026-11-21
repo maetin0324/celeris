@@ -2,6 +2,7 @@
 mod common;
 
 mod daemon_clusters_config;
+mod discussion_mode;
 mod integration_api;
 mod integration_principals;
 mod notify;

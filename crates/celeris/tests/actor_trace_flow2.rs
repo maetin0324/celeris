@@ -283,6 +283,7 @@ async fn forwarded_requests_keep_the_human_decider_apart_from_cos_and_operator_e
                 said_at: ts(30),
                 task_ids: vec![h.task.id.to_string()],
                 expires_at: Some(ts(600)),
+                discussion_mode: None,
             },
             &format!("operator:{OPERATOR}"),
             at(31),

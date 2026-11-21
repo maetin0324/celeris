@@ -365,6 +365,7 @@ async fn cos_review_is_not_held_back_by_the_persons_queued_message_in_the_genera
                 reply_to_id: None,
                 mode: ChatSendMode::Queue,
                 resume_queue: false,
+                discussion_mode: None,
             },
             at("2026-10-27T00:59:30Z"),
         )

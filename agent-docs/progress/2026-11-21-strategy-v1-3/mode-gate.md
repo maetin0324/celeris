@@ -1,12 +1,13 @@
 ---
 title: 戦略層 v1 子 3 mode-gate — discussion mode の記録と /cos/operations の拒否
 tasks: [01M7XQ9QE8STND208NXG90F743]
-status: blocked
+status: done
 updated: 2026-11-21
+completed: 2026-11-21
 ---
 # mode-gate（WorkUnit。子 3 の段 gate）
 
-状態: blocked（範囲の check が ADR と矛盾するので計画の問題として申告した。下の「Run #2」）。設計は [ADR 2026-11-21-chat-discussion-mode](../../adr/2026-11-21-chat-discussion-mode.md) の D1・D2・D4・D7。
+完了日: 2026-11-21（Run #3。Run #2 で申告した範囲の check は計画の改訂で広がった。下の「Run #3」）。設計は [ADR 2026-11-21-chat-discussion-mode](../../adr/2026-11-21-chat-discussion-mode.md) の D1・D2・D4・D7。
 基準は `$CELERIS_WU_BASE`。検査は提出時の HEAD で実行した。
 
 ## したこと
@@ -19,11 +20,12 @@ updated: 2026-11-21
 - CoS の prompt（`task-worker` の `cos_chat.rs`）に mode の 1 行（hint）。dispatcher は `cos_context::discussion_mode` で同じ関数を呼ぶ。
 - docs/api/v1 の schema・api.md、web の生成型、docs/protocol の worker schema を再生成した。
 
-## ADR からずれた点（理由つき）
+## ADR からずれた点（理由つき。Run #3 で ADR を改めて一致させた）
 
 - 導出の関数の置き場所を ADR D1.2 の `task_core::chat` から `task_core::discussion_mode`（新しい top-level module。`chat` へ一方向に依存）へ移した。
+  Run #3 で ADR D1.2・実装前 brief・WorkUnit の表を `task_core::discussion_mode` に改め、理由を ADR の付記 2026-11-21 に書いた。
   `chat` の module に置くと repo health の `size.responsibility-growth` が落ちた（`chat` の本体の行 8092 > 8000、`chat::SqliteStore` の method 115 で増加）。enum `ChatDiscussionMode` は `chat` に残した。
-- 依頼の objective (3) は「propose では未承認の案の記録の op だけ許可」と書くが、ADR D2.1・D3 は propose も operation を全拒否とし、案は返事の添付（summary-cite の WU）で残すと決めた。ADR に従った。approved の案の拒否は summary-cite の試験 `discussion_mode_propose_refuses_approved_state_draft` が受け持つ。
+- 依頼の objective (3) は「propose では未承認の案の記録の op だけ許可」と書くが、ADR D2.1・D3 は propose も operation を全拒否とし、案は返事の添付（cite 段の WU cite-attach）で残すと決めた。ADR に従った。実装（`cos/discussion_gate.rs` の `run.mode != Execute` で拒否）と試験 `discussion_mode_propose_denies_every_registered_op` もこのとおり。approved の案の拒否は cite-attach の試験 `discussion_mode_propose_refuses_approved_state_draft` が受け持つ（ADR D8 の 4 行の担当を Run #3 で summary-cite から cite-attach に改めた）。
 - skill cos-operator に discussion mode を prompt だけで守る記述は無かった（consult.md の「task を起票しない」は intent の型の hint で、ADR D1.2 が別物とした）。skill は変えていない（変えると `metadata.version` = policy_version に触れる）。
 - health の行数を増やさないため、`launch_claimed` の `harness_capabilities` の match を 2 腕にまとめた（挙動は同じ: `claude_code`・`claude-code` → `claude-code`、`codex` → `codex`）。
 
@@ -108,9 +110,8 @@ Run #1 で、同じ試験 file（JSON と SQL だけを使う）を base の src
 
 ## 未解決事項
 
-- 範囲の check は計画の正規表現が直るまで通らない（Run #2 の 2）。
 - MCP の入力の `instructed_by`（run の入力の MCP の発言は今も引用できる）は既存の挙動のまま。mode は「させない」向きにだけ効く（ADR D7）。人の承認に数えるかは子 4 の scope の決定に残る。
 
 ## 提案
 
-- ADR D1.2 の置き場所の記述（`task_core::chat`）を `task_core::discussion_mode` に改める（close の段か次の ADR 改訂で）。
+- 計画で WU の範囲の正規表現を書くときは、共有の要求の型に欄を足す WU について `git grep -l '<型> {'` で struct literal の file を引き、範囲に入れる（Run #2 の申告の原因）。

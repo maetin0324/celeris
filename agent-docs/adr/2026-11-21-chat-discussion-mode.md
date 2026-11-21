@@ -47,10 +47,16 @@ tasks: [01M7XQ9QE8STND208NXG90F743]
   `i` が `role='system'`（daemon の triage・review・要求）でも同じ式を使い、`i` 自身の mode は `execute` とする。
 - run の mode = `E(r) ∪ {i}` の mode のうち最も厳しいもの。失敗した run の入力が次の run に持ち越されたときも、議論の指示は緩まない。
   interrupt で先に取られた run では、まだ queue にある前の message も `E(r)` に入る。これは厳しい側にだけ働く（fail closed）。
-- 導出は `task_core::chat` の 1 つの関数 `discussion_mode_of_run(conn, thread_id, run_id) -> Result<RunDiscussionMode, ChatError>` が行う。
+- 導出は `task_core::discussion_mode` の 1 つの関数 `discussion_mode_of_run(conn, thread_id, run_id) -> Result<RunDiscussionMode, ChatError>` が行う
+  （読む口は `SqliteStore::chat_run_discussion_mode`）。`task_core::chat` に置かない理由は repo health の `size.responsibility-growth` である。
+  `chat` に置くと `chat` の本体が 8092 行で上限 8000 を超え、`chat::SqliteStore` の method も 115 から増えて落ちた。`task_core::discussion_mode` は
+  `chat` の型（`ChatDiscussionMode`・`ChatError`）を一方向に使い、`chat` は `discussion_mode` を使わない（循環を足さない）。型 `ChatDiscussionMode` と
+  1 つの message の mode の読み書き（`metadata_json`）は `task_core::chat` に残す。
   戻り値は mode と、mode を決めた message の `{message_id, author}` の列（監査に書く。D7）。値は `chat_runs` にも `metadata_json` にも保存せず、
   呼ぶたびに `chat_messages`（`UNIQUE(thread_id, seq)` の索引）と `chat_runs` から導く。状態の正本は人の message の `metadata_json` だけである（規約 4）。
-- CoS の prompt（`crates/task-worker/src/cos_chat.rs`）には、同じ関数が返した mode を 1 行で示す。保証は D2 の API の拒否で、prompt の行は説明である。
+- CoS の prompt（`crates/task-worker/src/cos_chat.rs`）には、同じ関数が返した mode を 1 行で示す。dispatcher が run の起動時に
+  `task_dispatch::cos_context::discussion_mode` で導き、worker の入力 `CosChatContext.discussion_mode`（execute のときは欄を出さない）で渡す。
+  保証は D2 の API の拒否で、prompt の行は説明である。
   `intent.rs` の型の推定は意味が違う（人が選ばない hint）ので残し、mode と 1 つにまとめない。
 
 ### D2: CoS operation の mode 別の許可と拒否
@@ -329,10 +335,10 @@ execute の run の operation は、今の `create_operation` の順のまま通
 | mode-gate | `discussion_mode_relay_and_mcp_instruct_carry_mode` | relay・MCP の入力も mode を運ぶ |
 | mode-gate | `discussion_mode_execute_matches_absent` | execute は今の検査の順と結果のまま（goal_guard の 422、authority_gate） |
 | mode-gate | `discussion_mode_external_text_cannot_lift_mode` | 本文・添付の指示文（prompt injection）で mode も権限も変わらない（T2） |
-| summary-cite | `discussion_mode_propose_attaches_valid_strategy_draft` | 案は添付として残り sha256 を持つ |
-| summary-cite | `discussion_mode_discuss_refuses_strategy_draft` | discuss の run の案は添付されない |
-| summary-cite | `discussion_mode_propose_refuses_approved_state_draft` | `approved` を書いた案は拒否 |
-| summary-cite | `discussion_mode_propose_same_name_other_sha_refused` | 同じ版の 2 つの sha256 は衝突（T5） |
+| cite-attach | `discussion_mode_propose_attaches_valid_strategy_draft` | 案は添付として残り sha256 を持つ |
+| cite-attach | `discussion_mode_discuss_refuses_strategy_draft` | discuss の run の案は添付されない |
+| cite-attach | `discussion_mode_propose_refuses_approved_state_draft` | `approved` を書いた案は拒否 |
+| cite-attach | `discussion_mode_propose_same_name_other_sha_refused` | 同じ版の 2 つの sha256 は衝突（T5） |
 | edit-retract | `chat_message_edit_by_author_keeps_previous_body_in_chat_events` | 前の本文が `message_revised` に残る |
 | edit-retract | `chat_message_edit_forbidden_for_non_author_principals` | operator・mcp・cos・別の人・認証無しは 403 |
 | edit-retract | `chat_message_edit_running_is_409` / `chat_message_edit_stale_revision_is_409` | 走っている入力と古い revision |
@@ -385,7 +391,7 @@ execute の run の operation は、今の `create_operation` の順のまま通
 ## 実装前 brief
 
 1. 根本原因: CoS operation の認可が run の入力の種類（議論か指示か）を見ない。message に revision が無く、引用の失効を導けない。
-2. 責務 owner: mode の記録と導出、編集・撤回、引用は `task_core::chat`（store・human_post）。拒否は `task_api::cos::operations::create_operation` と
+2. 責務 owner: mode の記録、編集・撤回、引用は `task_core::chat`（store・human_post）。run の mode の導出は `task_core::discussion_mode`（付記 2026-11-21）。拒否は `task_api::cos::operations::create_operation` と
    `cos::inbox::resolve`。REST は `task_api::chat`。案・要約の添付の検査は dispatcher の chat の run の終わり（`chat_message_attach_workspace_files` を呼ぶ所）。
 3. 既存の再利用先: `OperationAudit::reject`、`operations::allowed()`、`metadata_json`、`chat_events`、`chat_attachments`、FTS5 の trigger、`retire_conn`、
    `chat_thread_checkpoint_at` の cursor、子 2 の `task_core::strategy` と `strategy_gate`。
@@ -397,11 +403,22 @@ execute の run の operation は、今の `create_operation` の順のまま通
 6. 撤去対象: 無し（置き換える仕組みが無い）。
 7. 不変条件: D8.1 の表。
 
-## WorkUnit への割り当て（計画のまま）
+## WorkUnit への割り当て（付記 2026-11-21 の計画の改訂を反映）
 
 | WorkUnit | 書く場所 |
 |---|---|
-| mode-gate | `crates/task-core/src/chat/`（型・導出）、`crates/task-api/src/chat/mod.rs`、`crates/task-api/src/cos/operations.rs`・`cos/inbox.rs`、`crates/celeris-mcp/src/tools/console.rs`、`crates/task-worker/src/cos_chat.rs`（1 行） |
+| mode-gate | `crates/task-core/src/chat/`（型・message の mode の読み書き）、`crates/task-core/src/discussion_mode.rs`（run の mode の導出）、`crates/task-api/src/chat/mod.rs`、`crates/task-api/src/cos/operations.rs`・`cos/discussion_gate.rs`・`cos/inbox.rs`、`crates/celeris-mcp/src/tools/console.rs`、`crates/task-dispatch/src/cos_context.rs`・`dispatcher/cos_chat/launch.rs`、`crates/task-worker/src/protocol/cos_chat.rs`・`cos_chat.rs`（1 行）、D8.3 の struct literal のある試験 file、生成物（`docs/api/v1`・`docs/protocol/worker-protocol.schema.json`・web の生成型） |
 | edit-retract | `crates/task-core/src/chat/`（編集・撤回の tx、event の data）、`crates/task-api/src/chat/mod.rs`（3 つの口） |
-| summary-cite | `crates/task-core/src/chat/`（`ChatCitation`）、`crates/task-core/src/strategy*`（`chat` 参照の欄）、`crates/task-api/src/cos/strategy_gate*`、dispatcher の添付の検査 |
+| summary-cite | `crates/task-core/src/chat/`（`ChatCitation`、引用の検査と失効の導出の純粋関数）、`crates/task-core/src/strategy*`（`chat` 参照の欄）、`crates/task-api/src/cos/strategy_gate*` |
+| cite-attach | dispatcher の添付の検査（D3 の propose の案と要約の添付、`discussion_mode_forbidden`）、返事の `citations`、GET と SSE の失効の表示 |
 | web-discuss | D9 の file |
+
+## 付記 2026-11-21（mode-gate の実装時の改訂）
+
+- D1.2 の導出の置き場所を `task_core::chat` から `task_core::discussion_mode` に改めた。理由は repo health の `size.responsibility-growth`
+  （`chat` の本体 8092 行 > 8000、`chat::SqliteStore` の method 115 で増加）。導出の式・戻り値・保存しないことは変えていない。
+- propose の扱いは D2.1・D3 のまま変えない。propose の run も `/cos/operations` の action をすべて拒否する（403 `discussion_mode_forbidden`）。
+  propose が残す未承認の案は、operation を使わない返事の添付（D3）だけである。添付の検査（`approved`・`rejected` の拒否、同じ版の sha256 の衝突、
+  discuss の run の案の拒否）は計画の改訂で summary-cite から分けた WorkUnit cite-attach が受け持つ（D8 の 4 行の担当を cite-attach に改めた）。
+- 計画は web-discuss を web-mode と web-cite に分けた。D9 の file の割り当ては両者で分ける（この ADR の決定は変えない）。
+

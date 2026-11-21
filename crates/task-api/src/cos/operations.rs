@@ -386,6 +386,13 @@ pub struct OperationBody {
     /// `instructed_by` (the person decided).
     #[serde(default)]
     basis: Option<super::basis::DelegatedBasis>,
+    /// ADR 2026-11-21-strategy-evidence-contract D4: the strategy document (`celeris.strategy/1`
+    /// artifact) this `task.create` executes. When present, the document must be a human-approved,
+    /// current version of the new task's project with resolvable sources, or the request is 422
+    /// with the rule's code and nothing is created; it is checked with or without `instructed_by`.
+    /// Other operations refuse it (422 `strategy_not_applicable`). Absent, nothing changes.
+    #[serde(default)]
+    strategy: Option<super::strategy_gate::StrategyRef>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -514,12 +521,34 @@ fn canonical_json(value: &Value) -> String {
 
 /// `request_hash` = sha256 of `METHOD \n path \n canonical body`.
 pub(crate) fn request_hash(method: &str, path: &str, body: &Value) -> String {
+    format!("{:x}", request_hasher(method, path, body).finalize())
+}
+
+fn request_hasher(method: &str, path: &str, body: &Value) -> Sha256 {
     let mut hasher = Sha256::new();
     hasher.update(method.as_bytes());
     hasher.update(b"\n");
     hasher.update(path.as_bytes());
     hasher.update(b"\n");
     hasher.update(canonical_json(body).as_bytes());
+    hasher
+}
+
+/// ADR 2026-11-21-strategy-evidence-contract D1.4: the idempotency key covers the whole request, so
+/// a `strategy` is hashed after the body (`\n strategy \n canonical strategy`). Without one the hash
+/// is [`request_hash`] unchanged.
+fn operation_hash(
+    method: &str,
+    path: &str,
+    body: &Value,
+    strategy: Option<&super::strategy_gate::StrategyRef>,
+) -> String {
+    let Some(strategy) = strategy.and_then(|s| serde_json::to_value(s).ok()) else {
+        return request_hash(method, path, body);
+    };
+    let mut hasher = request_hasher(method, path, body);
+    hasher.update(b"\nstrategy\n");
+    hasher.update(canonical_json(&strategy).as_bytes());
     format!("{:x}", hasher.finalize())
 }
 
@@ -656,7 +685,7 @@ async fn create_operation(
             policy_version: req.policy_version.clone(),
         },
         idempotency_key: req.idempotency_key.clone(),
-        request_hash: request_hash(&method, &path, &req.request.body),
+        request_hash: operation_hash(&method, &path, &req.request.body, req.strategy.as_ref()),
         expected_revision: req.expected_revision.clone(),
         payload: serde_json::json!({
             "method": method,
@@ -667,6 +696,11 @@ async fn create_operation(
     };
     if match_operation(&method, &path).is_err() {
         audit.payload["body"] = serde_json::json!({"redacted": true});
+    }
+    if let (Some(strategy), Value::Object(payload)) = (&req.strategy, &mut audit.payload)
+        && let Ok(value) = serde_json::to_value(strategy)
+    {
+        payload.insert("strategy".into(), value);
     }
     let mut env = DispatchEnv::of(&state);
     let matched = match_operation(&method, &path).ok();
@@ -787,6 +821,14 @@ async fn create_operation(
             if instructed_by.is_none()
                 && let Some(problem) =
                     super::goal_guard::check(store, matched.as_ref(), &req.request.body)
+            {
+                return Err(audit.reject(store, "api", &path, problem));
+            }
+            // ADR 2026-11-21-strategy-evidence-contract D4: a task.create that names a strategy runs
+            // only an approved, current, same-project strategy with its sources (relayed or not).
+            if let (Some(strategy), Some(m)) = (req.strategy.as_ref(), matched.as_ref())
+                && let Err(problem) =
+                    super::strategy_gate::check(store, &env, m, &req.request.body, strategy)
             {
                 return Err(audit.reject(store, "api", &path, problem));
             }

@@ -108,6 +108,27 @@ Run #1 で、同じ試験 file（JSON と SQL だけを使う）を base の src
 - `cargo fmt --all -- --check`: exit 0。`sh scripts/dev/progress-index.sh --check`: exit 0。
 - 範囲の check: 範囲外 21 path のまま（計画の問題として申告。上の 2）。
 
+## Run #3（2026-11-21）: 範囲を広げた計画での続き
+
+- ADR 2026-11-21-chat-discussion-mode を改めた: D1.2 の導出の置き場所を `task_core::discussion_mode` にし、理由（repo health の `size.responsibility-growth`）を書いた。
+  実装前 brief の owner と WorkUnit の表も直し、付記 2026-11-21 を足した。propose は D2.1・D3 のまま `/cos/operations` を全拒否し、
+  案は返事の添付で残す。添付の検査の試験 4 件（D8）の担当を summary-cite から cite-attach に改めた。実装と試験はもとからこのとおりで、変えていない。
+- 範囲: 変更 path 79 件はすべて改訂後の範囲（Run #2 の 2 の正規表現を足したもの）に入る。`crates/task-core/src/store/` の変更は
+  `project_guard_usage_tests.rs` の struct literal の `discussion_mode: None` 1 行だけ。
+- migration・新しい表・trait・Manager: 無し（`git diff` の `migrations/`・`trait`・`Manager`・`CREATE TABLE` の grep が 0 件）。
+- 新しい機能は足していない（Run #3 の変更は ADR と進捗の文書だけ）。
+
+### Run #3 の検査（提出時の HEAD で実行）
+
+- `cargo test -p task-api discussion_mode_`: 一覧 16 件（`cos_delivery_suite_c::discussion_mode` 15 件と `strategy_gate::tests` 1 件）、16 passed。
+- `cargo test -p task-core chat_discussion_mode_`: 4 件、4 passed。
+- `bash scripts/dev/test-affected.sh && cargo clippy --workspace -- -D warnings && cargo fmt --all -- --check`: exit 0。
+  web は vitest 101 file 705 passed、nextest は 8601 tests run: 8601 passed・31 skipped（527.2 s）、script bundle の SKIP 0 件、
+  clippy は vendor の deno_core の既存の警告 1 件だけ。
+- `bash scripts/dev/check-health.sh`: verdict=pass、fail_grade=0、new=0、worsened=0。
+- `sh scripts/dev/progress-index.sh --check`・`check-adr-numbers.sh`・`check-doc-links.sh`: exit 0。
+- 範囲の check（改訂後の正規表現を手元で当てた）: 範囲外 0 件。
+
 ## 未解決事項
 
 - MCP の入力の `instructed_by`（run の入力の MCP の発言は今も引用できる）は既存の挙動のまま。mode は「させない」向きにだけ効く（ADR D7）。人の承認に数えるかは子 4 の scope の決定に残る。

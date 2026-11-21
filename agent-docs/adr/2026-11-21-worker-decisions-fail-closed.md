@@ -103,3 +103,50 @@ D3 の replan の unit が足す試験の名前の案: `decision_fail_closed_yie
 試験の変更: `worker_decisions_from_json` の戻り値を欄の値にするので、`worker_decisions_are_validated_and_self_is_resolved` の末尾の 2 つの
 確かめは新しい戻り値に合わせて書き換える（守る契約〈無いときは何もしない・配列は要素を読む〉は変えず、配列でない欄の確かめは
 `decision_fail_closed_non_array_decisions_become_one_rejected_decision` が足す）。
+
+## 付記 2026-11-21（読む規則と止め方の順）
+
+unit settle-leaf（WU の run）で D3 の直し方を確かめ、次のとおりに決めた。owner は `run_settlement`（`work_unit.rs`）と
+読む順を持つ `worker_finish.rs`。atomic の節点の run は unit settle-atomic が同じ規則で直す（下の「atomic の規則」）。
+
+- 読む規則（WU の run）: `WorkUnitSettlement::reads_worker_decisions` は「状態だけを戻す run（harness_error・取り消し。
+  `reset_only`）でなく、WU の遷移が `cluster_jobs` でない」とき true。遷移の理由は列挙しない。completed・continue・
+  auto_leaf_budget・limit・continuation_cap・plan_issue・question・retry・failed・merge_repair_failed の全てで読む。
+  旧い規則（done の遷移 `completed` だけで読む）は廃止した。
+- 外す経路と理由:
+  - harness_error・取り消し: run をやり直すだけで、WU は `ready` に戻る。次の run の `result.json` が要求を出し直す。
+  - WU のクラスタ job の wait（`RunEnd::Waiting`、遷移 `cluster_jobs`）: 待ちの正本は WU の行の `blocked(cluster_jobs)`
+    と wait の行で、job の終了による再開（`cluster_job_wait.rs`）は `blocked(cluster_jobs)` の行からだけ動く。待ちの理由の
+    欄は 1 つなので、`blocked(decision)` に置き換えると job の待ちの正本が 2 つになり、job が終わっても再開できない。
+    直すには `cluster_job_wait.rs`・`task_ops::decision` の変更が要り、この段の範囲の外なので読まない（要求は job の後の
+    run の `result.json` が出し直す。close の未解決に入れる）。
+- 止め方の順（`worker_finish.rs`）: `settle_work_unit` の直後に決定を読み、`needed_before: self` の要求があれば
+  `hold_for_worker_decisions` で止める。その後に integration repair の打ち切り（`integration_repair_exhaustion`）と WU の
+  失敗の処理（`settle_work_unit_failure`。自動 replan・質問・replan の使い切りの `limit:max_replans` の決定）を回すが、
+  止めた settlement では `failure`・`integration_repair_exhaust`・`auto_replan` が空なので何も起きない。1 つの leaf を
+  止めるのは決定 1 か所になる。auto-leaf の上限の決定の要求と worker の決定は 1 つの `WorkerDecisions` で両方記録する
+  （旧い「worker の決定を読まないときだけ auto-leaf の要求を記録する」分岐は消した）。self でない決定だけの run は
+  決定を記録し、遷移と失敗の処理は今のまま。
+- 止めた leaf の行: どの遷移でも `blocked(decision)`（`WorkUnitTransitioned.reason = "decision"`）、task は
+  `Continue{advance}`、待つ unit は ready にせず失敗も伝播しない。行は `running` の行を `blocked(decision)` にしたもので、
+  この run の遷移の数え（`continue` の continuation・`retry` の再試行）は動かさない。replay（`task_ops::replay`）は
+  WU の数えを遷移の理由から復元し、`decision` では数えを動かさないので、行と events が一致する。足す event は
+  `DecisionRequested` と進行の行だけで、遷移の event は 1 本のまま。auto-leaf の上限の遷移（`auto_leaf_budget`）は
+  理由と continuation の数えを残す（replay はこの理由で continuation を数えて `blocked(decision)` にする）。task の
+  試行・replan の数え・予算の記録・checkpoint の記録は変えない。質問で終わる提案（trigger が `WorkerQuestion`。worker の
+  質問・計画の問題・進捗なし・固い上限）を止めたときは、質問の文を outcome の末尾（`。止めた質問: …`）に残す。
+- 答えの後の run: 答えは既存の解放（`task_ops::decision` の `decision_answered`）で leaf を `pending`/`ready` に戻す。
+  `needs_continuation` ではないので、次の run は continuation でなく最初から走り、前置きの「人の決定」節に答えが入る。
+  同じ条件（進捗なし・上限・失敗）なら、その run の終わりで数えと上限・replan が効く。
+- atomic の規則（unit settle-atomic が入れる）: atomic の節点の run は、終わり方が分かり（`Some`）harness_error・取り消し・
+  `Waiting` でなければ読む（trigger を列挙しない）。self の要求なら `WorkerDone`・`WorkerQuestion`・`WorkerError` を
+  `Continue{advance}` に置き換え、`Continue{continue}`・`Continue{children_wait}` は残す。次の run は
+  `dispatch_admission` の `decision_self_hold` が答えまで止める（止めの正本は decisions の行 1 つ）。
+- 置き換えた試験: `worker_decisions_hold_a_completed_leaf_only`（`run_settlement/work_unit/tests.rs`）は「done の遷移
+  だけで読む」旧い契約を確かめていたので消し、`decision_fail_closed_reads_every_end_but_reset_and_cluster_jobs`（読む
+  規則。状態だけを戻す run の trigger・outcome を残す確かめを引き継いだ）と `decision_fail_closed_hold_clears_failure_side_effects`
+  （止め方。done の止めの outcome・待つ unit・trigger の確かめを引き継いだ）に置き換えた。auto-leaf の試験
+  `continuation_disabled_retries_the_unit_unless_the_auto_leaf_limit_stops_it` の `assert!(!s.reads_worker_decisions())`
+  は、auto-leaf の上限の run も読む新しい規則に合わせて `assert!(s.reads_worker_decisions())` にした（`auto_leaf_request`
+  の確かめは残した）。auto-leaf の要求が worker の決定と並んでも記録されることは
+  `decision_fail_closed_auto_leaf_request_recorded_with_and_without_worker_decisions`（`dispatcher/tests/tree_gate.rs`）が守る。

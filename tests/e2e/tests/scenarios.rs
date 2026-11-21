@@ -432,9 +432,9 @@ echo '{"type":"done","summary":"attempt '"$N"'","evidence":[{"criterion":0,"comm
         "{run1}"
     );
     assert!(run1.contains(r#""attempts":1"#));
-    // ADR-0033 D4/D6: protocol は 4（context.node / memory / conversation / standing_rules /
-    // organization、delegate の assignee、結果ファイルの memory を追加）。いずれも追加のみ。
-    assert!(run1.starts_with(r#"{"type":"run","protocol":4"#));
+    // ADR 2026-11-21-ancestor-objective-in-prompts D5: protocol は 5（子の一覧を `context` の直下から
+    // `context.lineage.children` に移し、`context.lineage.ancestors` を足した。既存の形を変えたので上げた）。
+    assert!(run1.starts_with(r#"{"type":"run","protocol":5"#));
     env.replay_is_consistent();
 }
 

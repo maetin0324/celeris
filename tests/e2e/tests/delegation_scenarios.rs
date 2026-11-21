@@ -266,7 +266,7 @@ candidates = [{{ source = "fake", model = "fake" }}]
     }
 }
 
-/// stdin の `run` 行から `task.role`（文字列の `"role":"…"`）、`context.role.instructions`、`context.children` の有無、
+/// stdin の `run` 行から `task.role`（文字列の `"role":"…"`）、`context.role.instructions`、`context.lineage.children` の有無、
 /// `task.id` を取り、役割ごとに振る舞う fake ワーカー。
 /// - lead（子の一覧なし）: 指示文を progress に書き戻し、4 件（有効 2、空欄 1、自己参照 1）を `delegate` して done
 /// - lead（子の一覧あり = 集約 run）: 子の件数を progress に書き、`artifacts/summary.md` を作って done
@@ -615,7 +615,7 @@ rm -f "$RUN"
 }
 
 /// ADR-0021 D1/D3: 委譲した子が失敗したら、親は**失敗を引き継がず**やり直す（attempts 消費、`reviewing → ready`）。
-/// やり直しの run は `context.children` で失敗した子を見られる。一度扱った失敗は数え直さないので、
+/// やり直しの run は `context.lineage.children` で失敗した子を見られる。一度扱った失敗は数え直さないので、
 /// 親が代わりの子を立てて成功すれば、古い失敗があっても親は完了できる。
 #[test]
 fn a_failed_child_makes_the_parent_retry_instead_of_inheriting_the_failure() {

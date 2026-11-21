@@ -303,13 +303,21 @@ fn uid_of(user: &str) -> Option<u32> {
         .ok()
 }
 
-/// 別 UID で 1 要求を送る process を `sudo -n -u <user>` で起こし、その `PEER-UID-PROBE` 行を返す。
-/// 自分の test binary を `--ignored --exact inner_peer_uid_probe` で再実行する（子の入口は常に ignored。
-/// client は本番と同じ `injection_ipc::call`）。
-fn probe_as(user: &str, socket: &Path) -> Result<(u32, Probe), String> {
+/// 子の stdout から `PEER-UID-PROBE` 行を読む。親が子の出力を読むのはこの関数だけ。
+/// 子は `--nocapture --test-threads=1` で走り、libtest は `test inner_peer_uid_probe ... ` を改行せずに出して
+/// から子の `println` が続く。そのため行の頭ではなく、各行の中の `MARK` の位置から行末までを `Probe::parse` に渡す。
+fn read_probe(stdout: &str) -> Option<(u32, Probe)> {
+    stdout
+        .lines()
+        .find_map(|line| Probe::parse(&line[line.find(MARK)?..]))
+}
+
+/// 子の入口 `inner_peer_uid_probe` を 1 回起こし、その `PEER-UID-PROBE` 行を返す。`launcher` は子を起こす command
+/// （別 UID なら `sudo -n -u <user> /usr/bin/env`、同 UID の試験なら `/usr/bin/env`）。自分の test binary を
+/// `--ignored --exact inner_peer_uid_probe` で再実行する（子の入口は常に ignored。client は本番と同じ `injection_ipc::call`）。
+fn run_probe_child(mut launcher: Command, socket: &Path) -> Result<(u32, Probe), String> {
     let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
-    let output = Command::new("sudo")
-        .args(["-n", "-u", user, "/usr/bin/env"])
+    launcher
         .arg(format!("{PROBE_SOCKET_ENV}={}", socket.display()))
         .arg(&exe)
         .args([
@@ -318,21 +326,28 @@ fn probe_as(user: &str, socket: &Path) -> Result<(u32, Probe), String> {
             "inner_peer_uid_probe",
             "--nocapture",
             "--test-threads=1",
-        ])
+        ]);
+    let output = launcher
         .output()
-        .map_err(|e| format!("spawn sudo: {e}"))?;
+        .map_err(|e| format!("spawn {:?}: {e}", launcher.get_program()))?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    match stdout.lines().find_map(Probe::parse) {
+    match read_probe(&stdout) {
         Some(found) => Ok(found),
         None => Err(format!(
-            "no {MARK} line from `sudo -n -u {user} {}` (exit={:?}); stdout={:?} stderr={:?}",
-            exe.display(),
+            "no {MARK} line from {launcher:?} (exit={:?}); stdout={:?} stderr={:?}",
             output.status.code(),
             stdout.trim(),
             stderr.trim()
         )),
     }
+}
+
+/// 別 UID で 1 要求を送る process を `sudo -n -u <user>` で起こし、その `PEER-UID-PROBE` 行を返す。
+fn probe_as(user: &str, socket: &Path) -> Result<(u32, Probe), String> {
+    let mut sudo = Command::new("sudo");
+    sudo.args(["-n", "-u", user, "/usr/bin/env"]);
+    run_probe_child(sudo, socket)
 }
 
 /// 別 UID の実 process から broker へ接続し、DAC 層と broker 層の判定を別々に出す。
@@ -475,6 +490,63 @@ fn probe_line_round_trips() {
     }
     assert_eq!(Probe::parse("running 1 test"), None);
     assert_eq!(Probe::parse("PEER-UID-PROBE uid=995 bogus=1"), None);
+}
+
+/// 親の読み取り（`read_probe`）が、libtest の前置きの付いた子の行を読む。文字列は operator が release gate の
+/// host で試験 9 を走らせたときの子の stdout と同じ形（2026-11-21。旧い `lines().find_map(Probe::parse)` は
+/// この行を読めず、試験 9 は `no PEER-UID-PROBE line` で止まった）。`probe_line_round_trips` は `Probe::parse` に
+/// 行の頭から渡すので、この形を検出できない。
+#[test]
+fn probe_found_after_libtest_prefix() {
+    let stdout = "running 1 test\n\
+                  test inner_peer_uid_probe ... PEER-UID-PROBE uid=995 pid=752262 connect_errno=13\n\
+                  ok\n\
+                  \n\
+                  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s\n\
+                  \n";
+    assert_eq!(
+        read_probe(stdout),
+        Some((
+            995,
+            Probe::ConnectFailed {
+                errno: Some(libc::EACCES)
+            }
+        ))
+    );
+    assert_eq!(
+        read_probe("PEER-UID-PROBE uid=995 pid=1 reply=peer_uid_mismatch\n"),
+        Some((
+            995,
+            Probe::Reply {
+                code: Some("peer_uid_mismatch".into())
+            }
+        ))
+    );
+    assert_eq!(
+        read_probe("running 1 test\ntest inner_peer_uid_probe ... ok\n"),
+        None
+    );
+}
+
+/// 試験 9 と同じ経路（`run_probe_child`・同じ引数・`read_probe`）で、同じ UID の子を本当に起こして読む。違うのは
+/// 子を起こす command（`sudo -n -u <user>` を付けない）だけなので sudo は要らない。子の stdout は libtest が実際に
+/// 出す形になり、前置きの付いた行を読めないと `Err` で落ちる。同じ UID の別 process なので、broker は peer 照合を
+/// 通した上で session 未登録の拒否を返す。
+#[test]
+fn probe_read_from_real_child_run() {
+    let fx = Fixture::serve(995);
+    let my_uid = unsafe { libc::geteuid() };
+    let found = run_probe_child(Command::new("/usr/bin/env"), &fx.socket());
+    assert_eq!(
+        found,
+        Ok((
+            my_uid,
+            Probe::Reply {
+                code: Some("injection_worker_not_allowed".into())
+            }
+        ))
+    );
+    assert_eq!(fx.journal_count(my_uid, "injection_worker_not_allowed"), 1);
 }
 
 /// 同じ UID からでも、要求の形が通った上で session 未登録の拒否になる（正の対照の単体）。

@@ -1,13 +1,12 @@
 ---
 title: 戦略層 v1 子 1 prompt-fix — 子 task の worker・planner・WU・reviewer の実 prompt に祖先の目的と受入条件の全文を出す
 tasks: [01M7XQ9Q4P4ZQ38Y509J9XYAQ0]
-status: done
+status: blocked
 updated: 2026-11-21
-completed: 2026-11-21
 ---
 # prompt-fix（WorkUnit。子 1 の受入条件 2 の修正）
 
-完了日: 2026-11-21。設計の記録は [ADR 2026-11-21-ancestor-objective-in-prompts](../../adr/2026-11-21-ancestor-objective-in-prompts.md)。
+完了日: 未（計画の範囲 check の replan 待ち。下の「範囲 check の不一致」）。設計の記録は [ADR 2026-11-21-ancestor-objective-in-prompts](../../adr/2026-11-21-ancestor-objective-in-prompts.md)。
 
 ## 結論
 
@@ -123,6 +122,16 @@ production の純増の理由: 祖先の節（`ancestors_section`）、`TaskLine
 3. `$TMPDIR/prompt-audit-after/prompt-audit.tsv` のうち `started_at` が 1. の `promoted_at` より後の行で、`kind` が `ancestor_objective` と
    `ancestor_acceptance` の行の `cut` と `missing` が 0 で、`result` が `found` であることを確かめる。WU の run（`wu_key` が `-` でない行）と
    reviewer の行も含める。prompt_audit.py の基点（`FIX_SUBJECT`）は 11-19 の planner の修正なので、昇格時刻の絞り込みは手で行う。
+
+## 範囲 check の不一致（plan_issue で replan を求めた）
+
+- 計画の prompt-fix の範囲 check（`scope: true` の check）は `crates/celerisctl/` を許さない。提出時の HEAD でこの check を走らせると
+  `out of scope: crates/celerisctl/src/commands/worker.rs` で落ちる。
+- 原因: `RunContext.children` を `RunContext.lineage` に置き換えたので、`celerisctl worker run` の `RunContext` の literal 2 か所
+  （`children: Vec::new()`）を `lineage: Default::default()` に直す必要がある。欄を置き換えずに 41 番目の欄を足すと、repo health の
+  型の欄の上限 40 で test-affected が落ちる（前回の run の不合格）。
+- 求めた直し: 範囲 check の正規表現に `crates/celerisctl/src/commands/worker.rs` を足す。コードの変更は要らない（提出時の HEAD で
+  check 1 は 13 passed・exit 0、check 2 の 3 つのコマンドは exit 0）。
 
 ## 未解決事項
 

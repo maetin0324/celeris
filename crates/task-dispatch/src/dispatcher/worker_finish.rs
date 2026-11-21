@@ -676,9 +676,9 @@ impl Dispatcher {
                 });
             }
         }
-        // ADR-0079 D7（Phase R3a）: 木の節点の atomic の run（WU を持たない）が `result.json` の `decisions` を
-        // 書いた。記録し、`needed_before: self` なら最終レビューに進めず `ready` に戻して（`advance`）、答えが
-        // 出るまで run を起こさない（`decision_self_hold`。答えは次の run の前置きの `answers` に入る）。
+        // ADR-0079 D7・ADR 2026-11-21-worker-decisions-fail-closed 付記「atomic の規則」: 木の節点の atomic の run の
+        // `decisions` を記録し、`needed_before: self` なら trigger を `hold_task_for_worker_decisions` で替え、答えまで
+        // run を起こさない（`decision_self_hold`。答えは次の run の前置きの `answers` に入る）。
         if current_wu.is_none() && run_settlement::task_reads_worker_decisions(run_end) {
             let artifacts_dir = self.task_dir(&task).map(|d| self.artifacts_dir(&task, &d));
             worker_decisions =

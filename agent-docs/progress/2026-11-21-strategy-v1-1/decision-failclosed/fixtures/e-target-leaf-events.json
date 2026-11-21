@@ -1,0 +1,1000 @@
+{
+ "schema": "decision-failclosed-fixture/1",
+ "source": "events・decisions・cos_inbox_items（sqlite3 file:/local/celeris/data/db/celeris.sqlite3?mode=ro）",
+ "task_id": "01M7Q5ZABN9NFQCH6QBTTP3EZ8",
+ "unit": "target-leaf",
+ "requested_decision": {
+  "key": "work-units-size-trim",
+  "needed_before": [
+   "integrate-impl"
+  ]
+ },
+ "decision_rows": [
+  {
+   "key": "record-run-write-sets-home",
+   "kind": "choice",
+   "status": "answered",
+   "needed_before": [
+    "write-set"
+   ],
+   "created_at": "2026-11-18T12:47:51.554388024Z",
+   "answered_at": "2026-11-18T12:48:21.557183998Z",
+   "origin": "worker"
+  }
+ ],
+ "decisions_rows_after_progress": 0,
+ "inbox_items_after_progress": 0,
+ "context_before": [
+  {
+   "seq": 419,
+   "ts": "2026-11-18T14:20:09.700627417Z",
+   "type": "worker_progress",
+   "run_id": "01M7QDR149BTFN2FXBB9K6VNW4"
+  },
+  {
+   "seq": 422,
+   "ts": "2026-11-18T14:20:43.649606619Z",
+   "type": "worker_progress",
+   "run_id": "01M7QDR149BTFN2FXBB9K6VNW4",
+   "msg_excerpt": "so I need your OK on that before integrate-impl."
+  }
+ ],
+ "events": [
+  {
+   "seq": 435,
+   "ts": "2026-11-18T14:46:27.913386068Z",
+   "type": "work_unit_transitioned",
+   "key": "target-leaf",
+   "from": "running",
+   "to": "done",
+   "reason": "completed"
+  },
+  {
+   "seq": 436,
+   "ts": "2026-11-18T14:46:28.072186858Z",
+   "type": "worker_progress",
+   "run_id": "01M7QDR149BTFN2FXBB9K6VNW4",
+   "msg": "worker の決定の要求を記録できませんでした（ADR-0079 D7）: decision work-units-size-trim: needed_before names an unknown unit \"integrate-impl\" (use self, a unit key of the plan or stage:<key>)"
+  },
+  {
+   "seq": 437,
+   "ts": "2026-11-18T14:46:28.076326503Z",
+   "type": "worker_finished",
+   "run_id": "01M7QDR149BTFN2FXBB9K6VNW4",
+   "outcome_excerpt": "人の確認を decision work-units-size-trim で求めた（integrate-impl の前まで）"
+  },
+  {
+   "seq": 438,
+   "ts": "2026-11-18T14:46:28.076569695Z",
+   "type": "work_unit_committed",
+   "key": "target-leaf"
+  },
+  {
+   "seq": 439,
+   "ts": "2026-11-18T14:46:28.076667125Z",
+   "type": "quota_estimated"
+  },
+  {
+   "seq": 440,
+   "ts": "2026-11-18T14:46:28.077181167Z",
+   "type": "work_unit_transitioned",
+   "key": "integrate-impl",
+   "from": "pending",
+   "to": "running",
+   "reason": "integrate"
+  },
+  {
+   "seq": 441,
+   "ts": "2026-11-18T14:46:28.110686931Z",
+   "type": "routing_outcome_recorded"
+  },
+  {
+   "seq": 442,
+   "ts": "2026-11-18T14:46:29.902914096Z",
+   "type": "integration_check_started",
+   "key": "integrate-impl",
+   "index": 0,
+   "total": 10
+  },
+  {
+   "seq": 443,
+   "ts": "2026-11-18T14:46:29.958272653Z",
+   "type": "integration_check_finished",
+   "key": "integrate-impl",
+   "index": 0,
+   "total": 10,
+   "pass": true
+  },
+  {
+   "seq": 444,
+   "ts": "2026-11-18T14:46:29.958887548Z",
+   "type": "integration_check_started",
+   "key": "integrate-impl",
+   "index": 1,
+   "total": 10
+  },
+  {
+   "seq": 445,
+   "ts": "2026-11-18T14:46:30.352271986Z",
+   "type": "integration_check_finished",
+   "key": "integrate-impl",
+   "index": 1,
+   "total": 10,
+   "pass": true
+  },
+  {
+   "seq": 446,
+   "ts": "2026-11-18T14:46:30.353131331Z",
+   "type": "integration_check_started",
+   "key": "integrate-impl",
+   "index": 2,
+   "total": 10
+  },
+  {
+   "seq": 447,
+   "ts": "2026-11-18T14:46:30.921352086Z",
+   "type": "integration_check_finished",
+   "key": "integrate-impl",
+   "index": 2,
+   "total": 10,
+   "pass": true
+  },
+  {
+   "seq": 448,
+   "ts": "2026-11-18T14:46:30.937206163Z",
+   "type": "integration_check_started",
+   "key": "integrate-impl",
+   "index": 3,
+   "total": 10
+  },
+  {
+   "seq": 449,
+   "ts": "2026-11-18T15:18:37.07771052Z",
+   "type": "integration_check_finished",
+   "key": "integrate-impl",
+   "index": 3,
+   "total": 10,
+   "pass": true
+  },
+  {
+   "seq": 450,
+   "ts": "2026-11-18T15:18:37.077924448Z",
+   "type": "integration_check_started",
+   "key": "integrate-impl",
+   "index": 4,
+   "total": 10
+  },
+  {
+   "seq": 451,
+   "ts": "2026-11-18T15:18:37.102910663Z",
+   "type": "integration_check_finished",
+   "key": "integrate-impl",
+   "index": 4,
+   "total": 10,
+   "pass": true
+  },
+  {
+   "seq": 452,
+   "ts": "2026-11-18T15:18:37.103080939Z",
+   "type": "integration_check_started",
+   "key": "integrate-impl",
+   "index": 5,
+   "total": 10
+  },
+  {
+   "seq": 453,
+   "ts": "2026-11-18T15:18:37.680867626Z",
+   "type": "integration_check_finished",
+   "key": "integrate-impl",
+   "index": 5,
+   "total": 10,
+   "pass": true
+  },
+  {
+   "seq": 454,
+   "ts": "2026-11-18T15:18:37.681116196Z",
+   "type": "integration_check_started",
+   "key": "integrate-impl",
+   "index": 6,
+   "total": 10
+  },
+  {
+   "seq": 455,
+   "ts": "2026-11-18T15:32:57.184611671Z",
+   "type": "integration_check_finished",
+   "key": "integrate-impl",
+   "index": 6,
+   "total": 10,
+   "pass": true
+  },
+  {
+   "seq": 456,
+   "ts": "2026-11-18T15:32:57.184883499Z",
+   "type": "integration_check_started",
+   "key": "integrate-impl",
+   "index": 7,
+   "total": 10
+  },
+  {
+   "seq": 457,
+   "ts": "2026-11-18T15:32:58.603153308Z",
+   "type": "integration_check_finished",
+   "key": "integrate-impl",
+   "index": 7,
+   "total": 10,
+   "pass": true
+  },
+  {
+   "seq": 458,
+   "ts": "2026-11-18T15:32:58.603598206Z",
+   "type": "integration_check_started",
+   "key": "integrate-impl",
+   "index": 8,
+   "total": 10
+  },
+  {
+   "seq": 459,
+   "ts": "2026-11-18T15:33:08.469005617Z",
+   "type": "integration_check_finished",
+   "key": "integrate-impl",
+   "index": 8,
+   "total": 10,
+   "pass": true
+  },
+  {
+   "seq": 460,
+   "ts": "2026-11-18T15:33:08.469220034Z",
+   "type": "integration_check_started",
+   "key": "integrate-impl",
+   "index": 9,
+   "total": 10
+  },
+  {
+   "seq": 461,
+   "ts": "2026-11-18T15:35:01.608087901Z",
+   "type": "integration_check_finished",
+   "key": "integrate-impl",
+   "index": 9,
+   "total": 10,
+   "pass": true
+  },
+  {
+   "seq": 462,
+   "ts": "2026-11-18T15:35:01.923832921Z",
+   "type": "work_unit_transitioned",
+   "key": "integrate-impl",
+   "from": "running",
+   "to": "done",
+   "reason": "integrated"
+  },
+  {
+   "seq": 463,
+   "ts": "2026-11-18T15:35:01.923925882Z",
+   "type": "work_unit_transitioned",
+   "key": "guard",
+   "from": "pending",
+   "to": "ready",
+   "reason": "dependency_ready"
+  },
+  {
+   "seq": 464,
+   "ts": "2026-11-18T15:35:01.924062494Z",
+   "type": "transitioned",
+   "from": "running",
+   "to": "ready",
+   "reason": "advance"
+  },
+  {
+   "seq": 465,
+   "ts": "2026-11-18T15:35:01.924088126Z",
+   "type": "phase_integrated",
+   "phase": "impl"
+  },
+  {
+   "seq": 466,
+   "ts": "2026-11-18T15:35:07.338362906Z",
+   "type": "transitioned",
+   "from": "ready",
+   "to": "running",
+   "reason": "dispatch"
+  },
+  {
+   "seq": 467,
+   "ts": "2026-11-18T15:35:07.408272764Z",
+   "type": "work_unit_transitioned",
+   "key": "guard",
+   "from": "ready",
+   "to": "running",
+   "reason": "dispatch"
+  },
+  {
+   "seq": 468,
+   "ts": "2026-11-18T15:35:07.408497937Z",
+   "type": "worker_started",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 469,
+   "ts": "2026-11-18T15:35:07.408699014Z",
+   "type": "routing_decided"
+  },
+  {
+   "seq": 470,
+   "ts": "2026-11-18T15:35:07.507915904Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 471,
+   "ts": "2026-11-18T15:35:07.519399156Z",
+   "type": "harness_selected"
+  },
+  {
+   "seq": 472,
+   "ts": "2026-11-18T15:35:07.519570341Z",
+   "type": "llm_route_selected"
+  },
+  {
+   "seq": 473,
+   "ts": "2026-11-18T15:35:07.526693036Z",
+   "type": "routing_features_recorded"
+  },
+  {
+   "seq": 474,
+   "ts": "2026-11-18T15:35:23.329109684Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 475,
+   "ts": "2026-11-18T15:35:23.648935262Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 476,
+   "ts": "2026-11-18T15:35:27.151385413Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 477,
+   "ts": "2026-11-18T15:35:27.348777909Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 478,
+   "ts": "2026-11-18T15:35:29.381967725Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 479,
+   "ts": "2026-11-18T15:35:29.425948562Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 480,
+   "ts": "2026-11-18T15:35:31.973941641Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 481,
+   "ts": "2026-11-18T15:35:32.014079036Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 482,
+   "ts": "2026-11-18T15:35:34.345521077Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 483,
+   "ts": "2026-11-18T15:35:34.396862494Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 484,
+   "ts": "2026-11-18T15:35:35.707157631Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 485,
+   "ts": "2026-11-18T15:35:37.672965055Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 486,
+   "ts": "2026-11-18T15:35:37.723315403Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 487,
+   "ts": "2026-11-18T15:35:40.837042767Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 488,
+   "ts": "2026-11-18T15:35:41.749360195Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 489,
+   "ts": "2026-11-18T15:35:46.344368935Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 490,
+   "ts": "2026-11-18T15:35:46.417791042Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 491,
+   "ts": "2026-11-18T15:37:11.503807558Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 492,
+   "ts": "2026-11-18T15:37:11.577503168Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 493,
+   "ts": "2026-11-18T15:37:35.00466578Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 494,
+   "ts": "2026-11-18T15:40:12.828158415Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 495,
+   "ts": "2026-11-18T15:40:21.369726519Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 496,
+   "ts": "2026-11-18T15:41:49.80997412Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 497,
+   "ts": "2026-11-18T15:41:52.30131781Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 498,
+   "ts": "2026-11-18T15:41:57.696412955Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 499,
+   "ts": "2026-11-18T15:42:14.233968749Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 500,
+   "ts": "2026-11-18T15:42:17.721526697Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 501,
+   "ts": "2026-11-18T15:42:44.445297119Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 502,
+   "ts": "2026-11-18T15:42:45.826357687Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 503,
+   "ts": "2026-11-18T15:42:59.331799861Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 504,
+   "ts": "2026-11-18T15:43:07.35602159Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 505,
+   "ts": "2026-11-18T15:43:18.148729288Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 506,
+   "ts": "2026-11-18T15:43:53.103549959Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 507,
+   "ts": "2026-11-18T15:44:07.20804598Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 508,
+   "ts": "2026-11-18T15:44:09.082682878Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 509,
+   "ts": "2026-11-18T15:44:20.709409691Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 510,
+   "ts": "2026-11-18T15:44:23.614602977Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 511,
+   "ts": "2026-11-18T15:58:12.098477262Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 512,
+   "ts": "2026-11-18T15:58:16.492841888Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 513,
+   "ts": "2026-11-18T15:59:18.060887278Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 514,
+   "ts": "2026-11-18T16:00:22.690966083Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 515,
+   "ts": "2026-11-18T16:00:37.505392672Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 516,
+   "ts": "2026-11-18T16:00:45.489233479Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 517,
+   "ts": "2026-11-18T16:01:10.835656785Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 518,
+   "ts": "2026-11-18T16:01:17.253592236Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 519,
+   "ts": "2026-11-18T16:02:20.716955378Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 520,
+   "ts": "2026-11-18T16:02:37.996420699Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 521,
+   "ts": "2026-11-18T16:02:38.077318067Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 522,
+   "ts": "2026-11-18T16:02:49.80597137Z",
+   "type": "worker_progress",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 523,
+   "ts": "2026-11-18T16:02:50.619869799Z",
+   "type": "work_unit_check_started",
+   "key": "guard",
+   "index": 0,
+   "total": 7
+  },
+  {
+   "seq": 524,
+   "ts": "2026-11-18T16:02:50.721526923Z",
+   "type": "work_unit_check_finished",
+   "key": "guard",
+   "index": 0,
+   "total": 7,
+   "pass": true
+  },
+  {
+   "seq": 525,
+   "ts": "2026-11-18T16:02:50.721729187Z",
+   "type": "work_unit_check_started",
+   "key": "guard",
+   "index": 1,
+   "total": 7
+  },
+  {
+   "seq": 526,
+   "ts": "2026-11-18T16:02:51.809660012Z",
+   "type": "work_unit_check_finished",
+   "key": "guard",
+   "index": 1,
+   "total": 7,
+   "pass": true
+  },
+  {
+   "seq": 527,
+   "ts": "2026-11-18T16:02:51.809849426Z",
+   "type": "work_unit_check_started",
+   "key": "guard",
+   "index": 2,
+   "total": 7
+  },
+  {
+   "seq": 528,
+   "ts": "2026-11-18T16:02:51.841080204Z",
+   "type": "work_unit_check_finished",
+   "key": "guard",
+   "index": 2,
+   "total": 7,
+   "pass": true
+  },
+  {
+   "seq": 529,
+   "ts": "2026-11-18T16:02:51.841292456Z",
+   "type": "work_unit_check_started",
+   "key": "guard",
+   "index": 3,
+   "total": 7
+  },
+  {
+   "seq": 530,
+   "ts": "2026-11-18T16:02:52.519928611Z",
+   "type": "work_unit_check_finished",
+   "key": "guard",
+   "index": 3,
+   "total": 7,
+   "pass": true
+  },
+  {
+   "seq": 531,
+   "ts": "2026-11-18T16:02:52.520158114Z",
+   "type": "work_unit_check_started",
+   "key": "guard",
+   "index": 4,
+   "total": 7
+  },
+  {
+   "seq": 532,
+   "ts": "2026-11-18T16:14:00.661326933Z",
+   "type": "work_unit_check_finished",
+   "key": "guard",
+   "index": 4,
+   "total": 7,
+   "pass": true
+  },
+  {
+   "seq": 533,
+   "ts": "2026-11-18T16:14:00.661543655Z",
+   "type": "work_unit_check_started",
+   "key": "guard",
+   "index": 5,
+   "total": 7
+  },
+  {
+   "seq": 534,
+   "ts": "2026-11-18T16:14:09.961966818Z",
+   "type": "work_unit_check_finished",
+   "key": "guard",
+   "index": 5,
+   "total": 7,
+   "pass": true
+  },
+  {
+   "seq": 535,
+   "ts": "2026-11-18T16:14:09.962241718Z",
+   "type": "work_unit_check_started",
+   "key": "guard",
+   "index": 6,
+   "total": 7
+  },
+  {
+   "seq": 536,
+   "ts": "2026-11-18T16:15:57.652092679Z",
+   "type": "work_unit_check_finished",
+   "key": "guard",
+   "index": 6,
+   "total": 7,
+   "pass": true
+  },
+  {
+   "seq": 537,
+   "ts": "2026-11-18T16:16:00.260428795Z",
+   "type": "work_unit_transitioned",
+   "key": "guard",
+   "from": "running",
+   "to": "done",
+   "reason": "completed"
+  },
+  {
+   "seq": 538,
+   "ts": "2026-11-18T16:16:00.360072355Z",
+   "type": "worker_finished",
+   "run_id": "01M7QMR9A0PBHWYCE2FNKD28P9"
+  },
+  {
+   "seq": 539,
+   "ts": "2026-11-18T16:16:00.36030081Z",
+   "type": "work_unit_committed",
+   "key": "guard"
+  },
+  {
+   "seq": 540,
+   "ts": "2026-11-18T16:16:00.360388184Z",
+   "type": "quota_estimated"
+  },
+  {
+   "seq": 541,
+   "ts": "2026-11-18T16:16:00.360902505Z",
+   "type": "work_unit_transitioned",
+   "key": "integrate-verify",
+   "from": "pending",
+   "to": "running",
+   "reason": "integrate"
+  },
+  {
+   "seq": 542,
+   "ts": "2026-11-18T16:16:00.384875583Z",
+   "type": "routing_outcome_recorded"
+  },
+  {
+   "seq": 543,
+   "ts": "2026-11-18T16:16:04.369941752Z",
+   "type": "integration_check_started",
+   "key": "integrate-verify",
+   "index": 0,
+   "total": 9
+  },
+  {
+   "seq": 544,
+   "ts": "2026-11-18T16:17:54.84861961Z",
+   "type": "integration_check_finished",
+   "key": "integrate-verify",
+   "index": 0,
+   "total": 9,
+   "pass": true
+  },
+  {
+   "seq": 545,
+   "ts": "2026-11-18T16:17:54.848804274Z",
+   "type": "integration_check_started",
+   "key": "integrate-verify",
+   "index": 1,
+   "total": 9
+  },
+  {
+   "seq": 546,
+   "ts": "2026-11-18T16:17:54.88150999Z",
+   "type": "integration_check_finished",
+   "key": "integrate-verify",
+   "index": 1,
+   "total": 9,
+   "pass": true
+  },
+  {
+   "seq": 547,
+   "ts": "2026-11-18T16:17:54.88170534Z",
+   "type": "integration_check_started",
+   "key": "integrate-verify",
+   "index": 2,
+   "total": 9
+  },
+  {
+   "seq": 548,
+   "ts": "2026-11-18T16:17:55.489105111Z",
+   "type": "integration_check_finished",
+   "key": "integrate-verify",
+   "index": 2,
+   "total": 9,
+   "pass": true
+  },
+  {
+   "seq": 549,
+   "ts": "2026-11-18T16:17:55.489448248Z",
+   "type": "integration_check_started",
+   "key": "integrate-verify",
+   "index": 3,
+   "total": 9
+  },
+  {
+   "seq": 550,
+   "ts": "2026-11-18T16:30:40.510684594Z",
+   "type": "integration_check_finished",
+   "key": "integrate-verify",
+   "index": 3,
+   "total": 9,
+   "pass": true
+  },
+  {
+   "seq": 551,
+   "ts": "2026-11-18T16:30:40.510921221Z",
+   "type": "integration_check_started",
+   "key": "integrate-verify",
+   "index": 4,
+   "total": 9
+  },
+  {
+   "seq": 552,
+   "ts": "2026-11-18T16:30:48.920704364Z",
+   "type": "integration_check_finished",
+   "key": "integrate-verify",
+   "index": 4,
+   "total": 9,
+   "pass": true
+  },
+  {
+   "seq": 553,
+   "ts": "2026-11-18T16:30:48.920931143Z",
+   "type": "integration_check_started",
+   "key": "integrate-verify",
+   "index": 5,
+   "total": 9
+  },
+  {
+   "seq": 554,
+   "ts": "2026-11-18T16:41:06.683706576Z",
+   "type": "integration_check_finished",
+   "key": "integrate-verify",
+   "index": 5,
+   "total": 9,
+   "pass": true
+  },
+  {
+   "seq": 555,
+   "ts": "2026-11-18T16:41:06.683902135Z",
+   "type": "integration_check_started",
+   "key": "integrate-verify",
+   "index": 6,
+   "total": 9
+  },
+  {
+   "seq": 556,
+   "ts": "2026-11-18T16:41:08.19838959Z",
+   "type": "integration_check_finished",
+   "key": "integrate-verify",
+   "index": 6,
+   "total": 9,
+   "pass": true
+  },
+  {
+   "seq": 557,
+   "ts": "2026-11-18T16:41:08.213752114Z",
+   "type": "integration_check_started",
+   "key": "integrate-verify",
+   "index": 7,
+   "total": 9
+  },
+  {
+   "seq": 558,
+   "ts": "2026-11-18T16:41:17.810102995Z",
+   "type": "integration_check_finished",
+   "key": "integrate-verify",
+   "index": 7,
+   "total": 9,
+   "pass": true
+  },
+  {
+   "seq": 559,
+   "ts": "2026-11-18T16:41:17.810354359Z",
+   "type": "integration_check_started",
+   "key": "integrate-verify",
+   "index": 8,
+   "total": 9
+  },
+  {
+   "seq": 560,
+   "ts": "2026-11-18T16:45:56.11992026Z",
+   "type": "integration_check_finished",
+   "key": "integrate-verify",
+   "index": 8,
+   "total": 9,
+   "pass": true
+  },
+  {
+   "seq": 561,
+   "ts": "2026-11-18T16:46:12.529774436Z",
+   "type": "work_unit_transitioned",
+   "key": "integrate-verify",
+   "from": "running",
+   "to": "done",
+   "reason": "integrated"
+  },
+  {
+   "seq": 562,
+   "ts": "2026-11-18T16:46:12.531363496Z",
+   "type": "transitioned",
+   "from": "running",
+   "to": "reviewing",
+   "reason": "worker_done"
+  },
+  {
+   "seq": 563,
+   "ts": "2026-11-18T16:46:12.531410849Z",
+   "type": "phase_integrated",
+   "phase": "verify"
+  },
+  {
+   "seq": 564,
+   "ts": "2026-11-18T16:46:18.430934704Z",
+   "type": "delivery_skipped"
+  },
+  {
+   "seq": 565,
+   "ts": "2026-11-18T16:46:18.436367066Z",
+   "type": "review_target_synced"
+  },
+  {
+   "seq": 566,
+   "ts": "2026-11-18T16:48:37.823884498Z",
+   "type": "health_review_input_skipped"
+  },
+  {
+   "seq": 567,
+   "ts": "2026-11-18T17:10:51.681253543Z",
+   "type": "required_checks_evaluated"
+  },
+  {
+   "seq": 568,
+   "ts": "2026-11-18T17:10:51.692196283Z",
+   "type": "transitioned",
+   "from": "reviewing",
+   "to": "done",
+   "reason": "review_pass"
+  }
+ ]
+}

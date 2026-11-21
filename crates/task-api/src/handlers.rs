@@ -314,4 +314,4 @@ pub(crate) fn validated_workspace_in(
 
 #[cfg(test)]
 #[path = "handlers/tests.rs"]
-pub(crate) mod tests;
+mod tests;

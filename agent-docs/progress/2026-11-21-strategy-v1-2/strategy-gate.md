@@ -8,11 +8,17 @@ completed: 2026-11-21
 # strategy-gate（WorkUnit。子 2 の段 wire）
 
 完了日: 2026-11-21。設計は [ADR 2026-11-21-strategy-evidence-contract](../../adr/2026-11-21-strategy-evidence-contract.md) の D3・D4・D6。
-commit は次の 3 件と、この進捗の commit。
+commit は次の 4 件と、この進捗の commit。
 
 - 「strategy-v1 2 strategy-gate: CoS の task.create の任意の欄 strategy を検査し、未承認・stale・別案件・出典欠損を 422 で拒否する」
 - 「strategy-v1 2 strategy-gate: API の schema と web の生成型、CoS の operations の説明に strategy の欄を足す」
 - 「strategy-v1 2 strategy-gate: strategy の監査・hash・検査を OperationBody の関数に移し、create_operation を base の行数以下に戻す」
+- 「strategy-v1 2 strategy-gate: 範囲外の 3 file を base に戻し、試験の API の状態を試験の module で組む」
+
+経緯: 最初の提出（attempt 1 の前の run）は計画の範囲の check で落ちた。範囲の外の `config/skills/cos-operator/operations.md`
+（CoS の説明）・`crates/task-api/src/handlers.rs`・`crates/task-api/src/handlers/tests.rs`（試験の部品 `state` を `pub(crate)` にした）を
+変えていた。3 file を base の内容に戻し、試験の API の状態は `cos/strategy_gate/tests.rs` の `api_state` で組むようにした。
+CoS の説明は下の「提案」に回した。
 
 ## 開始時の確認（本番の release）
 
@@ -56,10 +62,10 @@ commit は次の 3 件と、この進捗の commit。
 - `crates/task-api/src/cos/operations.rs`: `OperationBody.strategy`（任意）。`OperationBody` の関数 `audit_payload`（payload に `strategy` を入れる）・
   `hash`（`strategy` があるときだけ body の後に `\nstrategy\n<canonical strategy>` を hash に足す。無ければ従来の `request_hash` と同じ値）・
   `check_strategy`（`goal_guard::check` の後、`authority_gate` の前。`instructed_by` の有無によらず呼ぶ）。
-- 説明: `config/skills/cos-operator/operations.md` の起票の節に `strategy` の欄と 422 の code を書いた。
 - 生成物: `UPDATE_SCHEMA=1 cargo test -p task-api --lib committed_schema_matches_generated` で `docs/api/v1/api-v1.schema.json`、
   `cd web && node scripts/gen-types.mjs` で `web/api/generated/schema.json`・`types.ts`（`OperationBody.strategy?: StrategyRef | null` と `StrategyRef`）。
-- 試験の足場: `crates/task-api/src/handlers/tests.rs` の `state` を `pub(crate)` にした（`handlers.rs` の `mod tests` を `pub(crate)`）。
+- 試験の足場: `cos/strategy_gate/tests.rs` の `api_state`（`ApiSettings` を組んで `ApiState::new`）。`handlers/tests.rs` の `state` と同じ形の
+  設定の写し（約 110 行）で、試験だけの重複になる。`handlers/` はこの WorkUnit の範囲の外なので共通化しなかった（「提案」2）。
 
 `crates/task-api/src/cos/operations.rs` は高 risk の path class `authz` に入る。ADR の割り当てどおりで、final review の設計の判定の対象になる。
 `create_operation` は base で 202 行、HEAD で 200 行（repo health の `size.responsibility-growth` の閾値 200。最初の版は 215 行で落ちたので、
@@ -100,25 +106,24 @@ task を作らない。欄の無い要求は今と同じ。task-core の `strate
 
 ### 負の試験が production の変更だけを戻した tree で落ちること
 
-試験の file はそのままにして、production の変更だけを 2 通りに戻して走らせた（記録は run の artifacts の `revert-check.log`・`revert-gate-call.log`）。
-走らせた後に `git checkout HEAD -- crates/task-api/src/cos/operations.rs` で戻し、作業ツリーに差分が無いことを `git status --short` で確かめた。
+試験の file はそのままにして、production の変更だけを 2 通りに戻して走らせた（提出時の HEAD の試験で実行。記録は run の artifacts の
+`revert-check.log`・`revert-gate-call.log`）。走らせた後に HEAD の `operations.rs` を写し戻し、
+`git diff --quiet HEAD -- crates/task-api/src/cos/operations.rs` が exit 0 であることを確かめた。
 
 1. `git show $CELERIS_WU_BASE:crates/task-api/src/cos/operations.rs > crates/task-api/src/cos/operations.rs` の後に
-   `cargo test -p task-api --lib strategy_gate`: 0 passed・8 failed。全件が 400 `bad_request`（`unknown field strategy`）で、期待の 422 と code にならない。
-2. 欄 `strategy` は残し、`create_operation` から検査の呼び出しだけを消した tree で同じ command: 1 passed・7 failed。7 件の負の試験は 200 で
-   task が作られて落ちた（負の試験が見ているのは検査の呼び出しそのもの）。通った 1 件は正の例の試験（人の承認の文書は検査があっても無くても通る）。
-
-（2 は検査を `create_operation` に直接書いていた最初の commit の tree で走らせた。その後の commit は同じ呼び出しを `OperationBody::check_strategy` に移しただけで、
-検査の中身は変えていない。）
+   `cargo test -p task-api --lib strategy_gate`: exit 101、0 passed・8 failed。全件が 400 `bad_request`（`unknown field strategy`）で、期待の 422 と code にならない。
+2. 欄 `strategy` は残し、`create_operation` から検査の呼び出しの 1 行
+   `req.check_strategy(store, &env, &audit, matched.as_ref())?;` だけを `sed -i` で消した tree で同じ command: exit 101、1 passed・7 failed。
+   7 件の負の試験は 422 を期待したところで 200 が返り、task が作られて落ちた（負の試験が見ているのは検査の呼び出しそのもの）。
+   通った 1 件は正の例の試験（人の承認の文書は検査があっても無くても通る）。
 
 ## 行数（`git diff --numstat $CELERIS_WU_BASE`。空行・注釈を含む）
 
 | 区分 | file | 追加・削除 |
 |---|---|---|
 | production Rust | `cos/strategy_gate.rs`（`#[cfg(test)] mod tests;` の 2 行を除く）479・`cos/operations.rs` +78/−6・`cos/mod.rs` +1 | +558/−6（純増 552） |
-| test Rust | `cos/strategy_gate/tests.rs` 713・`handlers/tests.rs` +2/−1・`handlers.rs` +1/−1 | +716/−2 |
+| test Rust | `cos/strategy_gate/tests.rs` 828（うち `api_state` と token の定数で約 115） | +828 |
 | 生成物 | `docs/api/v1/api-v1.schema.json` +33・`web/api/generated/schema.json` +33・`types.ts` +7 | +73 |
-| 説明 | `config/skills/cos-operator/operations.md` | +9 |
 
 純増の理由: 新しい入口の検査で、消す旧い経路は無い。`strategy_gate.rs` の大半は store の 9 種の照会（成果物・file・鎖・決定・案件・Roadmap・
 参照 5 種）で、規則は task-core の 1 か所にあり二重に実装していない。
@@ -131,7 +136,7 @@ task を作らない。欄の無い要求は今と同じ。task-core の `strate
 - `cargo clippy --workspace -- -D warnings`: exit 0。
 - `cargo fmt --all -- --check`: exit 0。
 - `git diff --quiet $CELERIS_WU_BASE HEAD -- crates/task-core/migrations crates/task-core/src/model/events.rs crates/task-core/src/store`: exit 0（差分なし）。
-- `sh "$CELERIS_WU_SCOPE_PATHS"`: 変えた path は上の表の 10 file とこの進捗だけ。
+- 計画の範囲の check（`sh "$CELERIS_WU_SCOPE_PATHS"` の path を許す接頭辞で絞る command）: exit 0。変えた path は上の表の 7 file とこの進捗だけ。
 
 ## 親の目的への寄与
 
@@ -140,7 +145,8 @@ task を作らない。欄の無い要求は今と同じ。task-core の `strate
   承認・鮮度・案件の正本は既存の決定・Project.request・Roadmap・task で、新しい表・event の種類・状態機械は足していない。
   改善 A・C の「承認された戦略だけを実行する」入口の条件になる。
 - 推定: 子 5・6 が戦略の文書を作り版を上げるとき、pivot した新しい版の承認が古い版の実行を止める（`strategy_stale`）。shadow のケースでの確認は子 6。
-- 未確認: 実運用で CoS が `strategy` を付けて起票するか（skill の説明は足したが、本番の run では未観測）。改善 B・D と observability への効果は
+- 未確認: 実運用で CoS が `strategy` を付けて起票するか。CoS の skill の説明（`config/skills/cos-operator/operations.md`）には欄をまだ書いていない
+  （範囲の外。「提案」1）。本番の run では未観測。改善 B・D と observability への効果は
   子 3〜7 が文書を作り読むまで測れない。
 
 ## 未解決事項
@@ -152,4 +158,9 @@ task を作らない。欄の無い要求は今と同じ。task-core の `strate
 
 ## 提案
 
-- 無し。
+1. CoS の skill の説明 `config/skills/cos-operator/operations.md` の起票の節に、`strategy` の欄（`{"task_id","name","sha256"}`）、
+   拒否の code（`strategy_unapproved`・`strategy_stale`・`strategy_other_project`・`strategy_source_missing`・`strategy_invalid`・
+   `strategy_refute_removed`・`strategy_idempotency_conflict`・`strategy_not_applicable`）、CoS・operator・mcp の回答は承認に数えないことを書く。
+   この WorkUnit の範囲（`crates/task-api/src/cos/` など）の外なので書かなかった。段 close か、CoS が戦略の文書を扱い始める子 3・5 の範囲に入れる。
+2. `cos/strategy_gate/tests.rs` の `api_state` と `handlers/tests.rs` の `state` は同じ形の設定の写し。`handlers/tests.rs` の `state` を
+   `pub(crate)` にすれば `api_state` を消せる（1 行の可視性の変更。`handlers/` を範囲に持つ後の変更で行う）。

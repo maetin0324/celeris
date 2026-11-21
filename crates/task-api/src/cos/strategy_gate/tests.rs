@@ -147,10 +147,125 @@ fn open_thread(store: &SqliteStore, project: &task_core::Project) -> String {
         .id
 }
 
+/// 静的トークン（人の主体）と mcp のトークン。要求は CoS の run の bearer で送る。
+const HUMAN_TOKEN: &str = "strategy-gate-test-human";
+const MCP_TOKEN: &str = "celeris-mcp.strategy-gate-test";
+
+/// 単体試験の API の状態（`dir` の下に DB と `ws/`）。`handlers::tests::state` は handlers の試験の私的な部品なので、
+/// ここでは同じ形の設定を自分で組む。
+fn api_state(dir: &std::path::Path) -> crate::ApiState {
+    let settings = crate::ApiSettings {
+        browser: Default::default(),
+        documentation_state_dir: None,
+        listen: "127.0.0.1:7710".parse().unwrap_or_else(|e| panic!("{e}")),
+        // 静的トークンを 1 つ持たせ、認証を要る状態にする（CoS の run の bearer が CoS の主体として読まれる）。
+        tokens: vec![crate::ApiToken::new(
+            crate::Principal::Human {
+                name: "test".into(),
+            },
+            HUMAN_TOKEN,
+        )],
+        mcp_token: Some(MCP_TOKEN.into()),
+        allowed_hosts: vec![],
+        db_path: dir.join("celeris.db"),
+        busy_timeout: std::time::Duration::from_millis(5000),
+        background_checkpoint: false,
+        view: task_ops::view::ViewContext {
+            workspace_roots: task_core::local_machine::WorkspaceRoots::new(dir.join("ws"), None),
+            retry_backoff_base: std::time::Duration::from_secs(0),
+            retry_backoff_max: std::time::Duration::from_secs(0),
+            max_requeues: 5,
+            clusters: Default::default(),
+        },
+        config_view: crate::types::ConfigView {
+            config_path: String::new(),
+            db: String::new(),
+            workspace_root: String::new(),
+            tick_ms: 2000,
+            max_concurrency: 1,
+            lease_grace_secs: 0,
+            idle_timeout_secs: 0,
+            kill_grace_secs: 0,
+            review_timeout_secs: 0,
+            error_cooldown_secs: 0,
+            retry_backoff_base_secs: 0,
+            retry_backoff_max_secs: 0,
+            max_requeues: 5,
+            plan_auto_accept: false,
+            reviewer: crate::types::ReviewerConfigView {
+                adapter: None,
+                tier: Some(task_core::Tier::Standard),
+            },
+            clusters: vec![],
+            roles: vec![],
+            genres: vec![],
+            delegation: task_core::DelegationLimits::default(),
+            api: crate::types::ApiConfigView {
+                bind: "127.0.0.1:7710".into(),
+                auth_required: false,
+                allowed_hosts: vec![],
+            },
+            identity: crate::types::DaemonIdentityView {
+                instance_id: "01J00000000000000000000000".into(),
+                release: "dev".into(),
+                pid: 1,
+                started_at: "2026-09-14T00:00:00Z".into(),
+                config_sha256: None,
+                overrides: vec![],
+                effective: crate::types::EffectiveConfigView {
+                    db: String::new(),
+                    workspace_root: String::new(),
+                    knowledge_root: String::new(),
+                    knowledge_default_mounts: vec![],
+                    memory_dir: None,
+                    langmem_enabled: false,
+                    knowledge_gc_enabled: false,
+                    cron_seed_count: 0,
+                    selfdeploy_releases_dir: String::new(),
+                    selfdeploy_repo: String::new(),
+                    selfdeploy_push: false,
+                    api_listen: "127.0.0.1:7710".into(),
+                    llm_proxy_listen: None,
+                },
+            },
+        },
+        roles: vec![],
+        genres: vec![],
+        conversation_genre: task_core::CONVERSATION_GENRE.to_string(),
+        celeris_version: "test".into(),
+        instance_id: "01J00000000000000000000000".into(),
+        started_at: "2026-09-14T00:00:00Z".into(),
+        admin_tx: None,
+        accounts_roots: std::collections::HashMap::new(),
+        max_runs_per_account: 0,
+        secrets_dir: None,
+        secret_usage: std::collections::HashMap::new(),
+        memory_dir: None,
+        notify_secret_id: task_core::DEFAULT_WEBHOOK_SECRET_ID.to_string(),
+        notify_web_base_url: None,
+        releases: None,
+        integration_releases_dir: None,
+        release: "dev".to_string(),
+        cos_policy_version: None,
+        mode: task_core::DaemonMode::Normal,
+        role: task_core::SharedRole::new(task_core::InstanceRole::Active),
+        github: crate::GithubSettings::default(),
+        knowledge_root: None,
+        docs_repo_root: Some(dir.join("workspace")),
+        llm_sources: None,
+        harnesses: None,
+        model_discovery: None,
+        tree_limits: task_core::TreeLimits::default(),
+        budget_rates: task_core::pricing::BudgetRates::default(),
+        local_machine: crate::LocalMachineSettings::default(),
+    };
+    crate::ApiState::new(settings, tokio::sync::watch::channel(None).1).unwrap_or_else(|e| panic!("{e}"))
+}
+
 fn world() -> World {
     let tmp = tempfile::tempdir().expect("tempdir");
     let root = tmp.path().to_path_buf();
-    let state = crate::handlers::tests::state(&root);
+    let state = api_state(&root);
     let app = crate::router(state);
     let store = SqliteStore::open(&root.join("celeris.db")).expect("store");
     let project = project("agent-platform", "人の依頼 v1: 戦略層を作る");

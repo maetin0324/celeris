@@ -10,8 +10,7 @@ use super::*;
 use crate::types::{ApiConfigView, ConfigView, ReviewerConfigView};
 use crate::{ApiSettings, ApiState};
 
-/// The unit-test API state (also used by `cos::strategy_gate`'s route tests).
-pub(crate) fn state(dir: &std::path::Path) -> ApiState {
+fn state(dir: &std::path::Path) -> ApiState {
     state_rx(dir, tokio::sync::watch::channel(None).1)
 }
 

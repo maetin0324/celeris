@@ -205,15 +205,6 @@ CoS も上の表の `PATCH /api/v1/tasks/<id>`（task.update）で同じ修復�
    "acceptance":[{"type":"reviewer","text":"添付の screenshot の崩れが直っている"}]}}}
 ```
 
-承認された戦略（`celeris.strategy/1` の文書）を実行する task は、操作の本文の `request` と同じ層に
-`"strategy":{"task_id":"<文書を作った task>","name":"strategy/<strategy_id>/v<版>.json","sha256":"<成果物の sha256>"}` を付ける
-（ADR 2026-11-21-strategy-evidence-contract D4）。Celeris は文書が人（`human:<名前>`）に承認された、今の Project.request と
-承認済み Roadmap の版の、作る task と同じ案件の、出典のそろった最新の版であることを確かめ、違えば task を作らずに 422
-（`strategy_unapproved`・`strategy_stale`・`strategy_other_project`・`strategy_source_missing`・`strategy_invalid`・
-`strategy_refute_removed`・`strategy_idempotency_conflict`。`rules`・`violations` に全件）を返す。CoS・operator・mcp の回答は承認に数えない。
-文書を承認済みと書き換えず、人に承認の決定を出してもらう。`task.create` 以外に付けると 422 `strategy_not_applicable`。
-通常の task には付けない（付けなければ従来どおり）。
-
 失敗・blocked の task を直す修正を起票するときは `"unblocks":["<待っている task の ID>"]` を付ける。
 修正を含む release が昇格すると、待っている failed の task は Celeris が 1 度だけ reopen する（手で reopen しない）。
 

@@ -1,13 +1,12 @@
 ---
 title: 戦略層 v1 子 3 mode-gate — discussion mode の記録と /cos/operations の拒否
 tasks: [01M7XQ9QE8STND208NXG90F743]
-status: done
+status: blocked
 updated: 2026-11-21
-completed: 2026-11-21
 ---
 # mode-gate（WorkUnit。子 3 の段 gate）
 
-完了日: 2026-11-21。設計は [ADR 2026-11-21-chat-discussion-mode](../../adr/2026-11-21-chat-discussion-mode.md) の D1・D2・D4・D7。
+状態: blocked（範囲の check が ADR と矛盾するので計画の問題として申告した。下の「Run #2」）。設計は [ADR 2026-11-21-chat-discussion-mode](../../adr/2026-11-21-chat-discussion-mode.md) の D1・D2・D4・D7。
 基準は `$CELERIS_WU_BASE`。検査は提出時の HEAD で実行した。
 
 ## したこと
@@ -63,9 +62,46 @@ Run #1 で、同じ試験 file（JSON と SQL だけを使う）を base の src
 
 足していない。足した型は enum `ChatDiscussionMode`・構造体 `RunDiscussionMode`・`ChatDiscussionDecider` と要求の欄。
 
+## Run #2（2026-11-21）: 前回の check の不合格と対応
+
+前回の run の後の check は 2 つとも不合格だった。
+
+### 1. `test-affected && clippy && fmt`（exit 1）
+
+- 落ちたのは web の unit 試験 `e2e/support/fake-daemon.test.ts` の「records JSON requests, sends SSE immediately, and marks aborted requests」1 件（705 件中）。
+  test-affected は web を nextest より先に走らせるので、この check では nextest・clippy・fmt まで進んでいない。
+- 原因はこの WU の変更ではない。この WU が web で変えたのは生成物 `web/api/generated/schema.json`・`types.ts` だけで、試験は単独で 3 回とも 17 passed。
+  試験は abort の前後を固定の 30 ms の `setTimeout` で待っていた。負荷下では、server が要求を受ける前か close を記録する前に判定して落ちる。
+- 直した: 固定の待ちをやめ、`requests` に `/inbox` が記録されるまで待ってから abort し、`aborted` が立つまで待つ（vitest の試験の timeout が上限）。
+  commit「fake-daemon の abort の試験を固定の 30 ms 待ちから出来事待ちにする」。直した後、単独で 2 回 17 passed、`tsc -b` exit 0。
+
+### 2. 範囲の check（exit 1、範囲外 21 path）
+
+範囲の正規表現が許さない path を、ADR 2026-11-21-chat-discussion-mode と objective が変更を求めている。成果をどう直しても通らないので、`plan_issue` で申告した。
+
+- (a) 要求の struct literal（ADR D9「`ChatPostMessageRequest {` 65 か所・`ChatRelayRequest {` 20 か所に `discussion_mode: None` を足す」）。
+  欄は ADR D1.1 が両方の要求に置くと決めている。Rust は struct literal に全欄を要るので、欄を足すと次の file を必ず変える:
+  `crates/celeris/src/chat_gc_tests.rs`・`crates/celeris/src/daemon/cos_reload_tests.rs`・`crates/celeris/tests/{actor_trace_flow2,actor_trace_flow5,campaign_wiring_e2e,script_generation_e2e}.rs`・
+  `crates/task-core/src/store/project_guard_usage_tests.rs`・`crates/task-dispatch/src/cos_context/tests.rs`・
+  `crates/task-dispatch/src/dispatcher/tests/{cos_chat_launch,cos_chat_rollover,cos_chat_triage,cos_chat_triage_inbox_thread,cos_digest_trace,cos_launch_wire,cos_live_fix_d4,cron_cos_review}.rs`・
+  `crates/celeris-mcp/src/tools/console.rs`（`ChatRelayRequest` の literal。ADR D8 の試験 `discussion_mode_relay_and_mcp_instruct_carry_mode` も MCP の入力の mode を求める）。
+- (b) CoS の prompt の hint（objective (4)、ADR D1.2）。worker は `context.cos_chat`（`crates/task-worker/src/protocol/cos_chat.rs` の `CosChatContext`）しか受け取らないので、
+  mode を渡すにはこの型に欄が要る。生成物 `docs/protocol/worker-protocol.schema.json` は試験 `committed_schema_matches_generated` が照合する。
+  dispatcher 側の導出の呼び出しは `crates/task-dispatch/src/cos_context.rs`（15 行）。
+- (c) `crates/task-core/src/discussion_mode.rs`。ADR D1.2 は `task_core::chat` に置くと書くが、`chat` に置くと repo health の `size.responsibility-growth` が落ちる
+  （`chat` の本体 8092 行 > 8000、`chat::SqliteStore` の method 115 で増加）。上の「ADR からずれた点」の 1 つ目。
+- 範囲の内側だけで済ませる案（要求の型の外で `discussion_mode` を JSON から抜き、schema を `schemars(transform)` で足す等）は、schema と型の正本が 2 つになり（規約 4）、
+  ADR D1.1 にも反するので採らなかった。`#[serde(flatten)]` の包む型は内側の `deny_unknown_fields` が効かなくなり、未知の欄の 422 が変わるので採れない。
+- 計画への提案: 範囲の正規表現に次を足す。
+  `crates/celeris/src/chat_gc_tests\.rs$|crates/celeris/src/daemon/cos_reload_tests\.rs$|crates/celeris/tests/|crates/celeris-mcp/src/tools/console\.rs$|`
+  `crates/task-core/src/discussion_mode\.rs$|crates/task-core/src/store/project_guard_usage_tests\.rs$|crates/task-dispatch/src/cos_context(\.rs$|/)|`
+  `crates/task-dispatch/src/dispatcher/tests/|crates/task-worker/src/protocol/cos_chat\.rs$|docs/protocol/worker-protocol\.schema\.json$`
+  あわせて ADR D1.2 の置き場所を `task_core::discussion_mode` に改める（health の上限のため）。
+
 ## 未解決事項
 
-- 修正後の test-affected の全体の再実行（schema 再生成と timeout の 2 件は単独で確認済み）。
+- 修正後の test-affected の全体の再実行（schema 再生成と timeout の 2 件は単独で確認済み）。Run #2 の結果は下の「Run #2 の検査」。
+- 範囲の check は計画の正規表現が直るまで通らない（Run #2 の 2）。
 - MCP の入力の `instructed_by`（run の入力の MCP の発言は今も引用できる）は既存の挙動のまま。mode は「させない」向きにだけ効く（ADR D7）。人の承認に数えるかは子 4 の scope の決定に残る。
 
 ## 提案

@@ -125,7 +125,8 @@ prompt-audit は、修正後の release（2026-11-19T15:39Z 以降の昇格）�
   - 案件を持つのに行を読めないときは `StoreError` で返り、run を起こさない（祖先の読み取りの失敗と同じ扱い。D3 の付記の位置のまま）。
     production のコードに `projects` の行を消す経路は無く、本番 DB に案件の行の無い未終了の task は 0 件だった（2026-11-21、read-only で確認）。
   - `project_wake::project_request_sha256`（案件の判断の記録の `request_sha256`）も同じ `project_proposal::sha256_hex` を呼ぶようにし、
-    request の hash の計算を 1 か所にした。
+    request の hash の計算を 1 か所にした。`project_wake` の手元の `sha256_hex(&[u8])` は消し、snapshot と root の idempotency の
+    hash も同じ関数で計算する（入力は UTF-8 の文字列で、出す値は変わらない）。
   - prompt は `prompt_header` の `lineage_section` が、祖先の節の直前に「案件の依頼（Project.request の全文。人の元の目的の正本。
     sha256: <hex>）」の節を 1 回出す。harness ごとの分岐は無い。
 - D4 の置き換え: 「祖先の無い task の prompt は 1 byte も変えない」を「案件に属さない task の prompt は 1 byte も変えない」に狭める。

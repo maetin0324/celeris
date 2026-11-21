@@ -1,0 +1,56 @@
+{
+ "read_at": "2026-11-21T01:01:09Z",
+ "db": "file:<db path>?mode=ro",
+ "fix_subject": "arch-v4 H R1 planner-prompt: planner の 4 builder の prompt に task の受入条件の節を出し",
+ "fix_is_ancestor_of_head": true,
+ "first_release": {
+  "sha12": "54e61984357f",
+  "promoted_at": "2026-11-20T15:44:15Z",
+  "from": "1680de5cd1b4",
+  "contains_fix": true,
+  "has_heading": true
+ },
+ "first_release_from": {
+  "sha12": "1680de5cd1b4",
+  "promoted_at": "2026-11-19T11:30:18Z",
+  "from": "7014d24222c4",
+  "contains_fix": false,
+  "has_heading": false
+ },
+ "releases": [
+  {
+   "sha12": "7014d24222c4",
+   "promoted_at": "2026-11-19T05:35:55Z",
+   "from": "bb772ffca8ec",
+   "contains_fix": false,
+   "has_heading": false
+  },
+  {
+   "sha12": "1680de5cd1b4",
+   "promoted_at": "2026-11-19T11:30:18Z",
+   "from": "7014d24222c4",
+   "contains_fix": false,
+   "has_heading": false
+  },
+  {
+   "sha12": "54e61984357f",
+   "promoted_at": "2026-11-20T15:44:15Z",
+   "from": "1680de5cd1b4",
+   "contains_fix": true,
+   "has_heading": true
+  },
+  {
+   "sha12": "7f69057907ad",
+   "promoted_at": "2026-11-20T17:09:27Z",
+   "from": "54e61984357f",
+   "contains_fix": true,
+   "has_heading": true
+  }
+ ],
+ "cutoff": "2026-11-20T15:44:15Z",
+ "selection": "runs.role in (worker, planner, reviewer) and started_at > cutoff, order by started_at, run_id",
+ "limit": 300,
+ "eligible": 17,
+ "selected": 17,
+ "dropped": 0
+}

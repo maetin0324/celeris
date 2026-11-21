@@ -913,9 +913,8 @@ async fn decision_fail_closed_non_array_decisions_hold_the_leaf() {
         vec![leaf("a", "s1", &[]), leaf("b", "s1", &[])],
     );
     // 配列でない: 決定 1 件の形の object そのもの。
-    let adapter = Arc::new(
-        DecisionAdapter::new(vec![plan]).declaring("a", decision_spec("trim", &["self"])),
-    );
+    let adapter =
+        Arc::new(DecisionAdapter::new(vec![plan]).declaring("a", decision_spec("trim", &["self"])));
     let mut d = tree_dispatcher(&store, adapter.clone());
     run_until_quiet(&mut d, &store, 1500).await;
 
@@ -946,7 +945,10 @@ async fn decision_fail_closed_non_array_decisions_hold_the_leaf() {
         row.request.raised_by.run_id.as_deref(),
         unit(&units, "a").last_run_id.as_deref()
     );
-    assert_eq!(row.request.cost_of_reversal, task_core::CostOfReversal::High);
+    assert_eq!(
+        row.request.cost_of_reversal,
+        task_core::CostOfReversal::High
+    );
     for needle in [
         "決定の要求 1 件",
         "1) #field trim question trim",

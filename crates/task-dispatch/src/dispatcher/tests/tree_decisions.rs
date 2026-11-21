@@ -17,12 +17,15 @@ use super::*;
 /// 子 task なら題名の `Child ` の後）の台本が残っていれば先頭の 1 run を使い、無ければ `declare` に key があれば
 /// 最初の run の `result.json` にその `decisions` を書き、それ以外は `decisions` の無い `result.json` を書く。`ask` に
 /// key があれば、その key の最初の run は `result.json` に `question` を書いて質問で終わる（`decisions` は上と同じ）。
+/// `fail` に key があれば、その key の最初の run は `result.json` を書いた後に失敗（`Terminal::Error{retryable: true}`）で
+/// 終わる。
 struct DecisionAdapter {
     plans: StdMutex<VecDeque<String>>,
     seen: StdMutex<Vec<task_worker::RunContext>>,
     declare: StdMutex<BTreeMap<String, serde_json::Value>>,
     script: StdMutex<BTreeMap<String, VecDeque<ScriptedRun>>>,
     ask: StdMutex<BTreeMap<String, String>>,
+    fail: StdMutex<BTreeMap<String, String>>,
 }
 
 /// `DecisionAdapter` の台本の 1 run。`yielded` があればその checkpoint で yield し（`result.json` の `yield`）、
@@ -40,6 +43,7 @@ impl DecisionAdapter {
             declare: StdMutex::new(BTreeMap::new()),
             script: StdMutex::new(BTreeMap::new()),
             ask: StdMutex::new(BTreeMap::new()),
+            fail: StdMutex::new(BTreeMap::new()),
         }
     }
 
@@ -48,6 +52,14 @@ impl DecisionAdapter {
             .lock()
             .unwrap()
             .insert(key.to_string(), question.to_string());
+        self
+    }
+
+    fn failing(self, key: &str, message: &str) -> Self {
+        self.fail
+            .lock()
+            .unwrap()
+            .insert(key.to_string(), message.to_string());
         self
     }
 
@@ -141,6 +153,16 @@ impl WorkerAdapter for DecisionAdapter {
                 return Ok(RunOutcome {
                     terminal: Terminal::Question { text, usage: None },
                     exit_code: Some(0),
+                });
+            }
+            if let Some(message) = self.fail.lock().unwrap().remove(&key) {
+                return Ok(RunOutcome {
+                    terminal: Terminal::Error {
+                        message,
+                        retryable: true,
+                        usage: None,
+                    },
+                    exit_code: Some(1),
                 });
             }
             if let Some(checkpoint) = run.yielded {
@@ -1693,4 +1715,199 @@ async fn decision_fail_closed_question_leaf_records_decisions() {
         )
     );
     answer_and_finish(&mut d, &store, &adapter, root_id, &row, 2).await;
+}
+
+/// 段階 s1 に leaf a と子 k（atomic の節点）を置く計画。
+fn atomic_node_plan() -> String {
+    v3_plan(
+        vec![stage("s1", false)],
+        vec![leaf("a", "s1", &[]), task_unit("k", "s1", &[], "true")],
+    )
+}
+
+/// task の `Transitioned.reason`（古い順）。
+fn task_reasons(events: &[(u64, Event)]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|(_, e)| match e {
+            Event::Transitioned { reason, .. } => Some(reason.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// 子 k（atomic の節点）が worker の決定 `vault`（`needed_before = [self]`）で止まったことを確かめる（yield・失敗の
+/// 試験の共通の前半）。決定は open・origin worker・止めた run の行で受信箱の未回答の決定に出て、k は run 1 本で
+/// `ready` のまま done にならず、unit k と root も終わらず、質問も出ない。tick を回しても答えまで次の run は起きない。
+/// 子 task と決定の行と、止めた run の `WorkerFinished.outcome` を返す。
+fn assert_atomic_node_held_by_worker_decision(
+    d: &mut Dispatcher,
+    store: &Arc<SqliteStore>,
+    root_id: TaskId,
+) -> (Task, task_core::DecisionRow, String) {
+    let child = child_named(store, root_id, "k").expect("child k");
+    let runs = store.runs_for_task(child.id).unwrap();
+    assert_eq!(runs.len(), 1, "no next run before the answer");
+    assert_eq!(store.get(child.id).unwrap().unwrap().status, Status::Ready);
+    let units = store.work_units_for(root_id).unwrap();
+    assert_ne!(unit(&units, "k").status, task_core::WorkUnitStatus::Done);
+    assert_ne!(store.get(root_id).unwrap().unwrap().status, Status::Done);
+    let row = decision(store, root_id, "vault");
+    assert_eq!(row.task_id, child.id);
+    assert_eq!(row.status, task_core::DecisionStatus::Open);
+    assert_eq!(row.needed_before, vec!["self".to_string()]);
+    assert_eq!(
+        row.request.raised_by.origin,
+        task_core::DecisionOrigin::Worker
+    );
+    assert_eq!(
+        row.request.raised_by.run_id.as_deref(),
+        Some(runs[0].run_id.as_str())
+    );
+    let inbox = task_ops::decision::open_rows(store.as_ref()).unwrap();
+    assert_eq!(
+        inbox.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+        vec![row.id.as_str()]
+    );
+    no_questions(store, child.id);
+    for _ in 0..10 {
+        d.tick().unwrap();
+    }
+    assert_eq!(store.runs_for_task(child.id).unwrap().len(), 1);
+    assert_eq!(store.get(child.id).unwrap().unwrap().status, Status::Ready);
+    let outcome = finished_outcome(&store.events_for(child.id).unwrap(), &runs[0].run_id);
+    (child, row, outcome)
+}
+
+/// 答えると k の次の run が走って done になり（答えは `Answered` の event と前置きの `answers` に入る）、root も終わる
+/// （yield・失敗の試験の共通の後半）。答えの後の k の run の文脈（WU・planner・review でない最後の run。この木で
+/// それに当たるのは k の run だけ）を返す。
+async fn answer_atomic_node_and_finish(
+    d: &mut Dispatcher,
+    store: &Arc<SqliteStore>,
+    adapter: &DecisionAdapter,
+    root_id: TaskId,
+    child: &Task,
+    row: &task_core::DecisionRow,
+) -> task_worker::RunContext {
+    answer(store, &row.id, Some("org-vault"), None);
+    let report = run_until_idle(d, 1500).await;
+    assert!(report.idle, "{report:?}");
+    assert_eq!(store.runs_for_task(child.id).unwrap().len(), 2);
+    assert_eq!(store.get(child.id).unwrap().unwrap().status, Status::Done);
+    assert!(
+        store
+            .events_for(child.id)
+            .unwrap()
+            .iter()
+            .any(|(_, e)| matches!(e, Event::Answered { answer, .. }
+                if answer.starts_with("- vault question vault: org vault")))
+    );
+    let last = adapter
+        .contexts()
+        .into_iter()
+        .rfind(|c| c.work_unit.is_none() && c.execution_planner.is_none() && c.review.is_none())
+        .expect("k ran after the answer");
+    assert!(
+        last.answers
+            .iter()
+            .any(|a| a.answer.starts_with("- vault question vault: org vault")),
+        "{:?}",
+        last.answers
+    );
+    let units = store.work_units_for(root_id).unwrap();
+    assert_eq!(unit(&units, "k").status, task_core::WorkUnitStatus::Done);
+    assert_eq!(store.get(root_id).unwrap().unwrap().status, Status::Done);
+    no_questions(store, root_id);
+    assert_replay_is_clean(store);
+    last
+}
+
+/// ADR 2026-11-21-worker-decisions-fail-closed D1・付記「atomic の規則」（不変条件 I1・I2。continuation の数えと
+/// checkpoint を変えない）: 木の子の atomic の節点 k の run が yield で終わり、`result.json` に `needed_before: [self]`
+/// の決定を書く。決定が受信箱の未回答の決定に出て、k は答えるまで次の run（continuation）を起こさず done にならない。
+/// continuation の trigger（遷移 `continue`）と checkpoint は残り、止めた run の outcome は `continue: ` の文の末尾に
+/// 決定を待つことを足したものになる。答えると k の次の run が checkpoint の続き（continuation）として走って done になり、
+/// root も終わる。修正の前は atomic の run は done の run でしか `decisions` を読まなかったので、決定は 0 件で k は
+/// continuation の run で done になった。既存の試験（`worker_declared_decisions` の子 k・
+/// `decision_fail_closed_non_array_decisions_hold_the_atomic_node`）は atomic の節点を done の run でしか通さないので、
+/// yield の run の要求を検出できない。
+#[tokio::test]
+async fn decision_fail_closed_yielded_atomic_node_records_decisions() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let root = root_task(dir.path());
+    let root_id = root.id;
+    store.create_task(&root, vec![]).unwrap();
+    let adapter = Arc::new(DecisionAdapter::new(vec![atomic_node_plan()]).scripting(
+        "k",
+        vec![ScriptedRun {
+            yielded: Some(yielded_checkpoint(1)),
+            decisions: Some(serde_json::json!([decision_spec("vault", &["self"])])),
+        }],
+    ));
+    let mut d = tree_dispatcher(&store, adapter.clone());
+    run_until_quiet(&mut d, &store, 1500).await;
+
+    let (child, row, outcome) = assert_atomic_node_held_by_worker_decision(&mut d, &store, root_id);
+    let events = store.events_for(child.id).unwrap();
+    assert_eq!(
+        task_reasons(&events).last().map(String::as_str),
+        Some("continue")
+    );
+    assert!(
+        events
+            .iter()
+            .any(|(_, e)| matches!(e, Event::CheckpointSaved { .. })),
+        "the checkpoint stays"
+    );
+    assert!(
+        outcome.starts_with("continue: ")
+            && outcome.ends_with("。人の決定を待ちます（決定の要求 1 件。ADR-0079 D7）"),
+        "{outcome}"
+    );
+    let last = answer_atomic_node_and_finish(&mut d, &store, &adapter, root_id, &child, &row).await;
+    assert!(
+        last.continuation.is_some(),
+        "the run after the answer continues from the checkpoint"
+    );
+}
+
+/// ADR 2026-11-21-worker-decisions-fail-closed D1・付記「atomic の規則」（不変条件 I1・I2）: 木の子の atomic の節点 k の
+/// run が `result.json` に `needed_before: [self]` の決定を書いて失敗（`Terminal::Error{retryable: true}`）で終わる。
+/// 決定が受信箱の未回答の決定に出て、k は再試行の run を起こさず、`failed` にも done にもならない（遷移 `advance` で
+/// `ready`。試行を消費しない）。止めた run の outcome は決定を待つ文になる。答えると k の次の run が最初から走って done
+/// になり、root も終わる。修正の前は失敗の run で `decisions` を読まなかったので、決定は 0 件で k は再試行の run で
+/// done になった。既存の試験は atomic の節点を done の run でしか通さないので、失敗の run の要求を検出できない。
+#[tokio::test]
+async fn decision_fail_closed_failed_atomic_node_records_decisions() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let root = root_task(dir.path());
+    let root_id = root.id;
+    store.create_task(&root, vec![]).unwrap();
+    let adapter = Arc::new(
+        DecisionAdapter::new(vec![atomic_node_plan()])
+            .declaring("k", serde_json::json!([decision_spec("vault", &["self"])]))
+            .failing("k", "the vault is not configured"),
+    );
+    let mut d = tree_dispatcher(&store, adapter.clone());
+    run_until_quiet(&mut d, &store, 1500).await;
+
+    let (child, row, outcome) = assert_atomic_node_held_by_worker_decision(&mut d, &store, root_id);
+    let events = store.events_for(child.id).unwrap();
+    assert_eq!(
+        task_reasons(&events).last().map(String::as_str),
+        Some("advance")
+    );
+    assert_eq!(store.get(child.id).unwrap().unwrap().attempts, 0);
+    assert_eq!(
+        outcome,
+        "decision: 人の決定を待ちます（決定の要求 1 件。ADR-0079 D7）"
+    );
+    let last = answer_atomic_node_and_finish(&mut d, &store, &adapter, root_id, &child, &row).await;
+    assert!(
+        last.continuation.is_none(),
+        "the run after the answer starts over"
+    );
 }

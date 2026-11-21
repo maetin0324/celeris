@@ -150,13 +150,17 @@ pub(crate) fn settle_task_run(input: TaskRunInput<'_>) -> TaskRunSettlement {
 }
 
 /// ADR-0079 D7（Phase R3a）: atomic task の run が worker の `result.json` の `decisions` を読むか（done で終わった run だけ）。
-pub(crate) fn task_reads_worker_decisions(trigger: &Trigger, end: Option<RunEnd>) -> bool {
-    matches!(trigger, Trigger::WorkerDone) && end == Some(RunEnd::Completed)
+pub(crate) fn task_reads_worker_decisions(end: Option<RunEnd>) -> bool {
+    end == Some(RunEnd::Completed)
 }
 
 /// ADR-0079 D7: `needed_before: self` の決定の要求を出した atomic task の run は、最終レビューに進めず `ready` に戻す
 /// （`advance`。答えが出るまで run を起こさない）。返すのは置き換える trigger と outcome の文。
-pub(crate) fn hold_task_for_worker_decisions(count: usize) -> (Trigger, String) {
+pub(crate) fn hold_task_for_worker_decisions(
+    _trigger: Trigger,
+    _outcome: &str,
+    count: usize,
+) -> (Trigger, String) {
     (
         Trigger::Continue {
             why: ContinueWhy::Advance,

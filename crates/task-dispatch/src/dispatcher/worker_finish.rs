@@ -679,16 +679,13 @@ impl Dispatcher {
         // ADR-0079 D7（Phase R3a）: 木の節点の atomic の run（WU を持たない）が `result.json` の `decisions` を
         // 書いた。記録し、`needed_before: self` なら最終レビューに進めず `ready` に戻して（`advance`）、答えが
         // 出るまで run を起こさない（`decision_self_hold`。答えは次の run の前置きの `answers` に入る）。
-        if current_wu.is_none() && run_settlement::task_reads_worker_decisions(&trigger, run_end) {
+        if current_wu.is_none() && run_settlement::task_reads_worker_decisions(run_end) {
             let artifacts_dir = self.task_dir(&task).map(|d| self.artifacts_dir(&task, &d));
-            if let Some(found) =
-                self.worker_decisions(&task, None, artifacts_dir.as_deref(), &run_id)?
-            {
-                if found.self_hold {
-                    (trigger, outcome_str) =
-                        run_settlement::hold_task_for_worker_decisions(found.count);
-                }
-                worker_decisions = Some(found);
+            worker_decisions =
+                self.worker_decisions(&task, None, artifacts_dir.as_deref(), &run_id)?;
+            if let Some(f) = worker_decisions.as_ref().filter(|f| f.self_hold) {
+                (trigger, outcome_str) =
+                    run_settlement::hold_task_for_worker_decisions(trigger, &outcome_str, f.count);
             }
         }
         // ADR-0054 D1（Phase 67）: CoS の対話 run（継続セッション）は、この run の usage を

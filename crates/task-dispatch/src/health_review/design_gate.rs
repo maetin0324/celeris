@@ -281,6 +281,9 @@ impl Dispatcher {
         // 付記 C2: final review と同じ task 木の token 予算の watch（`run_watch`）を run と sink に付ける。読めなければ
         // run を起こさず次の tick でやり直す（`?`。C1 の判定と同じ扱い）。
         let watch = token_budget::run_watch(self.store.as_ref(), task, None)?;
+        // ADR 2026-11-21-ancestor-objective-in-prompts D3: 対象 task の祖先の目的と受入条件の全文（final review と同じ列）。
+        // 読めなければ WorkerStarted・runs の行・quota_begin の前に返り、run を起こさない（`?`。予算の watch と同じ扱い）。
+        let lineage = crate::prompt_ancestors::lineage(self.store.as_ref(), task, Vec::new())?;
         let Some(reviewer) = self.pick_reviewer(task, &subject, Ok(watch)) else {
             tracing::debug!(task_id = %task.id, "design review deferred (no admissible reviewer route)");
             return Ok(());
@@ -347,9 +350,6 @@ impl Dispatcher {
         }
         self.quota_begin(Some(&account), reviewer.account_adapter, &run_id);
         let artifacts_dir = self.artifacts_dir(task, &dir);
-        // ADR 2026-11-21-ancestor-objective-in-prompts D3: 対象 task の祖先の目的と受入条件の全文（final review と同じ列）。
-        // 読めなければ run の起動を store の失敗にする（`?`。上の予算の watch と同じ扱い）。
-        let lineage = crate::prompt_ancestors::lineage(self.store.as_ref(), task, Vec::new())?;
         let subject_task = task.clone();
         let (task_id, end_run_id, provider) = (task.id, run_id.clone(), source.to_string());
         let tx = self.coord.completion_sender();

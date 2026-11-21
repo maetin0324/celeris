@@ -3,7 +3,7 @@
 use super::route_select::{RouteInput, RoutePick, RouteTrace};
 use super::token_budget::run_watch;
 use super::*;
-use crate::review::{RepoHealth, ReviewHumanInputs};
+use crate::review::RepoHealth;
 use crate::review_decision;
 use task_worker::check_slots::CheckLimits;
 
@@ -244,7 +244,7 @@ impl Dispatcher {
     pub(super) fn review_human_inputs(
         &self,
         task: &Task,
-    ) -> Result<ReviewHumanInputs, DispatchError> {
+    ) -> Result<crate::review::ReviewHumanInputs, DispatchError> {
         let chain = crate::prompt_ancestors::chain_to_root(self.store.as_ref(), task)?;
         let mut rows: Vec<task_core::decision::DecisionRow> = self
             .store
@@ -288,7 +288,7 @@ impl Dispatcher {
                 &self.store.events_for(t.id)?,
             )));
         }
-        Ok(ReviewHumanInputs {
+        Ok(crate::review::ReviewHumanInputs {
             decisions,
             answers,
             ancestors: crate::prompt_ancestors::ancestor_contexts(&chain),
@@ -695,7 +695,7 @@ impl Dispatcher {
         let human_inputs = if reviewer_run.is_some() {
             self.review_human_inputs(&task)?
         } else {
-            ReviewHumanInputs::default()
+            crate::review::ReviewHumanInputs::default()
         };
         // ADR 2026-10-07-worker-no-subagents-no-llm-cli D6: 対象 run の検出（subagent・別 LLM の起動）を reviewer に渡す。
         let policy_violations = if reviewer_run.is_some() {

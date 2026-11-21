@@ -5590,7 +5590,7 @@
       "description": "ワーカー → celeris のメッセージ。`done` / `error` / `question` は終端（ADR-0003 D3）。",
       "oneOf": [
         {
-          "description": "ADR-0048 D2（Phase 60a）: `msg` は従来どおり人が読む 1 行。`kind` / `tool` / `summary` /\n`detail` / `truncated` / `error` は**任意の追加**で、出さないワーカーはそのまま動く\n（`PROTOCOL_VERSION` は 4 のまま）。`detail` は 4 KiB で切る（`truncated`）。",
+          "description": "ADR-0048 D2（Phase 60a）: `msg` は従来どおり人が読む 1 行。`kind` / `tool` / `summary` /\n`detail` / `truncated` / `error` は**任意の追加**で、出さないワーカーはそのまま動く\n（`PROTOCOL_VERSION` は上げない）。`detail` は 4 KiB で切る（`truncated`）。",
           "properties": {
             "detail": {
               "type": [
@@ -5641,7 +5641,7 @@
           "type": "object"
         },
         {
-          "description": "ADR-0044 D2（Phase 53）: タスクのコメント（任意回、非終端）。`progress` と違って**残る**\n（`task_comments` に `author_kind = node` で入り、次の run の前置きにも載る）。\n**追加のみ**なので `PROTOCOL_VERSION` は 4 のまま（この行を出さないワーカーはそのまま動く）。",
+          "description": "ADR-0044 D2（Phase 53）: タスクのコメント（任意回、非終端）。`progress` と違って**残る**\n（`task_comments` に `author_kind = node` で入り、次の run の前置きにも載る）。\n**追加のみ**なので `PROTOCOL_VERSION` は上げない（この行を出さないワーカーはそのまま動く）。",
           "properties": {
             "body": {
               "type": "string"

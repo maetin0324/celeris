@@ -4,9 +4,10 @@
   隣の `worker-protocol.schema.json`（その型から `schemars` で生成。`task-worker` のテスト
   `committed_schema_matches_generated` が一致を検証し、`UPDATE_SCHEMA=1 cargo test -p task-worker` で再生成する）。
   本文書と食い違うときは型と schema が正
-- 版: `PROTOCOL_VERSION = 4`（`run.protocol` に載る）。欄・メッセージの**追加のみ**では上げない（受信側は未知の
+- 版: `PROTOCOL_VERSION = 5`（`run.protocol` に載る）。欄・メッセージの**追加のみ**では上げない（受信側は未知の
   欄を無視し、新しい欄を出さない・読まないワーカーはそのまま動く）。上げるのは既存の形を変えるときだけ。
-  ワーカーはこの値を検査しなくてよい
+  ワーカーはこの値を検査しなくてよい。v5 は `context.children` を消して `context.lineage.children` に移し、
+  `context.lineage.ancestors` を足した（[ADR 2026-11-21-ancestor-objective-in-prompts](../../agent-docs/adr/2026-11-21-ancestor-objective-in-prompts.md) D1/D2）
 - 経緯（どの Phase で何を足したか）は各 ADR を参照: 基本形 [ADR-0003](../../agent-docs/adr/0003-worker-protocol.md)、
   CLI 系アダプタの結果ファイル [ADR-0006](../../agent-docs/adr/0006-phase4-claude-code-adapter.md)、kind 別出力
   [ADR-0007](../../agent-docs/adr/0007-phase5-planner-and-reviewer.md)、役割と委譲（v2）
@@ -49,7 +50,7 @@ celeris ◀─stdout── {"type":"progress", ...}\n
 | 未知 `type` | JSON として妥当だが `WorkerMessage` に読めない行（未知の `type`・必須欄の欠落・型違い）はプロトコル違反。run を `error{retryable:false, message:"protocol violation: …"}` で打ち切り、プロセスグループを止める |
 | 非 JSON 行・空行 | 破棄し警告ログ（ワーカーの stderr は別途 `runs/<run_id>/stderr.log` へ） |
 | 行長 | 1 MiB 以下。超過はプロトコル違反（`error{retryable:false}`） |
-| バージョン | `run.protocol = 4`（`PROTOCOL_VERSION`）。既存の形を変えるときだけ上げる（追加のみでは上げない） |
+| バージョン | `run.protocol = 5`（`PROTOCOL_VERSION`）。既存の形を変えるときだけ上げる（追加のみでは上げない） |
 
 ## 3. celeris → ワーカー
 
@@ -57,7 +58,7 @@ celeris ◀─stdout── {"type":"progress", ...}\n
 
 ```json
 {"type":"run",
- "protocol":4,
+ "protocol":5,
  "task":{ "...": "task-core::Task を serde でそのまま直列化したもの（role・aggregate を含む）" },
  "workspace":"/abs/path/to/workspace/<task_id>",
  "work_dir":"/abs/path/to/workspace/<task_id>/tree",
@@ -75,7 +76,7 @@ celeris ◀─stdout── {"type":"progress", ...}\n
 
 | フィールド | 型 | 必須 | 説明 |
 |---|---|---|---|
-| `protocol` | integer | ✓ | `PROTOCOL_VERSION`（現在 `4`）。ワーカーはこの値を検査する必要はない |
+| `protocol` | integer | ✓ | `PROTOCOL_VERSION`（現在 `5`）。ワーカーはこの値を検査する必要はない |
 | `task` | object | ✓ | `Task`（id, kind, title, objective, acceptance[], inputs[], depends_on[], status, priority, worker_hint, workspace, budget, attempts, `role`, `aggregate`, …）。`task.role`（`Option<string>`）はタスクの役割名、`task.aggregate`（`bool`。既定 false）は集約 run の親かどうか（ADR-0016 D1/D3） |
 | `workspace` | string | ✓ | 絶対パス。`artifact.path` の基準で、`runs/` `inputs/` `artifacts/` の親。`work_dir` が無ければワーカーの cwd でもある |
 | `work_dir` | string | –（省略可。Phase 49, ADR-0041 D1） | 絶対パス。ワーカーの cwd。タスクごとの `git worktree`（`<workspace>/tree`。ブランチ `celeris/<task_id>`）を切った run にだけ載る。このとき成果物は作業ツリーの**外**にあるので、前置きの成果物のパスは絶対パスになる |
@@ -186,7 +187,7 @@ Phase 53（ADR-0044 D2）: `context.comments` か `context.interrupt` がある�
 （`docs/api/v1/event.schema.json`。**追加のみ**なので導入前のイベントもそのまま読める）。無出力タイムアウトの
 カウンタをリセットする。
 
-**`PROTOCOL_VERSION` は 4 のまま**（追加のみ。この 6 つを出さないワーカーも、読まない celeris も従来どおり動く）。
+**`PROTOCOL_VERSION` は上げない**（追加のみ。この 6 つを出さないワーカーも、読まない celeris も従来どおり動く）。
 
 **アダプタごとの写像**（ここだけがアダプタ固有。ADR-0048 D2）:
 
@@ -408,7 +409,7 @@ celeris 側の扱い（ADR-0016 D2, 実装メモ M2/M6/M7）:
 - 空白だけの本文・20,000 文字超は捨てる（警告だけ。run は続く）。
 - 前置きには「短い進捗や判断の記録はコメントに書け」と書いてある（`context.comments_enabled`）。
   長い成果は成果物（`artifact`）に書くこと。
-- **追加のみ**なので `PROTOCOL_VERSION` は 4 のまま。この行を出さない既存のワーカーは何も変わらない。
+- **追加のみ**なので `PROTOCOL_VERSION` は上げない。この行を出さない既存のワーカーは何も変わらない。
 
 ### 4.8 `wait`（終端。ADR-0090 D1）
 
@@ -509,7 +510,7 @@ checkpoint は [`checkpoint.schema.json`](checkpoint.schema.json)、計画は [`
 stdin:
 
 ```json
-{"type":"run","protocol":4,"task":{"id":"01J8…","kind":"execute","title":"add README example","acceptance":[{"text":"cargo test exits 0","check":{"type":"command","cmd":"cargo test","expect_exit":0}}}],"budget":{"max_turns":20,"max_wall_secs":600,"max_retries":1},"attempts":0},"workspace":"/srv/ws/01J8…","artifacts_dir":"/srv/ws/01J8…/artifacts","context":{"prior_review":[],"inputs":[]}}
+{"type":"run","protocol":5,"task":{"id":"01J8…","kind":"execute","title":"add README example","acceptance":[{"text":"cargo test exits 0","check":{"type":"command","cmd":"cargo test","expect_exit":0}}}],"budget":{"max_turns":20,"max_wall_secs":600,"max_retries":1},"attempts":0},"workspace":"/srv/ws/01J8…","artifacts_dir":"/srv/ws/01J8…/artifacts","context":{"prior_review":[],"inputs":[]}}
 ```
 
 stdout:
@@ -612,7 +613,7 @@ run 終了時にそのファイルへフォールバックし、正しい置き�
   `done` を返しながら `"bad_news"` を名乗っても悪い知らせにはならない。
 - 効くのは「レビューを通って `Status::Done` になった」ときの報告 1 件だけ。`assignee` の無いタスク・
   対話用タスクは報告を作らないので、宣言も無視される。
-- `PROTOCOL_VERSION` は 4 のまま（追加のみで、既存のワーカーは何も変えなくてよい）。
+- `PROTOCOL_VERSION` は上げない（追加のみで、既存のワーカーは何も変えなくてよい）。
 
 判定順序（ADR-0006 D4）: stream-json の最後の `{"type":"result",...}` が `is_error:true` か
 `subtype != "success"` なら、結果ファイルの内容によらず `error{retryable:true}` とする（自己申告の

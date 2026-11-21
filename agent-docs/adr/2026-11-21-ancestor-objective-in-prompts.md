@@ -56,9 +56,23 @@ prompt-audit は、修正後の release（2026-11-19T15:39Z 以降の昇格）�
   - final review: `review_human_inputs` が D1 と同じ列から人の決定・回答と祖先を 1 つの `review::ReviewHumanInputs { decisions, answers,
     ancestors }` で返し、`ReviewExtras.human_inputs`（従来の `decisions`・`answers` の 2 欄を置き換える）→ `ReviewHumanContext.inputs` →
     `run_reviewer_inner` の `RunContext.lineage`（祖先だけ）に写す。人の決定・回答は従来どおり `ReviewRequest` に載る。
-  - 設計 review: `start_design_review` が `prompt_ancestors::lineage` で組み、`run_design_reviewer` の `RunContext.lineage` に渡す。読めなければ
-    `?` で store の失敗にする（同じ関数の予算の watch と同じ扱い）。
+  - 設計 review: `start_design_review` が `prompt_ancestors::lineage` で組み、`run_design_reviewer` の `RunContext.lineage` に渡す。読み取りは
+    予算の watch（`token_budget::run_watch` の `?`）の直後、`pick_reviewer` と `Event::WorkerStarted` の append より前に置く。読めなければ
+    `?` で返し、`WorkerStarted`・runs の行（`run_index_start`）・`quota_begin` のどれも作らず、run を起こさない（次の tick でやり直す）。
+- D3 の付記（読み取りの位置。3 つの経路）:
+  - final review（`Dispatcher::spawn_review`）: `review_human_inputs(&task)?` は `Event::WorkerStarted`（role reviewer）の append より前に
+    ある。読めなければ WorkerStarted を残さずに返る（base と同じ位置。この ADR は位置を変えない）。
+  - 設計 review: 上のとおり WorkerStarted より前（final review と同じ扱い）。
+  - worker・planner・WU の run（`dispatch_run`）: 祖先は `run_extras(...)?` の中で読む。`run_extras` は `Event::WorkerStarted` の append の
+    後に呼ばれ、base でも同じ所で `?` で store を読む（`store.children`・`events_for`・`comments_for`・`get` など）。祖先の読み取りはこの既存の
+    扱いに加わるだけで、位置と失敗時の挙動（WorkerStarted の後の store の失敗）を変えない。
   - `pick_reviewer` と `spawn_review` は変えない（repo health の関数の行の上限 200 を base で超えている関数を伸ばさない）。
+- D5: wire の版。D1 で `context.children` を消し、D2 で `objective_excerpt` を消して既存の形を変えるので、`PROTOCOL_VERSION`
+  （`crates/task-worker/src/protocol.rs`）を 4 から 5 に上げる（`docs/protocol/worker-protocol.md` の版の行・例、schema も合わせる）。
+  daemon とワーカーの production のコードは版を数値で比べない（`git grep -n PROTOCOL_VERSION` で代入だけ）。版を 4 と固定していた
+  試験の行（`subprocess/tests.rs` の comment 行の試験の末尾の `assert_eq!(PROTOCOL_VERSION, 4)`）は消す。その試験が守る comment 行の
+  契約（非終端で sink の `comment` に渡る）は残りの assert が守る。`tests/e2e/tests/scenarios.rs` の `"protocol":4` の literal も 5 に
+  直す必要がある（release gate の全体の試験だけが走らせる）。
 - D4: 計画の無い root の task（祖先の無い task）の prompt は 1 byte も変えない。`ancestors_section` は空の祖先で空文字列を返し、
   木の planner の祖先の行の変更は木の祖先を持つ task にしか出ない。
 

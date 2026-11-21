@@ -4,7 +4,7 @@
 //! 入力の [`DesignReviewRequest`] は 2 か所で使う。採用前の計画の設計 review の run は `context.review.design`、
 //! final review の run は差分の設計の節として `context.review.diff_design`。出力はどちらも `review.json` の
 //! `design`（[`DesignVerdictOut`]）。どれも追加の欄で、省略した JSON は従来の review と同じに読める
-//! （`PROTOCOL_VERSION` は 4 のまま）。finding の種別は final review の health verdict と同じ固定 7 種（[`HealthFindingOut`]）。
+//! （`PROTOCOL_VERSION` は上げない）。finding の種別は final review の health verdict と同じ固定 7 種（[`HealthFindingOut`]）。
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

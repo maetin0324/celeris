@@ -28,8 +28,11 @@ use task_core::{
 /// `context.organization[].skills` / `.harnesses` を追加（版数は据え置き。追加だけなので v4 のまま）。
 /// Phase 67（ADR-0054 D1）: `context.session`（継続セッションの手がかり）を追加（版数は据え置き）。
 /// ADR 2026-10-06 cos-chat-run-dispatch: `context.cos_chat`（CoS chat run の入力）を追加（版数は据え置き）。
-/// 全て追加のみで v1〜v3 のワーカーはそのまま動く。
-pub const PROTOCOL_VERSION: u32 = 4;
+/// v4 までの上の変更は全て追加のみで、v1〜v3 のワーカーはそのまま動いた。
+/// v5（ADR 2026-11-21-ancestor-objective-in-prompts D1/D2）: `context.children` を消して `context.lineage.children` に移し、
+/// `context.lineage.ancestors` を足した。木の planner の祖先の `objective_excerpt` を消した。既存の形を変えたので版を上げる。
+/// daemon とワーカーの production のコードは版を数値で比べない（ワーカーはこの値を検査しない）。
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// 直前のレビュー結果（`context.prior_review[]`）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1255,7 +1258,7 @@ pub struct Evidence {
 pub enum WorkerMessage {
     /// ADR-0048 D2（Phase 60a）: `msg` は従来どおり人が読む 1 行。`kind` / `tool` / `summary` /
     /// `detail` / `truncated` / `error` は**任意の追加**で、出さないワーカーはそのまま動く
-    /// （`PROTOCOL_VERSION` は 4 のまま）。`detail` は 4 KiB で切る（`truncated`）。
+    /// （`PROTOCOL_VERSION` は上げない）。`detail` は 4 KiB で切る（`truncated`）。
     Progress {
         msg: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1273,7 +1276,7 @@ pub enum WorkerMessage {
     },
     /// ADR-0044 D2（Phase 53）: タスクのコメント（任意回、非終端）。`progress` と違って**残る**
     /// （`task_comments` に `author_kind = node` で入り、次の run の前置きにも載る）。
-    /// **追加のみ**なので `PROTOCOL_VERSION` は 4 のまま（この行を出さないワーカーはそのまま動く）。
+    /// **追加のみ**なので `PROTOCOL_VERSION` は上げない（この行を出さないワーカーはそのまま動く）。
     Comment { body: String },
     /// ADR-0016 D2: 実行中の委譲の提案（任意回、非終端）。celeris は検証を通ったものだけ子タスクとして挿入し、
     /// 拒否した提案は理由を `WorkerProgress` に残す。run は失敗しない。

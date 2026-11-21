@@ -2066,7 +2066,7 @@ fn has_aggregate_transition(events: &[(u64, Event)]) -> bool {
 }
 
 /// ADR-0021 D1: イベント列に子の失敗による遷移（`Transitioned{reason: "child_failed"}`）があるか。
-/// 以後の run は「子が失敗した後のやり直し」なので、子の結果（`context.children`）を渡す。
+/// 以後の run は「子が失敗した後のやり直し」なので、子の結果（`context.lineage.children`）を渡す。
 fn has_child_failed_transition(events: &[(u64, Event)]) -> bool {
     events
         .iter()

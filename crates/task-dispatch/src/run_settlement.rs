@@ -38,7 +38,7 @@ pub(crate) use crate::execution_scheduler::ContinuationInputs;
 mod task_run;
 pub(crate) use task_run::{
     PhaseStep, TaskRunInput, hold_task_for_worker_decisions, phase_step_after_write,
-    settle_task_run, task_checkpoint_end, task_records_worker_decisions, waits_for_decisions,
+    settle_task_run, task_checkpoint_end, task_records_decisions, waits_for_decisions,
 };
 mod work_unit;
 pub(crate) use work_unit::{

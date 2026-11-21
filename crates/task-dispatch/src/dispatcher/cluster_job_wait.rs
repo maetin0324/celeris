@@ -20,6 +20,7 @@ use time::OffsetDateTime;
 
 use super::{DispatchError, Dispatcher, ops_to_store, rfc3339};
 use crate::cluster_runtime::{ClusterJobPoller, ClusterRuntime, JobPollSlot};
+use task_ops::decision::job_end_target;
 
 fn parse_ts(s: &str) -> Option<OffsetDateTime> {
     OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()
@@ -427,12 +428,9 @@ impl Dispatcher {
         }) else {
             return Ok(None);
         };
-        let (to, blocked_reason, reason) = task_ops::decision::job_end_target(
-            self.store.as_ref(),
-            &u,
-            (to, blocked_reason, reason),
-        )
-        .map_err(ops_to_store)?;
+        let (to, blocked_reason, reason) =
+            job_end_target(self.store.as_ref(), &u, (to, blocked_reason, reason))
+                .map_err(ops_to_store)?;
         let mut row = u.clone();
         row.status = to;
         row.blocked_reason = blocked_reason;

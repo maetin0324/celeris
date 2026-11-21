@@ -678,8 +678,7 @@ impl Dispatcher {
         // ADR-0079 D7・ADR 2026-11-21-worker-decisions-fail-closed 付記「atomic の規則」: 木の節点の atomic の run の
         // `decisions` を記録し、`needed_before: self` なら trigger を `hold_task_for_worker_decisions` で替え、答えまで
         // run を起こさない（`decision_self_hold`。答えは次の run の前置きの `answers` に入る）。
-        if current_wu.is_none() && run_settlement::task_records_worker_decisions(run_end, &trigger)
-        {
+        if current_wu.is_none() && run_settlement::task_records_decisions(run_end, &trigger) {
             worker_decisions = self.worker_decisions(&task, None, &run_id)?;
             if let Some(f) = worker_decisions.as_ref().filter(|f| f.self_hold) {
                 (trigger, outcome_str) =

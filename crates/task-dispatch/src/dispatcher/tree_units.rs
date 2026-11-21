@@ -373,11 +373,7 @@ impl Dispatcher {
         if !limits.enabled || !self.is_tree_node(task)? {
             return Ok(None);
         }
-        let dir = match wu {
-            Some(_) => self.work_unit_checkpoint_site(task, wu).0,
-            None => self.task_dir(task).map(|d| self.artifacts_dir(task, &d)),
-        };
-        let Some(dir) = dir else {
+        let Some(dir) = self.work_unit_checkpoint_site(task, wu).0 else {
             return Ok(None);
         };
         let Ok(text) = std::fs::read_to_string(dir.join("result.json")) else {

@@ -3,7 +3,7 @@
 use super::route_select::{RouteInput, RoutePick, RouteTrace};
 use super::token_budget::run_watch;
 use super::*;
-use crate::review::RepoHealth;
+use crate::review::{RepoHealth, artifact_candidates};
 use crate::review_decision;
 use task_worker::check_slots::CheckLimits;
 
@@ -813,7 +813,7 @@ impl Dispatcher {
             .map(|(spec, path, mode)| self.cluster.remote_ssh_settings(spec, path, task.id, *mode));
         let cluster_id = cluster.as_ref().map(|(spec, ..)| spec.id.clone());
         let events = self.store.events_for(task_id)?;
-        let produced = artifacts_for_run(&events, &run_id);
+        let produced = artifact_candidates(&events, &self.store.work_units_for(task_id)?, &run_id);
         // ADR-0014 D1: Reviewer run も対象タスクに WorkerStarted（role: reviewer）を残す（アカウント別の集計に含めるため）。
         if let Some((route_input, pick, trace, review_run_id, adapter_id)) = &review_selection {
             let model = pick.candidate.model.to_string();

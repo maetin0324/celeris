@@ -894,6 +894,180 @@ async fn rejected_worker_decision_reaches_the_inbox_and_holds_the_leaf() {
     assert_replay_is_clean(&store);
 }
 
+/// ADR 2026-11-21-worker-decisions-fail-closed D2（不変条件 I1・I2・I4）: leaf が `result.json` の `decisions` に
+/// 配列でなく決定 1 件の形の object を書く。要求は受け付けられない（1 件の配列に読み替えない）が、黙って進まない:
+/// decisions に `rejected` の行（open・origin worker・`needed_before = [leaf]`、問いに `#field` と型の誤りの理由）が
+/// できて受信箱の未回答の決定に出て、leaf は done にならず `blocked(decision)`、integrate も root も進まない。答えると
+/// leaf が走り直し、木が終わる。修正の前は `worker_decisions_from_json` が配列でない欄を空にしたので、決定は 0 件で
+/// leaf は done になった。既存の `rejected_worker_decision_reaches_the_inbox_and_holds_the_leaf`・
+/// `worker_declared_decisions` は `decisions` に配列しか渡さないので、これを検出できない。
+#[tokio::test]
+async fn decision_fail_closed_non_array_decisions_hold_the_leaf() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let root = root_task(dir.path());
+    let root_id = root.id;
+    store.create_task(&root, vec![]).unwrap();
+    let plan = v3_plan(
+        vec![stage("s1", false)],
+        vec![leaf("a", "s1", &[]), leaf("b", "s1", &[])],
+    );
+    // 配列でない: 決定 1 件の形の object そのもの。
+    let adapter = Arc::new(
+        DecisionAdapter::new(vec![plan]).declaring("a", decision_spec("trim", &["self"])),
+    );
+    let mut d = tree_dispatcher(&store, adapter.clone());
+    run_until_quiet(&mut d, &store, 1500).await;
+
+    // run の結果: leaf は done にならず止まり、integrate も root も進まない。
+    let units = store.work_units_for(root_id).unwrap();
+    assert!(blocked_by_decision(&units, "a"), "{units:?}");
+    assert_eq!(unit(&units, "b").status, task_core::WorkUnitStatus::Done);
+    assert_ne!(
+        unit(&units, "integrate-s1").status,
+        task_core::WorkUnitStatus::Done
+    );
+    assert_eq!(store.get(root_id).unwrap().unwrap().status, Status::Ready);
+    // decisions の行: 型の誤りをまとめた 1 件だけ（object の中の trim は受け付けない）。
+    let rows = store.decisions_list(Some(root_id)).unwrap();
+    assert_eq!(
+        rows.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(),
+        vec![task_core::decision::REJECTED_KEY]
+    );
+    let row = &rows[0];
+    assert_eq!(row.status, task_core::DecisionStatus::Open);
+    assert_eq!(row.task_id, root_id);
+    assert_eq!(row.needed_before, vec!["a".to_string()]);
+    assert_eq!(
+        row.request.raised_by.origin,
+        task_core::DecisionOrigin::Worker
+    );
+    assert_eq!(
+        row.request.raised_by.run_id.as_deref(),
+        unit(&units, "a").last_run_id.as_deref()
+    );
+    assert_eq!(row.request.cost_of_reversal, task_core::CostOfReversal::High);
+    for needle in [
+        "決定の要求 1 件",
+        "1) #field trim question trim",
+        "decisions must be an array of decision objects (got object)",
+    ] {
+        assert!(
+            row.request.question.contains(needle),
+            "{needle:?} in {}",
+            row.request.question
+        );
+    }
+    // 受信箱: 未回答の決定（受信箱・通知の対象）に出る。
+    let inbox = task_ops::decision::open_rows(store.as_ref()).unwrap();
+    assert_eq!(
+        inbox.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+        vec![row.id.as_str()]
+    );
+    // 進行の 1 行（理由）も残る。
+    let events = store.events_for(root_id).unwrap();
+    assert!(events.iter().any(|(_, e)| matches!(
+        e,
+        Event::WorkerProgress { msg, .. } if msg.contains("worker の決定の要求を記録できませんでした")
+            && msg.contains("(got object)")
+    )));
+    assert_eq!(unit_reasons(&events, "a"), vec!["dispatch", "decision"]);
+    no_questions(&store, root_id);
+
+    // 答える → a が走り直し（2 回目の run は `decisions` を書かない）、木が終わる。
+    let outcome = answer(
+        &store,
+        &row.id,
+        Some(task_core::decision::BUNDLE_OPTION_RECOMMENDED),
+        None,
+    );
+    assert_eq!(outcome.resumed, vec!["a".to_string()]);
+    let report = run_until_idle(&mut d, 1500).await;
+    assert!(report.idle, "{report:?}");
+    let units = store.work_units_for(root_id).unwrap();
+    assert_eq!(unit(&units, "a").status, task_core::WorkUnitStatus::Done);
+    assert_eq!(unit(&units, "a").runs, 2);
+    assert_eq!(
+        unit(&units, "integrate-s1").status,
+        task_core::WorkUnitStatus::Done
+    );
+    assert_eq!(store.get(root_id).unwrap().unwrap().status, Status::Done);
+    assert_replay_is_clean(&store);
+}
+
+/// ADR 2026-11-21-worker-decisions-fail-closed D2（不変条件 I1・I2）: 木の子の atomic の節点（WU の無い run）が
+/// `decisions` に文字列を書く。`needed_before = [self]` の `rejected` の行（open・origin worker・節点の task）が
+/// でき、受信箱の未回答の決定に出て、節点は答えるまで done にならない（`ready` のまま run 1 本）。答えると節点が
+/// 走り直して done になり、root も終わる。修正の前は配列でない欄が空になり、決定は 0 件で節点は 1 run で done に
+/// なった。既存の試験の atomic の場面（`worker_declared_decisions` の子 k）は配列しか渡さないので検出できない。
+#[tokio::test]
+async fn decision_fail_closed_non_array_decisions_hold_the_atomic_node() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let root = root_task(dir.path());
+    let root_id = root.id;
+    store.create_task(&root, vec![]).unwrap();
+    let plan = v3_plan(
+        vec![stage("s1", false)],
+        vec![leaf("a", "s1", &[]), task_unit("k", "s1", &[], "true")],
+    );
+    let adapter = Arc::new(
+        DecisionAdapter::new(vec![plan])
+            .declaring("k", serde_json::json!("which vault should the node use?")),
+    );
+    let mut d = tree_dispatcher(&store, adapter.clone());
+    run_until_quiet(&mut d, &store, 1500).await;
+
+    // 節点は止まる（ready、run 1 本）。root は終わらない。
+    let child = child_named(&store, root_id, "k").expect("child k");
+    assert_eq!(store.runs_for_task(child.id).unwrap().len(), 1);
+    assert_eq!(store.get(child.id).unwrap().unwrap().status, Status::Ready);
+    assert_ne!(store.get(root_id).unwrap().unwrap().status, Status::Done);
+    let rows = store.decisions_list(Some(root_id)).unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|r| (r.task_id, r.key.as_str()))
+            .collect::<Vec<_>>(),
+        vec![(child.id, task_core::decision::REJECTED_KEY)]
+    );
+    let row = &rows[0];
+    assert_eq!(row.status, task_core::DecisionStatus::Open);
+    assert_eq!(row.needed_before, vec!["self".to_string()]);
+    assert_eq!(
+        row.request.raised_by.origin,
+        task_core::DecisionOrigin::Worker
+    );
+    assert!(
+        row.request
+            .question
+            .contains("decisions must be an array of decision objects (got string)"),
+        "{}",
+        row.request.question
+    );
+    let inbox = task_ops::decision::open_rows(store.as_ref()).unwrap();
+    assert_eq!(
+        inbox.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+        vec![row.id.as_str()]
+    );
+    no_questions(&store, child.id);
+
+    // 答える → 節点が走り直して done、root も終わる。
+    answer(
+        &store,
+        &row.id,
+        Some(task_core::decision::BUNDLE_OPTION_RECOMMENDED),
+        None,
+    );
+    let report = run_until_idle(&mut d, 1500).await;
+    assert!(report.idle, "{report:?}");
+    assert_eq!(store.runs_for_task(child.id).unwrap().len(), 2);
+    assert_eq!(store.get(child.id).unwrap().unwrap().status, Status::Done);
+    let units = store.work_units_for(root_id).unwrap();
+    assert_eq!(unit(&units, "k").status, task_core::WorkUnitStatus::Done);
+    assert_eq!(store.get(root_id).unwrap().unwrap().status, Status::Done);
+    assert_replay_is_clean(&store);
+}
+
 /// ADR-0079 D15: `[execution.tree] enabled = false`（既定）では何も変わらない: 木でない task の worker が
 /// `result.json` に `decisions` を書いても記録されず止まらず、前置きに決定の要求の節も出ない。
 #[tokio::test]

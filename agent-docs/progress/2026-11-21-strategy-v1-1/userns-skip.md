@@ -6,10 +6,16 @@ updated: 2026-11-21
 ---
 # userns の 9 件を env 無しでは skip と数え、env 有りでは本体を実行する形に直す
 
-完了日: （未完了。before の段まで）
+完了日: （未完了。before・impl の段まで。verify の段が完了にする）
 
 結論: 対象の 9 件は、userns の env が無い今の build で nextest に `9 passed` と数えられる（exit 0）。
 試験の本体は 1 行も走らず、`return` で抜けて pass になっている。この段（before）はコードを変えていない。
+
+impl の段の結論: build script が env を読んで cfg `celeris_userns_tests` を出し、9 件は env 無しの build で harness の ignored に
+なった。`check-skip.sh` は exit 0（9 件が list で ignored、run で SKIP、PASS 0 件）。env 有り（`CELERIS_USERNS_TESTS=1`）の試し実行では
+task-worker の 7 件が本体に入り（`USERNS-BODY` の行）、試験 1 だけが深い `TMPDIR` で socket の path が長すぎて fail したので、
+runtime dir を短い一時 dir に移して直した（assert は変えていない）。設計は
+[ADR 2026-11-21-userns-tests-explicit-skip](../../adr/2026-11-21-userns-tests-explicit-skip.md)。
 
 ## 対象の 9 件（return の行は提出時の HEAD で確認）
 
@@ -70,11 +76,65 @@ env -u CELERIS_USERNS_TESTS -u CELERIS_ISOLATION_TESTS -u CELERIS_DB_GUARD_TESTS
 - 出力の file: `agent-docs/progress/2026-11-21-strategy-v1-1/userns-skip/before-nextest.txt`（repo の path は `<repo>`、target は `<target>`、
   nextest の run ID は `<run-id>` に置き換えた）。
 
+## impl の段（build script の cfg と ignored）
+
+### 変えたもの
+- `crates/task-worker/userns_tests_cfg.rs`（新規。build script 専用）: env を読む規則の唯一の置き場所。ADR-0126 B3 の優先順位
+  （`CELERIS_ISOLATION_TESTS=skip` → 無効、`CELERIS_USERNS_TESTS=1`・`CELERIS_ISOLATION_TESTS=require`・crate 固有の `<var>=require`
+  → 有効、無ければ無効）で、読む 3 変数の `cargo:rerun-if-env-changed`、`cargo:rerun-if-changed`（`build.rs` と規則の file）、
+  `cargo:rustc-check-cfg=cfg(celeris_userns_tests)`、有効なら `cargo:rustc-cfg=celeris_userns_tests` を出す。
+- `crates/task-worker/build.rs`（新規。固有の変数 `CELERIS_DB_GUARD_TESTS`）と `crates/celeris-credentiald/build.rs`（新規。固有の変数
+  `CELERIS_LAUNCHER_TESTS`）: `#[path]` で規則の file を読み `emit` を呼ぶだけ。
+- `crates/task-worker/src/db_guard_tests.rs`: 7 件の先頭の return を消し、`#[cfg_attr(not(celeris_userns_tests), ignore = "…")]` を付けた。
+  `userns_available()`（bool を返す）を `assert_userns_available()`（`unshare -Ur true` の assert は今の文言のまま。通ったら stderr に
+  `USERNS-BODY <試験名>: unshare -Ur true ok`）に置き換えた。試験 4 は今どおり `unshare(1)` の存在の assert だけで、その後に
+  `USERNS-BODY <試験名>: unshare(1) present` を出す。試験 1 は socket を置く runtime dir を `test_support::short_tempdir()` の下に移した
+  （下の「env 有りの試し実行」）。
+- `crates/task-worker/src/test_support.rs`: `skip_unless_userns_tests` は env を読まず `cfg!(celeris_userns_tests)` から導く
+  （lib の他の呼び出し元 `browser_tests.rs` 8 件・`browser_launcher/userns.rs` 1 件は return の形のまま。提案 1）。
+- `crates/celeris-credentiald/tests/injection_peer_uid.rs`: `skip_by_default()` を消した。試験 9 は `cfg_attr` の ignored にした。
+  試験 8 `inner_peer_uid_probe` は常に `#[ignore = "helper: …"]` にし、socket の env が無い直接の実行は panic で fail する。
+  `probe_as` は子を `--ignored --exact inner_peer_uid_probe` で起こす。`missing()` の strict 判定 `require()`（`CELERIS_LAUNCHER_TESTS=require`）
+  は「本体に入った後に環境が無ければ fail にするか」の規則なので試験の中に残した（ADR の「残る穴」）。
+
+### env 無しの検査（check-skip.sh）
+`sh agent-docs/progress/2026-11-21-strategy-v1-1/userns-skip/check-skip.sh`（repo の root で引数なし。dash で動く。JSON は `python3 -I` で読む）:
+1. 4 変数を `env -u` した上で `cargo nextest list -p task-worker --lib -p celeris-credentiald --test injection_peer_uid --message-format json`
+   を取り、9 件が在って `ignored: true` か。
+2. 同じ env で 9 件の filterset を `cargo nextest run --status-level all --final-status-level all --no-tests=warn` し、9 件がどれも
+   `SKIP` の行だけに出て `PASS`・`FAIL` の行に出ないか。
+結果（提出時の HEAD で実行）: exit 0。`list: ignored` 9 行、`run: SKIP` 9 行、`Summary [...] 0 tests run: 0 passed, 1234 skipped`。
+
+負の確認: 2 の判定の python を変更前の出力 `userns-skip/before-nextest.txt` に当てると、9 件すべてが
+`-> ['PASS'] (want only SKIP)` になり exit 1（変更前の形なら check-skip.sh は落ちる）。
+
+### env 有りの試し実行（impl の段の確認。正式の記録は verify の段）
+command: `env -u CELERIS_ISOLATION_TESTS -u CELERIS_DB_GUARD_TESTS -u CELERIS_LAUNCHER_TESTS CELERIS_USERNS_TESTS=1 cargo nextest run
+-p task-worker --lib -p celeris-credentiald --test injection_peer_uid --no-capture --status-level all --run-ignored all -E '<9 件の filterset>'`
+（filterset は `before-nextest.txt` の 1 行目と同じ）。試験 1 を直す前の結果: `9 tests run: 7 passed, 2 failed`。
+- 試験 2〜7: `USERNS-BODY db_guard::tests::<名前>: unshare -Ur true ok`（試験 4 は `unshare(1) present`）の後に PASS。試験 7 は
+  `skip: no ssh` を出さずに本体の `ssh -G` まで通った。
+- 試験 1: `USERNS-BODY` の後、`UnixListener::bind` が `path must be shorter than SUN_LEN` で FAIL。この run の `TMPDIR` は 93 文字で、
+  `tempfile::tempdir()` の下の `runtime/systemd/private` が sun_path（108 byte）を超える。今までは return して pass だったので
+  見えていなかった。runtime dir を `test_support::short_tempdir()`（`TMPDIR` が 40 文字を超えれば `/tmp`）に移した後、同じ env で
+  この 1 件を走らせて `USERNS-BODY …: unshare -Ur true ok` と `1 test run: 1 passed`。
+- 試験 9: 本体に入り、`SKIP: (not passed) cannot run a process as celeris-browser: \`sudo -n -u celeris-browser true\` exit=Some(1):
+  sudo: /etc/sudo.conf is owned by uid 65534, should be 0` を出して `missing()` で return し PASS（2 段目の skip。この run の container では
+  sudo が使えない）。DAC 層・broker 層の本体は未確認。
+- 試験 8: `--run-ignored all` で直接走り、socket の env が無いので panic して FAIL（設計どおり。ADR の D2）。verify の段で
+  `--run-ignored all` を付けるなら、この FAIL は「直接の実行を拒む」挙動の記録になる。
+
 ## LoC 差分
-- この段（before）: コードの差分は 0 行。足したのは `agent-docs/progress/2026-11-21-strategy-v1-1/` の下の文書・出力・走査の台本だけ。
-- task 全体の LoC 差分は impl・verify の段で書く。
+- before の段: コードの差分は 0 行。足したのは `agent-docs/progress/2026-11-21-strategy-v1-1/` の下の文書・出力・走査の台本だけ。
+- impl の段（`git diff --numstat "$CELERIS_WU_BASE" -- crates/task-worker crates/celeris-credentiald`、6 file、+141 −70）:
+  `crates/celeris-credentiald/build.rs` +12 −0、`crates/celeris-credentiald/tests/injection_peer_uid.rs` +21 −28、
+  `crates/task-worker/build.rs` +8 −0、`crates/task-worker/src/db_guard_tests.rs` +53 −27、`crates/task-worker/src/test_support.rs` +8 −15、
+  `crates/task-worker/userns_tests_cfg.rs` +39 −0。production のコード（lib の `#[cfg(test)]` の外）は変えていない（build script 2 つと規則の file を足しただけ）。
+- task 全体の LoC 差分（`git merge-base HEAD main` 基準）は verify の段で書く。
 
 ## 変更
+- `strategy-v1 1 userns-skip impl: build script の cfg で 9 件を env 無しでは ignored にする` — 上の「impl の段」の 6 file、ADR、
+  `userns-skip/check-skip.sh`、この md。
 - `strategy-v1 1 userns-skip before: 9 件の return の行と env 無しの nextest の出力を記録する` — この md、`userns-skip/before-nextest.txt`、
   `userns-skip/scan-env-return.py`・`userns-skip/scan-env-return.tsv` を足した。
 
@@ -85,8 +145,9 @@ env -u CELERIS_USERNS_TESTS -u CELERIS_ISOLATION_TESTS -u CELERIS_DB_GUARD_TESTS
 - 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` → この進捗 dir の下の path だけ
 
 ## 未解決
-- impl・verify の段は未着手（check-skip.sh・build.rs の cfg・ADR・`CELERIS_USERNS_TESTS=1` での本体の到達の記録）。
-- 試験 9 は sudo と user `celeris-browser` が要る。この run の環境で sudo が使えるかは未確認（verify の段で確かめる）。
+- verify の段は未着手（`CELERIS_USERNS_TESTS=1` での 9 件の正式の記録、`CELERIS_ISOLATION_TESTS=skip` との優先順位の記録、status: done）。
+- 試験 9 は sudo と user `celeris-browser`（uid 995、この host に在る）が要る。impl の段の run の container では `sudo -n` が
+  `/etc/sudo.conf is owned by uid 65534` で使えず、DAC 層・broker 層の本体は未確認。release gate の host で人が確かめる手順は verify の段で書く。
 
 ## 提案
 
@@ -135,21 +196,40 @@ helper を経由して別の fn の中で return する形と、vendor/ は数�
 **E. env ではなく道具・環境の probe の失敗で return するもの（env は fail にするかだけを決める）: 2 件**
 - `crates/campaign/tests/a_arm_hardening.rs:400`（`bwrap_usable()`）、`crates/task-worker/src/browser_post_login_tests.rs:1076`（`agent_browser_binary()`）
 
+**F. impl の段で見つけた追加（走査は `crates/` だけだった）: 1 件**
+- `tests/e2e/tests/worker_db_read_only.rs:148`（`a_codex_worker_run_cannot_write_the_daemon_db_but_can_read_it_with_celerisctl`）:
+  `CELERIS_USERNS_TESTS` が `1` でなければ return（B と同じ自前の規則）。
+
 提案: A（28 件）と B（7 件）は対象の 9 件と同じ「env 無しで pass と数える」問題を持つ。impl の段で作る build script の cfg と ignored の仕組みを、
 別の task で crate ごとに広げる（task-worker の tests/・task-api・campaign）。C は opt-in の入力なので、同じ仕組みで ignored にするかを別に決める。
 D は子 process の入口なので、ignored にするなら親の起動に `--ignored` を足す（下の 2）。
 
 ### 2. 子 process の入口と ignored の組み合わせ
-試験 8 のような子の入口を `#[ignore]` にすると、`--exact <name>` で起こした子は走らない。impl の段では、子を起こす側に `--ignored` を足すか、
-子の入口を ignored の対象から外すかを決め、ADR に書く。
+試験 8 のような子の入口を `#[ignore]` にすると、`--exact <name>` で起こした子は走らない。impl の段では、子の入口を常に ignored にし、
+子を起こす側（`probe_as`）に `--ignored` を足した。env の無い直接の実行は panic で fail する（ADR の D2）。D の 20 件に同じ形を広げるかは
+提案 1 の task で決める。
 
 ### 3. env を読む規則の写しが 5 つある
 `task-worker/src/test_support.rs:24`、`task-worker/tests/userns_gate/mod.rs:11`、`celeris-credentiald/tests/injection_peer_uid.rs:53`、
 campaign の各 file の直書き、`task-api/tests/common/mod.rs:827`。優先順位と受け付ける値（`CELERIS_DB_GUARD_TESTS`・`CELERIS_LAUNCHER_TESTS`・`require`）が少しずつ違う。
-この task の対象の 2 crate では build script の 1 か所に寄せる。残りは提案 1 の task で同じ所に寄せる。
+この task の対象の 2 crate では build script の 1 か所（`crates/task-worker/userns_tests_cfg.rs`）に寄せた。残り
+（`task-worker/tests/userns_gate/mod.rs`・task-api・campaign・e2e）は提案 1 の task で同じ file に寄せる（各 crate に `build.rs` を足し、
+`#[path]` で読む）。
 
 ## 検査
-提出時の HEAD で実行:
+### impl の段（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+- `sh agent-docs/progress/2026-11-21-strategy-v1-1/userns-skip/check-skip.sh` → exit 0（`list: ignored` 9 行・`run: SKIP` 9 行・
+  `0 tests run: 0 passed, 1234 skipped`）
+- `bash scripts/dev/test-affected.sh` → exit 0。対象 crate は celeris・celeris-campaign・celeris-credentiald・celerisctl・llm-proxy・task-api・
+  task-dispatch・task-worker と web（typecheck+unit）。repo-health `verdict=pass`（new 0・worsened 0）、nextest
+  `6238 tests run: 6238 passed (11 slow), 30 skipped`、web `Test Files 101 passed`・`Tests 705 passed`、doc test は失敗 0。
+- `cargo clippy --workspace -- -D warnings` → exit 0（出た warning は vendor の deno_core の既存の 1 件だけ）
+- `cargo fmt --all -- --check` → exit 0
+- `test -f agent-docs/adr/2026-11-21-userns-tests-explicit-skip.md && sh scripts/dev/check-adr-numbers.sh` → exit 0
+- 計画の check 4（9 件の早期 return と対象 3 file の env の読み取りが無いこと、build script が規則の file を読むこと）→ exit 0
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` → 範囲の正規表現の外の path は 0 件
+
+### before の段（提出時の HEAD で実行）
 - `sh scripts/dev/progress-index.sh --check` → `progress-index --check: ok`（exit 0）
 - `sh "$CELERIS_WU_SCOPE_PATHS"` → 4 path（この md、`userns-skip/before-nextest.txt`・`scan-env-return.py`・`scan-env-return.tsv`）
 - コードを変えていないので `test-affected.sh`・clippy・fmt はこの段では走らせていない（impl の段で走らせる）。

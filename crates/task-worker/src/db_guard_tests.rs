@@ -66,10 +66,19 @@ fn q(p: &Path) -> String {
     format!("'{}'", p.display())
 }
 
-fn userns_available() -> bool {
-    if crate::test_support::skip_unless_userns_tests() {
-        return false;
-    }
+/// 下の `#[cfg_attr(not(celeris_userns_tests), ignore = …)]` の試験の本体に入ったことを stderr に 1 行出す
+/// （env 有りの実行で本体の到達を示す。ADR 2026-11-21-userns-tests-explicit-skip D2）。
+fn mark_userns_body(what: &str) {
+    let test = std::thread::current()
+        .name()
+        .unwrap_or("<unnamed>")
+        .to_owned();
+    eprintln!("USERNS-BODY {test}: {what}");
+}
+
+/// 試験は cfg `celeris_userns_tests`（env 有りの build）のときだけ走る。ここで user namespace が作れなければ
+/// skip せずに fail する（ADR-0126 B2）。
+fn assert_userns_available() {
     let available = Command::new("unshare")
         .args(["-Ur", "true"])
         .output()
@@ -78,7 +87,7 @@ fn userns_available() -> bool {
         available,
         "user namespace is required for db_guard tests (CELERIS_USERNS_TESTS=1)"
     );
-    true
+    mark_userns_body("unshare -Ur true ok");
 }
 
 #[test]
@@ -95,12 +104,17 @@ fn user_systemd_bus_address_is_removed_even_without_a_guard() {
 }
 
 #[test]
+#[cfg_attr(
+    not(celeris_userns_tests),
+    ignore = "userns test: build with CELERIS_USERNS_TESTS=1 to run (ADR 2026-11-21-userns-tests-explicit-skip)"
+)]
 fn user_systemd_bus_is_hidden_from_launched_process() {
-    if !userns_available() {
-        return;
-    }
+    assert_userns_available();
     let f = fixture();
-    let runtime = f._tmp.path().join("runtime");
+    // socket の path は sun_path（108 byte）に収まる必要がある。run の深い TMPDIR の下では bind できないので
+    // 短い一時 dir に置く（env 有りの実行で見つけた。ADR 2026-11-21-userns-tests-explicit-skip）。
+    let short = crate::test_support::short_tempdir().unwrap();
+    let runtime = short.path().join("runtime");
     std::fs::create_dir_all(runtime.join("systemd")).unwrap();
     let _bus = UnixListener::bind(runtime.join("bus")).unwrap();
     let _private = UnixListener::bind(runtime.join("systemd/private")).unwrap();
@@ -153,10 +167,12 @@ fn user_systemd_bus_is_hidden_from_launched_process() {
 /// 付記 D-a の 3: `$HOME` の `.config/systemd`・`.local/celeris/releases`・`.config/celeris` は namespace の中で
 /// 読み取り専用（EROFS）になり、外では同じ dir に書ける。HOME は tempdir を注入する（実 HOME に依存しない）。
 #[test]
+#[cfg_attr(
+    not(celeris_userns_tests),
+    ignore = "userns test: build with CELERIS_USERNS_TESTS=1 to run (ADR 2026-11-21-userns-tests-explicit-skip)"
+)]
 fn host_config_read_only_inside_namespace() {
-    if !userns_available() {
-        return;
-    }
+    assert_userns_available();
     let f = fixture();
     let home = f._tmp.path().join("home");
     let dirs: Vec<PathBuf> = HOST_PROTECTED_HOME_DIRS
@@ -295,10 +311,12 @@ fn host_config_read_only_failure_refuses_the_spawn() {
 }
 
 #[test]
+#[cfg_attr(
+    not(celeris_userns_tests),
+    ignore = "userns test: build with CELERIS_USERNS_TESTS=1 to run (ADR 2026-11-21-userns-tests-explicit-skip)"
+)]
 fn the_db_and_its_wal_files_are_read_only_but_siblings_stay_writable() {
-    if !userns_available() {
-        return;
-    }
+    assert_userns_available();
     let f = fixture();
     let g = guard(&f);
     let db = q(&f.db);
@@ -348,16 +366,18 @@ fn the_db_and_its_wal_files_are_read_only_but_siblings_stay_writable() {
 }
 
 #[test]
+#[cfg_attr(
+    not(celeris_userns_tests),
+    ignore = "userns test: build with CELERIS_USERNS_TESTS=1 to run (ADR 2026-11-21-userns-tests-explicit-skip)"
+)]
 fn a_nested_user_namespace_cannot_undo_the_read_only_mount() {
-    if crate::test_support::skip_unless_userns_tests() {
-        return;
-    }
     let f = fixture();
     let g = guard(&f);
     assert!(
         Command::new("unshare").arg("--help").output().is_ok(),
         "unshare(1) is required for this test (CELERIS_USERNS_TESTS=1)"
     );
+    mark_userns_body("unshare(1) present");
     let script = format!(
         "unshare -Urm sh -c \"mount -o remount,bind,rw {lib} && echo REMOUNTED; \
          umount {lib} && echo UNMOUNTED; touch {lib}/escaped && echo ESCAPED\" 2>&1; \
@@ -374,10 +394,12 @@ fn a_nested_user_namespace_cannot_undo_the_read_only_mount() {
 }
 
 #[test]
+#[cfg_attr(
+    not(celeris_userns_tests),
+    ignore = "userns test: build with CELERIS_USERNS_TESTS=1 to run (ADR 2026-11-21-userns-tests-explicit-skip)"
+)]
 fn the_guarded_process_has_no_capabilities_and_keeps_its_uid() {
-    if !userns_available() {
-        return;
-    }
+    assert_userns_available();
     let f = fixture();
     let g = guard(&f);
     let (ok, out) = run_guarded(
@@ -392,10 +414,12 @@ fn the_guarded_process_has_no_capabilities_and_keeps_its_uid() {
 }
 
 #[test]
+#[cfg_attr(
+    not(celeris_userns_tests),
+    ignore = "userns test: build with CELERIS_USERNS_TESTS=1 to run (ADR 2026-11-21-userns-tests-explicit-skip)"
+)]
 fn probe_confirms_the_db_is_not_writable_inside() {
-    if !userns_available() {
-        return;
-    }
+    assert_userns_available();
     let f = fixture();
     probe(&guard(&f)).unwrap();
 }
@@ -445,10 +469,12 @@ fn sync_ssh_shadow_copies_contents_and_drops_stale_files() {
 /// D4: namespace の中でも ssh が `/etc/ssh/ssh_config.d` の Include を "Bad owner" で拒否しない
 /// （`ssh -G` は設定を解釈して表示するだけで接続しない）。ssh が無いホストでは見ない。
 #[test]
+#[cfg_attr(
+    not(celeris_userns_tests),
+    ignore = "userns test: build with CELERIS_USERNS_TESTS=1 to run (ADR 2026-11-21-userns-tests-explicit-skip)"
+)]
 fn ssh_config_includes_still_parse_inside_the_namespace() {
-    if !userns_available() {
-        return;
-    }
+    assert_userns_available();
     if !Path::new(SSH_CONFIG_D).is_dir() || Command::new("ssh").arg("-V").output().is_err() {
         eprintln!("skip: no ssh or no {SSH_CONFIG_D}");
         return;

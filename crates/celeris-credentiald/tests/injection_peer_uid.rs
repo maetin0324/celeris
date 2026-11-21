@@ -7,7 +7,9 @@
 //! `sudo -n -u` により起こす。`unshare -r` の子は host では同 UID なので別 UID の証拠にしない。
 //! sudo が使えない・user が無い環境では理由を出して skip する（黙って pass しない）。
 //! `CELERIS_LAUNCHER_TESTS=require` では skip せず失敗する。既定では ADR-0126 B の opt-in
-//! （`CELERIS_USERNS_TESTS=1`）が無いと走らない（sudo の試行を CI の既定に入れないため）。
+//! （`CELERIS_USERNS_TESTS=1`）が無い build で harness の ignored になる（sudo の試行を CI の既定に入れないため）。
+//! 走らせるかは build script の cfg `celeris_userns_tests` が決める（規則は `crates/task-worker/userns_tests_cfg.rs`。
+//! ADR 2026-11-21-userns-tests-explicit-skip）。
 //!
 //! 判定は 2 層に分けて出す（`PEER-UID` 行）:
 //! - `dac`: 本番と同じ permission（runtime dir 0700・socket 0600）では、別 UID の process は
@@ -45,26 +47,10 @@ const PROBE_USER_ENV: &str = "CELERIS_PEER_UID_USER";
 const DEFAULT_PROBE_USER: &str = "celeris-browser";
 const MARK: &str = "PEER-UID-PROBE";
 
+/// 本体に入った後、環境（user・sudo・probe の行）が無いときに skip せず fail させるか。走らせるかの規則
+/// （cfg `celeris_userns_tests`）とは別（ADR 2026-11-21-userns-tests-explicit-skip の「残る穴」）。
 fn require() -> bool {
     std::env::var("CELERIS_LAUNCHER_TESTS").as_deref() == Ok("require")
-}
-
-/// 既定 skip と opt-in（ADR-0126 B2/B3 と同じ優先順位。task-worker の `userns_gate` と揃える）。
-fn skip_by_default() -> bool {
-    if std::env::var("CELERIS_ISOLATION_TESTS").as_deref() == Ok("skip") {
-        eprintln!("SKIPPED (not passed): CELERIS_ISOLATION_TESTS=skip");
-        return true;
-    }
-    if std::env::var("CELERIS_USERNS_TESTS").as_deref() == Ok("1")
-        || std::env::var("CELERIS_ISOLATION_TESTS").as_deref() == Ok("require")
-        || require()
-    {
-        return false;
-    }
-    eprintln!(
-        "SKIPPED (peer-uid real-process test, not passed): set CELERIS_USERNS_TESTS=1 or CELERIS_LAUNCHER_TESTS=require to run (ADR-0126)"
-    );
-    true
 }
 
 fn missing(reason: impl AsRef<str>) -> bool {
@@ -186,13 +172,17 @@ impl RawFdI32 for OwnedFd {
     }
 }
 
-/// `sudo -n -u <user>` で起こした別 UID の process の側。環境変数が無ければ何もしない
-/// （通常の test 実行では no-op）。
+/// `sudo -n -u <user>` で起こした別 UID の process の側。親の試験（`probe_as`）が `--ignored --exact` で
+/// 起こすときだけ走る。socket の環境変数が無い直接の実行（`--include-ignored` など）は fail する。
 #[test]
+#[ignore = "helper: the child process that real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch starts via sudo with --ignored"]
 fn inner_peer_uid_probe() {
-    let Some(socket) = std::env::var_os(PROBE_SOCKET_ENV) else {
-        return;
-    };
+    let socket = std::env::var_os(PROBE_SOCKET_ENV).unwrap_or_else(|| {
+        panic!(
+            "{PROBE_SOCKET_ENV} is not set: this is the child entry of \
+             real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch, not a test to run directly"
+        )
+    });
     let result = probe(Path::new(&socket));
     let uid = unsafe { libc::geteuid() };
     println!("{}", result.line(uid, std::process::id()));
@@ -314,7 +304,8 @@ fn uid_of(user: &str) -> Option<u32> {
 }
 
 /// 別 UID で 1 要求を送る process を `sudo -n -u <user>` で起こし、その `PEER-UID-PROBE` 行を返す。
-/// 自分の test binary を `--exact inner_peer_uid_probe` で再実行する（client は本番と同じ `injection_ipc::call`）。
+/// 自分の test binary を `--ignored --exact inner_peer_uid_probe` で再実行する（子の入口は常に ignored。
+/// client は本番と同じ `injection_ipc::call`）。
 fn probe_as(user: &str, socket: &Path) -> Result<(u32, Probe), String> {
     let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
     let output = Command::new("sudo")
@@ -322,6 +313,7 @@ fn probe_as(user: &str, socket: &Path) -> Result<(u32, Probe), String> {
         .arg(format!("{PROBE_SOCKET_ENV}={}", socket.display()))
         .arg(&exe)
         .args([
+            "--ignored",
             "--exact",
             "inner_peer_uid_probe",
             "--nocapture",
@@ -345,10 +337,11 @@ fn probe_as(user: &str, socket: &Path) -> Result<(u32, Probe), String> {
 
 /// 別 UID の実 process から broker へ接続し、DAC 層と broker 層の判定を別々に出す。
 #[test]
+#[cfg_attr(
+    not(celeris_userns_tests),
+    ignore = "peer-uid real-process test: build with CELERIS_USERNS_TESTS=1 or CELERIS_LAUNCHER_TESTS=require to run (ADR 2026-11-21-userns-tests-explicit-skip)"
+)]
 fn real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch() {
-    if skip_by_default() {
-        return;
-    }
     let user = std::env::var(PROBE_USER_ENV).unwrap_or_else(|_| DEFAULT_PROBE_USER.to_owned());
     let Some(other_uid) = uid_of(&user) else {
         missing(format!(

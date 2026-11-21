@@ -16,8 +16,8 @@ completed: 2026-11-21
   task は done（seq 568）に達した。`reproduce.py verify` が fixture でこの流れと修正前の原因の file:line 12 か所を確かめ、exit 0。
 - (b) 11-18 の修正の owner の 2 hunk（`decision.rs`・`tree_units.rs`）を作業ツリーで戻すと `rejected_worker_decision_*` の 2 件が落ち
   （exit=100）、`git checkout -- crates/` で戻すと 2 件とも通った（exit=0）。作業ツリーは元に戻した。
-- (c) survey の 14 経路（クラスタ job の wait を分けて 15 行）のうち 5 経路を「直した」（decisions-not-array・continuable-end・
-  failed-end・question-and-decisions・atomic の節点）。クラスタ job の wait は「未解決」。残りの 9 経路は fail-closed（2）か問題無し（7）。
+- (c) survey の 14 経路（cluster job の wait を分けて 15 行）のうち 5 経路を「直した」（decisions-not-array・continuable-end・
+  failed-end・question-and-decisions・atomic の節点）。cluster job の wait は「未解決」。残りの 9 経路は fail-closed（2）か問題無し（7）。
   直した経路の `decision_fail_closed_*` 14 件は、どれも修正前に assertion で落ちた（4 つの before.log、どれも exit=100）。
 - (d) 11-18 の修正を含む最初の昇格（promoted_at 2026-11-19T01:25:29Z）の後、進行の行 0 行・key rejected の決定 0 件・対応しない行 0。
   この task の修正（fix・settle-leaf・settle-failure・settle-atomic）は main にも release にもまだ入っていない。昇格の後に人が走らせる
@@ -79,7 +79,7 @@ survey.md の全行（14 行）に、調査の後に直した結果を入れた�
 | failed-end | check の不合格・worker の失敗・replan の使い切り・integration repair の失敗で終わった run の `decisions` | 直した | settle-leaf（決定を失敗の処理より先にする）・settle-atomic（失敗を `Continue{advance}` にする）。settle-failure が dispatcher の経路全体で確かめた（[settle-failure.md](decision-failclosed/settle-failure.md)） |
 | question-and-decisions | `question` と `decisions` の併記 | 直した | survey の時点では fail-closed（質問が最優先で止まる）と判定したが、`decisions` の中身は人に届かなかった。settle-leaf・settle-atomic で決定が先に止め、質問の文は outcome の末尾（`。止めた質問: …`）に残す。settle-failure が試験した |
 | atomic-run | WU の無い run（木の子の atomic の節点）の `decisions` | 直した | 配列の誤りは survey の時点で fail-closed（`self` のまま止める）。配列でない欄は fix、done 以外の終わり方は settle-atomic が直した |
-| cluster-job-wait | WU のクラスタ job の wait（遷移 `cluster_jobs`）と atomic の `Waiting` で終わった run の `decisions` | 未解決 | 読まない。待ちの正本は WU の行の `blocked(cluster_jobs)` と wait の行で、job の終了による再開（`cluster_job_wait.rs`）はその行からだけ動く。`blocked(decision)` に置き換えると待ちの正本が 2 つになり、job が終わっても再開できない。直すには `cluster_job_wait.rs`・`task_ops::decision` の変更が要り、この段の範囲の外（ADR 2026-11-21-worker-decisions-fail-closed の付記） |
+| cluster-job-wait | WU の cluster job の wait（遷移 `cluster_jobs`）と atomic の `Waiting` で終わった run の `decisions` | 未解決 | 読まない。待ちの正本は WU の行の `blocked(cluster_jobs)` と wait の行で、job の終了による再開（`cluster_job_wait.rs`）はその行からだけ動く。`blocked(decision)` に置き換えると待ちの正本が 2 つになり、job が終わっても再開できない。直すには `cluster_job_wait.rs`・`task_ops::decision` の変更が要り、この段の範囲の外（ADR 2026-11-21-worker-decisions-fail-closed の付記） |
 | planner-plan | planner の計画の `decisions` の形・key の重複・`needed_before` の誤り | fail-closed | 計画の検証の誤りで計画は採用されず、2 回とも不正なら `plan_invalid`（`needed_before: [self]`）の決定で止める |
 | result-json-broken | `result.json` が JSON として壊れている・`summary` などの型が違う | fail-closed | run は `error(retryable=true)` で失敗し、完了しない |
 | harness-error | run が harness の誤りか取り消しで終わった | 問題無し | WU は `ready` に戻り run をやり直す。次の run の `result.json` が要求を出し直す |
@@ -90,9 +90,9 @@ survey.md の全行（14 行）に、調査の後に直した結果を入れた�
 | reread-same-question | 答えた後の run が同じ問いの要求をもう一度書いた | 問題無し | 人が答えた（または開いている）問いなので出し直さない（11-18 の ADR D3） |
 | needed-before-started-unit | `needed_before` が走っている・終わった unit を指した | 問題無し（人に届く） | 決定は記録され受信箱に出る。指した unit が止まらない点は「提案」 |
 
-survey.md は 14 行で、表の continuable-end の行の「クラスタ job の wait」を cluster-job-wait の行に分けた（計 15 行）。
+survey.md は 14 行で、表の continuable-end の行の「cluster job の wait」を cluster-job-wait の行に分けた（計 15 行）。
 
-読む規則と止め方の順: 木の節点の worker の run の `decisions` は、状態だけを戻す run（harness_error・取り消し）とクラスタ job の
+読む規則と止め方の順: 木の節点の worker の run の `decisions` は、状態だけを戻す run（harness_error・取り消し）と cluster job の
 wait（WU の遷移 `cluster_jobs`・atomic の `Waiting`）を除き、終わり方によらず読む（atomic は終わり方が分からない `None` の run も
 読まない）。読み取りは `worker_finish.rs` の `finish_worker_result_with` で `settle_work_unit` の直後に置き、`needed_before: self` の
 要求があれば、integration repair の打ち切りと WU の失敗の処理（再試行・自動 replan・質問・replan の使い切りの `limit:max_replans`）
@@ -204,7 +204,7 @@ config・DB の移行は無い。この task の修正を含む release が昇�
   14 crate・web・ts-verify）→ exit 0、875 秒。repo-health: verdict=pass（fail_grade=0、new=0、worsened=0）、web の vitest 101 files・
   705 passed、test-ts-verify 20 passed、nextest `8533 tests run: 8533 passed, 22 skipped`、doc test 通過、script bundle の SKIP 0 件。
   末尾に scratch の古い trash dir を消せない `rm: Permission denied` が 6 行出たが、exit code は 0。
-- `bash scripts/dev/test-affected.sh`（WU の基準 `$CELERIS_WU_BASE`）→ 結果は報告に書く（この unit の変更は agent-docs だけ）
+- `bash scripts/dev/test-affected.sh`（WU の基準 `$CELERIS_WU_BASE`）→ exit 0、152 秒。この unit の変更は agent-docs だけで `試験対象の変更なし（docs のみ等）`、repo-health: verdict=pass（fail_grade=0、new=0、worsened=0）、script の試験 1・126 件 OK、repo_health_gate: all checks passed
 - `cargo clippy --workspace -- -D warnings` → exit 0（外部の crate `deno_core` の deprecated の warning 1 件だけ）
 - `cargo fmt --all -- --check` → exit 0
 - `sh scripts/dev/progress-index.sh --check` → `progress-index --check: ok`、`sh scripts/dev/check-doc-links.sh` → `check-doc-links: ok`、
@@ -233,7 +233,7 @@ config・DB の移行は無い。この task の修正を含む release が昇�
 
 ## 未確認の事項
 
-- クラスタ job の wait の run（WU の `cluster_jobs`・atomic の `Waiting`）の `decisions` は読まないままで、人の答えの前に leaf が
+- cluster job の wait の run（WU の `cluster_jobs`・atomic の `Waiting`）の `decisions` は読まないままで、人の答えの前に leaf が
   job の終了で進みうる。要求は job の後の run の `result.json` が出し直す前提で、出し直さなければ人に届かない。
 - 答えの後の run は continuation にならず最初から走る（WU の run。atomic の continuation を止めた run だけは checkpoint の続きになる）。
   止めた run の途中の作業は前置きの答えと作業ツリーにしか残らない。
@@ -244,7 +244,7 @@ config・DB の移行は無い。この task の修正を含む release が昇�
 
 ## 提案
 
-- クラスタ job の wait の run の `decisions` を読む別 task を起こす。owner は `cluster_job_wait.rs`（job の終了による再開）と
+- cluster job の wait の run の `decisions` を読む別 task を起こす。owner は `cluster_job_wait.rs`（job の終了による再開）と
   `task_ops::decision`（答えの解放）で、待ちの理由を 2 つ持てるようにするか、job の終了と答えの両方を待つ再開の条件にするかを
   設計 brief で決める。
 - `needed-before-started-unit`: 指した unit がもう走っている・終わっているとき、決定は人に届くが unit は止まらない。止められない

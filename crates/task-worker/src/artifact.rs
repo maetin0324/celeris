@@ -17,10 +17,15 @@ pub enum ArtifactError {
     Io(#[from] std::io::Error),
 }
 
-/// 成果物の path の字面の検査（I/O 無し）: 空・絶対パスは `NotRelative`、`..`・root・prefix の要素を持つものは
-/// `Escapes`。[`resolve`] と、最終レビューが `ArtifactExists` の候補から workspace の外を指す path を除くとき
-/// （ADR 2026-11-21-root-review-work-unit-artifacts）が使う。
-pub fn check_relative(rel_path: &str) -> Result<(), ArtifactError> {
+/// ワークスペース相対パスを検査し、実在すれば sha256 を計算して `ArtifactRef` を作る。
+/// 絶対パス、`..` を含むパス、シンボリックリンク経由でワークスペース外に出るパスは拒否する。
+/// `kind` 省略時は拡張子から推定する（無ければ `"file"`）。
+pub fn resolve(
+    workspace: &Path,
+    name: &str,
+    rel_path: &str,
+    kind: Option<&str>,
+) -> Result<ArtifactRef, ArtifactError> {
     let rel = Path::new(rel_path);
     if rel.is_absolute() || rel_path.is_empty() {
         return Err(ArtifactError::NotRelative(rel_path.to_string()));
@@ -33,20 +38,6 @@ pub fn check_relative(rel_path: &str) -> Result<(), ArtifactError> {
     }) {
         return Err(ArtifactError::Escapes(rel_path.to_string()));
     }
-    Ok(())
-}
-
-/// ワークスペース相対パスを検査し、実在すれば sha256 を計算して `ArtifactRef` を作る。
-/// 絶対パス、`..` を含むパス（[`check_relative`]）、シンボリックリンク経由でワークスペース外に出るパスは拒否する。
-/// `kind` 省略時は拡張子から推定する（無ければ `"file"`）。
-pub fn resolve(
-    workspace: &Path,
-    name: &str,
-    rel_path: &str,
-    kind: Option<&str>,
-) -> Result<ArtifactRef, ArtifactError> {
-    check_relative(rel_path)?;
-    let rel = Path::new(rel_path);
     let full = workspace.join(rel);
     if !full.exists() {
         return Err(ArtifactError::NotFound(rel_path.to_string()));

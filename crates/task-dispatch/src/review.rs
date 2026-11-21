@@ -19,7 +19,7 @@ use task_core::plan::{PlanLimits, PlanOutput, parse_and_validate};
 use task_core::{
     ArtifactRef, Check, GenreSpec, Status, Task, TaskId, TaskKind, Tier, Usage, WorkerHint,
 };
-use task_worker::artifact::sha256_file;
+use task_worker::artifact::{ArtifactError, sha256_file};
 
 use crate::policy::ProviderOutcome;
 use task_worker::protocol::{ReviewCheckResult, ReviewDecision, ReviewPolicyViolation};
@@ -633,8 +633,8 @@ pub(crate) async fn exec_check_outcome(
 /// 並びは「同じ task の WorkUnit の run の `ArtifactProduced`（古い順）→ review する run（`run_id`）の
 /// `ArtifactProduced`」なので、名前が重なれば review する run の分 → WorkUnit の新しい run の分の順に選ばれる。
 /// WorkUnit の run は `WorkUnitTransitioned{to: running, run_id}` の `work_unit_id` が `units` にあるものだけ（子 task に
-/// 任せた unit は run_id を持たず、子 task の成果物は子の events にあるので入らない）。path が workspace の外を指すもの
-/// （`task_worker::artifact::check_relative` が拒むもの）は候補にしない。計画の無い task では review する run の分だけになる。
+/// 任せた unit は run_id を持たず、子 task の成果物は子の events にあるので入らない）。計画の無い task では review する
+/// run の分だけになる。path が workspace の外を指す候補は [`review_task`] が使わない（[`escapes_workspace`]）。
 pub(crate) fn artifact_candidates(
     events: &[(u64, task_core::Event)],
     units: &[task_core::WorkUnitRow],
@@ -666,15 +666,24 @@ pub(crate) fn artifact_candidates(
             _ => None,
         })
         .chain(task_ops::derive::artifacts_for_run(events, run_id))
-        .filter(|artifact| task_worker::artifact::check_relative(&artifact.path).is_ok())
         .collect()
+}
+
+/// ADR 2026-11-21-root-review-work-unit-artifacts D4: 成果物の候補の path が workspace の外を指すか。規則は成果物を出す
+/// 側の [`task_worker::artifact::resolve`]（空・絶対 path・`..` は `NotRelative`・`Escapes`、symlink で外に出る path は
+/// `Escapes`）をそのまま使う。見つからない・読めない path は外とみなさない（`ArtifactExists` が従来どおり判定する）。
+fn escapes_workspace(workspace_dir: &Path, artifact: &ArtifactRef) -> bool {
+    matches!(
+        task_worker::artifact::resolve(workspace_dir, &artifact.name, &artifact.path, None),
+        Err(ArtifactError::NotRelative(_) | ArtifactError::Escapes(_))
+    )
 }
 
 pub const SUMMARY_FILE_NAME: &str = "summary.md";
 
 /// `task.acceptance` を順に判定する。`produced` は `ArtifactExists` の名前の照合に使う成果物の候補で、同じ名前なら後ろの
-/// ものを使う（最終 review では review する run と同じ task の WorkUnit の run の `ArtifactProduced`。組み立ては
-/// [`artifact_candidates`]、ADR 2026-11-21-root-review-work-unit-artifacts）。
+/// ものを使い、path が workspace の外を指すものは使わない（最終 review では review する run と同じ task の WorkUnit の run
+/// の `ArtifactProduced`。組み立ては [`artifact_candidates`]、ADR 2026-11-21-root-review-work-unit-artifacts）。
 /// `artifacts_dir` はそのタスクの成果物ディレクトリ（ADR-0036 D1。ディスパッチャが決める）。
 /// `plan.json` / `review.json` / `summary.md` と `Check::ArtifactExists` の既定のパスはここを基準にする。
 pub async fn review_task(
@@ -731,7 +740,7 @@ pub async fn review_task(
                 let rel = produced
                     .iter()
                     .rev()
-                    .find(|a| &a.name == name)
+                    .find(|a| &a.name == name && !escapes_workspace(workspace_dir, a))
                     .map(|a| a.path.clone())
                     .unwrap_or_else(|| format!("{artifacts_rel}/{name}"));
                 let full = workspace_dir.join(&rel);

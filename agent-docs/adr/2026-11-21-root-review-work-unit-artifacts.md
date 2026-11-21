@@ -8,8 +8,9 @@ tasks: [01M7XQ9Q4P4ZQ38Y509J9XYAQ0]
 - 関係: [ADR-0036](0036-per-task-artifacts.md)（成果物の dir と `ArtifactExists` の既定の path）、
   [ADR-0074](0074-parallel-work-units-checkpoints-milestones-quota.md) D1.2（WorkUnit の run は `wu/<key>/artifacts` に書く）、
   [ADR-0003](0003-worker-protocol.md) D5（成果物の path はワークスペース相対。`task_worker::artifact::resolve`）。
-  この ADR は `review_task` の `produced`（`ArtifactExists` の名前の照合に使う成果物）の組み立てだけを変える。
-  `ArtifactExists` の既定の path（`<artifacts_rel>/<name>`）、ディレクトリの判定、他の check は変えない。
+  この ADR は `review_task` の `produced`（`ArtifactExists` の名前の照合に使う成果物）の組み立てと、`ArtifactExists` が
+  候補を選ぶときに workspace の外を指す path を除くことだけを変える。`ArtifactExists` の既定の path
+  （`<artifacts_rel>/<name>`）、ディレクトリの判定、他の check は変えない。
 - task: 01M7XQ9Q4P4ZQ38Y509J9XYAQ0（戦略層 v1 子 1、WorkUnit `root-artifacts`）
 
 ## 事象
@@ -46,10 +47,16 @@ task 01M7MZTKBPZPQE4XN451F8X84F（アーキ v4 H）の受け入れ条件 3 は `
   `work_units` の行にあるものだけ（段の途中報告の成果物のリンク〈`phase_integration.rs` の `build_phase_report`〉と同じ見分け方）。
   子 task に任せた unit の遷移は `run_id` を持たず、子 task の成果物は子の events にあるので入らない。他の task・他の案件の
   events は読まない。
-- D4: path が workspace の外を指す候補（空・絶対 path・`..`・root・prefix の要素）は除く。規則は成果物を出す側の
-  `task_worker::artifact::resolve` の字面の検査を `check_relative`（`crates/task-worker/src/artifact.rs:23`）に切り出し、
-  `resolve` と候補の組み立ての両方が使う（同じ規則を 2 か所に書かない）。review する run の候補にも当てる。成果物を出す側は
-  この path を `ArtifactProduced` に書かないので、計画の無い task の到達しうる判定は変わらない。
+- D4: `ArtifactExists` は path が workspace の外を指す候補を使わず、同じ名前のその前の候補（無ければ既定の path）を使う。
+  判定は `crates/task-dispatch/src/review.rs:675` の `escapes_workspace` で、成果物を出す側の公開関数
+  `task_worker::artifact::resolve` を task の workspace の dir に当て、`NotRelative`・`Escapes`（空・絶対 path・`..`・root・
+  prefix の要素、symlink で外に出る path）を外とみなす。規則を task-dispatch に書き直さない。`NotFound`・`Io`（ディレクトリの
+  sha256 の失敗を含む）は外とみなさず、従来どおり `ArtifactExists` が `not found at <path>` やディレクトリの判定をする。
+  review する run の候補にも当てる。成果物を出す側は外を指す path を `ArtifactProduced` に書かないので、計画の無い task の
+  到達しうる判定は変わらない。除くのは候補を選ぶ時（`review_task`、`review.rs:743`）で、組み立て（D1）は path を見ない。
+  外を指す候補が後ろにあっても、前にある workspace の中の同名の候補が隠されないようにするため。
+  `resolve` は選んだ候補の file を 1 回読んで sha256 を計算するので、合格する file は `ArtifactExists` の sha256 と合わせて
+  2 回読まれる（候補を選ぶ時に読むのは名前の合う候補のうち後ろから最初の中の 1 件まで）。
 - D5: 計画の無い task（`work_units` が空）の候補は review する run の分だけで、従来の `artifacts_for_run` と同じ。前の attempt
   の run の成果物は今までどおり候補にしない。
 - D6: 新しい状態・DB 表・event・設定の欄・fallback は足さない。成果物を root の `artifacts/` に写す仕組みも置かない。
@@ -61,6 +68,10 @@ task 01M7MZTKBPZPQE4XN451F8X84F（アーキ v4 H）の受け入れ条件 3 は `
   daemon の途中報告（`daemon:phase-gate:<phase>`）も混ざる。
 - `runs` 索引（`RunRow.work_unit_id`）で WorkUnit の run を引く: 索引の書き込みは失敗しても警告だけで run を止めない
   （`run_index_start` の呼び出し元）。events は追記専用の正本なので events から引く。
+- `resolve` の字面の検査（空・絶対 path・`..`）を `task_worker::artifact` の別の関数に切り出して共有する: この WorkUnit の
+  範囲（task-dispatch の review・dispatcher と試験）の外の変更になる。また字面だけでは外への symlink を除けない。
+  `resolve` をそのまま呼べば、規則を書き直さずに symlink も除ける。
+- 字面の検査を `review.rs` に書く: `resolve` と同じ規則を 2 か所に持つことになる。
 - 子 task の events も読む: 子 task の成果物は子 task 自身の review が判定する。親の review が子の成果物で合格すると、
   子の受け入れ条件の外の file を親の合格の根拠にできてしまう。
 
@@ -83,12 +94,14 @@ task 01M7MZTKBPZPQE4XN451F8X84F（アーキ v4 H）の受け入れ条件 3 は `
   の分があればそれを選ぶ。
 - `root_review_artifact_ignores_other_tasks_and_projects`: 同じ workspace を継ぐ子 task、同じ案件の兄弟、他の案件の task の
   WU が同じ名前の成果物を出しても拾わない。対象 task の events に他の案件の WorkUnit の id を指す遷移が紛れても拾わない。
-- `root_review_artifact_ignores_paths_outside_workspace`: 絶対 path・`..`・空の path は WU の run の分も review する run の分も
-  候補にしない。修正前は review する run の絶対 path が候補に入り、workspace の外の file で合格していた。
+- `root_review_artifact_ignores_paths_outside_workspace`: 絶対 path・`..`・空の path・外への symlink は、WU の run の分も
+  review する run の分も `ArtifactExists` が使わない。外を指す候補が後ろにあっても、前にある中の同名の候補を使う。
+  修正前は review する run の絶対 path がそのまま使われ、workspace の外の file で合格していた。候補の組み立てだけ直して
+  `escapes_workspace` を外すと、同じく外の file で合格する（D4 の検査が要る）。
 - `root_review_artifact_unplanned_task_keeps_reviewed_run_only`: 計画の無い task の候補は `artifacts_for_run` と等しく、
   前の attempt の成果物は従来どおり拾わない。
-- 既存の `crates/task-worker/src/artifact.rs` の `resolve_rejects_absolute_parent_missing_and_symlink_escape` が
-  `check_relative` を切り出した後の `resolve` の拒否を守る。
+- 既存の `crates/task-worker/src/artifact.rs` の `resolve_rejects_absolute_parent_missing_and_symlink_escape` が、D4 が使う
+  `resolve` の拒否（絶対 path・`..`・symlink）を守る。
 
 ## 本番での確認（release の昇格は人が行う）
 

@@ -5,8 +5,8 @@
 //! - 計画を持つ task の最終 review は、同じ task の WorkUnit の run が出した `ArtifactProduced` を名前で見つける
 //!   （本番 2026-11-20 task 01M7MZTKBPZPQE4XN451F8X84F seq 2075: `final-report.md` は WU `finish` の run が
 //!   `wu/finish/artifacts/final-report.md` に出したが、review は `artifacts/final-report.md` を探して落ちた）。
-//! - 候補は対象 task の events と WorkUnit の行だけから作る。他の task（子・兄弟・他の案件）の成果物と、workspace の
-//!   外を指す path（絶対 path・`..`）は候補にしない。
+//! - 候補は対象 task の events と WorkUnit の行だけから作る。他の task（子・兄弟・他の案件）の成果物は候補にしない。
+//! - workspace の外を指す path（絶対 path・`..`・外への symlink）の候補は `review_task` が使わない。
 //! - 計画の無い task の候補と判定は変わらない（review する run の成果物だけ）。
 //!
 //! 既存の試験で検出できない理由: `review/tests.rs` の `artifact_exists_*` は `review_task` に `produced` を直接渡すので、
@@ -307,8 +307,10 @@ async fn root_review_artifact_ignores_other_tasks_and_projects() {
     );
 }
 
-/// (3) WU の run の成果物でも、path が workspace の外（絶対 path・`..`）を指すものは候補にしない。
-/// 外に同名の file があっても、`ArtifactExists` は既定の path（`artifacts/<name>`）で判定する。
+/// (3) WU の run の成果物でも review する run の成果物でも、path が workspace の外（絶対 path・`..`・空・外への symlink）
+/// を指すものは `ArtifactExists` が使わない（規則は成果物を出す側の `task_worker::artifact::resolve`）。外を指す候補が
+/// 後ろにあっても、前にある workspace の中の同名の候補を使い、中の候補が無ければ既定の path（`artifacts/<name>`）で判定する。
+/// 修正前は review する run の絶対 path がそのまま使われ、workspace の外の file で合格していた。
 #[tokio::test]
 async fn root_review_artifact_ignores_paths_outside_workspace() {
     let root = tempfile::tempdir().unwrap();
@@ -316,6 +318,8 @@ async fn root_review_artifact_ignores_paths_outside_workspace() {
     std::fs::create_dir_all(&dir).unwrap();
     let outside = root.path().join("outside/final-report.md");
     write(root.path(), "outside/final-report.md", "outside");
+    std::fs::create_dir_all(dir.join("wu/finish/artifacts")).unwrap();
+    std::os::unix::fs::symlink(&outside, dir.join("wu/finish/artifacts/link.md")).unwrap();
     let store = SqliteStore::open_in_memory().unwrap();
     let task = new_task(
         &dir,
@@ -339,6 +343,7 @@ async fn root_review_artifact_ignores_paths_outside_workspace() {
                 "wu/finish/../../../outside/final-report.md",
             ),
             artifact("final-report.md", ""),
+            artifact("final-report.md", "wu/finish/artifacts/link.md"),
         ],
     );
     // review する run 自身の記録でも同じ（成果物を出す側の `artifact::resolve` はこの path を受け付けない）。
@@ -349,13 +354,30 @@ async fn root_review_artifact_ignores_paths_outside_workspace() {
         &[artifact("final-report.md", outside.to_str().unwrap())],
     );
 
-    let produced = candidates(&store, task.id);
-    assert!(produced.is_empty(), "{produced:?}");
-    let v = artifact_verdict(&task, &dir, &produced).await;
+    let escaping = candidates(&store, task.id);
+    let v = artifact_verdict(&task, &dir, &escaping).await;
     assert!(!v.pass, "{}", v.reason);
     assert_eq!(
         v.reason,
         "artifact \"final-report.md\" not found at artifacts/final-report.md"
+    );
+    // 外を指す 6 件は候補に入っていて（組み立ては path を見ない）、`review_task` が使わなかった。
+    assert_eq!(escaping.len(), 6, "{escaping:?}");
+
+    // workspace の中の同名の候補が前にあれば、後ろの外を指す候補に隠されずにそれを使う。
+    write(&dir, "wu/finish/artifacts/final-report.md", "inside");
+    let mut with_inside = vec![artifact(
+        "final-report.md",
+        "wu/finish/artifacts/final-report.md",
+    )];
+    with_inside.extend(escaping);
+    let v = artifact_verdict(&task, &dir, &with_inside).await;
+    assert!(v.pass, "{}", v.reason);
+    assert!(
+        v.reason
+            .starts_with("path=wu/finish/artifacts/final-report.md sha256="),
+        "{}",
+        v.reason
     );
 }
 

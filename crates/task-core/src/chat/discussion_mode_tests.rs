@@ -24,7 +24,13 @@ fn req(key: &str, mode: Option<ChatDiscussionMode>) -> ChatPostMessageRequest {
     }
 }
 
-fn post(s: &SqliteStore, thread: &str, key: &str, mode: Option<ChatDiscussionMode>, t: i64) -> String {
+fn post(
+    s: &SqliteStore,
+    thread: &str,
+    key: &str,
+    mode: Option<ChatDiscussionMode>,
+    t: i64,
+) -> String {
     s.chat_message_post_as(thread, &req(key, mode), "human:rmaeda", at(t))
         .expect("post")
         .response
@@ -88,11 +94,16 @@ fn chat_discussion_mode_recorded_only_for_discuss_and_propose() {
     let other = s.chat_message_post_as(&t.id, &req("discuss", None), "human:rmaeda", at(6));
     assert_eq!(other.expect_err("other mode").http_status(), 409);
     assert_eq!(
-        s.chat_message_post_as(&t.id, &req("absent", Some(ChatDiscussionMode::Execute)), "human:rmaeda", at(7))
-            .expect("execute is absent")
-            .response
-            .message
-            .id,
+        s.chat_message_post_as(
+            &t.id,
+            &req("absent", Some(ChatDiscussionMode::Execute)),
+            "human:rmaeda",
+            at(7)
+        )
+        .expect("execute is absent")
+        .response
+        .message
+        .id,
         absent
     );
 }
@@ -205,4 +216,59 @@ fn chat_discussion_mode_unreadable_record_is_discuss() {
         .expect("odd value");
     claim(&s, &t.id, "r1", 2);
     assert_eq!(mode(&s, &t.id, "r1").mode, ChatDiscussionMode::Discuss);
+}
+
+/// D1.1・D7: a relay and an MCP `console_instruct` input carry the mode; the run's deciders keep
+/// the MCP client's author apart from a person's (an MCP input never counts as the person).
+#[test]
+fn discussion_mode_relay_and_mcp_instruct_carry_mode() {
+    let s = SqliteStore::open_in_memory().expect("store");
+    let posted = s
+        .chat_mcp_instruct(
+            "chatgpt",
+            None,
+            None,
+            "議論",
+            None,
+            Some(ChatDiscussionMode::Discuss),
+            at(0),
+        )
+        .expect("mcp");
+    let message = posted.response.message;
+    assert_eq!(message.discussion_mode, Some(ChatDiscussionMode::Discuss));
+    assert_eq!(message.author.as_deref(), Some("mcp:chatgpt"));
+    let run = claim(&s, &message.thread_id, "r-mcp", 1);
+    assert_eq!(run.input_message_id, message.id);
+    let derived = mode(&s, &message.thread_id, "r-mcp");
+    assert_eq!(derived.mode, ChatDiscussionMode::Discuss);
+    assert_eq!(derived.decided_by[0].author.as_deref(), Some("mcp:chatgpt"));
+    let plain = s
+        .chat_mcp_instruct(
+            "chatgpt",
+            Some(&message.thread_id),
+            None,
+            "続き",
+            None,
+            None,
+            at(2),
+        )
+        .expect("mcp");
+    assert_eq!(plain.response.message.discussion_mode, None);
+    let t = test_project_thread(&s, "relay", at(3));
+    let relay = ChatRelayRequest {
+        client_message_id: "relay-1".into(),
+        text: "人の原文".into(),
+        said_at: "2026-10-05T00:00:00Z".into(),
+        task_ids: vec![],
+        expires_at: None,
+        discussion_mode: Some(ChatDiscussionMode::Propose),
+    };
+    let relayed = s
+        .chat_relay_post(&t.id, &relay, "operator:claude-code", at(4))
+        .expect("relay")
+        .response
+        .message;
+    assert_eq!(relayed.discussion_mode, Some(ChatDiscussionMode::Propose));
+    assert_eq!(relayed.author.as_deref(), Some("operator:claude-code"));
+    assert_eq!(metadata(&s, &relayed.id)["discussion_mode"], "propose");
 }

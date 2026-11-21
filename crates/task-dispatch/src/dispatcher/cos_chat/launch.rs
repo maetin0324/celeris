@@ -761,9 +761,18 @@ impl CosChatLaunch {
             thread.as_ref().and_then(|t| t.project_id.as_deref()),
             now,
         )?;
+        // ADR 2026-11-21-chat-discussion-mode D1.2: the prompt names a discuss / propose run.
+        let discussion_mode = Some(
+            self.store
+                .chat_run_discussion_mode(thread_id, run_id)
+                .map_err(|e| e.to_string())?
+                .mode,
+        )
+        .filter(|mode| *mode != task_core::chat::ChatDiscussionMode::Execute);
         let chat = CosChatContext {
             thread_id: thread_id.to_string(),
             run_id: run_id.to_owned(),
+            discussion_mode,
             inline_read_max_commands: Some(self.config.inline_read_max_commands),
             relayed_instructions,
             inputs: vec![CosChatInput {

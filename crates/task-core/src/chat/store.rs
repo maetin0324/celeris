@@ -568,6 +568,7 @@ fn parse_thread_cursor(s: &str) -> Result<(String, String), ChatError> {
 impl SqliteStore {
     /// MCP inputs use the normal human queue of the named thread, else of the project's (or the
     /// general) CoS thread. Input and provenance commit together; the input id is also the compatibility task receipt.
+    #[allow(clippy::too_many_arguments)]
     pub fn chat_mcp_instruct(
         &self,
         client_id: &str,
@@ -575,6 +576,7 @@ impl SqliteStore {
         project_id: Option<&str>,
         text: &str,
         relay: Option<&ChatRelayRequest>,
+        discussion_mode: Option<super::ChatDiscussionMode>,
         now: OffsetDateTime,
     ) -> Result<ChatMessagePosted, ChatError> {
         let mut conn = writer(self)?;
@@ -628,7 +630,7 @@ impl SqliteStore {
                 reply_to_id: None,
                 mode: ChatSendMode::Queue,
                 resume_queue: false,
-                discussion_mode: None,
+                discussion_mode,
             },
             &MessageProvenance {
                 author: Some(author),

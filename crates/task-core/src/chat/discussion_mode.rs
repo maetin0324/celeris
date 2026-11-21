@@ -156,7 +156,9 @@ fn mode_of(meta: &Value) -> ChatDiscussionMode {
 }
 
 fn author_of(meta: &Value) -> Option<String> {
-    meta.get("author").and_then(Value::as_str).map(str::to_owned)
+    meta.get("author")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
 }
 
 impl SqliteStore {

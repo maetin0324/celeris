@@ -35,6 +35,10 @@ pub struct InstructArgs {
     /// (verbatim) that this client relays. The relaying principal is `mcp:<client_id>`.
     #[serde(default)]
     pub relay: Option<RelayArgs>,
+    /// ADR 2026-11-21-chat-discussion-mode D1.1: what the CoS run answering this input may do
+    /// (`discuss` / `propose` refuse every CoS operation). Absent = `execute`, as before.
+    #[serde(default)]
+    pub discussion_mode: Option<task_core::chat::ChatDiscussionMode>,
 }
 
 /// The relay record of a `console_instruct` input (ADR 2026-10-27-relayed-instructions D1).
@@ -85,7 +89,7 @@ async fn instruct_impl(
             said_at: relay.said_at.clone(),
             task_ids: relay.task_ids.clone(),
             expires_at: relay.expires_at.clone(),
-            discussion_mode: None,
+            discussion_mode: args.discussion_mode,
         });
     let posted = state
         .blocking(move |store| {
@@ -95,6 +99,7 @@ async fn instruct_impl(
                 project_id.map(|p| p.to_string()).as_deref(),
                 &args.text,
                 relay.as_ref(),
+                args.discussion_mode,
                 time::OffsetDateTime::now_utc(),
             )
         })
@@ -119,7 +124,7 @@ fn instruct_call<'a>(
 pub fn instruct_def() -> ToolDef {
     ToolDef {
         name: "console_instruct",
-        description: "新しい CoS 会話を作って発言を積む。thread_id 指定で続ける（author は mcp:<client_id>）。relay を付けると、人の発言の原文を取り次いだ記録（said_at・task_ids・expires_at）になり、CoS が instructed_by の根拠に使える。",
+        description: "新しい CoS 会話を作って発言を積む。thread_id 指定で続ける（author は mcp:<client_id>）。relay を付けると、人の発言の原文を取り次いだ記録（said_at・task_ids・expires_at）になり、CoS が instructed_by の根拠に使える。discussion_mode が discuss・propose なら、その発言に答える CoS run の操作は API がすべて拒否する（省略は execute）。",
         scope: task_core::McpScope::ConsoleInstruct,
         input_schema: schema::<InstructArgs>,
         call: instruct_call,

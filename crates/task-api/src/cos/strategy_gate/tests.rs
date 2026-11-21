@@ -828,3 +828,26 @@ async fn strategy_gate_ablation_four_rules() {
         rows.join("\n")
     );
 }
+
+/// ADR 2026-11-21-chat-discussion-mode D4: an execute run (no mode recorded) keeps the strategy
+/// gate's refusal of an unapproved document; the same request from a discuss run is refused
+/// earlier by the mode (403), and neither creates a task.
+#[tokio::test]
+async fn discussion_mode_execute_unapproved_strategy_is_422() {
+    let w = world();
+    let s = publish(&w, &baseline(&w));
+    refused(&w, "dm-exec", &s, "strategy_unapproved").await;
+    rusqlite::Connection::open(w.root.join("celeris.db"))
+        .expect("db")
+        .execute(
+            "UPDATE chat_messages SET metadata_json=json_set(metadata_json,'$.discussion_mode','discuss') \
+             WHERE id=?1",
+            [&w.message],
+        )
+        .expect("discuss");
+    let before = created_tasks(&w);
+    let (status, code, _, body) = create(&w, "dm-discuss", &s).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(code, "discussion_mode_forbidden", "{body}");
+    assert_eq!(created_tasks(&w), before);
+}

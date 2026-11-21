@@ -9,6 +9,7 @@
 #
 # 本番には一切触れない（プロセスも DB も config も）。人でもワーカーでも実行してよい（D5）。
 # ADR-0126 B4: userns の要る試験は既定 skip だが、この gate は既定で `CELERIS_USERNS_TESTS=1` を立てて走らせる。
+# ADR 2026-11-21-release-gate-second-stage-skip: 試験 7・9 の 2 段目の前提の欠けは FAIL。走れない試験は SD_GATE_SKIP_HOST_TESTS（と NoNewPrivs 1 の試験 9）で明示して外し、gate.json に残す。
 set -euo pipefail
 
 SD_PROG=release
@@ -32,6 +33,11 @@ env:
                        cargo-test なら従来の `cargo test --workspace`（直列。非常用）
   SD_TEST_PARALLEL     既定 ビルドする sha の scripts/dev/test-parallel.sh（テスト用の差し替え口）
   CELERIS_TEST_JOBS    並列に走らせるテストの数（既定 min(8, max(2, nproc/3))。test-parallel.sh が読む）
+  SD_GATE_SKIP_HOST_TESTS  既定 空。この host で走れない試験を人が明示して gate から外す（comma 区切り。`sudo` = 試験 9
+                       real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch、`ssh` = 試験 7
+                       ssh_config_includes_still_parse_inside_the_namespace）。外した試験は skipped と数え、gate.json の
+                       host_tests に理由を残す。未知の key は gate の前に落とす（ADR 2026-11-21-release-gate-second-stage-skip G4）
+  SD_PROC_SELF_STATUS  既定 /proc/self/status（NoNewPrivs を読む file。試験だけが差し替える）
   SD_SCRIPT_BUNDLE_GATE  既定 ビルドする sha の scripts/selfdeploy/script-bundle-gate.sh（試験の偽の木だけが差し替える）
 EOF
   exit 2
@@ -53,6 +59,68 @@ if [ "${SD_GATE_TEST_RUNNER:-nextest}" = nextest ]; then
   cargo nextest --version >/dev/null 2>&1 \
     || sd_die "cargo-nextest is not installed; install once: cargo install cargo-nextest --locked --version $(git -C "$SD_REPO" show "$REF:tools/nextest/VERSION" 2>/dev/null | tr -d ' \n' || true) (docs/ops/nextest.md), or set SD_GATE_TEST_RUNNER=cargo-test"
 fi
+
+# ADR 2026-11-21-release-gate-second-stage-skip G1・G4・G5: userns の試験 7・9 は本体に入った後に ssh・sudo が無いと FAIL する
+# （skip して PASS と数えない）。この host で走れない試験は、人が `SD_GATE_SKIP_HOST_TESTS` で明示して外す。daemon が起こす gate は
+# NoNewPrivs 1 で sudo が権限を上げられないので、試験 9 だけは NoNewPrivs 1 を読んだら自動で外す（sudo -n の probe では外さない）。
+# 外した試験は nextest の filter（cargo-test runner なら `--skip --exact`）で skipped と数え、gate.json の `host_tests` に理由を残す。
+# この gate は CELERIS_LAUNCHER_TESTS を立てない（G1。実際の値は gate.json の `gate_env`）。
+declare -A HOST_OFF_BY=() HOST_REASON=() HOST_NAME=() HOST_FILTER=()
+HOST_NAME[sudo]="real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch"
+HOST_FILTER[sudo]="package(celeris-credentiald) & test(=${HOST_NAME[sudo]})"
+HOST_NAME[ssh]="db_guard::tests::ssh_config_includes_still_parse_inside_the_namespace"
+HOST_FILTER[ssh]="package(task-worker) & test(=${HOST_NAME[ssh]})"
+HOST_NEXTEST_EXPR=""
+HOST_SKIP_ARGS=()
+resolve_host_tests() {
+  local raw="${SD_GATE_SKIP_HOST_TESTS:-}" key nnp
+  local -a keys=()
+  IFS=, read -ra keys <<<"$raw" || true
+  for key in ${keys[@]+"${keys[@]}"}; do
+    case "$key" in
+      sudo | ssh)
+        HOST_OFF_BY[$key]="SD_GATE_SKIP_HOST_TESTS"
+        HOST_REASON[$key]="SD_GATE_SKIP_HOST_TESTS=$raw" ;;
+      *) sd_die "SD_GATE_SKIP_HOST_TESTS: unknown key '$key' (known: sudo, ssh)" ;;
+    esac
+  done
+  nnp="$(awk '$1 == "NoNewPrivs:" { print $2 }' "${SD_PROC_SELF_STATUS:-/proc/self/status}" 2>/dev/null || true)"
+  if [ "$nnp" = 1 ] && [ -z "${HOST_OFF_BY[sudo]:-}" ]; then
+    HOST_OFF_BY[sudo]="no_new_privs"
+    HOST_REASON[sudo]="NoNewPrivs: 1: sudo cannot gain privileges"
+  fi
+  for key in sudo ssh; do
+    [ -n "${HOST_OFF_BY[$key]:-}" ] || continue
+    HOST_NEXTEST_EXPR="${HOST_NEXTEST_EXPR:+$HOST_NEXTEST_EXPR | }(${HOST_FILTER[$key]})"
+    HOST_SKIP_ARGS+=(--skip "${HOST_NAME[$key]}")
+    sd_log "host test $key off by ${HOST_OFF_BY[$key]}: ${HOST_REASON[$key]} (${HOST_NAME[$key]} is counted as skipped)"
+  done
+}
+resolve_host_tests
+
+# gate.json の `host_tests`: 試験 7（ssh）・9（sudo）を走らせたか。外したなら誰が（off_by）と理由。
+host_tests_json() {
+  local key rows=""
+  for key in sudo ssh; do
+    rows="$rows$key"$'\t'"${HOST_OFF_BY[$key]:-}"$'\t'"${HOST_REASON[$key]:-}"$'\t'"${HOST_NAME[$key]}"$'\n'
+  done
+  printf '%s' "$rows" | python3 -c '
+import json, sys
+out = {}
+for line in sys.stdin.read().splitlines():
+    key, off_by, reason, name = line.split("\t")
+    out[key] = {"run": not off_by, "off_by": off_by or None, "reason": reason or None, "tests": [name]}
+print(json.dumps(out))'
+}
+
+# gate.json の `gate_env`: gate の試験の範囲を決める env の実際の値（未設定は null）。ADR-0126 B4 の人の `CELERIS_USERNS_TESTS=0`
+# の明示も、ここで読める。
+gate_env_json() {
+  python3 -c '
+import json, os
+names = ("CELERIS_USERNS_TESTS", "CELERIS_ISOLATION_TESTS", "CELERIS_LAUNCHER_TESTS", "SD_GATE_SKIP_HOST_TESTS")
+print(json.dumps({n: os.environ.get(n) for n in names}))'
+}
 
 SHA12="$(sd_sha12 "$REF")"
 SHA_FULL="$(sd_sha_full "$REF")"
@@ -312,6 +380,8 @@ write_gate_json() {
       "$(sd_json_str "$BUILD")" "$BUILD_TREE_REUSED" "$(sd_json_str "$SD_CARGO_TARGET")" \
       "$(sd_json_str "$SD_SCRATCH_OWNER")" "$WS_CLEAN_NEEDED"
     printf '  "cargo_test": %s,\n' "$(cargo_test_summary_json)"
+    printf '  "host_tests": %s,\n' "$(host_tests_json)"
+    printf '  "gate_env": %s,\n' "$(gate_env_json)"
     printf '  "bundle": %s,\n' "${BUNDLE_JSON:-null}"
     printf '  "script_bundle": %s,\n' "${SCRIPT_BUNDLE_JSON:-null}"
     printf '  "web": %s,\n' "$(web_json)"
@@ -381,8 +451,17 @@ run_cargo_test_step() {
   case "${SD_GATE_TEST_RUNNER:-nextest}" in
     nextest)
       # 無ければ bash が exit 127 で落ち、gate.json の cargo-test 段に残る（sd_die だと gate.json が残らない）。
-      run_step cargo-test "$BUILD" -- bash "${SD_TEST_PARALLEL:-$BUILD/scripts/dev/test-parallel.sh}" ;;
-    cargo-test) run_step cargo-test "$BUILD" -- cargo test --workspace ;;
+      if [ -n "$HOST_NEXTEST_EXPR" ]; then
+        run_step cargo-test "$BUILD" -- bash "${SD_TEST_PARALLEL:-$BUILD/scripts/dev/test-parallel.sh}" -E "not ($HOST_NEXTEST_EXPR)"
+      else
+        run_step cargo-test "$BUILD" -- bash "${SD_TEST_PARALLEL:-$BUILD/scripts/dev/test-parallel.sh}"
+      fi ;;
+    cargo-test)
+      if [ ${#HOST_SKIP_ARGS[@]} -gt 0 ]; then
+        run_step cargo-test "$BUILD" -- cargo test --workspace -- "${HOST_SKIP_ARGS[@]}" --exact
+      else
+        run_step cargo-test "$BUILD" -- cargo test --workspace
+      fi ;;
     *) sd_die "SD_GATE_TEST_RUNNER must be nextest or cargo-test (got ${SD_GATE_TEST_RUNNER})" ;;
   esac
 }

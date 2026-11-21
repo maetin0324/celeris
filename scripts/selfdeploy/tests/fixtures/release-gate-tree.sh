@@ -100,6 +100,12 @@ exit 0
 EOF
 chmod +x "$root/bin/"*
 
+# release.sh は自分の NoNewPrivs を読み、1 なら試験 9 を gate から外す（ADR 2026-11-21-release-gate-second-stage-skip G5）。
+# 試験の結果がこの worker・CI の NoNewPrivs に左右されないよう、既定は「NoNewPrivs の行が無い」file に固定する
+# （release_host_tests_gate.sh だけが値を指定する）。
+: >"$root/proc-self-status"
+export SD_PROC_SELF_STATUS="${SD_PROC_SELF_STATUS:-$root/proc-self-status}"
+
 # ---- 偽の木（release.sh・test-parallel.sh が読む file を写す） ----
 repo="$root/repo"
 mkdir -p "$repo/crates/task-core/src/store" "$repo/crates/celeris" "$repo/crates/x/src" "$repo/scripts/selfdeploy"

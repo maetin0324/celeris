@@ -265,7 +265,7 @@ if kind == "gate":
     ct = d.get("cargo_test") if isinstance(d.get("cargo_test"), dict) else {}
     steps = [s for s in d.get("steps") or [] if isinstance(s, dict)]
     row.update(ok=d.get("ok") is True, file=src, sha=d.get("sha"), failed_step=d.get("failed_step") or None,
-               step_count=len(steps), steps=[{"step": s.get("step"), "exit": s.get("exit")} for s in steps],
+               host_tests=d.get("host_tests"), step_count=len(steps), steps=[{"step": s.get("step"), "exit": s.get("exit")} for s in steps],
                cargo_test={k: ct.get(k) for k in ("runner", "passed", "failed", "ignored", "nextest_passed",
                                                    "nextest_skipped", "doc_passed", "doc_ignored", "nextest_exit",
                                                    "doctest_exit", "userns")} if ct else None)

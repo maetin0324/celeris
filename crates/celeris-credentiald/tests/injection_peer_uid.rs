@@ -5,8 +5,8 @@
 //!
 //! 別 UID の process は launcher の UID（`celeris-browser`、設定 `[browser].launcher_uid`）で
 //! `sudo -n -u` により起こす。`unshare -r` の子は host では同 UID なので別 UID の証拠にしない。
-//! sudo が使えない・user が無い環境では理由を出して skip する（黙って pass しない）。
-//! `CELERIS_LAUNCHER_TESTS=require` では skip せず失敗する。既定では ADR-0126 B の opt-in
+//! sudo が使えない・user が無い・probe の行が返らない環境では、本体に入った後は常に失敗する（skip して pass と数えない。
+//! ADR 2026-11-21-release-gate-second-stage-skip G2）。既定では ADR-0126 B の opt-in
 //! （`CELERIS_USERNS_TESTS=1`）が無い build で harness の ignored になる（sudo の試行を CI の既定に入れないため）。
 //! 走らせるかは build script の cfg `celeris_userns_tests` が決める（規則は `crates/task-worker/userns_tests_cfg.rs`。
 //! ADR 2026-11-21-userns-tests-explicit-skip）。
@@ -47,21 +47,14 @@ const PROBE_USER_ENV: &str = "CELERIS_PEER_UID_USER";
 const DEFAULT_PROBE_USER: &str = "celeris-browser";
 const MARK: &str = "PEER-UID-PROBE";
 
-/// 本体に入った後、環境（user・sudo・probe の行）が無いときに skip せず fail させるか。走らせるかの規則
-/// （cfg `celeris_userns_tests`）とは別（ADR 2026-11-21-userns-tests-explicit-skip の「残る穴」）。
-fn require() -> bool {
-    std::env::var("CELERIS_LAUNCHER_TESTS").as_deref() == Ok("require")
-}
-
-fn missing(reason: impl AsRef<str>) -> bool {
-    if require() {
-        panic!(
-            "peer-uid real-process test environment required: {}",
-            reason.as_ref()
-        );
-    }
-    eprintln!("SKIP: (not passed) {}", reason.as_ref());
-    true
+/// 本体に入った後、環境（user・sudo・probe の行）が無いときは skip（return して PASS）にせず失敗させる
+/// （ADR 2026-11-21-release-gate-second-stage-skip G2、ADR-0126 B2）。走らせるかの規則（cfg `celeris_userns_tests`）
+/// とは別で、この関数は env を読まない。gate が走れない host で外すときは nextest の filter で明示する。
+fn missing(reason: impl AsRef<str>) -> ! {
+    panic!(
+        "peer-uid real-process test environment required: {}",
+        reason.as_ref()
+    )
 }
 
 fn request() -> InjectionRequest {
@@ -362,11 +355,10 @@ fn real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch() {
         missing(format!(
             "user {user} is absent (set {PROBE_USER_ENV} to another local user)"
         ));
-        return;
     };
     let my_uid = unsafe { libc::geteuid() };
     assert_ne!(other_uid, my_uid, "{user} must differ from the test UID");
-    // sudo が使えるか（NOPASSWD か `sudo -v` 済み）。無ければ理由を出して skip。
+    // sudo が使えるか（NOPASSWD か `sudo -v` 済み）。無ければ失敗する（missing）。
     match Command::new("sudo")
         .args(["-n", "-u", &user, "/usr/bin/true"])
         .output()
@@ -378,15 +370,12 @@ fn real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch() {
                 o.status.code(),
                 String::from_utf8_lossy(&o.stderr).trim()
             ));
-            return;
         }
         Err(e) if e.kind() == ErrorKind::NotFound => {
             missing("sudo is not installed");
-            return;
         }
         Err(e) => {
             missing(format!("sudo: {e}"));
-            return;
         }
     }
 
@@ -412,10 +401,7 @@ fn real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch() {
     // 層 1（dac）: 本番と同じ permission。別 UID は connect で EACCES、broker は接続を見ない。
     let (uid, dac) = match probe_as(&user, &socket) {
         Ok(found) => found,
-        Err(reason) => {
-            missing(reason);
-            return;
-        }
+        Err(reason) => missing(reason),
     };
     eprintln!("PEER-UID dac uid={uid} {dac:?}");
     assert_eq!(uid, other_uid, "probe process did not run as {user}");
@@ -439,15 +425,11 @@ fn real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch() {
             "broker layer: fixture ancestor {} is not traversable by {user} (run with TMPDIR=/tmp)",
             dir.display()
         ));
-        return;
     }
     fx.loosen_dac();
     let (uid, broker) = match probe_as(&user, &socket) {
         Ok(found) => found,
-        Err(reason) => {
-            missing(reason);
-            return;
-        }
+        Err(reason) => missing(reason),
     };
     eprintln!("PEER-UID broker uid={uid} {broker:?}");
     assert_eq!(uid, other_uid);
@@ -469,6 +451,56 @@ fn real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch() {
         "PEER-UID result dac=connect_errno={} broker=peer_uid_mismatch (peer uid {other_uid}, broker uid {my_uid})",
         libc::EACCES
     );
+}
+
+/// 試験 9 を子 process（同じ試験 binary、PATH の先頭に偽の `sudo`）で起こし、`(終了 status, stdout+stderr)` を返す。
+/// 別 UID の user は試験の UID と違う既存の user（`nobody`）。本物の sudo も別 UID の process も要らない。
+fn run_test9_with_fake_sudo(script: &str) -> (bool, String) {
+    let dir = short_tempdir().unwrap();
+    let fake = dir.path().join("sudo");
+    fs::write(&fake, format!("#!/bin/sh\n{script}\n")).unwrap();
+    fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!(
+        "{}:{}",
+        dir.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let out = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--include-ignored",
+            "--exact",
+            "real_process_with_another_uid_is_rejected_by_dac_then_peer_uid_mismatch",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("PATH", path)
+        .env(PROBE_USER_ENV, "nobody")
+        .output()
+        .unwrap();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    (out.status.success(), text)
+}
+
+/// sudo が使えない（NoNewPrivs 1 の daemon の gate と同じ失敗）とき、試験 9 は skip で PASS ではなく FAIL する。
+/// 本体を `return` の形に戻すと子が PASS し、この試験が落ちる（既存の試験は本体が走ったときの判定しか見ない）。
+#[test]
+fn test9_fails_instead_of_skipping_when_sudo_is_unusable() {
+    let (ok, text) = run_test9_with_fake_sudo("echo 'no new privileges' >&2; exit 1");
+    assert!(!ok, "child must FAIL, not pass: {text}");
+    assert!(text.contains("environment required"), "{text}");
+}
+
+/// sudo は通るが probe の `PEER-UID-PROBE` 行が返らないときも FAIL する（`no PEER-UID-PROBE line`）。
+#[test]
+fn test9_fails_instead_of_skipping_when_no_probe_line_returns() {
+    let (ok, text) = run_test9_with_fake_sudo("exit 0");
+    assert!(!ok, "child must FAIL, not pass: {text}");
+    assert!(text.contains("environment required"), "{text}");
+    assert!(text.contains("no PEER-UID-PROBE line"), "{text}");
 }
 
 /// `PEER-UID-PROBE` 行の往復（別 UID の子の出力を親が読む部分）。

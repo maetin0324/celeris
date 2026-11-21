@@ -34,8 +34,12 @@ task 01M7MZTKBPZPQE4XN451F8X84F（アーキ v4 H）の受け入れ条件 3 は `
 
 ## 決定
 
-- D1: 候補の組み立ての owner は `review_spawn.rs` の `review_artifact_candidates`（`review_spawn.rs:56`、呼び出しは `:865`）。
-  入力は対象 task の `events_for(task_id)` と `work_units_for(task_id)` と review する run の id だけで、純粋関数にする。
+- D1: 候補の組み立ては `crates/task-dispatch/src/review.rs:638` の `artifact_candidates`（純粋関数）にし、最終 review の
+  `spawn_review`（`crates/task-dispatch/src/dispatcher/review_spawn.rs:823`）が対象 task の `events_for(task_id)` と
+  `work_units_for(task_id)` と review する run の id を渡して `produced` にする。`produced` の意味（`ArtifactExists` の名前の
+  照合と優先順）は `review_task` の契約なので、同じ module に置く。`review_spawn.rs` に置くと repo health の
+  `size.responsibility-growth` の既存の 2 件（module `crates/task-dispatch/src/dispatcher` の本体の行 32350 > 8000、
+  `Dispatcher::spawn_review` の関数の行 727 > 200）が悪化して fail になった（実測）ので置かない。
 - D2: 候補は「同じ task の WorkUnit の run の `ArtifactProduced`（events の順）→ review する run の `ArtifactProduced`」の並び。
   `review_task` は同じ名前なら後ろを使うので、名前が重なれば review する run の分 → WorkUnit の新しい run の分の順に選ばれる。
 - D3: WorkUnit の run は `WorkUnitTransitioned { to: running, run_id: Some(r), work_unit_id }` で、`work_unit_id` が対象 task の
@@ -62,9 +66,9 @@ task 01M7MZTKBPZPQE4XN451F8X84F（アーキ v4 H）の受け入れ条件 3 は `
 
 ## 撤去
 
-- `review_spawn.rs` の `artifacts_for_run(&events, &run_id)` の 1 行は `review_artifact_candidates` に置き換えた。
-  `task_ops::derive::artifacts_for_run` は `review_artifact_candidates` が review する run の分を取るのに使い続ける
-  （同じ規則を書き直さない）。
+- `review_spawn.rs` の `artifacts_for_run(&events, &run_id)` の 1 行は `artifact_candidates` の呼び出しに置き換え、
+  使われなくなった `dispatcher.rs` の `artifacts_for_run` の import を消した。`task_ops::derive::artifacts_for_run` は
+  `artifact_candidates` が review する run の分を取るのに使い続ける（同じ規則を書き直さない）。
 - `review.rs` の `review_task` の doc（「`produced` はその run の `ArtifactProduced`」）を新しい意味に書き換えた。
 
 ## 不変条件と試験

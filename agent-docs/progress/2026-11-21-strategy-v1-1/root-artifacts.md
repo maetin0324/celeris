@@ -27,8 +27,8 @@ updated: 2026-11-21
 ## 変更
 
 - `strategy-v1 1 root-artifacts: root の最終 review の ArtifactExists が同じ task の WorkUnit の run の成果物を候補にする`
-  - `review_spawn.rs` に `review_artifact_candidates(events, units, run_id)`（純粋関数）を足し、最終 review の `produced` を
-    これで組み立てる。並びは「同じ task の WorkUnit の run の `ArtifactProduced`（古い順）→ review する run の分」。
+  - 最終 review の `produced`（`ArtifactExists` の名前の照合に使う候補）を、同じ task の WorkUnit の run の成果物まで広げた。
+    並びは「同じ task の WorkUnit の run の `ArtifactProduced`（古い順）→ review する run の分」。
     `review_task` は同じ名前なら後ろを使うので、review する run の分 → WU の新しい run の分の順に選ぶ。
   - WorkUnit の run は `WorkUnitTransitioned{to: running, run_id}` の `work_unit_id` が `work_units_for(task)` にあるものだけ。
   - workspace の外を指す path は除く。規則は `task_worker::artifact::resolve` の字面の検査を `check_relative` に切り出して
@@ -38,6 +38,13 @@ updated: 2026-11-21
 - `strategy-v1 1 root-artifacts: 試験 (1) を本番と同じ形（review する run も同じ WU の run）にする`
 - `strategy-v1 1 root-artifacts: ADR 2026-11-21-root-review-work-unit-artifacts を足す`
 - `strategy-v1 1 root-artifacts: 進捗 file を書く`（この file）
+- `strategy-v1 1 root-artifacts: 候補の組み立てを review.rs の artifact_candidates に移し、dispatcher の行を増やさない`
+  - 組み立ての純粋関数を `crates/task-dispatch/src/review.rs` の `artifact_candidates` に置き、`review_spawn.rs` の
+    `spawn_review` からは 1 行で呼ぶ。最初は `review_spawn.rs` に置いたが、test-affected の repo health が
+    `size.responsibility-growth` の既存の 2 件の悪化（module `crates/task-dispatch/src/dispatcher` の本体の行 32350 > 8000、
+    `Dispatcher::spawn_review` の関数の行 727 > 200）で exit 1 になったので移した。移した後の `check-health.sh` は
+    `verdict=pass worsened=0`。使われなくなった `dispatcher.rs` の `artifacts_for_run` の import を消した。
+- `strategy-v1 1 root-artifacts: ADR と進捗 file を関数の移動と検査の結果に合わせる`
 
 新しい状態・DB 表・event・設定の欄・Manager・trait・fallback は足していない。成果物を root の dir に写す仕組みも置いていない。
 
@@ -54,7 +61,7 @@ updated: 2026-11-21
 (2) と (4) が修正前に通るのは、修正前の候補が review する run の分だけだったから（(2) は修正が他の task の成果物まで
 広げないこと、(4) は計画の無い task の挙動を変えないことを守る試験）。
 
-### 修正前の出力（`review_artifact_candidates` の本体を base と同じ `artifacts_for_run(events, run_id)` に戻して実行）
+### 修正前の出力（候補の組み立ての本体を base と同じ `artifacts_for_run(events, run_id)` に戻して実行）
 
 ```
 $ cargo nextest run -p task-dispatch --lib -E 'test(root_review_artifact_)' --no-fail-fast
@@ -92,8 +99,9 @@ exit=100
 | external_test | 463385 | 463808 | +423 |
 | inline_test | 21408 | 21408 | 0 |
 
-`git diff --numstat $CELERIS_WU_BASE HEAD` の内訳: `review_spawn.rs` +43/−1、`review.rs` +3/−1、`artifact.rs` +18/−9、
-`dispatcher/tests/mod.rs` +1、`dispatcher/tests/root_review_artifacts.rs` +422、ADR +101（docs）。
+`git diff --numstat $CELERIS_WU_BASE HEAD` の内訳（Rust）: `review.rs` +45/−1、`artifact.rs` +18/−9、`review_spawn.rs` +2/−2、
+`dispatcher.rs` +4/−4（import の折り返し）、`dispatcher/tests/mod.rs` +1、`dispatcher/tests/root_review_artifacts.rs` +422。
+docs は ADR と進捗 file。
 
 本体の純増 53 行の理由: 候補の組み立て（WU の run の見分けと path の除外、doc comment 7 行を含む）と、`check_relative` の
 切り出し（doc comment と関数の枠）。この task は行数の純減を目的にしていない。

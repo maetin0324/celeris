@@ -454,3 +454,16 @@ $ tr '\0' '\n' </proc/812926/environ
   コードの試験は impl の段で 6266 passed を確認済み。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
 - commit: 「selfdeploy userns-skip-gate record: 進捗の本番への移行と提出時の検査を書く」（この段）。最後の同期の後の再実行は integrate-record が行う。
+
+### first-release の段（子 task 01M7ZDW4QK6N27N7MFJPCZ13JN。提出時の HEAD で実行。基準は `git merge-base HEAD main`）
+- `bash scripts/dev/test-affected.sh` → exit 0（15 分 41 秒。対象 crate は celeris・celeris-campaign・celeris-credentiald・celerisctl・llm-proxy・task-api・
+  task-dispatch・task-worker と web の typecheck+unit。`6272 tests run: 6272 passed (16 slow), 30 skipped`、`repo-health: verdict=pass … new=0 worsened=0`、
+  `script bundle SKIP: 0 件`）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- `sh scripts/dev/progress-index.sh --check` → exit 0、`sh scripts/dev/check-adr-numbers.sh` → exit 0（475 files）、`sh scripts/dev/check-doc-links.sh` → exit 0。
+- shell の試験: `release_host_tests_gate.sh`・`release_parallel_test_gate.sh`・`release_record_summary_survives_prune.sh`（共有の fixture を変えたので）→ すべて exit 0。
+- 参考（必須の検査ではない）: `cargo clippy -p celeris-credentiald -p task-worker --tests -- -D warnings` は、この変更の外の既存の
+  `crates/task-worker/src/adapter.rs:561`（`clippy::type_complexity`）で exit 101。この変更の file には指摘が無い。
+- release.sh・verify.sh・promote.sh の本番での実行はしていない。本番の unit・config・DB は読んだだけで変えていない。
+- commit: 「selfdeploy userns-skip-gate first-release: 試験 7・9 の厳格化を新しい release.sh が立てる CELERIS_SECOND_STAGE_TESTS で有効にし、旧い台本の 1 回目の gate を落とさない」と、
+  この節を足した commit。

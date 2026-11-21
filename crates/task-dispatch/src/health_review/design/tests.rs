@@ -315,7 +315,7 @@ fn prompt_ancestor_objective_design_review_carries_the_parent() {
             ancestors: crate::prompt_ancestors::ancestor_contexts(
                 &crate::prompt_ancestors::chain_to_root(&store, &subject).unwrap(),
             ),
-            children: Vec::new(),
+            ..Default::default()
         },
         ..RunContext::default()
     };

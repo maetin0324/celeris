@@ -240,7 +240,8 @@ impl Dispatcher {
     /// ADR-0117 D1: 対象 task とその祖先（木の親、無ければ `parent_id`）で回答済みの決定と、
     /// それらの task の `question` への回答を集める。決定は `answered_at` の昇順、回答は root 側から順に並べる。
     /// 兄弟の決定は混ぜない。`withdrawn` と未回答は含めない。ADR 2026-11-21-ancestor-objective-in-prompts D3: 同じ列の
-    /// 祖先の objective と受入条件の全文も返す（reviewer の prompt の祖先の節）。
+    /// 祖先の objective と受入条件の全文も返す（reviewer の prompt の祖先の節）。ADR 2026-11-21-strategy-evidence-contract
+    /// D5.2: 同じ列の案件の `Project.request` も返す（読めなければ `?` で返り、reviewer run を起こさない）。
     pub(super) fn review_human_inputs(
         &self,
         task: &Task,
@@ -291,7 +292,7 @@ impl Dispatcher {
         Ok(crate::review::ReviewHumanInputs {
             decisions,
             answers,
-            ancestors: crate::prompt_ancestors::ancestor_contexts(&chain),
+            lineage: crate::prompt_ancestors::chain_lineage(self.store.as_ref(), &chain)?,
         })
     }
 

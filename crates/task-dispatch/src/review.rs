@@ -287,20 +287,10 @@ pub struct ReviewHumanInputs {
     pub decisions: Vec<ReviewDecision>,
     /// ADR-0117 D1: 対象 task と祖先の `question` への人の回答（`ReviewRequest.answers`）。
     pub answers: Vec<Answer>,
-    /// ADR 2026-11-21-ancestor-objective-in-prompts D3: 祖先（root が先頭、親が末尾）の objective と受入条件の全文。
-    /// reviewer run の `RunContext.lineage.ancestors` に写す。親の無い task では空。
-    pub ancestors: Vec<task_worker::protocol::AncestorContext>,
-}
-
-impl ReviewHumanInputs {
-    /// reviewer run の `RunContext.lineage`（ADR 2026-11-21-ancestor-objective-in-prompts D3。祖先の目的と受入条件の全文
-    /// だけで、reviewer は子の要約を受け取らない）。`run_reviewer_inner` は `review` に `into_request` で移す前にこれを写す。
-    fn lineage(&self) -> task_worker::protocol::TaskLineageContext {
-        task_worker::protocol::TaskLineageContext {
-            ancestors: self.ancestors.clone(),
-            children: Vec::new(),
-        }
-    }
+    /// reviewer run の `RunContext.lineage`（ADR 2026-11-21-ancestor-objective-in-prompts D3: 祖先（root が先頭、親が末尾）の
+    /// objective と受入条件の全文。ADR 2026-11-21-strategy-evidence-contract D5.2: 同じ列の案件の `Project.request`）。
+    /// `prompt_ancestors::chain_lineage` が組み、reviewer は子の要約を受け取らない。親も案件も無い task では空。
+    pub lineage: task_worker::protocol::TaskLineageContext,
 }
 
 /// ADR-0117 D2: `ReviewCheckResult.reason` に残す末尾の文字数。
@@ -1313,7 +1303,7 @@ async fn run_reviewer_inner(
             profile: run.profile.clone(),
             skills: run.skills.clone(),
             prior_review: vec![],
-            lineage: human_context.inputs.lineage(),
+            lineage: human_context.inputs.lineage.clone(),
             inputs: produced.to_vec(),
             // ADR-0117 D1: `RunContext.answers` は worker run 用。人の回答は `ReviewRequest.answers` に載せる。
             answers: vec![],

@@ -15,6 +15,9 @@ mod planner_prompt_tests;
 #[path = "ancestor_prompt_tests.rs"]
 mod ancestor_prompt_tests;
 
+#[path = "project_request_prompt_tests.rs"]
+mod project_request_prompt_tests;
+
 #[derive(Default)]
 struct RecordingSink {
     progress: Mutex<Vec<String>>,

@@ -14,7 +14,7 @@
 //!   効果の `Err` と CoS 入力の Busy は `pending` のまま backoff で延期し、`Err` が `max_retries` を超えたら
 //!   notice を書いて `failed`・phase `blocked` にする（ADR 付記 A1 の 10）。
 
-use sha2::{Digest, Sha256};
+use task_core::project_proposal::sha256_hex;
 use task_core::project_wake::{
     ControllerPhase, EffectState, NewProjectWake, ProjectControllerDecision, ProjectDecideInput,
     ProjectWakeKind,
@@ -476,7 +476,7 @@ impl Pass<'_> {
             id: ulid::Ulid::new().to_string(),
             based_on_revision: input.revision,
             human_epoch: input.human_epoch,
-            snapshot_sha256: sha256_hex(input_json.as_bytes()),
+            snapshot_sha256: sha256_hex(&input_json),
             request_sha256,
             generation_id: None,
             proposal_json: match guard_record {
@@ -983,11 +983,7 @@ fn decide_exhausted_notice(
 }
 
 fn root_claim(key: &str, spec: &NewTaskSpec) -> Result<IdempotencyClaim, String> {
-    let request_hash = sha256_hex(
-        serde_json::to_string(spec)
-            .map_err(|e| e.to_string())?
-            .as_bytes(),
-    );
+    let request_hash = sha256_hex(&serde_json::to_string(spec).map_err(|e| e.to_string())?);
     Ok(IdempotencyClaim {
         key: key.into(),
         operation: "project_controller.create_root".into(),
@@ -1091,12 +1087,8 @@ pub(super) fn project_request_sha256(store: &SqliteStore, project: &str) -> Stri
         .and_then(|id| store.project_get(id).ok().flatten())
         .map(|p| p.request)
         .unwrap_or_default();
-    sha256_hex(request.as_bytes())
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    digest.iter().map(|b| format!("{b:02x}")).collect()
+    // run の prompt の `context.lineage.project.request_sha256`（ADR 2026-11-21-strategy-evidence-contract D5.1）と同じ関数。
+    sha256_hex(&request)
 }
 
 fn format_time(t: OffsetDateTime) -> String {

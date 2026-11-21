@@ -1,5 +1,5 @@
 ---
-tasks: [01M7XQ9Q4P4ZQ38Y509J9XYAQ0]
+tasks: [01M7XQ9Q4P4ZQ38Y509J9XYAQ0, 01M7XQ9Q9EB3CH59TSNYM9HBC8]
 ---
 # ADR 2026-11-21: 子 task の worker・planner・WU・reviewer の prompt に、祖先の task の目的と受入条件の全文を出す
 
@@ -83,6 +83,8 @@ prompt-audit は、修正後の release（2026-11-19T15:39Z 以降の昇格）�
 
 ## 欠け 5（Project.request）を扱わない理由
 
+（2026-11-21 の付記 U3 で閉じた。下の理由は子 1 の時点の判断の記録として残す。）
+
 - この WU の目的は祖先の task の objective と受入条件を出すことで、root の task の prompt を変えないことを求める。Project.request を
   出すと、案件に属する root の task の prompt がすべて変わる。
 - prompt-audit の対象の案件の Project.request は 345 字の案件の説明で、依頼の原文ではない。依頼の原文は CoS が root の task の objective
@@ -107,3 +109,37 @@ prompt-audit は、修正後の release（2026-11-19T15:39Z 以降の昇格）�
   1 回ずつ載る。CoS が子の objective に親の文を写したかによらない。
 - 祖先の無い task の prompt と wire は変わらない（`context.children` を `context.lineage.children` に移した点を除く。子の要約を持つ run の
   wire だけが変わり、prompt の文は変わらない）。
+
+## 付記 U3（2026-11-21。戦略層 v1 子 2、task 01M7XQ9Q9EB3CH59TSNYM9HBC8、WorkUnit request-prompt）: 欠け 5 を閉じる
+
+- 人（rmaeda）は 2026-11-21 に「第一ゲートの U3（欠け 5）は子 2 で扱う」と決めた（子 2 の task の comment）。子 2 の
+  [ADR 2026-11-21-strategy-evidence-contract](2026-11-21-strategy-evidence-contract.md) D5 がその方式を決め、この付記で
+  「欠け 5 を扱わない理由」の節を閉じる。扱わない理由の 2 点目（この案件の request は依頼の原文ではない）は今も事実だが、
+  人は欠け 5 を直すと決め、戦略の文書は request の sha256 を前提にする。
+- 実装（D1 と同じ形）: `TaskLineageContext` に `project: Option<ProjectRequestContext>`（`{project_id, request, request_sha256}`。
+  `request` は全文で切らない。`request_sha256` は `task_core::project_proposal::sha256_hex`）を足した（wire は `context.lineage.project`。
+  `None` なら出さない。欄の追加だけなので `PROTOCOL_VERSION` は 5 のまま）。`RunContext` の欄の数は増やしていない。
+  - 組む所は `task_dispatch::prompt_ancestors::project_request` の 1 か所で、`chain_to_root` の列（対象 task が先頭）で最初に
+    `project_id` を持つ task の案件を読む。worker・planner・WU の run（`lineage`）、final review（`review_human_inputs` →
+    `ReviewHumanInputs.project` → `RunContext.lineage.project`）、設計 review（`start_design_review` が `lineage` を使う）が同じ関数を通る。
+  - 案件を持つのに行を読めない（store の失敗・行が無い）ときは `StoreError` で返り、run を起こさない（strategy-evidence-contract D5.3）。
+    エラーは `run_extras`・`review_human_inputs` の `?` で dispatcher の tick まで返る（祖先の store の読み取りの失敗と同じ経路。ただし
+    `chain_to_root` は行の無い祖先では止まるだけで、エラーにしない）。production のコードに `projects` の行を消す経路は無く、
+    `tasks.project_id` に外部キーは無いが、案件の付いた task 2,267 件のすべてに案件の行があった（本番 DB、2026-11-21、read-only で確認）。
+    行の無い `project_id`（`ProjectId::new()`）を task に付けていた dispatcher の試験 2 件（review の
+    `a_review_retry_that_eventually_passes_produces_exactly_one_done_report` と
+    `human_check_approval_child_inherits_the_parents_project_milestone_and_assignee`）は、案件の行を store に置く形に直した。
+  - `project_wake::project_request_sha256`（案件の判断の記録の `request_sha256`）も同じ `project_proposal::sha256_hex` を呼ぶようにし、
+    request の hash の計算を 1 か所にした。`project_wake` の手元の `sha256_hex(&[u8])` は消し、snapshot と root の idempotency の
+    hash も同じ関数で計算する（入力は UTF-8 の文字列で、出す値は変わらない）。
+  - prompt は `prompt_header` の `lineage_section` が、祖先の節の直前に「案件の依頼（Project.request の全文。人の元の目的の正本。
+    sha256: <hex>）」の節を 1 回出す。harness ごとの分岐は無い。
+- D4 の置き換え: 「祖先の無い task の prompt は 1 byte も変えない」を「案件に属さない task の prompt は 1 byte も変えない」に狭める。
+  案件に属する task（root を含む）の prompt は、案件の節の分だけ変わる。
+- 試験（prefix `prompt_project_request_`）: `task-dispatch` の `dispatcher::tests::prompt_project_request` の 3 件（worker と reviewer、
+  祖先の案件を辿る木の planner と WU、案件の無い task に節が無いこと）と、`task-worker` の `claude_code::tests::project_request_prompt_tests`
+  の 3 件（全 builder・2 つの harness で節が 1 回、案件の無い context では節を除くと 1 byte も違わない、wire の往復）。production の変更
+  だけを戻した tree では、dispatcher の 2 件が 4 経路とも x0 で落ち、task-worker の 3 件は型が無いので compile できない
+  （`agent-docs/progress/2026-11-21-strategy-v1-2/request-prompt.md`）。
+- 回帰の条件（strategy-evidence-contract D5.7）: この変更を含む release の昇格後に、子 1 の prompt-audit の script（collect と render）を
+  走らせ、`project_request` の欠けが 0 になることを確かめる（未実施。release は人が作り、昇格する）。

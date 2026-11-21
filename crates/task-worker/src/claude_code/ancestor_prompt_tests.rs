@@ -74,8 +74,9 @@ fn tree_planner() -> ExecutionPlannerContext {
     }
 }
 
-/// builder ごとの (label, task, 祖先の無い context)。祖先は呼び出し側が `ancestors` に入れる。
-fn cases() -> Vec<(&'static str, Task, RunContext)> {
+/// builder ごとの (label, task, 祖先の無い context)。祖先は呼び出し側が `ancestors` に入れる。案件の依頼の試験
+/// （`project_request_prompt_tests`）も同じ builder の一覧を使う。
+pub(super) fn cases() -> Vec<(&'static str, Task, RunContext)> {
     vec![
         (
             "worker",
@@ -154,7 +155,7 @@ fn prompt_ancestor_objective_every_builder_carries_full_ancestor_text_once() {
         let context = RunContext {
             lineage: TaskLineageContext {
                 ancestors: ancestors(),
-                children: Vec::new(),
+                ..TaskLineageContext::default()
             },
             ..context
         };
@@ -204,7 +205,7 @@ fn prompt_ancestor_objective_root_task_prompt_is_unchanged() {
         let with = RunContext {
             lineage: TaskLineageContext {
                 ancestors: ancestors(),
-                children: Vec::new(),
+                ..TaskLineageContext::default()
             },
             ..context.clone()
         };

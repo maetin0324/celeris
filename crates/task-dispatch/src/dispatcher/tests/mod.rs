@@ -3213,6 +3213,7 @@ mod knowledge_usage;
 /// （`src/dispatcher/tests/planner_budget.rs`）。
 mod planner_budget;
 mod prompt_ancestor_objective;
+mod prompt_project_request;
 /// ADR-0079 付記 R7-9: 統合済みの段階に unit が増えたら段階の統合をやり直す（replan・修正前の行の reopen）
 /// （`src/dispatcher/tests/stage_reopen.rs`）。
 mod stage_reopen;

@@ -180,7 +180,7 @@ fn prompt_header(task: &Task, context: &RunContext, run_id: &str, artifacts: &st
                 "## このタスク全体の目的（全文。目標・禁止事項・不変条件はこの WorkUnit にも掛かる）\n{}\n\n",
                 wu.task_objective
             ));
-            out.push_str(&ancestors_section(context));
+            out.push_str(&lineage_section(context));
             if !wu.plan_overview.is_empty() {
                 out.push_str("## 計画の中のこの WorkUnit\n");
                 for line in &wu.plan_overview {
@@ -212,7 +212,7 @@ fn prompt_header(task: &Task, context: &RunContext, run_id: &str, artifacts: &st
         }
         None => {
             out.push_str(&format!("## Objective\n{}\n\n", task.objective));
-            out.push_str(&ancestors_section(context));
+            out.push_str(&lineage_section(context));
         }
     }
     // ADR-0079 D7（Phase R3a）: 木の節点の worker の run だけ（`false` ならプロンプトは変わらない）。
@@ -220,6 +220,27 @@ fn prompt_header(task: &Task, context: &RunContext, run_id: &str, artifacts: &st
         out.push_str(&crate::preamble::decision_requests_section(artifacts));
     }
     out
+}
+
+/// `prompt_header` の木の上の文脈: 案件の依頼（`project_request_section`）、続けて祖先の節（`ancestors_section`）。
+/// 案件は root の上にあるので先に出す（ADR 2026-11-21-strategy-evidence-contract D5.4）。どちらも空なら空文字列。
+fn lineage_section(context: &RunContext) -> String {
+    let mut out = project_request_section(context);
+    out.push_str(&ancestors_section(context));
+    out
+}
+
+/// ADR 2026-11-21-strategy-evidence-contract D5.4（U3）: 案件の `Project.request` の全文（切り詰めない）と sha256 の節。
+/// worker・planner・WU・reviewer の prompt が `prompt_header` を通してこの 1 か所から出す。`context.lineage.project` が
+/// `None`（案件に属さない task）なら空文字列で、prompt は 1 バイトも変わらない。
+fn project_request_section(context: &RunContext) -> String {
+    let Some(project) = &context.lineage.project else {
+        return String::new();
+    };
+    format!(
+        "## 案件の依頼（Project.request の全文。人の元の目的の正本。sha256: {}）\n{}\n\n",
+        project.request_sha256, project.request
+    )
 }
 
 /// ADR 2026-11-21-ancestor-objective-in-prompts D1: 祖先の task（`context.lineage.ancestors`。root が先頭）の objective と受入条件の

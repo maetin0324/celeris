@@ -4,7 +4,7 @@ tasks: [01M7XSH46KVRV62ENAWWKWJKBQ]
 # ADR 2026-11-21: userns の試験は env 無しの build で harness の ignored にし、env 有りの build では本体を走らせる（ADR-0126 B の付記）
 
 - 日付: 2026-11-21
-- 状態: Accepted（実装は WorkUnit `impl`。env 有りの実行の記録は WorkUnit `verify`）
+- 状態: Accepted（実装は WorkUnit `impl`。env 有りの実行の記録は WorkUnit `verify`。結果は 4 節の付記）
 - task: 01M7XSH46KVRV62ENAWWKWJKBQ（戦略層 v1 子 1 の受入条件 3。unit `userns-skip`）
 - 進捗: [userns-skip.md](../progress/2026-11-21-strategy-v1-1/userns-skip.md)（9 件の return の行と変更前の nextest の出力）
 - 関係: [ADR-0126](0126-test-daemons-without-userns.md) B2・B3（既定 skip と env の優先順位）・却下した案の 3 つ目（`#[ignore]`）、
@@ -123,3 +123,14 @@ build した後に env を変えて test binary を直接走らせても、cfg �
   task-worker の lib の 9 件（`browser_tests.rs` 8 件と `browser_launcher/userns.rs` 1 件）は同じ cfg を読む `skip_unless_userns_tests`
   を通るので、別の task で `cfg_attr` に移せる。`crates/task-worker/tests/userns_gate/mod.rs`・task-api・campaign は env を
   実行時に読む写しのままで、別の task で同じ規則の file に寄せる。
+
+## 4. 付記（2026-11-21、WorkUnit `verify` の結果）
+進捗の「verify の段」に出力と表がある。
+- I1: `check-skip.sh` は exit 0（9 件が list で ignored、run で SKIP、PASS 0 件）。
+- I2: `CELERIS_USERNS_TESTS=1` の build で task-worker の 7 件が本体に到達し（各試験の `USERNS-BODY` の行）、7 件とも PASS した。
+  credentiald の 2 件は未確認: worker の sandbox は `NoNewPrivs: 1` で `sudo -n` が使えず、試験 9 は `missing()` で return して PASS と数えられ
+  （3 節の「残る穴」のとおり）、`PEER-UID` の行は出なかった。試験 8 は直接の実行で panic して FAIL した（D2 のとおり）。
+  人が release gate の host で `CELERIS_USERNS_TESTS=1 CELERIS_LAUNCHER_TESTS=require TMPDIR=/tmp` を付けて試験 9 を走らせ、
+  `PEER-UID control`・`dac`・`broker`・`result` の 4 行と PASS を確かめる（手順は進捗の「未確認の 2 件」）。
+- I3: `CELERIS_ISOLATION_TESTS=skip CELERIS_USERNS_TESTS=1` の `nextest list` で 9 件とも ignored のまま。`CELERIS_USERNS_TESTS=1` だけでは
+  `inner_peer_uid_probe` の 1 件だけが ignored。

@@ -1,13 +1,12 @@
 ---
 title: 戦略層 v1 子 4 scope-guard — 外部 LLM の MCP client が人の決定・plan の承認に答えられないようにする
 tasks: [01M7XQ9QK1KC34Q2A6PJ960TJB]
-status: done
+status: running
 updated: 2026-11-22
-completed: 2026-11-22
 ---
 # scope-guard（WorkUnit。子 4 の段 wire）
 
-完了日: 2026-11-22。設計は [ADR 2026-11-22-external-llm-discussion-exchange](../../adr/2026-11-22-external-llm-discussion-exchange.md) の D6・D7.2・D7.3。
+未完（2 回目の run で範囲外の古い記述を見つけ、計画の範囲の直しを申告した。下の「2 回目の run」）。設計は [ADR 2026-11-22-external-llm-discussion-exchange](../../adr/2026-11-22-external-llm-discussion-exchange.md) の D6・D7.2・D7.3。
 人の決定 `ext-client-scope` の答え b（rmaeda。operator が AskUserQuestion で聞いた）に従った。
 
 ## 結論
@@ -95,6 +94,43 @@ Summary 7 tests run: 2 passed, 5 failed
   `crates/celeris-mcp/src/tools/decisions.rs`・`crates/celeris-mcp/tests/mcp_integration.rs`・`docs/guides/chatgpt-rdc.md`・`docs/guides/mcp.md`・
   `scripts/rdc/setup-chatgpt-rdc.sh` と、この進捗 file。どれも D7.3 の scope-guard の範囲の中。
 
+## 2 回目の run（check の不合格の原因と、範囲外に残る古い記述）
+
+### check の不合格の原因: 古い build の再利用（成果の誤りではない）
+
+1 回目の run の後の check `cargo nextest run -p celeris-mcp -E 'test(/mcp_external_scope_/)'` は exit 100 だった（`decision_answer`・
+`task_plan_gate` が `tasks:interact` のまま動き、`tools under tasks:decide` が `["task_approve", "task_reject"]`）。commit 済みの
+`decisions.rs` は `McpScope::TasksDecide` を持っていた。原因は cargo の build の鮮度の判定:
+
+- probe で base に戻した後、変更を戻した `decisions.rs` の mtime が `13:04:26.000000000`（秒の精度。戻す前の時刻）で、probe の間に base の内容で
+  作った celeris-mcp の lib（dep-info `13:09:04`）より古かった。cargo は mtime で鮮度を判定するので、base の内容の lib を新しいと見て使い続けた。
+- 直し: 変えた file を `touch` して lib を作り直した（内容の変更は無い）。check と同じ command で 7 passed になった（下の証拠）。
+- 教訓: probe で file を base に戻したら、戻すときも `git checkout`・`git stash apply` のように mtime が今になる方法を使う（`cp -p`・`tar` で
+  古い mtime を戻さない）。
+
+### 範囲外に残る古い記述（計画の範囲の直しを申告した）
+
+`docs/api/v1/api.md` の 2 か所が、この変更で正しくなくなった「`tasks:interact` で決定に答えられる」記述のまま残る。この unit の範囲 check の
+正規表現（`crates/celeris-mcp/`・`docs/guides/(mcp|chatgpt-rdc)\.md`・`scripts/rdc/` など）に `docs/api/v1/api.md` が無く、後の unit
+（rdc-path・close）の範囲にも無い:
+
+- 3177 行（`POST /tasks/{id}/execution/plan-gate` の節の末尾）: 「MCP では `task_plan_gate`（scope `tasks:interact`、`by = mcp:<client_id>`）」
+- 3183 行（決定の要求の節の冒頭）: 「MCP では `decision_list` / `decision_answer`（scope `tasks:interact`、`docs/guides/mcp.md`）」
+
+直し方: 3177 行を scope `tasks:decide`、3183 行を「`decision_list`（scope `tasks:interact`）/ `decision_answer`（scope `tasks:decide`）」にする。
+Objective は旧い記述を同じ変更で消すことを求めるので、範囲の外に回避策を置かず、`result.json` の `plan_issue` で scope-guard の範囲に
+`docs/api/v1/api\.md` を足すよう申告した。他に範囲外で `tasks:interact` を書く所は、`agent-docs/PROGRESS.md`（共有の索引の歴史の記録。
+追記・書き換えをしない）と `crates/task-core/src/strategy/envelope/tests.rs`（試験の scope の文字列で、道具の説明ではない）だけ。
+
+### 2 回目の run の検査（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+
+- `cargo nextest run -p celeris-mcp -E 'test(/mcp_external_scope_/)'`（check と同じ）→ exit 0、`7 tests run: 7 passed, 85 skipped`。
+- `cargo nextest run -p celeris-mcp` → exit 0、`92 tests run: 92 passed`（作り直した lib で celeris-mcp の全試験）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- `bash scripts/dev/test-affected.sh` はこの run では再実行していない（`docs/api/v1/api.md` を直す次の run で、check の 2 番目として走らせる）。
+- celeris-mcp の外に MCP の `decision_answer`・`task_plan_gate` を呼ぶ code・試験は無い（`git grep -e decision_answer -e task_plan_gate -- crates scripts web/src`
+  の当たりは event 名 `decision_answered` と task-api の HTTP の経路だけ）。
+
 ## LoC（`git diff --numstat`、この unit の commit）
 
 | 区分 | file | + | − |
@@ -143,4 +179,5 @@ production の変更は scope の値 2 行と module の doc comment だけで�
 
 ## 提案
 
-- 無し。
+- `docs/api/v1/api.md` の MCP の道具の scope の記述は `docs/guides/mcp.md` §4 の表と二重になっている。次に道具の scope を変える計画では、
+  `docs/api/v1/api.md` も範囲に入れる（または api.md は scope を書かず mcp.md §4 を参照するだけにする）。

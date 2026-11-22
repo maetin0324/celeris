@@ -18,20 +18,23 @@ completed: 2026-11-22
   - `GET …/messages/{m}/revisions`（`message_revised` の event を古い順に `ChatEventListResponse` で返す。応答の型は既存のものを使う）
   - 書けるのは `Principal::Human` だけ（`editor()`）。そのうえで store が `author == human:<name>` を確かめる。operator・別の人・relay の発言・`assistant`・`system` は
     403 `chat_message_edit_forbidden`。CoS の `/cos/operations` の allowlist には足していない。`human_epoch` を上げない（`HumanEpoch` を呼ばない）。
-- 処理（`crates/task-core/src/chat_revision.rs`。`task_core::chat` の外の兄弟 module。`chat` には型だけを足した）:
+- 処理（`crates/task-core/src/chat_revision.rs`。`task_core::chat` の外の兄弟 module）:
   - 状態: `running`・`cancelled`・撤回済みは 409。`queued` は編集だけ（撤回は 409。DELETE を使う）。`expected_revision` の不一致は 409 `chat_conflict`。
   - `metadata_json.revision`（無ければ 1）を 1 上げ、`edited{by,at}` か `retracted{by,at,reason}` を書く。撤回は `text=''`（FTS5 は既存の trigger で追従）。mode・添付・添付の参照は変えない。
   - 同じ transaction で `chat_events` に `message_revised`（`ChatMessageRevisedData`: 前の本文・その sha256・前と後の revision・by・reason・checkpoint_reset）を追記し、
     続けて既存の `message` event を流す。
   - D5.4: 発言の seq が `chat_threads.summary_through_seq` 以下なら `summary=''`・`summary_through_seq=0` に戻し、前の要約と cursor を event の `checkpoint_reset` に残す。
     live の CoS session の `delivered_through_seq` 以下なら既存の `retire_conn` で retire する。
-- wire: `ChatMessage` に `revision`（1 のときは出さない）・`edited`・`retracted`（無ければ出さない）。`ChatEventType::MessageRevised`、`ChatError::EditForbidden`。
-  未変更の message の JSON は base と同じ。
+- wire の型は葉の module `crates/task-core/src/chat_revision_wire.rs`（crate の中の何にも依存しない）に置き、`chat` は 1 行の `pub use` で再 export する。
+  `ChatMessage` には `#[serde(flatten)] edit_state: Box<ChatMessageEditState>` を 1 つ足し、JSON では `revision`（1 のときは出さない）・`edited`・`retracted`
+  （無ければ出さない）の 3 つの欄になる。`ChatEventType::MessageRevised`（wire は `message_revised`）と `ChatEventData::Revised`。未変更の message の JSON は base と同じ。
+  拒否は `chat_revision::ChatRevisionError`（`Forbidden` → 403 `chat_message_edit_forbidden`、`Chat(ChatError)` → 今の対応）。`ChatError` に variant は足していない。
+- `task_core::chat` に足した本体の行は 6 行（列挙の 2・`ChatMessage` の欄の 2・`message_from_raw` の 1・`decode_event` の 1）。`chat` は repo health の
+  `size.responsibility-growth` の上限 8000 行の手前にある。最初の版は型を `chat` に置いて 8059 行で落ち、型を葉の module に移して pass にした（提出時の HEAD で 8000 以下）。
 - schema: `ApiV1Schema` に要求 2 つ（編集・撤回）を足し、`ChatRun`・`ChatCard` の直接の登録を外した（`ChatRunResponse.run`・`ChatMessage.cards` から `$defs` に残る）。
   型の欄の数は 255 のまま（repo health の `size.responsibility-growth` の閾値 40 を base から超えている型。増やすと worsened になる）。
   `docs/api/v1/api-v1.schema.json`・`web/api/generated/{schema.json,types.ts}` を再生成し、`docs/api/v1/api.md` に route 3 行・要求 3 行・SSE の type 1 行を足した。
-- clippy の `large_enum_variant`: `ChatMessage` が欄 3 つで大きくなり、`ChatEventData` の `Message` と `Run` の差が 200 byte を超えた。clippy の勧めどおり
-  `Message(Box<ChatMessageData>)`・`Run(Box<ChatRunData>)` にした（JSON と schema は変わらない。組み立ては 3 か所）。
+- clippy の `large_enum_variant` を避けるため、欄は `Box` にした（`ChatMessage` は 8 byte だけ大きくなる。`escalation`・`cos_proposal` と同じ形）。
 - web の画面は変えていない（web-cite の担当）。既存の SSE client は知らない type（`message_revised`）を捨て、続く `message` event で表示を直す。
 
 ## ADR からずれた点
@@ -89,10 +92,11 @@ base は試験の型（`ChatMessageEditRequest` など）を持たないので�
 
 - `cargo fmt --all -- --check`: exit 0。
 - `cargo clippy --workspace -- -D warnings`: exit 0。
-- `bash scripts/dev/test-affected.sh`: 下の「検査の結果」。
-- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` の 16 path（上の file とこの進捗）。Objective の範囲の外の path は無い。
+- `bash scripts/dev/check-health.sh`: verdict=pass、fail_grade=0、new=0、worsened=2（上の `dup.state`、optional）。
+- `bash scripts/dev/test-affected.sh`: 下の「test-affected の結果」。
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` の 17 path（上の file とこの進捗）。Objective の範囲の外の path は無い。
 
-## LoC（`git diff --numstat` を `$CELERIS_WU_BASE` に当てた。Run #2 の Box の変更を含む前の値で概数）
+## LoC（`git diff --numstat` を `$CELERIS_WU_BASE` に当てた。型を葉の module に移す前の値で概数。移した後も合計はほぼ同じ）
 
 - production の Rust: +529 / −18（うち新しい file `chat_revision.rs` 285 行、`revise.rs` 133 行。`revise.rs` は単体試験 約 30 行を含む）。
 - 試験: +842 / −0（`chat_revision_tests.rs`・`tests/chat_message_revise.rs`）。
@@ -108,6 +112,9 @@ base は試験の型（`ChatMessageEditRequest` など）を持たないので�
 ## 未解決事項
 
 - ADR D5.1 の「MCP・CoS も 403 `chat_message_edit_forbidden`」と実際の code（MCP 403 `forbidden`、CoS 422）の差。直すなら authz の path（`middleware.rs`・`cos/mod.rs`）の設計 review が要る。
+- repo health の `dup.state`（optional・警告）が 2 件 worsened: 表 `chat_messages`・`chat_threads` を書く dir が `crates/task-core/src` の `chat_revision.rs` で 1 つ増えた
+  （`chat` の dir と `store` の dir に加えて 3 つ）。書き手は D5 の編集・撤回だけで、`chat` の行の上限のため `chat` の外に置いた（ADR の Objective の指定どおり）。
+  `chat` の上限を見直すか、`chat` の本体を減らせば `chat` の dir に戻せる。
 - `cargo clippy --all-targets` は task-core の既存の試験 file（`chat/triage_tests.rs:1038`・`strategy/tests.rs:407`）で落ちる。この WU の前からあり、必須の検査の外。
 
 ## 提案

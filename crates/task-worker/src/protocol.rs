@@ -83,6 +83,52 @@ pub struct ReviewRequest {
     /// criterion ごとの `verdicts` と並べて `ReviewOutput.design` を書く。`None` の `request.json` は従来と同じ。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diff_design: Option<Box<DesignReviewRequest>>,
+    /// ADR 2026-11-22-strategy-review-critic D3.4: 対象 task の run が戦略の文書（`strategy/<id>/v<n>.json`）を作ったとき
+    /// だけ dispatcher が付ける Critic の節。final review の run だけが持つ。reviewer は `ReviewOutput.critic` を書く。
+    /// `None` の `request.json` と reviewer prompt は従来と同じ。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strategy_critic: Option<Box<StrategyCriticRequest>>,
+}
+
+/// ADR 2026-11-22-strategy-review-critic D3.4: reviewer への Critic の入力。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct StrategyCriticRequest {
+    /// 暗黙の条件 `strategy_critic` の番号（D3.3）。合否は `ReviewOutput.critic` だけで決まる。
+    pub criterion_idx: usize,
+    /// 判定する文書（`strategy_id` ごとに最大の版）。reviewer は workspace の `path` を読む。
+    pub subjects: Vec<StrategyCriticSubject>,
+    /// 固定の基準（`task_core::strategy_critic::CRITIC_RUBRIC` の写し）。
+    pub rubric: Vec<CriticRubricItem>,
+}
+
+impl StrategyCriticRequest {
+    /// `task_core::strategy_critic::CRITIC_RUBRIC` を wire の形にしたもの（基準の定義はそちらだけ）。
+    pub fn fixed_rubric() -> Vec<CriticRubricItem> {
+        task_core::strategy_critic::CRITIC_RUBRIC
+            .iter()
+            .map(|(id, text)| CriticRubricItem {
+                id: (*id).to_string(),
+                text: (*text).to_string(),
+            })
+            .collect()
+    }
+}
+
+/// Critic の対象 1 件（D3.1）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct StrategyCriticSubject {
+    pub name: String,
+    pub path: String,
+    pub sha256: String,
+    pub strategy_id: String,
+    pub version: u32,
+}
+
+/// Critic の基準 1 項目（`C1`〜`C5`）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CriticRubricItem {
+    pub id: String,
+    pub text: String,
 }
 
 /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D6: reviewer に見せる検出 1 件（`Event::WorkerPolicyViolation` の写し）。
@@ -1138,6 +1184,49 @@ pub struct ReviewOutput {
     /// を渡した final review（`verdicts` と並べて書く）だけが書く。旧 reviewer の `review.json` は省略で読める。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub design: Option<DesignVerdictOut>,
+    /// ADR 2026-11-22-strategy-review-critic D3.5: Critic の判定。`ReviewRequest.strategy_critic` を渡した final review
+    /// だけが書く（無ければ暗黙の条件 `strategy_critic` は不合格）。旧 reviewer の `review.json` は省略で読める。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub critic: Option<CriticVerdictOut>,
+}
+
+/// D3.5: Critic の判定（対象ごと）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CriticVerdictOut {
+    pub subjects: Vec<CriticSubjectVerdict>,
+}
+
+/// 対象 1 件の Critic の判定。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CriticSubjectVerdict {
+    pub name: String,
+    pub sha256: String,
+    /// 文書の `candidates[].id` ごとにちょうど 1 件。
+    pub candidates: Vec<CriticCandidateVerdict>,
+    /// C4。
+    pub comparison: CriticCheckOut,
+    /// C5。
+    pub revisit: CriticCheckOut,
+}
+
+/// 候補 1 件の Critic の判定（C1〜C3）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CriticCandidateVerdict {
+    pub id: String,
+    /// C1 の欠陥（空でもよい。致命でなければ `ok` にできる）。
+    #[serde(default)]
+    pub defects: Vec<String>,
+    /// C2。
+    pub falsification: CriticCheckOut,
+    /// C3。
+    pub experiment: CriticCheckOut,
+}
+
+/// 1 観点の判定。`reason` は空でなく 2,000 文字以内。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CriticCheckOut {
+    pub ok: bool,
+    pub reason: String,
 }
 
 /// celeris → ワーカーの `run` メッセージ（1 行）。`{"type":"run", ...}`。

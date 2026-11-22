@@ -229,6 +229,69 @@ pub fn needs_reviewer_run(task: &Task) -> bool {
         .any(|c| matches!(c.check, Check::Reviewer))
 }
 
+/// reviewer run を起こすか（ADR-0007 D5）。`Check::Reviewer` を持つ task、自動で届ける root task（`auto_integrates` は
+/// `task_ops::delivery::auto_integrates` の値。support・tree の子は除く）、ADR 2026-11-22-strategy-review-critic D3.1・D3.2
+/// の戦略の文書を作った task（`critic_subjects` が空でない。同じ run が Critic を判定する）。`critic_subjects` が空なら
+/// 従来と同じ条件で、reviewer run の数は変わらない。
+pub fn reviewer_run_required(
+    task: &Task,
+    auto_integrates: bool,
+    critic_subjects: &[task_core::strategy_critic::CriticSubject],
+) -> bool {
+    let delivery_requires_reviewer_run = auto_integrates
+        && task_core::support_kind(task).is_none()
+        && !task_core::tree::is_tree_child(task);
+    needs_reviewer_run(task) || delivery_requires_reviewer_run || !critic_subjects.is_empty()
+}
+
+/// reviewer が判定しなかった条件（`criteria` と Critic）を `reason` で不合格にする（ADR-0007 D5・ADR
+/// 2026-11-22-strategy-review-critic D3.3）。
+fn not_evaluated(
+    criteria: &[usize],
+    critic: Option<&critic::Critic>,
+    reason: &str,
+) -> Vec<Verdict> {
+    criteria
+        .iter()
+        .map(|&idx| Verdict {
+            criterion_idx: idx,
+            pass: false,
+            reason: reason.to_string(),
+            repair_hint: None,
+        })
+        .chain(critic.map(|c| c.fail(reason)))
+        .collect()
+}
+
+/// reviewer run が無い回の verdict。`reuse` があれば `Check::Reviewer` の条件をその理由で合格にする（ADR 2026-10-27
+/// review-resync-halt-visible-and-reviewer-reuse D2）。持ち越しは Critic を覆わない（D3.2）。
+fn without_reviewer_run(
+    criteria: &[usize],
+    critic: Option<&critic::Critic>,
+    reuse: Option<&str>,
+) -> Vec<Verdict> {
+    let Some(reuse) = reuse else {
+        return not_evaluated(
+            criteria,
+            critic,
+            "not evaluated: no reviewer run was available",
+        );
+    };
+    criteria
+        .iter()
+        .map(|&idx| Verdict {
+            criterion_idx: idx,
+            pass: true,
+            reason: format!("reviewer pass reused: {reuse}"),
+            repair_hint: None,
+        })
+        .chain(
+            critic
+                .map(|c| c.fail("not evaluated: a reused reviewer pass does not cover the Critic")),
+        )
+        .collect()
+}
+
 /// `Reviewer` run に使う `WorkerHint`（DESIGN §5.7: `Standard` tier）。
 pub fn reviewer_hint() -> WorkerHint {
     WorkerHint {
@@ -236,6 +299,7 @@ pub fn reviewer_hint() -> WorkerHint {
     }
 }
 
+mod critic;
 mod required;
 pub use required::{
     HEALTH_CHECK_ERROR, HealthItem, RepoHealth, RequiredCheckBinding, RequiredRepoChecks,
@@ -278,6 +342,9 @@ pub struct ReviewExtras {
     /// 決定的な条件が全 pass のとき `Check::Reviewer` の条件をその理由で合格にする（同期前の HEAD に束縛された
     /// reviewer の合格を、target の進みが候補の差分と重ならないまま持ち越す）。
     pub reviewer_reuse: Option<String>,
+    /// ADR 2026-11-22-strategy-review-critic D3.1・D3.3: 対象 task の run が作った戦略の文書（dispatcher が events から
+    /// `critic_subjects` で導く）。空でなければ暗黙の条件 `strategy_critic` を足し、reviewer の同じ run に Critic を求める。
+    pub critic_subjects: Vec<task_core::strategy_critic::CriticSubject>,
 }
 
 /// `ReviewExtras.human_inputs`: 対象 task から root への列（`prompt_ancestors::chain_to_root`）から store で集めた、人の文脈。
@@ -717,6 +784,7 @@ pub async fn review_task(
         human_inputs,
         policy_violations,
         reviewer_reuse,
+        critic_subjects,
     } = extras;
     let mut implicit: HashMap<usize, (&'static str, Option<String>)> = HashMap::new();
     let subject = &subject;
@@ -861,10 +929,7 @@ pub async fn review_task(
 
     // ADR-0046 D4（Phase 59）: `mode = research` は「結果に出典か計測の記録があること」を暗黙の条件に足す。
     if research {
-        let idx = task.acceptance.len()
-            + usize::from(plan.is_some())
-            + usize::from(aggregate)
-            + extra_check_count;
+        let idx = base + extra_check_count;
         let (pass, reason) = research_evidence(artifacts_dir, &artifacts_rel);
         implicit.insert(idx, ("research_evidence", None));
         verdicts.push(Verdict {
@@ -875,40 +940,34 @@ pub async fn review_task(
         });
     }
 
+    // ADR 2026-11-22-strategy-review-critic D3.3: 戦略の文書を作った task は暗黙の条件 `strategy_critic` を最後に足す。
+    let critic_idx = base + extra_check_count + usize::from(research);
+    let critic = critic::Critic::new(critic_idx, critic_subjects, &mut implicit);
+
     // ADR-0007 D5 2./3.: 決定的条件が全 pass のときだけ LLM レビュー run を起動する。
     let mut provider_failure = None;
     let mut reviewer_run = None;
-    if !reviewer_criteria.is_empty() {
+    if !reviewer_criteria.is_empty() || critic.is_some() {
         let deterministic_ok = verdicts.iter().all(|v| v.pass);
         let reviewer_verdicts = if !deterministic_ok {
-            reviewer_criteria
-                .iter()
-                .map(|&idx| Verdict {
-                    criterion_idx: idx,
-                    pass: false,
-                    reason: REVIEWER_NOT_EVALUATED_REASON.to_string(),
-                    repair_hint: None,
-                })
-                .collect()
+            not_evaluated(
+                &reviewer_criteria,
+                critic.as_ref(),
+                REVIEWER_NOT_EVALUATED_REASON,
+            )
         } else {
             match reviewer {
-                None => reviewer_criteria
-                    .iter()
-                    .map(|&idx| Verdict {
-                        criterion_idx: idx,
-                        pass: reviewer_reuse.is_some(),
-                        reason: match &reviewer_reuse {
-                            Some(reason) => format!("reviewer pass reused: {reason}"),
-                            None => "not evaluated: no reviewer run was available".to_string(),
-                        },
-                        repair_hint: None,
-                    })
-                    .collect(),
+                None => without_reviewer_run(
+                    &reviewer_criteria,
+                    critic.as_ref(),
+                    reviewer_reuse.as_deref(),
+                ),
                 Some(run) => {
                     let human_context = ReviewHumanContext {
                         inputs: human_inputs,
                         checks: deterministic_check_results(task, &verdicts, &implicit),
                         policy_violations,
+                        critic: critic.as_ref().map(|c| Box::new(c.request())),
                     };
                     let (result, record) = run_reviewer(
                         task,
@@ -918,6 +977,7 @@ pub async fn review_task(
                         produced,
                         subject,
                         &reviewer_criteria,
+                        critic.as_ref(),
                         human_context,
                         run,
                     )
@@ -1126,6 +1186,8 @@ struct ReviewHumanContext {
     checks: Vec<ReviewCheckResult>,
     /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D6。
     policy_violations: Vec<ReviewPolicyViolation>,
+    /// ADR 2026-11-22-strategy-review-critic D3.4。
+    critic: Option<Box<task_worker::protocol::StrategyCriticRequest>>,
 }
 
 impl ReviewHumanContext {
@@ -1152,6 +1214,8 @@ impl ReviewHumanContext {
             policy_violations: self.policy_violations,
             // ADR 2026-11-07-health-review-integration D4.2: candidate SHA ごとに 1 回作った材料。
             health: material.health,
+            // ADR 2026-11-22-strategy-review-critic D3.4: 戦略の文書を作った task だけ `Some`。
+            strategy_critic: self.critic,
         }
     }
 }
@@ -1166,6 +1230,7 @@ async fn run_reviewer(
     produced: &[ArtifactRef],
     subject: &ReviewSubject,
     criteria: &[usize],
+    critic: Option<&critic::Critic>,
     human_context: ReviewHumanContext,
     run: ReviewerRun,
 ) -> (
@@ -1185,6 +1250,7 @@ async fn run_reviewer(
         produced,
         subject,
         criteria,
+        critic,
         human_context,
         run,
         &mut record,
@@ -1261,20 +1327,14 @@ async fn run_reviewer_inner(
     produced: &[ArtifactRef],
     subject: &ReviewSubject,
     criteria: &[usize],
+    critic: Option<&critic::Critic>,
     human_context: ReviewHumanContext,
     run: ReviewerRun,
     record: &mut ReviewerRunRecord,
 ) -> Result<Vec<Verdict>, ReviewerProviderFailure> {
+    // ADR 2026-11-22-strategy-review-critic D3.3: 判定できなかった run は Critic も不合格にする。
     let fail_all = |reason: String| -> Result<Vec<Verdict>, ReviewerProviderFailure> {
-        Ok(criteria
-            .iter()
-            .map(|&idx| Verdict {
-                criterion_idx: idx,
-                pass: false,
-                reason: reason.clone(),
-                repair_hint: None,
-            })
-            .collect())
+        Ok(not_evaluated(criteria, critic, &reason))
     };
     let subject_genre = run.subject_genre.clone();
     let review_path = artifacts_dir.join(REVIEW_FILE_NAME);
@@ -1449,7 +1509,12 @@ async fn run_reviewer_inner(
     };
     // ADR 2026-11-07-health-review-integration D5: health を渡した review は health verdict も読んで写す。
     // ADR 2026-11-17-boundary-change-risk-review D3: `diff_design` を渡した review は `design` の合格も要る。
+    // ADR 2026-11-22-strategy-review-critic D3.5: 読めた review は Critic の節も判定する（落ちたら `fail_all` が落とす）。
     Verdict::from_final_review(&text, review.as_ref(), criteria, &tag, &review_rel)
+        .map(|mut verdicts| {
+            verdicts.extend(critic.map(|c| c.judge(&text, workspace_dir, &tag)));
+            verdicts
+        })
         .or_else(fail_all)
 }
 

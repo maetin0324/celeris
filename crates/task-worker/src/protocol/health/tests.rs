@@ -116,6 +116,7 @@ fn health_protocol_review_output_verdict_round_trips() {
             }),
         }),
         design: None,
+        critic: None,
     };
     let value = serde_json::to_value(&out).unwrap();
     assert_eq!(value["health"]["findings"][0]["kind"], "removal_missing");

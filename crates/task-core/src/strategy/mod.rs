@@ -6,6 +6,7 @@
 //! 検査は最初の違反で止まらず、違反を規則（[`Rule`]）つきで全部返す。
 
 pub mod envelope;
+pub mod review;
 #[cfg(test)]
 mod tests;
 
@@ -22,6 +23,10 @@ use crate::chat_citation::{
 use crate::decision::DecisionStatus;
 use crate::project_proposal::sha256_hex;
 use crate::roadmap::ROADMAP_TEXT_MAX;
+pub use review::{
+    CandidateState, ExecutionFacts, Experiment, ExperimentBudget, ExperimentTask, HeldAssumption,
+    check_execution,
+};
 
 pub const SCHEMA: &str = "celeris.strategy/1";
 /// D1.3: 文書の file の上限（byte、UTF-8）。
@@ -32,7 +37,9 @@ pub const TEXT_MAX_CHARS: usize = ROADMAP_TEXT_MAX;
 pub const LIST_ITEM_MAX_CHARS: usize = 500;
 pub const LABEL_MAX_CHARS: usize = 200;
 pub const ID_MAX_CHARS: usize = 40;
-pub const CANDIDATES_MAX: usize = 5;
+/// ADR 2026-11-22-strategy-review-critic D1.3: 却下した候補を次の版に残すので全体で 2〜8 件（open の数は [`review`]）。
+pub const CANDIDATES_MIN: usize = 2;
+pub const CANDIDATES_MAX: usize = 8;
 pub const HYPOTHESES_MAX: usize = 32;
 pub const EVIDENCE_MAX: usize = 256;
 pub const RISKS_MAX: usize = 16;
@@ -70,6 +77,8 @@ pub struct StrategyDocument {
     pub decision_state: DecisionState,
     pub research_question: ResearchQuestion,
     pub candidates: Vec<Candidate>,
+    /// ADR 2026-11-22-strategy-review-critic D1.2: 保留する前提。
+    pub held_assumptions: Vec<HeldAssumption>,
     pub hypotheses: Vec<Hypothesis>,
     pub evidence: Vec<Evidence>,
 }
@@ -213,6 +222,16 @@ pub struct Candidate {
     pub hypotheses: Vec<String>,
     #[serde(default)]
     pub selected: bool,
+    /// ADR 2026-11-22-strategy-review-critic D1.1: 候補の採否（文書の承認の状態とは別）。
+    pub state: CandidateState,
+    /// `rejected` の根拠（同じ文書の、候補の仮説の `refute` の証拠の id）。
+    #[serde(default)]
+    pub rejected_by: Vec<String>,
+    /// 最小の識別実験。
+    pub experiment: Experiment,
+    pub expected_information_value: String,
+    /// 停止条件。
+    pub stop_when: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -398,6 +417,11 @@ pub enum Rule {
     Supersedes,
     RefuteRemoved,
     Idempotency,
+    /// ADR 2026-11-22-strategy-review-critic D5 の 4 つ。
+    ExperimentPhase,
+    Uncritiqued,
+    RevisitRejected,
+    FailureUnread,
 }
 
 impl Rule {
@@ -409,6 +433,10 @@ impl Rule {
             Self::Unapproved | Self::Outbound => "strategy_unapproved",
             Self::RefuteRemoved => "strategy_refute_removed",
             Self::Idempotency => "strategy_idempotency_conflict",
+            Self::ExperimentPhase => "strategy_experiment_phase",
+            Self::Uncritiqued => "strategy_uncritiqued",
+            Self::RevisitRejected => "strategy_revisit_rejected",
+            Self::FailureUnread => "strategy_failure_unread",
             Self::Required
             | Self::Shape
             | Self::Limit
@@ -537,7 +565,7 @@ fn push(out: &mut Vec<Violation>, rule: Rule, path: impl Into<String>, detail: i
 }
 
 /// 共有フォーマットの必須の欄（`source` の欠けは出典の欠損として別に返す）。
-const REQUIRED: [&str; 15] = [
+const REQUIRED: [&str; 16] = [
     "schema",
     "project_id",
     "strategy_id",
@@ -551,6 +579,7 @@ const REQUIRED: [&str; 15] = [
     "decision_state",
     "research_question",
     "candidates",
+    "held_assumptions",
     "hypotheses",
     "evidence",
 ];
@@ -632,6 +661,27 @@ impl<'a> Input<'a> {
         }
     }
 
+    /// 鎖の隣り合う 2 版 `(新しい方の名前, 新しい方, 古い方)`。読めない版を挟む組は飛ばす。
+    fn adjacent_versions(&self) -> Vec<(String, &StrategyDocument, &StrategyDocument)> {
+        let docs: Vec<Option<&StrategyDocument>> = std::iter::once(Some(self.doc))
+            .chain(self.prev.iter().map(Option::as_ref))
+            .collect();
+        docs.windows(2)
+            .enumerate()
+            .filter_map(|(i, pair)| {
+                let [Some(newer), Some(older)] = pair else {
+                    return None;
+                };
+                let at = if i == 0 {
+                    "文書".to_string()
+                } else {
+                    format!("chain[{}]", i - 1)
+                };
+                Some((at, *newer, *older))
+            })
+            .collect()
+    }
+
     /// 鎖に要る前の版の数。
     fn expected_prev(&self) -> usize {
         self.doc.version.clamp(1, VERSION_MAX) as usize - 1
@@ -709,9 +759,11 @@ impl<'a> Input<'a> {
 type Check = fn(&Input<'_>, &mut Vec<Violation>);
 
 /// 検査の表。各関数は表の規則だけを返す（ablation の試験が 1 規則ずつ外して確かめる）。
-const CHECKS: [(Rule, Check); 16] = [
+const CHECKS: [(Rule, Check); 19] = [
     (Rule::Shape, check_shape),
+    (Rule::Shape, review::check_candidate_shape),
     (Rule::Limit, check_limits),
+    (Rule::Limit, review::check_candidate_limits),
     (Rule::ContentHash, check_content_hash),
     (Rule::Secret, check_secret),
     (Rule::StateNotWritable, check_state),
@@ -725,6 +777,7 @@ const CHECKS: [(Rule, Check); 16] = [
     (Rule::Outbound, check_outbound),
     (Rule::Supersedes, check_supersedes),
     (Rule::RefuteRemoved, check_refute),
+    (Rule::RevisitRejected, review::check_revisit),
     (Rule::Idempotency, check_idempotency),
 ];
 
@@ -854,6 +907,32 @@ fn check_shape(input: &Input<'_>, out: &mut Vec<Violation>) {
     }
 }
 
+/// 文の上限（空も拒否する）。
+fn limit_text(out: &mut Vec<Violation>, path: String, s: &str, max: usize) {
+    if s.trim().is_empty() {
+        push(out, Rule::Limit, path, "空の文");
+    } else if chars(s) > max {
+        push(
+            out,
+            Rule::Limit,
+            path,
+            format!("{} 文字で上限 {max} を超える", chars(s)),
+        );
+    }
+}
+
+/// 件数の範囲。
+fn limit_count(out: &mut Vec<Violation>, path: String, n: usize, min: usize, max: usize) {
+    if !(min..=max).contains(&n) {
+        push(
+            out,
+            Rule::Limit,
+            path,
+            format!("{n} 件で範囲 {min}〜{max} の外"),
+        );
+    }
+}
+
 fn check_limits(input: &Input<'_>, out: &mut Vec<Violation>) {
     let doc = input.doc;
     if !(1..=VERSION_MAX).contains(&doc.version) {
@@ -864,18 +943,7 @@ fn check_limits(input: &Input<'_>, out: &mut Vec<Violation>) {
             format!("version が 1〜{VERSION_MAX} の外"),
         );
     }
-    let mut text = |path: String, s: &str, max: usize| {
-        if s.trim().is_empty() {
-            push(out, Rule::Limit, path, "空の文");
-        } else if chars(s) > max {
-            push(
-                out,
-                Rule::Limit,
-                path,
-                format!("{} 文字で上限 {max} を超える", chars(s)),
-            );
-        }
-    };
+    let mut text = |path: String, s: &str, max: usize| limit_text(out, path, s, max);
     text(
         "research_question.text".into(),
         &doc.research_question.text,
@@ -941,17 +1009,14 @@ fn check_limits(input: &Input<'_>, out: &mut Vec<Violation>) {
             TEXT_MAX_CHARS,
         );
     }
-    let mut count = |path: String, n: usize, min: usize, max: usize| {
-        if !(min..=max).contains(&n) {
-            push(
-                out,
-                Rule::Limit,
-                path,
-                format!("{n} 件で範囲 {min}〜{max} の外"),
-            );
-        }
-    };
-    count("candidates".into(), doc.candidates.len(), 1, CANDIDATES_MAX);
+    let mut count =
+        |path: String, n: usize, min: usize, max: usize| limit_count(out, path, n, min, max);
+    count(
+        "candidates".into(),
+        doc.candidates.len(),
+        CANDIDATES_MIN,
+        CANDIDATES_MAX,
+    );
     count("hypotheses".into(), doc.hypotheses.len(), 1, HYPOTHESES_MAX);
     count("evidence".into(), doc.evidence.len(), 0, EVIDENCE_MAX);
     for (i, c) in doc.candidates.iter().enumerate() {
@@ -1344,20 +1409,9 @@ fn check_supersedes(input: &Input<'_>, out: &mut Vec<Violation>) {
 }
 
 fn check_refute(input: &Input<'_>, out: &mut Vec<Violation>) {
-    let docs: Vec<Option<&StrategyDocument>> = std::iter::once(Some(input.doc))
-        .chain(input.prev.iter().map(Option::as_ref))
-        .collect();
-    for (i, pair) in docs.windows(2).enumerate() {
-        let [Some(newer), Some(older)] = pair else {
-            continue;
-        };
+    for (at, newer, older) in input.adjacent_versions() {
         for e in older.evidence.iter().filter(|e| e.stance == Stance::Refute) {
             if !newer.evidence.contains(e) {
-                let at = if i == 0 {
-                    "文書".to_string()
-                } else {
-                    format!("chain[{}]", i - 1)
-                };
                 push(
                     out,
                     Rule::RefuteRemoved,

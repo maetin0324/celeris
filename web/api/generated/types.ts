@@ -6145,6 +6145,7 @@ export type StandingRuleList = {
 export type Status = "draft" | "ready" | "running" | "blocked" | "reviewing" | "done" | "failed" | "cancelled";
 
 export type StrategyRef = {
+  "candidate"?: string | null;
   "name": string;
   "sha256": string;
   "task_id": string;

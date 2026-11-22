@@ -1772,6 +1772,117 @@
       ],
       "type": "object"
     },
+    "CriticCandidateVerdict": {
+      "description": "候補 1 件の Critic の判定（C1〜C3）。",
+      "properties": {
+        "defects": {
+          "default": [],
+          "description": "C1 の欠陥（空でもよい。致命でなければ `ok` にできる）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "experiment": {
+          "$ref": "#/$defs/CriticCheckOut",
+          "description": "C3。"
+        },
+        "falsification": {
+          "$ref": "#/$defs/CriticCheckOut",
+          "description": "C2。"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "falsification",
+        "experiment"
+      ],
+      "type": "object"
+    },
+    "CriticCheckOut": {
+      "description": "1 観点の判定。`reason` は空でなく 2,000 文字以内。",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ok",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "CriticRubricItem": {
+      "description": "Critic の基準 1 項目（`C1`〜`C5`）。",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "text"
+      ],
+      "type": "object"
+    },
+    "CriticSubjectVerdict": {
+      "description": "対象 1 件の Critic の判定。",
+      "properties": {
+        "candidates": {
+          "description": "文書の `candidates[].id` ごとにちょうど 1 件。",
+          "items": {
+            "$ref": "#/$defs/CriticCandidateVerdict"
+          },
+          "type": "array"
+        },
+        "comparison": {
+          "$ref": "#/$defs/CriticCheckOut",
+          "description": "C4。"
+        },
+        "name": {
+          "type": "string"
+        },
+        "revisit": {
+          "$ref": "#/$defs/CriticCheckOut",
+          "description": "C5。"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "sha256",
+        "candidates",
+        "comparison",
+        "revisit"
+      ],
+      "type": "object"
+    },
+    "CriticVerdictOut": {
+      "description": "D3.5: Critic の判定（対象ごと）。",
+      "properties": {
+        "subjects": {
+          "items": {
+            "$ref": "#/$defs/CriticSubjectVerdict"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "subjects"
+      ],
+      "type": "object"
+    },
     "DelegateDep": {
       "anyOf": [
         {
@@ -3897,6 +4008,17 @@
     "ReviewOutput": {
       "description": "`Review` run がワークスペース直下 `artifacts/review.json` に書く出力（ADR-0007 D1/D5）。",
       "properties": {
+        "critic": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CriticVerdictOut"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-11-22-strategy-review-critic D3.5: Critic の判定。`ReviewRequest.strategy_critic` を渡した final review\nだけが書く（無ければ暗黙の条件 `strategy_critic` は不合格）。旧 reviewer の `review.json` は省略で読める。"
+        },
         "design": {
           "anyOf": [
             {
@@ -4095,6 +4217,17 @@
             "$ref": "#/$defs/ReviewPolicyViolation"
           },
           "type": "array"
+        },
+        "strategy_critic": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StrategyCriticRequest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-11-22-strategy-review-critic D3.4: 対象 task の run が戦略の文書（`strategy/<id>/v<n>.json`）を作ったとき\nだけ dispatcher が付ける Critic の節。final review の run だけが持つ。reviewer は `ReviewOutput.critic` を書く。\n`None` の `request.json` と reviewer prompt は従来と同じ。"
         },
         "summary": {
           "description": "対象 run の `done.summary`。",
@@ -4778,6 +4911,67 @@
         "cancelled"
       ],
       "type": "string"
+    },
+    "StrategyCriticRequest": {
+      "description": "ADR 2026-11-22-strategy-review-critic D3.4: reviewer への Critic の入力。",
+      "properties": {
+        "criterion_idx": {
+          "description": "暗黙の条件 `strategy_critic` の番号（D3.3）。合否は `ReviewOutput.critic` だけで決まる。",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rubric": {
+          "description": "固定の基準（`task_core::strategy_critic::CRITIC_RUBRIC` の写し）。",
+          "items": {
+            "$ref": "#/$defs/CriticRubricItem"
+          },
+          "type": "array"
+        },
+        "subjects": {
+          "description": "判定する文書（`strategy_id` ごとに最大の版）。reviewer は workspace の `path` を読む。",
+          "items": {
+            "$ref": "#/$defs/StrategyCriticSubject"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "criterion_idx",
+        "subjects",
+        "rubric"
+      ],
+      "type": "object"
+    },
+    "StrategyCriticSubject": {
+      "description": "Critic の対象 1 件（D3.1）。",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "strategy_id": {
+          "type": "string"
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "path",
+        "sha256",
+        "strategy_id",
+        "version"
+      ],
+      "type": "object"
     },
     "Task": {
       "description": "DESIGN §4.1 の `Task`。",

@@ -701,3 +701,52 @@ async fn chat_exchange_export_query_and_thread_kind() {
     let resp = send(&app, get_admin(&format!("{}/export", base(&general)))).await;
     assert_problem(&resp, 422, "thread_kind_not_project");
 }
+
+/// Invariant (D1.3): a Markdown import whose front matter nests a flow value 5,000 levels deep (10 KB, inside the
+/// 32,768-byte limit) is 422 `exchange_invalid` and writes nothing, and the daemon keeps serving: the next import
+/// is received. Before the depth limit the reader recursed once per level on the 2 MiB stack of the blocking pool,
+/// overflowed it and aborted the whole process (this test binary died with SIGABRT); no earlier test nests deeply.
+#[tokio::test]
+async fn chat_exchange_import_deep_nesting_rejected() {
+    let env = env();
+    let app = env.router();
+    let (t, project) = thread(&env, "exchange-import-deep");
+    let md_body = "ChatGPT での要約";
+    let markdown = |source: &str| {
+        format!(
+            "---\nschema: celeris.discussion-envelope/1\nproject_id: {project}\nsource: {source}\n\
+             source_revision: {{request_sha256: {}, roadmap_version: null}}\ntimestamp: 2026-11-22T03:10:00Z\n\
+             content_hash: sha256:{}\nconfidence: estimated\ndecision_state: discussion\nreferences: []\n---\n{md_body}\n",
+            "0".repeat(64),
+            body_sha256(md_body)
+        )
+    };
+    let deep = markdown(&format!("{}{}", "[".repeat(5_000), "]".repeat(5_000)));
+    assert!(deep.len() <= task_core::discussion_exchange::DOCUMENT_MAX_BYTES);
+    let resp = send(
+        &app,
+        post_admin(
+            &format!("{}/imports", base(&t)),
+            &json!({"format": "markdown", "client_message_id": "import-deep", "content": deep}),
+        ),
+    )
+    .await;
+    let problem = assert_problem(&resp, 422, "exchange_invalid");
+    assert!(
+        problem.to_string().contains("deeper than 16"),
+        "refused by the depth limit, not the length: {problem}"
+    );
+    assert_eq!(exchange_rows(&env), (0, 0));
+
+    let resp = send(
+        &app,
+        post_admin(
+            &format!("{}/imports", base(&t)),
+            &json!({"format": "markdown", "client_message_id": "import-after",
+                    "content": markdown("{kind: markdown_import, label: chatgpt}")}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 201, "{}", resp.text());
+    assert_eq!(exchange_rows(&env), (0, 1));
+}

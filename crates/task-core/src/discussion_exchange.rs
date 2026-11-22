@@ -45,6 +45,10 @@ pub const SNAPSHOT_SCHEMA: &str = "celeris.discussion-snapshot/1";
 pub const ENVELOPE_SCHEMA: &str = "celeris.discussion-envelope/1";
 /// D1.3: the longest Markdown / JSON document brought in, in UTF-8 bytes.
 pub const DOCUMENT_MAX_BYTES: usize = 32_768;
+/// D1.3: the deepest nesting of a Markdown front matter flow value (`{…}` / `[…]` read by hand, not as JSON); the
+/// reader recurses once per level, so a deeper value is refused, never truncated. A value that reads as JSON keeps
+/// `serde_json`'s own limit of 128.
+pub const FLOW_DEPTH_MAX: usize = 16;
 /// D1.3: at most this many references.
 pub const REFERENCES_MAX: usize = 32;
 /// D1.3: the longest reference `url`, in bytes.

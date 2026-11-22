@@ -42,8 +42,8 @@ pub mod cron_jobs;
 pub mod decisions;
 /// ADR-0044 D7（Phase 57）: 案件の文書（git が正本）。ツリー・ページ・編集・昇格。
 pub mod docs;
-/// ADR-0072（Phase E2）: `POST`/`GET /tasks/{id}/execution-plan`。
 pub mod exchange_wire;
+/// ADR-0072（Phase E2）: `POST`/`GET /tasks/{id}/execution-plan`。
 pub mod execution;
 mod files;
 mod handlers;

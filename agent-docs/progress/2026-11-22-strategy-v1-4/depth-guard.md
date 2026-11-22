@@ -76,7 +76,12 @@ completed: 2026-11-22
 - `cargo nextest run -p task-api --test chat_exchange` → exit 0、`13 tests run: 13 passed`（既存 12 件と新しい 1 件）。
 - `cargo clippy --workspace -- -D warnings` → exit 0。
 - `cargo fmt --all -- --check` → exit 0。
-- `bash scripts/dev/test-affected.sh` → 下の「test-affected」に書く。
+- `bash scripts/dev/test-affected.sh` → exit 0。対象 crate は task-core の逆依存の 14 crate で `Summary 8700 tests run: 8700 passed (12 slow), 31 skipped`、
+  web の typecheck と unit（`Test Files 105 passed`・`Tests 745 passed`）、`test-ts-verify: 20 passed, 0 failed`、`script bundle SKIP: 0 件`。
+  repo-health は `verdict=pass`・`fail_grade=0`（new 13・worsened 2 は close の時点と同じ数で、この unit で増えていない）、`repo_health_gate: all checks passed`。
+- `sh scripts/dev/progress-index.sh --check` → ok。`sh scripts/dev/check-doc-links.sh` → ok。
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` の変更 path は ADR・この進捗・`crates/task-api/src/lib.rs`・`crates/task-api/tests/chat_exchange.rs`・
+  `crates/task-core/src/discussion_exchange.rs`・`discussion_exchange/format.rs`・`discussion_exchange_tests.rs` の 7 件。
 
 ## LoC
 

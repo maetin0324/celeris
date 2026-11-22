@@ -78,6 +78,20 @@ fn approval(strategy_id: &str, version: u32, sha256: &str, by: &str) -> Approval
     }
 }
 
+/// chat の引用が今の message を指すときの事実（版も本文の sha256 も引いたとおり）。
+fn cited_now(c: &ChatCitation, project_id: Option<&str>) -> RefStatus {
+    RefStatus::Cited(CitedMessage {
+        thread_id: c.thread_id.clone(),
+        message_id: c.message_id.clone(),
+        project_id: project_id.map(str::to_string),
+        general_thread: project_id.is_none(),
+        seq: 1,
+        revision: c.revision,
+        sha256: c.sha256.clone(),
+        retracted: false,
+    })
+}
+
 /// baseline の参照を引いた結果（統括の thread は案件なし、別の案件の thread を 1 つ足す）。
 fn resolutions() -> Vec<(Reference, RefStatus)> {
     let doc: StrategyDocument = serde_json::from_str(V1).unwrap();
@@ -88,23 +102,24 @@ fn resolutions() -> Vec<(Reference, RefStatus)> {
         .chain(doc.evidence.iter().flat_map(|e| &e.references))
         .filter(|r| !matches!(r, Reference::Url { .. }))
         .map(|r| {
-            let project_id = match r {
-                Reference::Chat { thread_id, .. } if thread_id == GLOBAL_THREAD => None,
-                _ => Some(P.to_string()),
+            let status = match r {
+                Reference::Chat(c) if c.thread_id == GLOBAL_THREAD => cited_now(c, None),
+                Reference::Chat(c) => cited_now(c, Some(P)),
+                _ => RefStatus::Found {
+                    project_id: Some(P.to_string()),
+                },
             };
-            (r.clone(), RefStatus::Found { project_id })
+            (r.clone(), status)
         });
-    let other = Reference::Chat {
+    let other = ChatCitation {
         thread_id: "01M0OTHERTHREAD00000000000".into(),
         message_id: "01M0OTHERMSG00000000000000".into(),
+        revision: 1,
+        sha256: "7c15c8a2e1eb86f82b4f147df8aa06bda7f02503808a644ec76426fc2f341aab".into(),
     };
-    refs.chain([(
-        other,
-        RefStatus::Found {
-            project_id: Some(OTHER.into()),
-        },
-    )])
-    .collect()
+    let other_status = cited_now(&other, Some(OTHER));
+    refs.chain([(Reference::Chat(other), other_status)])
+        .collect()
 }
 
 /// 文書の byte 列に対する、人が承認した最新・同じ案件の文脈（基準の状態 B）。
@@ -684,5 +699,100 @@ fn strategy_contract_ablation_four_rules() {
             base_with.is_empty() && base_without.is_empty(),
             "{name}: B は受理"
         );
+    }
+}
+
+/// 文脈の chat の引用（統括の thread でないもの）の今の事実を `f` で変える。
+fn with_chat_facts(ctx: &mut CheckContext, f: impl Fn(&mut CitedMessage)) {
+    for (r, status) in &mut ctx.references {
+        if let (Reference::Chat(c), RefStatus::Cited(m)) = (&*r, status)
+            && c.thread_id != GLOBAL_THREAD
+            && m.project_id.as_deref() == Some(P)
+        {
+            f(m);
+        }
+    }
+}
+
+/// ADR 2026-11-21-chat-discussion-mode D3・D6: 戦略の `chat` の参照は要約の引用と同じ導出を使う。引いた後に編集された
+/// 発言は `strategy_stale`、撤回・無い発言は `strategy_source_missing`。base の `chat` の参照は revision を持たず、
+/// 発言があれば通したので落ちる。
+#[test]
+fn chat_discussion_summary_strategy_ref_edited_is_stale() {
+    let bytes = V1.as_bytes();
+    let base = ctx_for(bytes, Intent::Execute);
+    assert!(validate_document(bytes, &base).is_empty());
+
+    let mut edited = base.clone();
+    with_chat_facts(&mut edited, |m| {
+        m.revision += 1;
+        m.sha256 = sha256_hex("編集後の本文");
+    });
+    let got = validate_document(bytes, &edited);
+    assert_eq!(rules(&got), BTreeSet::from([Rule::Stale]), "{got:?}");
+    assert_eq!(codes(&got), BTreeSet::from(["strategy_stale"]));
+    assert!(got.iter().all(|v| v.path.contains("references")), "{got:?}");
+
+    let mut retracted = base.clone();
+    with_chat_facts(&mut retracted, |m| {
+        m.revision += 1;
+        m.retracted = true;
+        m.sha256 = sha256_hex("");
+    });
+    assert_eq!(
+        codes(&validate_document(bytes, &retracted)),
+        BTreeSet::from(["strategy_source_missing"])
+    );
+
+    let mut missing = base.clone();
+    for (r, status) in &mut missing.references {
+        if matches!(r, Reference::Chat(_)) {
+            *status = RefStatus::Missing;
+        }
+    }
+    assert_eq!(
+        codes(&validate_document(bytes, &missing)),
+        BTreeSet::from(["strategy_source_missing"])
+    );
+
+    // 引いた版の本文と今の本文が違う（同じ revision）: その版は無かった。
+    let mut forged = base;
+    with_chat_facts(&mut forged, |m| m.sha256 = sha256_hex("別の本文"));
+    assert_eq!(
+        codes(&validate_document(bytes, &forged)),
+        BTreeSet::from(["strategy_source_missing"])
+    );
+}
+
+/// D3: `chat` の参照は revision（1 以上）と sha256（64 桁の小文字 hex）が要り、状態の欄を持てない。
+/// base の `chat` の参照は `{thread_id, message_id}` だけで通ったので落ちる。
+#[test]
+fn strategy_contract_chat_ref_requires_revision_and_sha256() {
+    fn chat_ref(v: &mut Value) -> &mut Value {
+        v["evidence"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .flat_map(|e| e["references"].as_array_mut().unwrap().iter_mut())
+            .find(|r| r["kind"] == "chat")
+            .unwrap()
+    }
+    let cases: [(&str, fn(&mut Value)); 5] = [
+        ("no revision", |r| {
+            r.as_object_mut().unwrap().remove("revision");
+        }),
+        ("no sha256", |r| {
+            r.as_object_mut().unwrap().remove("sha256");
+        }),
+        ("revision 0", |r| r["revision"] = 0.into()),
+        ("upper hex", |r| {
+            r["sha256"] = r["sha256"].as_str().unwrap().to_uppercase().into()
+        }),
+        ("stored state", |r| r["state"] = "current".into()),
+    ];
+    for (name, f) in cases {
+        let bytes = mutate(|v| f(chat_ref(v)));
+        let got = check(&bytes, Intent::Record);
+        assert!(rules(&got).contains(&Rule::Shape), "{name}: {got:?}");
     }
 }

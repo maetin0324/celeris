@@ -121,7 +121,9 @@
     {
      "kind": "chat",
      "thread_id": "01M0OTHERTHREAD00000000000",
-     "message_id": "01M0OTHERMSG00000000000000"
+     "message_id": "01M0OTHERMSG00000000000000",
+     "revision": 1,
+     "sha256": "7c15c8a2e1eb86f82b4f147df8aa06bda7f02503808a644ec76426fc2f341aab"
     }
    ]
   },
@@ -166,7 +168,9 @@
     {
      "kind": "chat",
      "thread_id": "01M0GLOBALTHREAD0000000000",
-     "message_id": "01M7XMSGGLOBAL000000000000"
+     "message_id": "01M7XMSGGLOBAL000000000000",
+     "revision": 1,
+     "sha256": "86d3861f984ee394cecc586087fdb54050bfac81a256d6ceb924fb7428435216"
     }
    ]
   }

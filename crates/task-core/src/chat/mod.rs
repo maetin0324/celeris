@@ -46,6 +46,7 @@ mod window;
 #[cfg(test)]
 mod window_tests;
 // ADR 2026-11-21-chat-discussion-mode D5: the edit / retract wire types live in a leaf module.
+pub use crate::chat_citation::{ChatCitation, ChatCitationState};
 pub use crate::chat_revision_wire::*;
 pub use credential::{ChatCheckpointSaved, CosRunCredentialError, CosRunIdentity};
 pub use digest_fixture::{COS_DIGEST_GENERATED_CASES, cos_digest_fixture_jsonl};

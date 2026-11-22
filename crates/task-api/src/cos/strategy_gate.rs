@@ -5,6 +5,7 @@
 //!
 //! 文脈の正本は既存のものだけを読む（書かない）: 文書は作った task の `ArtifactProduced` と workspace の file、
 //! 今の `Project.request` の sha256、承認済み Roadmap の版、作る task の案件（`request.body.project_id`）、
+//! `chat` の参照が引いた発言の今の revision・本文の sha256・撤回（`SqliteStore::chat_cited_message`）、
 //! 承認は `decisions` の行と最後の `DecisionAnswered{option, by}`（人は `human:<名前>` だけ。D2.2）。
 //! 欄の無い `task.create` はここを通らない（呼び出し側の `operations::create_operation` が欄のあるときだけ呼ぶ）。
 
@@ -431,16 +432,14 @@ impl Reader<'_> {
                     None => RefStatus::Missing,
                 }
             }
-            Reference::Chat {
-                thread_id,
-                message_id,
-            } => match self.store.chat_message_get(thread_id, message_id) {
-                Ok(_) => match self.store.chat_thread_get(thread_id) {
-                    Ok(Some(thread)) => found(thread.project_id),
-                    _ => RefStatus::Missing,
-                },
-                Err(_) => RefStatus::Missing,
-            },
+            // ADR 2026-11-21-chat-discussion-mode D6: 引いた発言の今の事実。状態（edited・retracted・missing）は
+            // task_core::strategy が要約の引用と同じ関数で導く。
+            Reference::Chat(c) => {
+                match self.store.chat_cited_message(&c.thread_id, &c.message_id) {
+                    Ok(Some(m)) => RefStatus::Cited(m),
+                    Ok(None) | Err(_) => RefStatus::Missing,
+                }
+            }
             Reference::Knowledge { path, .. } => self.knowledge(project, path),
         })
     }

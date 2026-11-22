@@ -6,7 +6,7 @@
  "supersedes": {
   "task_id": "01M7ZTASKSTRATEGY000000000",
   "name": "strategy/arch-v4-cycle/v1.json",
-  "sha256": "128c9a15119598ca6e8b8027093b1950ef3f77fac2090af15f26bca9d15ae1a5"
+  "sha256": "22997da7aa609a928eb6a42cb015c5f979300a0d0ad701d4f8fa81b760eee1a0"
  },
  "change_reason": "未確認の議論の証拠 e-chat-note を外し、pilot の候補を捨てた。反証は残す",
  "idempotency_key": "strategy:arch-v4-cycle:v2",
@@ -125,7 +125,9 @@
     {
      "kind": "chat",
      "thread_id": "01M5JJTVPW15CKFRCA0FAYCHK4",
-     "message_id": "01M7XPWTXR1A0CNWYN7D1HBZWB"
+     "message_id": "01M7XPWTXR1A0CNWYN7D1HBZWB",
+     "revision": 1,
+     "sha256": "ceb5ac161c55091264d74f1a5c2e21a32a9892e1532ab825490585ba89c94870"
     }
    ]
   },

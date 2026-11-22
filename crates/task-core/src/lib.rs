@@ -39,6 +39,8 @@ pub mod artifacts;
 /// ADR-0130 D4: task branch の target からの behind commits / age（snapshot と純粋規則）。
 pub mod behind_target;
 pub mod chat;
+/// ADR 2026-11-21-chat-discussion-mode D6: chat の引用の型と検査・失効の導出（純粋関数、葉）。
+pub mod chat_citation;
 pub mod chat_revision;
 pub mod chat_revision_wire;
 /// ADR-0044 D2（Phase 53）: タスク単位のコメント。
@@ -53,6 +55,8 @@ pub mod delegate;
 pub mod design_review;
 /// ADR-0124: atomic coding task の決定的な直行経路判定。
 pub mod direct_route;
+/// ADR 2026-11-21-chat-discussion-mode D6: 引いた chat の message の今の事実を読む。
+pub mod discussion_citation;
 pub mod discussion_mode;
 /// ADR 2026-10-07-build-tmp-hygiene D4.4: ディスク使用率の監視の状態。
 pub mod disk_watch;

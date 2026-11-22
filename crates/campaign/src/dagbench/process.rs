@@ -211,6 +211,8 @@ pub struct OwnedProc {
     child: Child,
     stdin: Option<ChildStdin>,
     lines: mpsc::Receiver<String>,
+    /// child の stderr を書く file（[`Supervisor::spawn`] が作る）。
+    stderr: PathBuf,
     limits: Limits,
     log: Arc<EventLog>,
     stopped: bool,
@@ -227,6 +229,11 @@ impl OwnedProc {
 
     pub fn incarnation(&self) -> u64 {
         self.incarnation
+    }
+
+    /// child の stderr の file（`<log dir>/<role>-<incarnation>.stderr`）。止まった child の報告に使う。
+    pub fn stderr_path(&self) -> &Path {
+        &self.stderr
     }
 
     /// child が stdout に出した次の 1 行を `timeout` まで待つ（reader thread からの出来事待ち）。
@@ -435,11 +442,11 @@ impl Supervisor {
                 self.limits.max_restarts
             )));
         }
-        let err = File::create(
-            self.log
-                .dir()
-                .join(format!("{}-{inc}.stderr", role.as_str())),
-        )?;
+        let stderr = self
+            .log
+            .dir()
+            .join(format!("{}-{inc}.stderr", role.as_str()));
+        let err = File::create(&stderr)?;
         let program = format!("{:?}", cmd.get_program());
         let mut child = cmd
             .stdin(Stdio::piped())
@@ -475,6 +482,7 @@ impl Supervisor {
             child,
             stdin,
             lines,
+            stderr,
             limits: self.limits.clone(),
             log: Arc::clone(&self.log),
             stopped: false,

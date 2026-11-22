@@ -108,6 +108,7 @@ fn health_review_design_protocol_verdict_round_trips_and_rejects_unknown_kind() 
                 repair: None,
             }],
         }),
+        critic: None,
     };
     let value = serde_json::to_value(&out).unwrap();
     assert_eq!(

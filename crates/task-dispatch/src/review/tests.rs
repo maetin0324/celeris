@@ -1960,6 +1960,7 @@ fn review_risk_final_review_sets_diff_design_not_design() {
         inputs: ReviewHumanInputs::default(),
         checks: Vec::new(),
         policy_violations: Vec::new(),
+        critic: None,
     };
     let material = FinalReviewMaterial {
         health: None,

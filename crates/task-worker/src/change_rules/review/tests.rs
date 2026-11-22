@@ -1027,3 +1027,120 @@ fn prompt_boundary_worker_and_planner_get_class_rule_invariants_and_dependency_r
         "objective was truncated"
     );
 }
+
+// ADR 2026-11-22-strategy-review-critic D3.6・D7.2（prefix `strategy_critic_`）。
+
+/// 戦略の成果物の無い task の reviewer prompt（health・設計・Critic の節の無い final review）。task id・run id・入力を
+/// 固定し、prompt の byte 列を base の sha256 と比べる。
+fn base_shaped_review_prompt() -> String {
+    let mut task = crate::protocol::tests::sample_task();
+    task.kind = TaskKind::Review;
+    task.id = "01M7XQ9QQXY1DY56EXE0TT8X6W"
+        .parse()
+        .expect("fixed task id parses");
+    task.lease = None;
+    let context = RunContext {
+        review: Some(ReviewRequest {
+            summary: "fixed summary".into(),
+            evidence: vec![Evidence {
+                criterion: 0,
+                command: Some("cargo test".into()),
+                exit: Some(0),
+                stdout_tail: Some("ok".into()),
+            }],
+            criteria: vec![0],
+            ..Default::default()
+        }),
+        ..RunContext::default()
+    };
+    build_prompt(&task, &context, "run-strategy-critic-absent", "artifacts")
+}
+
+/// 不変条件: 戦略の成果物の無い task の reviewer prompt は base（Critic を足す前）と同じ byte 列である。既存の試験は
+/// prompt の部分文字列を見るだけで、節の追加で前後の文が変わったことを検出できない。sha256 は base の commit で
+/// この関数が作った prompt のもの。
+#[test]
+fn strategy_critic_absent_prompt_unchanged() {
+    use sha2::{Digest, Sha256};
+    let prompt = base_shaped_review_prompt();
+    let sha = format!("{:x}", Sha256::digest(prompt.as_bytes()));
+    assert_eq!(
+        sha, "0f7107b41adf496e635f82a9726e6af9dc199dee8ee98272ee22fc522ea0b5e0",
+        "prompt:\n{prompt}"
+    );
+}
+
+fn critic_request() -> crate::protocol::StrategyCriticRequest {
+    crate::protocol::StrategyCriticRequest {
+        criterion_idx: 3,
+        subjects: vec![crate::protocol::StrategyCriticSubject {
+            name: "strategy/arch/v1.json".into(),
+            path: "artifacts/strategy/arch/v1.json".into(),
+            sha256: "a".repeat(64),
+            strategy_id: "arch".into(),
+            version: 1,
+        }],
+        rubric: crate::protocol::StrategyCriticRequest::fixed_rubric(),
+    }
+}
+
+/// 不変条件: `strategy_critic` を渡した final review の prompt には Critic の節がちょうど 1 回出て、対象の path と
+/// C1〜C5 と `critic` の出力の形を持つ。base の prompt に Critic の節は無い。
+#[test]
+fn strategy_critic_section_appears_once() {
+    let mut task = crate::protocol::tests::sample_task();
+    task.kind = TaskKind::Review;
+    let context = RunContext {
+        review: Some(ReviewRequest {
+            summary: "wrote the strategy".into(),
+            criteria: vec![0],
+            strategy_critic: Some(Box::new(critic_request())),
+            ..Default::default()
+        }),
+        ..RunContext::default()
+    };
+    let prompt = build_prompt(&task, &context, "run-critic", "artifacts");
+    assert_eq!(prompt.matches(CRITIC_HEADING).count(), 1, "{prompt}");
+    assert!(
+        prompt.contains("artifacts/strategy/arch/v1.json"),
+        "{prompt}"
+    );
+    for (id, _) in task_core::strategy_critic::CRITIC_RUBRIC {
+        assert!(
+            prompt.contains(&format!("{id}:")),
+            "{id} missing:\n{prompt}"
+        );
+    }
+    assert!(prompt.contains("\"critic\""), "{prompt}");
+    assert!(prompt.contains("\"falsification\""), "{prompt}");
+    assert_eq!(critic_section(None), "");
+    let without = ReviewRequest {
+        criteria: vec![0],
+        ..Default::default()
+    };
+    assert_eq!(critic_section(Some(&without)), "");
+    assert!(!review_prompt(Some(without)).contains(CRITIC_HEADING));
+}
+
+/// 不変条件: `strategy_critic` の無い `request.json` に key が出ず、`critic` の無い旧い `review.json` は読める。
+#[test]
+fn strategy_critic_absent_request_json_unchanged() {
+    let request = ReviewRequest {
+        summary: "s".into(),
+        criteria: vec![0],
+        ..Default::default()
+    };
+    let json = serde_json::to_string(&request).expect("serializes");
+    assert!(!json.contains("strategy_critic"), "{json}");
+    let old: ReviewOutput =
+        serde_json::from_str(r#"{"verdicts":[{"criterion":0,"pass":true,"reason":"ok"}]}"#)
+            .expect("old review.json parses");
+    assert!(old.critic.is_none());
+    let with = ReviewRequest {
+        strategy_critic: Some(Box::new(critic_request())),
+        ..request
+    };
+    let json = serde_json::to_string(&with).expect("serializes");
+    let back: ReviewRequest = serde_json::from_str(&json).expect("round trip");
+    assert_eq!(back, with);
+}

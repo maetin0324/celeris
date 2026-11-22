@@ -28,11 +28,48 @@ use task_core::execution_plan::DesignBrief;
 
 use super::GENERIC_RULES;
 use crate::protocol::{
+    CriticCandidateVerdict, CriticCheckOut, CriticSubjectVerdict, CriticVerdictOut,
+};
+use crate::protocol::{
     DesignReviewRequest, DesignVerdictOut, DiffStat, HealthFindingKind, HealthFindingOut,
     HealthFindingsSummary, HealthPolicyState, HealthRepoInput, HealthReviewInput, HealthSeverity,
     HealthVerdictOut, OwnerRow, PolicyVerdictOut, ReviewOutput, ReviewRepairHint, ReviewRequest,
-    ReviewVerdictOut,
+    ReviewVerdictOut, StrategyCriticRequest,
 };
+
+/// ADR 2026-11-22-strategy-review-critic D3.6: Critic の節の見出し。
+pub const CRITIC_HEADING: &str = "## Strategy Critic（戦略の文書の欠陥を探す判定）";
+
+/// D3.6: Critic の節。`ReviewRequest.strategy_critic` が `None` なら空文字列（prompt は従来と同じ）。対象・固定の基準
+/// C1〜C5 を出す。出力の形は [`result_section`] が `critic` の例として出す。
+pub fn critic_section(review: Option<&ReviewRequest>) -> String {
+    let Some(critic) = review.and_then(|r| r.strategy_critic.as_deref()) else {
+        return String::new();
+    };
+    let mut out = format!(
+        "{CRITIC_HEADING}\n\
+         この task の run は戦略の文書を作った。受け入れ条件の判定に加えて、あなたは同じ run で Critic として下の文書の\
+         欠陥を探し、候補を比べ、結果を下の Result 節の `critic` に書く（celeris が付けた暗黙の条件 criterion \
+         {idx}。`verdicts` には書かない）。`critic` が無い・対象や候補が文書と食い違う・どれか 1 つでも `ok` が `false` \
+         なら、この review は不合格になる。文書は読み取り専用で読み、file を変えない。\n\n\
+         ### 判定する文書\n",
+        idx = critic.criterion_idx,
+    );
+    for s in &critic.subjects {
+        out.push_str(&format!(
+            "- `{}` at `{}` (sha256={}, strategy_id={}, version={})\n",
+            s.name, s.path, s.sha256, s.strategy_id, s.version
+        ));
+    }
+    out.push_str("\n### 基準（固定）\n");
+    for item in &critic.rubric {
+        out.push_str(&format!("- {}: {}\n", item.id, item.text));
+    }
+    out.push_str(
+        "\n人の決定（上の Human decisions）に `strategy-approve-v<n>` があれば、承認した sha256 と文書の sha256 を比べる。\n\n",
+    );
+    out
+}
 
 /// health の材料の節の見出し（Result 節はこの見出しの名前で材料を指す）。
 pub const HEALTH_HEADING: &str = "## Repo health の材料（celeris が作った決定的な材料）";
@@ -470,9 +507,10 @@ pub fn result_section(review: Option<&ReviewRequest>, artifacts: &str) -> String
     let criterion = review
         .and_then(|r| r.criteria.first().copied())
         .unwrap_or(0);
+    let critic = review.and_then(|r| r.strategy_critic.as_deref());
     out.push_str(&format!(
         "`{}`\n",
-        example_json(&final_example(criterion, health, diff_design))
+        example_json(&final_example(criterion, health, diff_design, critic))
     ));
     out.push_str(
         "- `verdicts` には上の \"Criteria you must judge in this run\" の criterion ごとにちょうど 1 件を書く。\
@@ -488,8 +526,17 @@ pub fn result_section(review: Option<&ReviewRequest>, artifacts: &str) -> String
     if diff_design {
         out.push_str(&design_verdict_lines(DesignTarget::Diff));
     }
+    if critic.is_some() {
+        out.push_str(CRITIC_VERDICT_LINES);
+    }
     out
 }
+
+/// D3.5: `critic` の書き方。
+const CRITIC_VERDICT_LINES: &str = "- `critic.subjects` には上の「判定する文書」ごとにちょうど 1 件を書く。`name`・`sha256` は\
+     文書の行のとおり。`candidates` には文書の `candidates[].id` ごとにちょうど 1 件を書き、`defects` に C1 の欠陥\
+     （無ければ空の配列）、`falsification` に C2、`experiment` に C3 の判定を書く。`comparison` は C4、`revisit` は C5。\
+     各 `ok` は `true` か `false`、`reason` は空でなく 2,000 文字以内の理由。\n";
 
 /// 例の値。種別は `HealthFindingKind` から選び、source に名前を書かない。
 const EXAMPLE_PATH: &str = "src/example.rs";
@@ -517,6 +564,7 @@ fn design_example() -> ReviewOutput {
         verdicts: Vec::new(),
         health: None,
         design: Some(design_verdict_example("brief と計画のどこが規約に反するか")),
+        critic: None,
     }
 }
 
@@ -524,6 +572,7 @@ fn final_example(
     criterion: usize,
     health: Option<&HealthReviewInput>,
     diff_design: bool,
+    critic: Option<&StrategyCriticRequest>,
 ) -> ReviewOutput {
     let local_repair = || ReviewRepairHint {
         scope: "local".to_string(),
@@ -563,6 +612,33 @@ fn final_example(
         }],
         health,
         design: diff_design.then(|| design_verdict_example("差分のどこが規約に反するか")),
+        critic: critic.map(critic_example),
+    }
+}
+
+/// D3.5: `critic` の例（対象ごとに 1 件、候補の id は文書から reviewer が写す）。
+fn critic_example(critic: &StrategyCriticRequest) -> CriticVerdictOut {
+    let check = |reason: &str| CriticCheckOut {
+        ok: false,
+        reason: reason.to_string(),
+    };
+    CriticVerdictOut {
+        subjects: critic
+            .subjects
+            .iter()
+            .map(|s| CriticSubjectVerdict {
+                name: s.name.clone(),
+                sha256: s.sha256.clone(),
+                candidates: vec![CriticCandidateVerdict {
+                    id: "文書の candidates[].id".to_string(),
+                    defects: vec!["C1 の欠陥".to_string()],
+                    falsification: check("C2 の判定の理由"),
+                    experiment: check("C3 の判定の理由"),
+                }],
+                comparison: check("C4 の判定の理由"),
+                revisit: check("C5 の判定の理由"),
+            })
+            .collect(),
     }
 }
 

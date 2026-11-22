@@ -3,8 +3,9 @@
 use super::route_select::{RouteInput, RoutePick, RouteTrace};
 use super::token_budget::run_watch;
 use super::*;
-use crate::review::{RepoHealth, artifact_candidates};
+use crate::review::{RepoHealth, artifact_candidates, reviewer_run_required};
 use crate::review_decision;
+use task_core::strategy_critic::critic_subjects;
 use task_worker::check_slots::CheckLimits;
 
 /// ADR-0118 D4 付記 / ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D3・D4: 直近の遷移（自動の
@@ -409,11 +410,9 @@ impl Dispatcher {
             }
         };
 
-        let delivery_requires_reviewer_run =
-            task_ops::delivery::auto_integrates(&self.store, &task).unwrap_or(false)
-                && task_core::support_kind(&task).is_none()
-                && !task_core::tree::is_tree_child(&task);
-        let reviewer = if needs_reviewer_run(&task) || delivery_requires_reviewer_run {
+        let critic_subjects = critic_subjects(&self.store.events_for(task_id)?);
+        let delivers = task_ops::delivery::auto_integrates(&self.store, &task).unwrap_or(false);
+        let reviewer = if reviewer_run_required(&task, delivers, &critic_subjects) {
             match self.pick_reviewer(&task, &run_id, run_watch(&self.store, &task, None)) {
                 Some(r) => Some(r),
                 None => {
@@ -680,6 +679,7 @@ impl Dispatcher {
         // 合格があり、target の進みが候補の差分と重ならなければ reviewer run を起こさず、決定的な check だけをやり直す。
         let mut reviewer_reuse = None;
         if reviewer_run.is_some()
+            && critic_subjects.is_empty()
             && !synced.is_empty()
             && let Some(reason) = self.reviewer_reuse(&task, &run_id, &synced)?
         {
@@ -995,6 +995,7 @@ impl Dispatcher {
                 policy_violations,
                 // ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D2。
                 reviewer_reuse,
+                critic_subjects,
             };
             let mut outcome = review_task(
                 &task,

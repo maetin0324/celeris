@@ -19,6 +19,7 @@ updated: 2026-11-22
 - strategy-v1 5 critic-review: WU の進捗（変更前の失敗・残る size の超過）
 - strategy-v1 5 critic-review: 判定されなかった reviewer の条件と Critic の不合格を 1 つの関数にし、review_task・run_reviewer_inner・spawn_review の行を base 以下に戻す
 - strategy-v1 5 critic-review: 進捗・ADR の付記（experiments[] を入れない理由、条件のまとめ方）
+- strategy-v1 5 critic-review: WU の進捗（提出時の HEAD の test-affected の結果）
 
 ## 何を足したか
 - `task_core::strategy_critic`: `critic_subjects(events)`（`ArtifactProduced` の `strategy/<id>/v<n>.json` から id ごとに最大の版。名前は
@@ -65,7 +66,7 @@ updated: 2026-11-22
 - `cargo nextest run -p task-core -p task-worker -p task-dispatch -E 'test(/strategy_critic_/) | test(/^review::/)'` → exit 0、50 tests run: 50 passed。
 - WU の check の数え方 `cargo nextest list -p task-worker -p task-dispatch | grep -cE 'strategy_critic_[a-z0-9_]*$'` → 9（task-core の 4 件は数えない）。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
-- `bash scripts/dev/test-affected.sh` → 結果は下の「test-affected」。
+- `bash scripts/dev/test-affected.sh` → exit 0（下の「test-affected」）。
 - 範囲 check（計画の `"scope": true` の command）→ out of scope: `crates/task-core/src/lib.rs`・`crates/task-core/src/strategy_critic.rs`・`crates/task-dispatch/src/dispatcher.rs`。
 
 ### size の超過の解消（repo health の size.responsibility-growth）
@@ -80,7 +81,10 @@ updated: 2026-11-22
 した。持ち越しの回は `review::without_reviewer_run`。delivery の条件は `reviewer_run_required` に寄せた（D3.2 の条件そのもの）。
 
 ### test-affected
-TEST_AFFECTED_RESULT
+`bash scripts/dev/test-affected.sh` → exit 0（提出時の HEAD で実行。基準は `git merge-base HEAD main`）:
+- repo-health: verdict=pass、fail_grade=0、new=0、worsened=0（size.responsibility-growth・progress.index も pass）。
+- cargo nextest（対象 14 crate）: 8655 tests run: 8655 passed、31 skipped。script bundle の SKIP 0 件。
+- web（task-core の変更で走る）: tsc -b 通過、vitest 105 files・745 tests passed、node --test 110 passed・fail 0。test-ts-verify も ok。
 
 ## LoC（`source-size-report.py --exclusive-classes`、script と toml は base の commit から取り出して base と HEAD に当てた。base は `$CELERIS_WU_BASE` の段の head）
 | view | base との差 |

@@ -27,10 +27,19 @@ D2.1・D4.1〜D4.3。基準は `$CELERIS_WU_BASE`（この WU の base）。
 - 登録: 書き込みの 3 route を `crates/task-api/src/cos/ops/surface.rs` の `EXCLUDED` と ADR 2026-10-09 の D2・D3 の表に理由
   `human_exchange` で足した（CoS の operation から呼べない）。`docs/api/v1/api.md` の endpoint の表（242〜245）と chat の詳細の表に 4 行ずつ足した。
 - wire の型: `ChatExchangeShareRequest`・`ChatExchangeShareResponse`・`ChatExchangeImportRequest`・`ChatExchangeImportResponse` を
-  `ApiV1Schema` に登録し、`docs/api/v1/api-v1.schema.json`（`UPDATE_SCHEMA=1`）と `web/api/generated`（`node web/scripts/gen-types.mjs`）を
-  再生成した。task-core の `ExchangeShareRequest`・`ImportRequest` は `JsonSchema` を持たず、task-core はこの WU の書き込み範囲の外なので、
-  task-api の wire の型から `From` の網羅の struct literal で作る（task-core 側に欄が増えれば compile が落ちる。形の二重の定義は wire と
+  葉の module `crates/task-api/src/exchange_wire.rs`（`task_core` だけに依存）に置き、`ApiV1Schema` に登録し、
+  `docs/api/v1/api-v1.schema.json`（`UPDATE_SCHEMA=1`）と `web/api/generated`（`node web/scripts/gen-types.mjs`）を再生成した。
+  task-core の `ExchangeShareRequest`・`ImportRequest` は `JsonSchema` を持たず、task-core はこの WU の書き込み範囲の外なので、
+  wire の型から `From` の網羅の struct literal で作る（task-core 側に欄が増えれば compile が落ちる。形の二重の定義は wire と
   domain の境界の 1 か所だけ）。
+- repo health への対応（最初の test-affected で 2 件の fail）:
+  - `deps.cycle`: 最初は wire の型を `chat::exchange` に置き、`schema -> chat` が task-api の 49 単位の循環の内部の新しい組になった。
+    型を葉の module `exchange_wire` に移し、`schema -> exchange_wire`・`chat -> exchange_wire` の向きだけにした（循環の外）。
+  - `size.responsibility-growth`: `ApiV1Schema` の field が 255 → 259 になった。`$defs` に他の応答の型から必ず入る `ChatThread`
+    （`ChatThreadResponse.thread`）・`ChatMessage`（`ChatMessageResponse.message`）・`ChatAttachment`（`ChatAttachmentResponse`）・
+    `ChatEvent`（`ChatEventListResponse.items`）の 4 つの根の field を外し、255 のままにした（`ChatRun`・`ChatCard` を載せない既存の
+    書き方と同じ）。schema の差分はこの 4 つの根の property と `required` の行の削除だけで、`$defs` と `web/api/generated/types.ts` の
+    既存の型は変わらない。
 - ChatGPT の会話全文・Memory を読みに行く経路、browser の login・Cookie、外部の URL を取りに行く処理は無い。取り込みは人が貼った 1 件だけ。
 - 新しい表・列・migration・Manager・trait・状態機械は無い。
 
@@ -57,18 +66,22 @@ D2.1・D4.1〜D4.3。基準は `$CELERIS_WU_BASE`（この WU の base）。
 ## 証拠（提出時の HEAD で実行）
 
 - `cargo nextest run -p task-api -E 'test(/chat_exchange_/)'` → exit 0、`12 tests run: 12 passed`。
-- `cargo nextest run -p task-api -E 'test(/cos_ops_registry|cos_ops_exclusions/)'` → 通過（EXCLUDED・ADR の表・api.md の表が一致）。
-- `cargo nextest run -p task-api -E 'test(committed_schema_matches_generated)'` → exit 0（再生成の後）。
+- `cargo nextest run -p task-api -E 'test(/committed_schema_matches_generated|chat_exchange_|cos_ops_/)'` → exit 0、`54 tests run: 54 passed`
+  （EXCLUDED・ADR 2026-10-09 の表・api.md の表・router が一致し、commit した schema が生成物と一致）。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
-- `bash scripts/dev/test-affected.sh` → 下の「test-affected」に書く。
-- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` の変更 path は `crates/task-api/`・`docs/api/v1/`・`web/api/generated/`・ADR 2026-10-09・
+- `bash scripts/dev/test-affected.sh` → exit 0（対象: celeris・celeris-campaign・celerisctl・llm-proxy・task-api・task-dispatch・task-worker と
+  web）。`repo_health_gate: all checks passed`、nextest `6243 tests run: 6243 passed (22 slow), 28 skipped`、web の `tsc -b` 通過、
+  vitest `Test Files 105 passed`・`Tests 745 passed`。1 回目（wire の型を `chat::exchange` に置いた版）は repo health の `deps.cycle` と
+  `size.responsibility-growth` で exit 1、直した後の 2 回目が上の結果。
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` の変更 path は `crates/task-api/`（`lib.rs` の `pub mod` 1 行を含む）・`docs/api/v1/`・`web/api/generated/`・ADR 2026-10-09・
   `agent-docs/progress/` だけ（`cos/strategy_gate*`・`strategy/mod.rs`・`control-ts/`・`ChatPostMessageRequest`・`ChatRelayRequest` は変えていない）。
 
-## LoC（`git diff --numstat $CELERIS_WU_BASE HEAD`、追加のみ・削除 0）
+## LoC（`git diff --numstat $CELERIS_WU_BASE HEAD`）
 
-- production Rust: +372（`chat/exchange.rs` 348・`chat/mod.rs` 2・`cos/ops/surface.rs` 15・`schema.rs` 7）。
+- production Rust: +384 −10（`chat/exchange.rs` 243・`exchange_wire.rs` 118・`chat/mod.rs` 2・`cos/ops/surface.rs` 15・`lib.rs` 1・
+  `schema.rs` +15 −10）。
 - test Rust: +703（`tests/chat_exchange.rs`）。
-- 生成物: `api-v1.schema.json` +132・`web/api/generated/schema.json` +132・`types.ts` +30。文書: `api.md` +8・ADR 2026-10-09 +6。
+- 生成物: `api-v1.schema.json` +132 −16・`web/api/generated/schema.json` +132 −16・`types.ts` +30。文書: `api.md` +8・ADR 2026-10-09 +6。
 - 純増の理由: D4.1 の 4 route（MCP 非対応の経路）は base に無い機能。handler は store の関数を呼ぶだけで、規則は task-core の 1 か所にある。
 
 ## 親の目的への寄与

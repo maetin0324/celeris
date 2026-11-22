@@ -187,6 +187,25 @@ tasks: [01M7XQ9QK1KC34Q2A6PJ960TJB]
 - `chat` の参照は、呼んだ client の snapshot に今出る item を指し、`revision`・`sha256` がその時の message と一致すること（子 3 D6 の
   `ChatCitation` の検査を使う）。一致しなければ `-32002`（`citation_invalid`）。`url` の参照は文字列として保存するだけで、Celeris は取りに行かない。
 
+#### D1.7 付記: mcp-tools の実装（2026-11-22）
+
+- 3 道具は `crates/celeris-mcp/src/tools/discussion.rs` に置き、`tools::all()` に並べた。引数と error の写しだけを持ち、範囲と規則は
+  `SqliteStore::chat_exchange_snapshot`・`chat_exchange_propose`（`task_core::discussion_exchange`）と envelope の純関数が決める。
+  呼んだ主体は認証した client から `mcp:<client_id>` として作り、引数からは取らない。scope は `client.scopes` の `as_str()` を R8 に渡す。
+- `McpScope::DiscussionPropose.as_str()` は `envelope::MCP_PROPOSE_SCOPE` を返す（綴りは 1 か所）。`McpScope` の JSON Schema の enum にも
+  2 つを足したので、`ApiV1Schema`（`GET /mcp/clients` の `scopes`）の生成物 `docs/api/v1/api-v1.schema.json`・`web/api/generated/` が変わる。
+- D1.5 の検索は、FTS5 ではなく、呼んだ client の snapshot の item（マスク後の本文）を語で照合する。理由: (1) 範囲の実装を snapshot の 1 つに
+  する（規約 2。FTS5 の結果を共有の範囲で絞る処理を別に書かない）。(2) FTS5 はマスク前の今の本文を引くので、秘密の前置き（`ghp_` など）で
+  探すと、出力に秘密が出なくても「当たった」ことで秘密の有無が分かる。snapshot の本文はマスク後なので当たらない。照合は空白で区切った語が
+  すべて含まれるもの（大文字小文字を区別しない）。snapshot の頁（200 件）を最大 50 頁まで読む。
+- D1.6 の `chat` の参照の検査（`citation_invalid`）は MCP の道具が行う。呼んだ client の snapshot の全頁の item の `citation` と
+  `thread_id`・`message_id`・`revision`・`sha256` が一致しなければ `-32002`。`check_propose`（task-core）は参照の形と長さだけを見るので、
+  REST の取り込みが同じ検査を要るなら、検査を task-core の兄弟 module に移して両方から呼ぶ（mcp-tools の書き込み範囲は task-core を
+  含まないため、ここでは MCP 側に置いた）。
+- 要約・戦略の file（`ExchangeDocument`）は MCP からは渡さない（`documents = []`）。`McpState` は CoS の workspace の場所を持たず、file を
+  読む処理を MCP に足すと CoS の workspace の読み方が 2 つになる。したがって今の MCP の snapshot・検索の item は `message` と `proposal`
+  だけで、confidential の文書は MCP から出ない。要約・戦略の file を外部 LLM に渡すかは未解決（mcp-tools の進捗）。
+
 ### D2: snapshot が返す範囲（人の共有）、失効、秘密のマスク
 
 #### D2.1 既定は出さない。人の共有だけを出す
@@ -433,6 +452,8 @@ ChatGPT との議論で人が選んだ要約 …
 | 同上 | `chat_exchange_consent_granted_by_is_caller` | 書き出し・取り込みの consent は呼んだ人 |
 | 権限昇格 | `mcp_external_scope_decision_answer_needs_tasks_decide`・`mcp_external_scope_plan_gate_needs_tasks_decide`・`mcp_external_scope_task_approve_needs_tasks_decide` | `tasks:interact` だけの client は人の決定・plan・task の承認に答えられない |
 | 同上 | `mcp_external_scope_recommended_has_no_decide` | 文書と `setup-chatgpt-rdc.sh` の推奨 scope に `tasks:decide` が無い |
+| 同上 | `mcp_external_scope_recommended_lists_no_decide_tools` | `tasks:decide` の道具は 4 つ（`task_approve`・`task_reject`・`decision_answer`・`task_plan_gate`）だけで、D6 の 2 つの推奨 scope の `tools/list` に出ない（scope-guard で足した） |
+| 同上 | `mcp_external_scope_discussion_only_cannot_read_db_api_or_instruct` | `discussion:*` だけの client は `db_query`・`api_get`・`console_instruct` を呼べない（scope-guard で足した） |
 | 二重取り込み | `external_exchange_import_idempotent_same_hash`・`external_exchange_import_conflict_different_hash` | 同じ key と本文は 1 件、違う本文は R7 |
 | 同上 | `mcp_discussion_propose_duplicate_single`・`chat_exchange_import_duplicate`・`chat_exchange_import_conflict` | MCP・REST の両方で同じ |
 | 秘密 | `external_exchange_snapshot_masks_secret`・`mcp_discussion_output_has_no_secret` | 返り値に token・cookie・webhook の形が出ない |
@@ -459,12 +480,14 @@ ChatGPT との議論で人が選んだ要約 …
 | exchange-design | `agent-docs/adr/`・`agent-docs/progress/` |
 | envelope-fix | `crates/task-core/src/strategy/envelope.rs`（と `envelope/`）・`crates/task-core/src/strategy/fixtures/`・`crates/task-core/src/strategy/tests.rs`・`agent-docs/progress/`・`agent-docs/adr/` |
 | exchange-core | `crates/task-core/src/discussion_exchange.rs`（と `discussion_exchange/`・`discussion_exchange_tests.rs`）・`crates/task-core/src/lib.rs`（`pub mod` の 1 行）・`crates/task-core/src/chat/`（既存の関数の公開範囲の変更と、`chat_events` の 2 つの type の追加だけ。本体に関数を足さない）・`crates/task-core/Cargo.toml`・`Cargo.lock`・`agent-docs/progress/`・`agent-docs/adr/` |
-| mcp-tools | `crates/celeris-mcp/`・`crates/task-core/src/mcp.rs`（scope の 2 つ）・`docs/guides/mcp.md`・`Cargo.lock`・`agent-docs/progress/`・`agent-docs/adr/` |
+| mcp-tools | `crates/celeris-mcp/`・`crates/task-core/src/mcp.rs`（scope の 2 つ）・`docs/guides/mcp.md`・`docs/api/v1/api-v1.schema.json`・`web/api/generated/`（`McpScope` の enum の生成物。生成器で書く）・`Cargo.lock`・`agent-docs/progress/`・`agent-docs/adr/` |
 | rest-import | `crates/task-api/`（`cos/strategy_gate*` を除く）・`crates/celerisctl/`・`docs/api/v1/`・`web/api/generated/`・`Cargo.lock`・`agent-docs/progress/`・`agent-docs/adr/`（2026-10-09 の表を含む） |
 | scope-guard | `crates/celeris-mcp/`・`crates/task-core/src/mcp.rs`・`crates/celerisctl/src/commands/mcp.rs`・`docs/guides/mcp.md`・`docs/guides/chatgpt-rdc.md`・`scripts/rdc/`・`agent-docs/progress/`・`agent-docs/adr/` |
 | rdc-path | `crates/celeris-mcp/tests/`・`crates/celeris-mcp/Cargo.toml`・`crates/celerisctl/tests/`・`crates/celerisctl/Cargo.toml`・`Cargo.lock`・`scripts/rdc/`・`docs/guides/mcp.md`・`docs/guides/chatgpt-rdc.md`・`agent-docs/progress/`・`agent-docs/adr/` |
 | close | `agent-docs/progress/` |
 
+- `McpScope` は `ApiV1Schema`（`GET /mcp/clients` の `scopes`）に載るので、scope を足す mcp-tools は公開 API の schema の生成物も書く（計画 v2 で範囲に足した）。
+  rest-import も同じ生成物を変えるが、変わる行が離れているので段の統合の merge で合わさる。
 - 子 5 と重なりうる file は `crates/task-core/src/lib.rs`（module の宣言の行）・`Cargo.lock`・ADR 2026-10-09 の表・`crates/task-api/src/schema.rs`。
   行が違えば統合の機械的な merge で解ける。同じ行の衝突なら、その unit は進捗に書いて止まり、子 5 の統合を待つ。
 - 同じ段の mcp-tools と scope-guard は `crates/celeris-mcp/`・`crates/task-core/src/mcp.rs` を共有するので、scope-guard は mcp-tools の後に走る（計画の依存のとおり）。

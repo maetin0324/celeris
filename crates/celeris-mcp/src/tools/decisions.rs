@@ -1,4 +1,9 @@
-//! ADR-0079 D7（Phase R3a）: `decision_list` / `decision_answer`（scope `tasks:interact`。`task_answer` と同じ重さ）。
+//! ADR-0079 D7（Phase R3a）: `decision_list`（scope `tasks:interact`）/ `decision_answer`（scope `tasks:decide`）。
+//! ADR-0079 D8（Phase R3b）: `task_plan_gate`（scope `tasks:decide`）。
+//!
+//! 人の決定への回答と root の計画の承認は `task_approve` と同じ `tasks:decide` に置く（ADR
+//! 2026-11-22-external-llm-discussion-exchange D6、人の決定 `ext-client-scope` の答え b）。`tasks:interact` だけの
+//! 外部 LLM の client（`chatgpt-rdc-2` の推奨 scope）は、決定の一覧は読めるが答えられない。
 //!
 //! HTTP の `GET /decisions` / `POST /decisions/{id}/answer` と**同じ** `task_ops::decision` の関数を呼ぶ（ロジックの
 //! 二重実装をしない）。回答の主体（`DecisionAnswered.by`）は `mcp:<client_id>`。取り下げ・revise は MCP には
@@ -143,7 +148,7 @@ pub fn answer_def() -> ToolDef {
     ToolDef {
         name: "decision_answer",
         description: "Answer an open decision request (same as POST /decisions/{id}/answer): option must be one of the decision's option keys (a kind=choice decision also accepts a free-text answer in note with option omitted). Records decision_answered with by=mcp:<client_id> and applies the deterministic effect (resume the waiting units, raise-once / replan / withdraw for limits, replan / atomic / cancel for plan_invalid). Already answered or withdrawn decisions are refused.",
-        scope: McpScope::TasksInteract,
+        scope: McpScope::TasksDecide,
         input_schema: schema::<AnswerArgs>,
         call: answer_call,
     }
@@ -193,7 +198,7 @@ pub fn plan_gate_def() -> ToolDef {
     ToolDef {
         name: "task_plan_gate",
         description: "Respond to a root plan that is waiting for human approval (same as POST /tasks/{id}/execution/plan-gate; the task's execution phase is awaiting_plan_approval): action approve (run the plan as adopted), replan (note required: the instruction for the planner, which writes a new plan version) or withdraw (cancel the task and its subtree). Recorded with by=mcp:<client_id>. Tasks not awaiting a plan approval are refused. Answering the plan's decisions is separate (decision_answer).",
-        scope: McpScope::TasksInteract,
+        scope: McpScope::TasksDecide,
         input_schema: schema::<PlanGateArgs>,
         call: plan_gate_call,
     }

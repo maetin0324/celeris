@@ -6,7 +6,7 @@
 #
 #   bash scripts/rdc/setup-chatgpt-rdc.sh [TOKEN_FILE]
 #
-#   TOKEN_FILE: `celerisctl mcp client add chatgpt-rdc --scope …` が出したトークンを保存した 600 のファイル。
+#   TOKEN_FILE: `celerisctl mcp client add chatgpt-rdc-2 --scope …`（docs/guides/mcp.md §8.2）が出したトークンを保存した 600 のファイル。
 #               与えると専用ユーザーの ~/.config/celeris/mcp-token に 600 で置く（値は表示しない）。
 #               既にある client に scope を足すだけなら不要（`celerisctl mcp client scopes`。token は変わらない）。
 #
@@ -90,9 +90,10 @@ echo "check: groups = $(id -nG "$RDC_USER")"
 echo
 cat <<NEXT
 next (人が行う):
-  0. scope（DB と API の読み取りを含む。docs/guides/mcp.md §8.2）。既にある client なら token はそのまま:
-       $CELERIS_HOME/current/bin/celerisctl --db $CELERIS_HOME/celeris.sqlite3 mcp client scopes chatgpt-rdc \\
-         --scope knowledge:read,knowledge:propose,tasks:read,tasks:interact,console:instruct,db:read,api:read
+  0. scope（DB と API の読み取りと議論の道具を含み、tasks:decide は渡さない。docs/guides/mcp.md §8.2）。
+     既にある client なら token はそのまま:
+       $CELERIS_HOME/current/bin/celerisctl --db $CELERIS_HOME/celeris.sqlite3 mcp client scopes chatgpt-rdc-2 \\
+         --scope knowledge:read,knowledge:propose,tasks:read,tasks:interact,console:instruct,db:read,api:read,discussion:read,discussion:propose
   1. 動作確認:  sudo -iu $RDC_USER -- celeris-chat --list
                sudo -iu $RDC_USER -- celeris-chat db_query '{"sql":"SELECT count(*) FROM tasks"}'
                sudo -iu $RDC_USER -- celeris-chat api_get '{"path":"/api/v1/health"}'

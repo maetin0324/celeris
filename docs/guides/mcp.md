@@ -88,9 +88,9 @@ token: <64+ 文字の値。この 1 回しか出ない>
 | `knowledge:read` | `knowledge_list` / `knowledge_search` / `knowledge_get` / `resources/read`（`celeris://knowledge/*`） |
 | `knowledge:propose` | `knowledge_propose`（`_inbox` に候補を置く） |
 | `tasks:read` | `tasks_list` / `tasks_get` / `projects_list` / `projects_get` |
-| `tasks:interact`（Phase 101） | `task_comment` / `task_answer`（`POST /tasks/{id}/comments` / `/answer` と同じ）、`task_decompose`（Phase F6。`POST /tasks/{id}/execution/decompose` と同じ）、`decision_list` / `decision_answer`（ADR-0079 R3a。`GET /decisions` / `POST /decisions/{id}/answer` と同じ）、`task_plan_gate`（ADR-0079 R3b。`POST /tasks/{id}/execution/plan-gate` と同じ） |
+| `tasks:interact`（Phase 101） | `task_comment` / `task_answer`（`POST /tasks/{id}/comments` / `/answer` と同じ）、`task_decompose`（Phase F6。`POST /tasks/{id}/execution/decompose` と同じ）、`decision_list`（ADR-0079 R3a。`GET /decisions` と同じ。読むだけ） |
 | `tasks:control`（Phase 101） | `task_retry` / `task_cancel`（`POST /tasks/{id}/retry` / `/cancel` と同じ） |
-| `tasks:decide`（Phase 101） | `task_approve` / `task_reject`（`POST /tasks/{id}/approve` / `/reject` と同じ） |
+| `tasks:decide`（Phase 101） | `task_approve` / `task_reject`（`POST /tasks/{id}/approve` / `/reject` と同じ）、`decision_answer`（ADR-0079 R3a。`POST /decisions/{id}/answer` と同じ）、`task_plan_gate`（ADR-0079 R3b。`POST /tasks/{id}/execution/plan-gate` と同じ）。人の決定・計画・task の承認に答える道具はこの scope だけ（ADR 2026-11-22-external-llm-discussion-exchange D6） |
 | `console:instruct` | `console_instruct` / `console_reply` |
 | `org:read` | `org_list` / `org_get` |
 | `org:write` | `org_create_node` / `org_mount_skill` / `org_unmount_skill` |
@@ -98,6 +98,8 @@ token: <64+ 文字の値。この 1 回しか出ない>
 | `skills:write` | `skills_put` |
 | `db:read` | `db_schema` / `db_query`（DB を読み取り専用で問い合わせる。ADR 2026-10-23-mcp-read-only-db-and-api） |
 | `api:read` | `api_get`（`/api/v1` への GET を daemon が代行する。同 ADR） |
+| `discussion:read` | `discussion_snapshot` / `discussion_evidence_search`（案件 thread のうち人が共有した範囲と、その client 自身の propose だけ。ADR 2026-11-22-external-llm-discussion-exchange） |
+| `discussion:propose` | `discussion_propose`（未承認の案を 1 件記録する。同 ADR） |
 
 `tools/list` は**持っているスコープの道具だけ**を返す（無い道具は一覧にすら出ない）。スコープが無い
 道具を `tools/call` で呼んでも JSON-RPC `-32601`（`method not found` と同じ見え方。「その道具は無い」
@@ -146,15 +148,16 @@ token: <64+ 文字の値。この 1 回しか出ない>
     `true`）。`root_id` で 1 つの木、`task_id` でその task の subtree に絞る（同時には使えない）。各要素は
     `DecisionView`（`decision.id`・`path`〈root › 段階 › unit のパンくず〉・`question`・`options`・`recommended`・
     `cost_of_reversal`・`needed_before`〈止めている unit / `stage:<key>` / `self`〉・`kind`）。
-  - `decision_answer { id, option?, note? }`（scope `tasks:interact`。`POST /decisions/{id}/answer` と同じ。
-    `task_answer` と同じ重さ: 待っている仕事を進めるだけで、run を止めない・複製しない）。`option` は決定の
+  - `decision_answer { id, option?, note? }`（scope `tasks:decide`。`POST /decisions/{id}/answer` と同じ。
+    人の決定への回答なので `task_approve` と同じ `tasks:decide` に置く（ADR 2026-11-22-external-llm-discussion-exchange D6。
+    `tasks:interact` だけの client は `decision_list` で読めるが答えられない））。`option` は決定の
     `options[].key` のどれか。`kind = choice` の決定だけ `option` を省いて `note` に自由記述で答えられる
     （記録される `option` は `other`）。`DecisionAnswered.by` は `mcp:<client_id>`。効き目は決定の種類と選択肢で
     決まる（ADR-0079 付記「R3a 実装時の逸脱・明確化」の表: 待っていた unit を進める / limit の `raise-once`・
     `replan`・`withdraw` / plan_invalid の `replan`・`atomic`・`cancel`）。回答済み・取り下げ済み・選択肢の外は
     `-32602`、無い id は `-32001`。取り下げ（`withdraw`）と revise は MCP には出さない（人が GUI / API で行う）。
     例: `{"name":"decision_answer","arguments":{"id":"01M4…","option":"org-vault","note":"まず試験用で"}}`。
-  - `task_plan_gate { task_id, action, note? }`（scope `tasks:interact`。ADR-0079 D8 / Phase R3b。
+  - `task_plan_gate { task_id, action, note? }`（scope `tasks:decide`。ADR-0079 D8 / Phase R3b。
     `POST /tasks/{id}/execution/plan-gate` と同じ `task_ops::plan_gate::plan_gate`）。root の計画の承認待ち
     （`awaiting_plan_approval`）に `approve` / `replan`（`note` 必須。planner への指示）/ `withdraw`（task と subtree の
     中止）で応える（`decision` は `action` の別名）。記録の主体は `mcp:<client_id>`（replan の `ExecutionHintSet.source` は
@@ -205,6 +208,30 @@ token: <64+ 文字の値。この 1 回しか出ない>
   `query` は object（値は文字列・数・真偽）。`method` は省略か `GET`。secret・保存 credential・browser の
   identity と Live View・credential の受け渡し・TOTP 接続・login・添付の生 bytes・SSE は拒否（`-32002`。一覧は ADR）。
   返り値は `{status, content_type, body}`（4xx/5xx もそのまま返す）。応答 1 MiB・30 秒まで。
+
+- **外部 LLM との議論**（ADR 2026-11-22-external-llm-discussion-exchange D1。ChatGPT・Muse など MCP の客は同じ契約）:
+  対象は `project_id`（案件の固定の CoS thread）か `thread_id`（`kind=project` の thread）。両方なら一致しなければ、
+  別案件・統括の thread なら `-32602`（`thread_project_mismatch`・`thread_kind_not_project`）。
+  - `discussion_snapshot { project_id?, thread_id?, after_seq?, limit? }`（scope `discussion:read`）: 人が
+    `exchange/shares` で共有した message（共有した版のまま。撤回・共有後の編集・取り消し・期限切れは `omitted`）と、
+    この客自身の propose だけを `celeris.discussion-snapshot/1` で返す。各 item は `citation`・`content_hash`・`source`・
+    `actor`・`consent`・`references`・`confidence`・`decision_state` を持ち、秘密の形は `[masked]`。共有が無ければ
+    `items: []`。既定 50 件・上限 200 件、続きは `next_after_seq`。要約・戦略の添付 file は今は MCP からは返さない
+    （`McpState` は CoS の workspace を読まない。ADR の D1.7）。
+  - `discussion_evidence_search { project_id?, thread_id?, query, limit? }`（scope `discussion:read`）: snapshot と
+    同じ範囲（マスク後の本文）だけを語で探す（空白で区切った語がすべて含まれるもの、大文字小文字を区別しない）。
+    `query` は 1〜512 文字。返り値は `celeris.discussion-evidence/1` の `hits[]`（`citation`・`snippet` 400 文字まで・
+    `references`・`confidence`・`decision_state`・`actor`・`source`・`content_hash`）。knowledge は探さない。
+  - `discussion_propose { project_id?, thread_id?, idempotency_key, source_label, body, references?, confidence, decision_state }`
+    （scope `discussion:propose`）: 案件 thread に `role=user`・author `mcp:<client_id>`・`discussion_mode: discuss` の
+    message を 1 件作り、`metadata_json.exchange` に envelope（`actor = mcp:<client_id>`、consent は客の scope）を
+    書く。人の発言・承認には数えない。`decision_state` は `discussion` か `proposed` だけ（他は `-32002`）。
+    `actor`・`consent`・`approval` を引数に書くと `-32602`。`kind: chat` の参照はこの客の snapshot に今ある item の
+    `thread_id`・`message_id`・`revision`・`sha256` と一致しなければ `-32002`（`citation_invalid`）、`kind: url` は
+    文字列として保存するだけで取りに行かない。同じ `idempotency_key` と本文は 1 件（`duplicate: true`）、別の本文は
+    `-32002`（`R7:idempotency_conflict`）。key は客ごとの名前空間（`mcp:<client_id>:<key>`）。秘密を含む本文は `-32002`
+    （`exchange_secret`。本文は返さない）。返り値 `{message_id, thread_id, project_id, seq, content_hash, decision_state, duplicate}`。
+  - 3 道具の引数・本文は `mcp_calls.request` に残さない。MCP の客は共有も取り込みもできない（人の REST だけ）。
 
 **resources**（読むだけの客のため。`resources/read { uri }` は対応する `*_get` と同じものを返す）:
 `celeris://knowledge/<path>`、`celeris://tasks/<id>`、`celeris://projects/<id>`、
@@ -298,7 +325,7 @@ $ celerisctl mcp call --base-url http://127.0.0.1:18200 --token-file /tmp/celeri
 ## 8. Remote Desktop Commander 経由（ChatGPT）（Phase 101、ADR 2026-10-23-mcp-read-only-db-and-api）
 
 ChatGPT からは Remote Desktop Commander（RDC）というリモート MCP で home-dev のシェルを叩ける。
-ChatGPT の操作は **MCP client（`chatgpt-rdc`）の scope で許される範囲だけ**にする。DB と HTTP API は、
+ChatGPT の操作は **MCP client（`chatgpt-rdc-2`）の scope で許される範囲だけ**にする。DB と HTTP API は、
 MCP の中の読み取り限定の道具（`db_query` / `db_schema`、`api_get`）で読む。専用ユーザーに DB ファイルの
 権限・API の token・curl は渡さない（境界は Linux ユーザーと MCP client の scope）。
 
@@ -333,19 +360,35 @@ RDC の device agent は `chatgpt-rdc` という**専用の**ユーザーで動�
 
 ### 8.2 推奨 scope
 
+RDC の ChatGPT の client（本番の id は `chatgpt-rdc-2`。ADR 2026-11-22-external-llm-discussion-exchange D6）:
+
 ```
-$ celerisctl --db ~/.local/celeris/celeris.sqlite3 mcp client add chatgpt-rdc \
-    --scope knowledge:read,knowledge:propose,tasks:read,tasks:interact,console:instruct,db:read,api:read
-# 既にある chatgpt-rdc に足すとき（token はそのまま。scope は置き換えなので全部書く）
-$ celerisctl --db ~/.local/celeris/celeris.sqlite3 mcp client scopes chatgpt-rdc \
-    --scope knowledge:read,knowledge:propose,tasks:read,tasks:interact,console:instruct,db:read,api:read
+$ celerisctl --db ~/.local/celeris/celeris.sqlite3 mcp client add chatgpt-rdc-2 \
+    --scope knowledge:read,knowledge:propose,tasks:read,tasks:interact,console:instruct,db:read,api:read,discussion:read,discussion:propose
+# 既にある client の scope を置き換えるとき（token はそのまま。scope は置き換えなので全部書く）
+$ celerisctl --db ~/.local/celeris/celeris.sqlite3 mcp client scopes chatgpt-rdc-2 \
+    --scope knowledge:read,knowledge:propose,tasks:read,tasks:interact,console:instruct,db:read,api:read,discussion:read,discussion:propose
 ```
 
-- 与える: `knowledge:read`、`knowledge:propose`、`tasks:read`、`tasks:interact`、`console:instruct`、
-  `db:read`（DB の読み取り）、`api:read`（API の GET）。
-- **与えない**: `tasks:control`（やり直し・取り消し）、`tasks:decide`（承認・却下）、`org:write`、
-  `skills:write`。これらは人が GUI から行う決定的な操作で、ChatGPT に渡す理由がない（欲しくなったら
-  この節の scope を明示して広げる。既定では絞る）。
+- 与える: `knowledge:read`、`knowledge:propose`、`tasks:read`、`tasks:interact`（コメント・`task_answer`・
+  `task_decompose`・`decision_list`）、`console:instruct`、`db:read`（DB の読み取り）、`api:read`（API の GET）、
+  `discussion:read`・`discussion:propose`（§5 の議論の道具）。
+- **与えない**: `tasks:decide`（`task_approve`・`task_reject`・`decision_answer`・`task_plan_gate`。人の決定・計画・
+  task の承認に答える道具）、`tasks:control`（やり直し・取り消し）、`org:write`、`skills:write`。これらは人が GUI から
+  行う操作で、外部の LLM に渡さない。ChatGPT の発言は人の承認にならない（MCP の記録の主体は `mcp:<client_id>`）。
+- `db:read`・`api:read` は運用の分析のために残す（人の決定 `ext-client-scope` の答え b）。DB と API の全読みなので、
+  未発表の研究結果など機微な内容も ChatGPT に出うる（人が受け入れた運用）。`discussion_snapshot` の共有の範囲の制限は、
+  この 2 つを持たない client だけを守る。
+
+Muse など、RDC 以外の MCP 対応の外部 LLM の client（HTTP の token か `celerisctl mcp stdio`）:
+
+```
+$ celerisctl --db ~/.local/celeris/celeris.sqlite3 mcp client add muse \
+    --scope discussion:read,discussion:propose
+```
+
+- 与えるのは `discussion:read`・`discussion:propose` だけ。`console:instruct`・`db:read`・`api:read`・`knowledge:read`・
+  `tasks:*` を渡さない（人が共有した議論を読み、未承認の案を記録するだけにする）。
 - scope の付与・token の発行は人が行う（credential は人だけが扱う）。
 - この口は `auth = "token"`（§2 の 18200）を使う（`auth = "none"` の 18201 は同じホストの ChatGPT の
   Secure MCP tunnel 専用。RDC とは別経路）。
@@ -379,7 +422,7 @@ $ celeris-chat task_comment '{"id":"<task ulid>","text":"見ました。続け�
 認証はトンネルの配置だけで担保している）。RDC の device agent を celeris と**同居させるホスト**では、
 この口は使わない（`chatgpt-rdc` から `18201` を直接叩けてしまうと、§8.2 で絞った scope を素通りして
 `chatgpt`（Secure MCP tunnel 用）のクライアントとして振る舞えてしまう）。RDC 経由は必ず `auth =
-"token"` の口（§2 の 18200）と、§8.2 で絞った専用クライアント（`chatgpt-rdc`）のトークンを使うこと。
+"token"` の口（§2 の 18200）と、§8.2 で絞った専用クライアント（`chatgpt-rdc-2`）のトークンを使うこと。
 
 ### 人の指示の取り次ぎ
 

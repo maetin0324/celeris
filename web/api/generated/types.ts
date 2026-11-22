@@ -3999,7 +3999,7 @@ export type McpClientsView = {
   "items": Array<McpClient>;
 };
 
-export type McpScope = "knowledge:read" | "knowledge:propose" | "tasks:read" | "tasks:interact" | "tasks:control" | "tasks:decide" | "console:instruct" | "org:read" | "org:write" | "skills:read" | "skills:write" | "db:read" | "api:read";
+export type McpScope = "knowledge:read" | "knowledge:propose" | "tasks:read" | "tasks:interact" | "tasks:control" | "tasks:decide" | "console:instruct" | "org:read" | "org:write" | "skills:read" | "skills:write" | "db:read" | "api:read" | "discussion:read" | "discussion:propose";
 
 export type MemoryView = {
   "notes": string;

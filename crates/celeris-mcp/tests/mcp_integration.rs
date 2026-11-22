@@ -1229,17 +1229,19 @@ fn decision_request(id: &str, key: &str, task_id: TaskId) -> DecisionRequest {
     }
 }
 
-/// ADR-0079 D7（Phase R3a）: `decision_list` / `decision_answer` は scope `tasks:interact`（`task_answer` と
-/// 同じ重さ）。回答の主体は `mcp:<client_id>`、二回目の回答は invalid_params、無い id は not_found。
+/// ADR-0079 D7（Phase R3a）: `decision_list` は scope `tasks:interact`、`decision_answer` は `tasks:decide`
+/// （ADR 2026-11-22-external-llm-discussion-exchange D6、決定 `ext-client-scope` の答え b で `tasks:interact` から移した。
+/// `tasks:interact` だけの client が答えられないことは `mcp_external_scope_decision_answer_needs_tasks_decide`）。
+/// 回答の主体は `mcp:<client_id>`、二回目の回答は invalid_params、無い id は not_found。
 #[tokio::test]
-async fn decision_tools_require_tasks_interact_and_record_the_mcp_source() {
+async fn decision_list_needs_tasks_interact_and_decision_answer_needs_tasks_decide() {
     let server = spawn_token_server(60).await;
     create_client(&server.store, "noscope", Some("s0"), vec![]);
     create_client(
         &server.store,
         "chatgpt",
         Some("secret"),
-        vec![McpScope::TasksInteract],
+        vec![McpScope::TasksInteract, McpScope::TasksDecide],
     );
     let task_id = insert_task(&server.store, TaskKind::Execute, Status::Ready);
     server
@@ -1276,7 +1278,7 @@ async fn decision_tools_require_tasks_interact_and_record_the_mcp_source() {
     .await;
     assert_eq!(body["error"]["code"], -32601, "{body}");
 
-    // `tasks:interact` を持つクライアントは一覧・回答ができる。
+    // `tasks:interact`（一覧）と `tasks:decide`（回答）を持つクライアントは一覧・回答ができる。
     let session = initialize(&client, &server.base_url, Some("secret")).await;
     let body = call_tool(
         &client,
@@ -1339,38 +1341,42 @@ async fn decision_tools_require_tasks_interact_and_record_the_mcp_source() {
     server.stop().await;
 }
 
-/// ADR-0079 D8（Phase R3b）: `task_plan_gate` は `tasks:interact`（scope 無しは -32601）。承認待ちの root の計画に
-/// approve / replan を記録し、主体は `mcp:<client_id>`。承認待ちでなければ invalid_params、無い task は not_found。
+/// root の計画の承認待ち（`awaiting_plan_approval`）の task を 1 件作る。
+fn awaiting_plan_approval(store: &SqliteStore) -> TaskId {
+    let id = insert_task(store, TaskKind::Execute, Status::Ready);
+    store
+        .apply_transition(id, task_core::Trigger::Dispatch, None)
+        .expect("dispatch");
+    store
+        .apply_transition_with_events(
+            id,
+            task_core::Trigger::PlanGate {
+                plan_id: "p1".into(),
+            },
+            vec![Event::PlanApprovalRequested {
+                plan_id: "p1".into(),
+                reasons: vec!["decisions:h1".into()],
+            }],
+        )
+        .expect("plan gate");
+    id
+}
+
+/// ADR-0079 D8（Phase R3b）: `task_plan_gate` は `tasks:decide`（ADR 2026-11-22-external-llm-discussion-exchange D6 で
+/// `tasks:interact` から移した。scope 無しは -32601、`tasks:interact` だけの client は
+/// `mcp_external_scope_plan_gate_needs_tasks_decide`）。承認待ちの root の計画に approve / replan を記録し、主体は
+/// `mcp:<client_id>`。承認待ちでなければ invalid_params、無い task は not_found。
 #[tokio::test]
-async fn task_plan_gate_requires_tasks_interact_and_records_the_mcp_source() {
+async fn task_plan_gate_requires_tasks_decide_and_records_the_mcp_source() {
     let server = spawn_token_server(60).await;
     create_client(&server.store, "noscope", Some("s0"), vec![]);
     create_client(
         &server.store,
         "chatgpt",
         Some("secret"),
-        vec![McpScope::TasksInteract],
+        vec![McpScope::TasksDecide],
     );
-    let awaiting = |store: &SqliteStore| {
-        let id = insert_task(store, TaskKind::Execute, Status::Ready);
-        store
-            .apply_transition(id, task_core::Trigger::Dispatch, None)
-            .expect("dispatch");
-        store
-            .apply_transition_with_events(
-                id,
-                task_core::Trigger::PlanGate {
-                    plan_id: "p1".into(),
-                },
-                vec![Event::PlanApprovalRequested {
-                    plan_id: "p1".into(),
-                    reasons: vec!["decisions:h1".into()],
-                }],
-            )
-            .expect("plan gate");
-        id
-    };
-    let task_id = awaiting(&server.store);
+    let task_id = awaiting_plan_approval(&server.store);
     let client = reqwest::Client::new();
 
     let session0 = initialize(&client, &server.base_url, Some("s0")).await;
@@ -1430,7 +1436,7 @@ async fn task_plan_gate_requires_tasks_interact_and_records_the_mcp_source() {
     assert_eq!(body["error"]["code"], -32602, "{body}");
 
     // replan は `ExecutionHintSet{replan: true}` を source `mcp:<client> (plan-gate)` で積む。
-    let other = awaiting(&server.store);
+    let other = awaiting_plan_approval(&server.store);
     let body = call_tool(
         &client,
         &server.base_url,
@@ -2217,4 +2223,463 @@ async fn api_get_proxies_only_safe_gets_with_the_daemon_token() {
     );
 
     rs.server.stop().await;
+}
+
+// ---------------------------------------------------------------------------
+// ADR 2026-11-22-external-llm-discussion-exchange D6・D7.2（決定 `ext-client-scope` の答え b）: 外部 LLM の MCP client の
+// scope。人の決定・計画・task の承認に答える道具は `tasks:decide` だけにあり、RDC の ChatGPT（`chatgpt-rdc-2`）の推奨
+// scope にも Muse など他の client の推奨 scope にも `tasks:decide` は無い。base では `decision_answer`・`task_plan_gate` が
+// `tasks:interact` にあり、`chatgpt-rdc-2` の scope で人の決定に答えられた（既存の試験はそれを正の case として確かめていた）。
+// ---------------------------------------------------------------------------
+
+/// D6: RDC の ChatGPT の client（本番の id は `chatgpt-rdc-2`）の推奨 scope。
+const CHATGPT_RDC_2_SCOPES: &str = "knowledge:read,knowledge:propose,tasks:read,tasks:interact,console:instruct,db:read,api:read,discussion:read,discussion:propose";
+/// D6: Muse など RDC 以外の MCP 対応の外部 LLM の client の推奨 scope。
+const OTHER_LLM_SCOPES: &str = "discussion:read,discussion:propose";
+/// 人の決定・計画・task の承認に答える道具（すべて `tasks:decide`）。
+const DECIDE_TOOLS: [&str; 4] = [
+    "task_approve",
+    "task_reject",
+    "decision_answer",
+    "task_plan_gate",
+];
+
+fn recommended(list: &str) -> Vec<McpScope> {
+    let scopes = task_core::mcp::scopes_from_string(list);
+    assert_eq!(
+        task_core::mcp::scopes_to_string(&scopes),
+        list,
+        "unknown scope in {list}"
+    );
+    scopes
+}
+
+/// Invariant: the registry puts exactly the four answer/approval tools under `tasks:decide`, and neither recommended
+/// scope list (D6) holds `tasks:decide`, so neither client sees any of them in `tools/list`. Base listed
+/// `decision_answer`・`task_plan_gate` for `chatgpt-rdc-2` (they were `tasks:interact`); no existing test checked the
+/// recommended lists against the registry.
+#[tokio::test]
+async fn mcp_external_scope_recommended_lists_no_decide_tools() {
+    let decide: Vec<&str> = celeris_mcp::tools::all()
+        .into_iter()
+        .filter(|t| t.scope == McpScope::TasksDecide)
+        .map(|t| t.name)
+        .collect();
+    let mut want = DECIDE_TOOLS.to_vec();
+    want.sort_unstable();
+    let mut got = decide.clone();
+    got.sort_unstable();
+    assert_eq!(got, want, "tools under tasks:decide");
+    for list in [CHATGPT_RDC_2_SCOPES, OTHER_LLM_SCOPES] {
+        assert!(
+            !recommended(list).contains(&McpScope::TasksDecide),
+            "{list}"
+        );
+    }
+
+    let server = spawn_token_server(60).await;
+    create_client(
+        &server.store,
+        "chatgpt-rdc-2",
+        Some("t-rdc"),
+        recommended(CHATGPT_RDC_2_SCOPES),
+    );
+    create_client(
+        &server.store,
+        "muse",
+        Some("t-muse"),
+        recommended(OTHER_LLM_SCOPES),
+    );
+    let client = reqwest::Client::new();
+    let rdc = tool_names(&client, &server.base_url, "t-rdc").await;
+    for name in DECIDE_TOOLS {
+        assert!(!rdc.iter().any(|n| n == name), "{name} listed: {rdc:?}");
+    }
+    // 答え b: 決定は読める（`decision_list`）、DB・API の読み取りと議論の道具は残る。
+    for name in [
+        "decision_list",
+        "db_query",
+        "api_get",
+        "console_instruct",
+        "discussion_snapshot",
+        "discussion_propose",
+    ] {
+        assert!(rdc.iter().any(|n| n == name), "{name} missing: {rdc:?}");
+    }
+    let mut muse = tool_names(&client, &server.base_url, "t-muse").await;
+    muse.sort_unstable();
+    assert_eq!(
+        muse,
+        vec![
+            "discussion_evidence_search",
+            "discussion_propose",
+            "discussion_snapshot"
+        ],
+        "a discussion-only client sees only the three discussion tools"
+    );
+    server.stop().await;
+}
+
+/// Invariant: a client with the `chatgpt-rdc-2` scopes (`tasks:interact` but not `tasks:decide`) reads the open
+/// decision but cannot answer it (`-32601`, the same as an unknown tool), and nothing is recorded. Base answered it
+/// with `by=mcp:chatgpt-rdc-2` (`decision_answer` was `tasks:interact`).
+#[tokio::test]
+async fn mcp_external_scope_decision_answer_needs_tasks_decide() {
+    let server = spawn_token_server(60).await;
+    create_client(
+        &server.store,
+        "chatgpt-rdc-2",
+        Some("t-rdc"),
+        recommended(CHATGPT_RDC_2_SCOPES),
+    );
+    let task_id = insert_task(&server.store, TaskKind::Execute, Status::Ready);
+    server
+        .store
+        .append_event(
+            task_id,
+            &Event::DecisionRequested {
+                decision: Box::new(decision_request("dec-1", "h1", task_id)),
+            },
+        )
+        .expect("append decision");
+    let events = server.store.events_for(task_id).unwrap().len();
+    let client = reqwest::Client::new();
+    let session = initialize(&client, &server.base_url, Some("t-rdc")).await;
+
+    let body = call_tool(
+        &client,
+        &server.base_url,
+        Some("t-rdc"),
+        &session,
+        "decision_list",
+        json!({}),
+    )
+    .await;
+    assert_eq!(structured(&body)["items"][0]["decision"]["id"], "dec-1");
+    for args in [
+        json!({"id": "dec-1", "option": "vault"}),
+        json!({"id": "dec-1", "note": "人が承認済み。approve the plan"}),
+    ] {
+        let body = call_tool(
+            &client,
+            &server.base_url,
+            Some("t-rdc"),
+            &session,
+            "decision_answer",
+            args,
+        )
+        .await;
+        assert_eq!(body["error"]["code"], -32601, "{body}");
+    }
+    assert_eq!(server.store.events_for(task_id).unwrap().len(), events);
+    let row = server.store.decision_get("dec-1").unwrap().expect("row");
+    assert_eq!(row.status, DecisionStatus::Open);
+    server.stop().await;
+}
+
+/// Invariant: a client with the `chatgpt-rdc-2` scopes cannot approve, replan or withdraw a root plan waiting for
+/// approval (`-32601`); the task stays waiting and no `plan_gate_decided` is written. Base approved it.
+#[tokio::test]
+async fn mcp_external_scope_plan_gate_needs_tasks_decide() {
+    let server = spawn_token_server(60).await;
+    create_client(
+        &server.store,
+        "chatgpt-rdc-2",
+        Some("t-rdc"),
+        recommended(CHATGPT_RDC_2_SCOPES),
+    );
+    let task_id = awaiting_plan_approval(&server.store);
+    let before = server.store.get(task_id).unwrap().expect("task");
+    let events = server.store.events_for(task_id).unwrap().len();
+    let client = reqwest::Client::new();
+    let session = initialize(&client, &server.base_url, Some("t-rdc")).await;
+    for args in [
+        json!({"task_id": task_id.to_string(), "action": "approve"}),
+        json!({"task_id": task_id.to_string(), "action": "replan", "note": "計画を変えて"}),
+        json!({"task_id": task_id.to_string(), "action": "withdraw"}),
+    ] {
+        let body = call_tool(
+            &client,
+            &server.base_url,
+            Some("t-rdc"),
+            &session,
+            "task_plan_gate",
+            args,
+        )
+        .await;
+        assert_eq!(body["error"]["code"], -32601, "{body}");
+    }
+    let after = server.store.get(task_id).unwrap().expect("task");
+    assert_eq!(after.status, before.status);
+    assert_eq!(server.store.events_for(task_id).unwrap().len(), events);
+    server.stop().await;
+}
+
+/// Invariant: a client with the `chatgpt-rdc-2` scopes cannot approve or reject a task (`-32601`) and the approval
+/// task is unchanged. `task_approve` was already `tasks:decide` in base, so this guards the recommended list (it
+/// must never gain `tasks:decide`) rather than failing on base.
+#[tokio::test]
+async fn mcp_external_scope_task_approve_needs_tasks_decide() {
+    let server = spawn_token_server(60).await;
+    create_client(
+        &server.store,
+        "chatgpt-rdc-2",
+        Some("t-rdc"),
+        recommended(CHATGPT_RDC_2_SCOPES),
+    );
+    let approval_id = insert_task(&server.store, TaskKind::Approval, Status::Ready);
+    let events = server.store.events_for(approval_id).unwrap().len();
+    let client = reqwest::Client::new();
+    let session = initialize(&client, &server.base_url, Some("t-rdc")).await;
+    for (tool, args) in [
+        ("task_approve", json!({"id": approval_id.to_string()})),
+        (
+            "task_reject",
+            json!({"id": approval_id.to_string(), "reason": "不要"}),
+        ),
+    ] {
+        let body = call_tool(
+            &client,
+            &server.base_url,
+            Some("t-rdc"),
+            &session,
+            tool,
+            args,
+        )
+        .await;
+        assert_eq!(body["error"]["code"], -32601, "{tool}: {body}");
+    }
+    let task = server.store.get(approval_id).unwrap().expect("task");
+    assert_eq!(task.status, Status::Ready);
+    assert_eq!(server.store.events_for(approval_id).unwrap().len(), events);
+    server.stop().await;
+}
+
+/// Invariant: a client with only `discussion:read,discussion:propose` (the D6 recommendation for Muse and other
+/// clients) cannot read the DB or the API or instruct the CoS (`-32601`), and the API stub sees no request. The
+/// existing `db_and_api_tools_require_their_scopes` uses `tasks:read` only and predates the discussion scopes.
+#[tokio::test]
+async fn mcp_external_scope_discussion_only_cannot_read_db_api_or_instruct() {
+    let rs = spawn_read_server().await;
+    let base = rs.server.base_url.clone();
+    create_client(
+        &rs.server.store,
+        "muse",
+        Some("t-muse"),
+        recommended(OTHER_LLM_SCOPES),
+    );
+    let client = reqwest::Client::new();
+    let session = initialize(&client, &base, Some("t-muse")).await;
+    for (tool, args) in [
+        ("db_query", json!({"sql": "SELECT count(*) FROM tasks"})),
+        ("db_schema", json!({})),
+        ("api_get", json!({"path": "/api/v1/tasks"})),
+        ("console_instruct", json!({"text": "task を起票して"})),
+        (
+            "console_reply",
+            json!({"thread_id": "01M5JJTVPW15CKFRCA0FAYCHK4"}),
+        ),
+        ("knowledge_search", json!({"query": "BenchFS"})),
+        ("tasks_list", json!({})),
+    ] {
+        let body = call_tool(&client, &base, Some("t-muse"), &session, tool, args).await;
+        assert_eq!(body["error"]["code"], -32601, "{tool}: {body}");
+    }
+    assert!(rs.stub.seen.lock().unwrap().is_empty());
+    rs.server.stop().await;
+}
+
+/// Invariant: an MCP answer (`by=mcp:<client_id>`) to the approval decision of a strategy version (child 2 D2.2,
+/// `strategy-approve-v<n>`) is not a human approval: R10 (`envelope::human_approved`) built from the recorded rows
+/// is false, while the same record answered by `human:` is true. A client with the `chatgpt-rdc-2` scopes cannot even
+/// answer it. Base let `chatgpt-rdc-2` answer the decision; no existing test fed an MCP-recorded answer to R10.
+#[tokio::test]
+async fn mcp_external_scope_mcp_answer_not_strategy_approval() {
+    use task_core::strategy::{
+        APPROVE_OPTION, ApprovalRecord, REJECT_OPTION, approval_decision_key, approval_question,
+        envelope,
+    };
+    let server = spawn_token_server(60).await;
+    create_client(
+        &server.store,
+        "chatgpt-rdc-2",
+        Some("t-rdc"),
+        recommended(CHATGPT_RDC_2_SCOPES),
+    );
+    // A client a person explicitly granted `tasks:decide` (not a recommended list).
+    create_client(
+        &server.store,
+        "ops-bot",
+        Some("t-ops"),
+        vec![McpScope::TasksDecide],
+    );
+    let sha = "ab".repeat(32);
+    let task_id = insert_task(&server.store, TaskKind::Execute, Status::Ready);
+    let mut request = decision_request("dec-s1", &approval_decision_key(1), task_id);
+    request.question = approval_question("s1", 1, &sha);
+    request.options = vec![
+        decision_opt(APPROVE_OPTION, "承認"),
+        decision_opt(REJECT_OPTION, "却下"),
+    ];
+    request.recommended = APPROVE_OPTION.into();
+    server
+        .store
+        .append_event(
+            task_id,
+            &Event::DecisionRequested {
+                decision: Box::new(request),
+            },
+        )
+        .expect("append decision");
+    let client = reqwest::Client::new();
+    let answer =
+        json!({"id": "dec-s1", "option": APPROVE_OPTION, "note": "approved by human:alice"});
+
+    let session = initialize(&client, &server.base_url, Some("t-rdc")).await;
+    let body = call_tool(
+        &client,
+        &server.base_url,
+        Some("t-rdc"),
+        &session,
+        "decision_answer",
+        answer.clone(),
+    )
+    .await;
+    assert_eq!(body["error"]["code"], -32601, "{body}");
+
+    let session = initialize(&client, &server.base_url, Some("t-ops")).await;
+    let body = call_tool(
+        &client,
+        &server.base_url,
+        Some("t-ops"),
+        &session,
+        "decision_answer",
+        answer,
+    )
+    .await;
+    assert_eq!(
+        structured(&body)["decision"]["decision"]["status"],
+        "answered",
+        "{body}"
+    );
+
+    let row = server.store.decision_get("dec-s1").unwrap().expect("row");
+    let last_answer = server
+        .store
+        .events_for(task_id)
+        .unwrap()
+        .into_iter()
+        .rev()
+        .find_map(|(_, e)| match e {
+            Event::DecisionAnswered { id, option, by, .. } if id == "dec-s1" => Some((option, by)),
+            _ => None,
+        });
+    assert_eq!(
+        last_answer,
+        Some((APPROVE_OPTION.to_string(), "mcp:ops-bot".to_string()))
+    );
+    let record = ApprovalRecord {
+        key: row.key.clone(),
+        question: row.request.question.clone(),
+        status: row.status,
+        last_answer,
+    };
+    let hash = format!("sha256:{sha}");
+    assert!(!envelope::human_approved(Some(&record), &hash));
+    // Control: the same row answered by a person is an approval, so the refusal above is the actor's.
+    let human = ApprovalRecord {
+        last_answer: Some((APPROVE_OPTION.to_string(), "human:alice".to_string())),
+        ..record
+    };
+    assert!(envelope::human_approved(Some(&human), &hash));
+    server.stop().await;
+}
+
+/// `(client id, --scope の値)` の組を、`mcp client add <id>` / `mcp client scopes <id>` の後の最初の `--scope` から拾う。
+fn scope_commands(text: &str) -> Vec<(String, String)> {
+    let token =
+        |s: &str, ok: fn(char) -> bool| s.chars().take_while(|c| ok(*c)).collect::<String>();
+    let mut out = Vec::new();
+    for verb in ["mcp client add ", "mcp client scopes "] {
+        for (at, _) in text.match_indices(verb) {
+            let rest = &text[at + verb.len()..];
+            let id = token(rest, |c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+            let Some(flag) = rest.find("--scope ") else {
+                continue;
+            };
+            // The flag belongs to this command only if no other command starts before it.
+            if rest[..flag].contains("mcp client ") {
+                continue;
+            }
+            let value = token(&rest[flag + "--scope ".len()..], |c| {
+                c.is_ascii_lowercase() || c == ':' || c == ','
+            });
+            // `--scope …` は値の無い参照（例の placeholder）。
+            if !value.is_empty() {
+                out.push((id, value));
+            }
+        }
+    }
+    out
+}
+
+/// Invariant: the documents and the setup script recommend exactly the D6 lists — the RDC ChatGPT client
+/// (`chatgpt-rdc*`) gets `CHATGPT_RDC_2_SCOPES`, `muse` gets `OTHER_LLM_SCOPES` — and no `--scope` example in them
+/// holds `tasks:decide`; the scope table puts the four answer/approval tools under `tasks:decide` only. Base
+/// recommended the old list without `discussion:*` and documented `decision_answer`・`task_plan_gate` under
+/// `tasks:interact`; nothing compared the documents with the code.
+#[test]
+fn mcp_external_scope_recommended_has_no_decide() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let read = |rel: &str| std::fs::read_to_string(root.join(rel)).expect(rel);
+    let guide = read("docs/guides/mcp.md");
+    let rdc_guide = read("docs/guides/chatgpt-rdc.md");
+    let setup = read("scripts/rdc/setup-chatgpt-rdc.sh");
+
+    let mut rdc_lists = 0;
+    let mut muse_lists = 0;
+    for (file, text) in [
+        ("docs/guides/mcp.md", &guide),
+        ("docs/guides/chatgpt-rdc.md", &rdc_guide),
+        ("scripts/rdc/setup-chatgpt-rdc.sh", &setup),
+    ] {
+        for (id, value) in scope_commands(text) {
+            assert!(!value.contains("tasks:decide"), "{file}: {id} {value}");
+            if id.starts_with("chatgpt-rdc") {
+                assert_eq!(value, CHATGPT_RDC_2_SCOPES, "{file}: {id}");
+                rdc_lists += 1;
+            } else if id == "muse" {
+                assert_eq!(value, OTHER_LLM_SCOPES, "{file}: {id}");
+                muse_lists += 1;
+            }
+        }
+    }
+    // §8.2 の add と scopes の 2 つ、setup の 1 つ。Muse は §8.2 の 1 つ。
+    assert_eq!(rdc_lists, 3, "recommended lists for the RDC ChatGPT client");
+    assert_eq!(muse_lists, 1, "recommended list for Muse and other clients");
+
+    let row = |scope: &str| {
+        let head = format!("| `{scope}`");
+        guide
+            .lines()
+            .find(|l| l.starts_with(&head))
+            .unwrap_or_else(|| panic!("no row for {scope}"))
+            .to_owned()
+    };
+    let interact = row("tasks:interact");
+    let decide = row("tasks:decide");
+    for name in DECIDE_TOOLS {
+        assert!(
+            !interact.contains(&format!("`{name}`")),
+            "{name} in tasks:interact"
+        );
+        assert!(decide.contains(&format!("`{name}`")), "{name} missing");
+    }
+    for name in ["decision_answer", "task_plan_gate"] {
+        let entry = guide
+            .lines()
+            .find(|l| l.trim_start().starts_with(&format!("- `{name} {{")))
+            .unwrap_or_else(|| panic!("no entry for {name}"));
+        assert!(entry.contains("（scope `tasks:decide`"), "{entry}");
+    }
 }

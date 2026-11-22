@@ -103,7 +103,7 @@ celeris ◀─stdout── {"type":"progress", ...}\n
 | `context.interrupt` | string | –（省略可。Phase 53, ADR-0044 D2） | **直前の run を人のコメントで止めた**とき、そのコメントの本文。前置きのいちばん先に「**人からの割り込み**: …」として出る。割り込みの直後の run にだけ載る（その run が終わったら消える） |
 | `context.comments_enabled` | bool | –（省略可。既定 false。Phase 53, ADR-0044 D2） | この run は `comment` を書ける。true のときだけ前置きに「短い進捗や判断の記録はコメントに書け」が出る。**仕事の run は true、対話 run（Phase 28 の「返事だけをする」run）とレビュー run は false** |
 | `context.recent_work` | array | –（省略可。空なら省略。Phase 33, ADR-0033 D4 追記） | 対話 run にだけ、担当の直近の仕事（最大 10 件、更新の新しい順。案件を選んでいればその案件のものを先に。対話・まとめ・承認・レビューは除く）。`RecentWork`: `{task_id, title, project_title?, status, finished_at?, outcome?, artifacts: string[]}`。`outcome` は終端の要約（`done` なら summary の 1 行目、`failed` なら理由、`blocked` なら質問）で、ストアのタスクとイベントから決定的に組む（LLM は使わない） |
-| `context.review` | object | –（省略可） | Review run だけ。`ReviewRequest`: `{summary, evidence, criteria, decisions?, answers?, checks?, policy_violations?, health?, design?, diff_design?}`（§10.2） |
+| `context.review` | object | –（省略可） | Review run だけ。`ReviewRequest`: `{summary, evidence, criteria, decisions?, answers?, checks?, policy_violations?, health?, design?, diff_design?, strategy_critic?}`（§10.2） |
 | `context.available_genres` | array | –（省略可。空なら省略。v3） | 分解・委譲できる run に渡す分野の一覧。`GenreContext`: `{id, description, capabilities?, input_artifacts?, output_artifacts?, roles?, harness?}` |
 | `context.subject_genre` | object | –（省略可） | レビュー対象の仕事の分野（`GenreContext`） |
 | `context.clusters` | array | –（省略可。空なら省略） | 使えるクラスタ。`{id, connected, work_dir?}` |
@@ -744,11 +744,12 @@ task.acceptance.len()`。受け入れ条件の無い Plan〈R6 で撤去した `
 `Check::Reviewer` 条件を判定する際、ディスパッチャは対象タスクとは別の run を起動する。
 `RunRequest.task` は永続化されない合成タスク（`kind = "review"`、`title = "Review: <対象 title>"`、
 `objective`/`acceptance`/`workspace`/`budget` は対象タスクと同じ）。`RunRequest.context.review` に
-`ReviewRequest{summary, evidence, criteria, decisions?, answers?, checks?, policy_violations?, health?, design?, diff_design?}` が入る（`criteria` は判定すべき `task.acceptance` の
+`ReviewRequest{summary, evidence, criteria, decisions?, answers?, checks?, policy_violations?, health?, design?, diff_design?, strategy_critic?}` が入る（`criteria` は判定すべき `task.acceptance` の
 インデックス一覧、`summary`/`evidence` は対象 run の `done` の内容、`decisions` / `answers` は人の決定と回答、
 `checks` は daemon が走らせた決定的な検査の結果、`policy_violations` は検出した subagent・別 LLM の起動、
 `health` は final review にだけ渡す健全性の材料、`design` は採用前の設計 review の run にだけ渡す計画の材料、
-`diff_design` は final review にだけ渡す差分の設計の材料）。`context.inputs` には対象 run の
+`diff_design` は final review にだけ渡す差分の設計の材料、`strategy_critic` は戦略の文書を作った task の final review にだけ渡す
+Critic の材料）。`context.inputs` には対象 run の
 `ArtifactProduced` が入る。run は対象タスクと同じ作業ディレクトリで実行される（成果物を直接読めるように
 するため。ワーカーには読み取り専用で振る舞うよう指示するが強制はしない。既知の制約）。
 
@@ -836,6 +837,57 @@ final review の candidate の差分が、採用した計画の設計 review の
 該当する `Reviewer` 条件を `pass=false`（理由に原因を記録）として扱う: run の終端が `done` 以外
 （`error`/`question`/クラッシュ/タイムアウト）、`artifacts/review.json` が無い、JSON として不正、
 `criteria` のいずれかのインデックスに対応する `verdicts` エントリが欠落している。
+
+#### 戦略の文書の Critic（ADR 2026-11-22-strategy-review-critic D3.3〜D3.6）
+
+対象: dispatcher は対象 task の events の `ArtifactProduced` のうち name が `strategy/<strategy_id>/v<n>.json` の形のものを、task のすべての run
+（WorkUnit の run を含む）から集め、`strategy_id` ごとに最大の版を Critic の対象にする（`task_core::strategy_critic::critic_subjects`。D3.1）。
+対象がある task の final review は、`Check::Reviewer` の条件が無くても reviewer run を 1 回起こし、reviewer の合格の持ち越しを使わない（D3.2）。
+対象が空の task では `context.review.strategy_critic` は `None` で省略され、`request.json` も reviewer の prompt も base と同じで、reviewer run の数も
+変わらない。`PROTOCOL_VERSION` は上げない（欄を足すだけ）。
+
+入力 `context.review.strategy_critic`（`StrategyCriticRequest`）は `{criterion_idx, subjects, rubric}`:
+
+- `criterion_idx`: 暗黙の条件 `strategy_critic` の番号（D3.3。`research_evidence` の次の番号。`criteria` には入らない）。合否は
+  `ReviewOutput.critic` だけで決まる。
+- `subjects[]`（`StrategyCriticSubject`）: `{name, path, sha256, strategy_id, version}`。`name` は成果物の名前
+  `strategy/<strategy_id>/v<version>.json`、`path` は workspace からの相対 path（reviewer はこの file を読む）、`sha256` は最後の
+  `ArtifactProduced` の記録の値。
+- `rubric[]`（`CriticRubricItem`）: `{id, text}`。固定の基準 C1〜C5（`task_core::strategy_critic::CRITIC_RUBRIC` の写し。文書や run は変えられない）。
+  C1 は欠陥（候補ごとの根本原因の仮説・approach・費用・risk・保留する前提、`commit` の参照の実在、人の承認 `strategy-approve-v<n>` の sha256 と対象の
+  sha256 の一致）、C2 は反証条件（`falsified_by` が観測で確かめられるか）、C3 は識別実験（`experiment` が `discriminates` の仮説を区別でき、予算が最小か）、
+  C4 は比較（期待情報価値・費用・risk。`selected` があれば、文書の `evidence` が参照する task の実験の結果から選んだ理由が成り立つか）、C5 は逆戻り
+  （`open` の候補が `rejected` の候補の approach を名前を変えて出していないか、前の版の実験 task の失敗・反証を証拠が反映しているか）。
+  reviewer は `evidence` が参照する task を読み取り専用の DB（ADR-0095）で読む。前の版の実験 task の記録は入力の欄にしない。
+
+出力: `strategy_critic` を渡された reviewer は、`review.json` に `verdicts`（`health`・`diff_design` を渡されたら `health`・`design` も）と並べて
+`critic`（`ReviewOutput.critic`、`CriticVerdictOut`）を書く。`criterion_idx` の判定は `verdicts` に書かない。形は
+`{subjects: [{name, sha256, candidates: [{id, defects, falsification: {ok, reason}, experiment: {ok, reason}}], comparison: {ok, reason}, revisit: {ok, reason}}]}`:
+
+- `subjects[]`（`CriticSubjectVerdict`）: 入力の `subjects` ごとにちょうど 1 件。`name`・`sha256` は入力の値を写す（前置き `sha256:` の有無は区別しない）。
+- `candidates[]`（`CriticCandidateVerdict`）: 文書の `candidates[].id` ごとにちょうど 1 件。`defects` は C1 の欠陥の文の配列（空でもよい。致命でなければ
+  `ok` にできる）、`falsification` は C2、`experiment` は C3。
+- `comparison` は C4、`revisit` は C5。
+- 判定 1 つ（`CriticCheckOut`）は `{ok, reason}`。`reason` は空でなく 2,000 文字以内。
+
+```json
+{"verdicts":[{"criterion":0,"pass":true,"reason":"…"}],
+ "critic":{"subjects":[{"name":"strategy/arch-v4/v1.json","sha256":"…","candidates":[{"id":"fixed-plan","defects":["子 A〜H の効果を測る指標が無い"],"falsification":{"ok":true,"reason":"…"},"experiment":{"ok":true,"reason":"…"}},{"id":"scc-cut","defects":[],"falsification":{"ok":true,"reason":"…"},"experiment":{"ok":true,"reason":"…"}}],"comparison":{"ok":true,"reason":"…"},"revisit":{"ok":true,"reason":"…"}}]}}
+```
+
+dispatcher（`task_dispatch::review::critic`）は `critic` の形だけを照合し、LLM を呼ばない。文書の中身の検査は CoS の `task.create` の gate の仕事で、
+dispatcher は workspace の文書の file から `candidates[].id` だけを読む。暗黙の条件 `strategy_critic` は次のどれでも不合格になる（fail closed）:
+
+- reviewer run が無い。決定的な条件が 1 つでも落ちて reviewer が判定しなかった（ADR-0007 D5。`task_dispatch::review::not_evaluated`）。
+  reviewer の run が終端 `done` 以外で終わった、`review.json` が無い・読めない（この節の上の規則と同じ。インフラ都合の再試行は除く）。
+- `review.json` に `critic` の節が無い、または `ReviewOutput` として読めない（形の崩れ）。
+- `subjects` の `(name, sha256)` の集合が対象と食い違う・重複する。対象が衝突している（同じ name に 2 つの sha256）。
+- 候補の id の集合が文書の `candidates[].id` と食い違う・重複する。文書の file が読めない・workspace の外・記録の後に書き換えられた（sha256 が違う）。
+- `reason` が空か 2,000 文字を超える。
+- どれか 1 つでも `ok` が `false`。
+
+不合格の理由は verdict の `reason` に `strategy_critic: <食い違い・ok=false の項目>` として残る。Critic を判定しない review は合格にならない。
+`critic` は省略で読めるので、`strategy_critic` を渡さない review の `review.json` は従来のまま。
 
 ### 10.3 run 開始前のクリーンアップ
 

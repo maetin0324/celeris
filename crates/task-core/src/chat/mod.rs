@@ -63,9 +63,9 @@ pub use review::{
     COS_REVIEW_THREAD_TITLE, ChatReviewReported, cos_review_report_tx, cos_review_thread_ensure_tx,
 };
 pub use run_store::{
-    CHAT_EVENT_PAGE_DEFAULT, CHAT_EVENT_PAGE_MAX, CHAT_EVENT_RETENTION_DAYS,
-    CHAT_TOOL_DETAIL_MAX_BYTES, ChatEventQuery, ChatRecoveryCause, ChatStopOutcome,
-    chat_run_state_is_terminal, chat_run_stop_tx,
+    CHAT_EVENT_EXCHANGE_SHARE_REVOKED, CHAT_EVENT_EXCHANGE_SHARED, CHAT_EVENT_PAGE_DEFAULT,
+    CHAT_EVENT_PAGE_MAX, CHAT_EVENT_RETENTION_DAYS, CHAT_TOOL_DETAIL_MAX_BYTES, ChatEventQuery,
+    ChatRecoveryCause, ChatStopOutcome, chat_run_state_is_terminal, chat_run_stop_tx,
 };
 pub use session::{
     COS_CHAT_SESSION_KIND, COS_CHAT_SESSION_NODE, ChatRunSessionMode, ChatRunSessionRecord,

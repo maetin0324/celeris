@@ -5,13 +5,15 @@
 //! writes by hand), and a block list (`references:` then `  - <value>` lines). The body is everything after the
 //! closing `---` line, without the one trailing newline the writer adds; `content_hash` is the SHA-256 of that body,
 //! so the Markdown and the JSON of the same envelope carry the same hash. In a snapshot, each item's front matter
-//! carries `body_bytes`, so a body holding a `---` line is read back exactly.
+//! carries `body_bytes`, so a body holding a `---` line is read back exactly. A flow value nested deeper than
+//! [`FLOW_DEPTH_MAX`] is refused (D1.3): the reader recurses once per level, and a document inside the length limit
+//! could otherwise nest thousands of levels and overflow the stack.
 
 use serde_json::{Map, Value};
 
 use super::{
-    DiscussionSnapshot, ENVELOPE_SCHEMA, ExchangeEnvelope, ExchangeItem, ExchangeRefusal, INVALID,
-    SNAPSHOT_SCHEMA, content_hash,
+    DiscussionSnapshot, ENVELOPE_SCHEMA, ExchangeEnvelope, ExchangeItem, ExchangeRefusal,
+    FLOW_DEPTH_MAX, INVALID, SNAPSHOT_SCHEMA, content_hash,
 };
 
 const FENCE: &str = "---";
@@ -56,28 +58,47 @@ fn split_top(s: &str) -> Vec<&str> {
     out.into_iter().filter(|p| !p.trim().is_empty()).collect()
 }
 
-/// One front matter value: JSON if it parses, else a flow mapping / list, else a bare (optionally quoted) string.
-fn parse_value(s: &str) -> Value {
+/// The parts of a flow collection found `depth` levels inside others (0 for a whole value). The collection is one
+/// level deeper, so at `depth` = [`FLOW_DEPTH_MAX`] it is refused, never truncated.
+fn flow_parts(inner: &str, depth: usize) -> Result<Vec<&str>, ExchangeRefusal> {
+    if depth >= FLOW_DEPTH_MAX {
+        return Err(invalid(format!(
+            "a front matter flow value nests deeper than {FLOW_DEPTH_MAX} levels"
+        )));
+    }
+    Ok(split_top(inner))
+}
+
+/// One front matter value `depth` flow levels deep (0 for a whole value): JSON if it parses (`serde_json` keeps its
+/// own limit of 128), else a flow mapping / list (see [`flow_parts`]), else a bare (optionally quoted) string.
+fn parse_value(s: &str, depth: usize) -> Result<Value, ExchangeRefusal> {
     let s = s.trim();
     if let Ok(v) = serde_json::from_str::<Value>(s) {
-        return v;
+        return Ok(v);
     }
     if let Some(inner) = s.strip_prefix('{').and_then(|r| r.strip_suffix('}')) {
         let mut map = Map::new();
-        for part in split_top(inner) {
+        for part in flow_parts(inner, depth)? {
             let (k, v) = part.split_once(": ").unwrap_or((part, ""));
-            map.insert(k.trim().trim_matches('"').to_owned(), parse_value(v));
+            map.insert(
+                k.trim().trim_matches('"').to_owned(),
+                parse_value(v, depth + 1)?,
+            );
         }
-        return Value::Object(map);
+        return Ok(Value::Object(map));
     }
     if let Some(inner) = s.strip_prefix('[').and_then(|r| r.strip_suffix(']')) {
-        return Value::Array(split_top(inner).into_iter().map(parse_value).collect());
+        return flow_parts(inner, depth)?
+            .into_iter()
+            .map(|part| parse_value(part, depth + 1))
+            .collect::<Result<_, _>>()
+            .map(Value::Array);
     }
     let unquoted = s
         .strip_prefix('\'')
         .and_then(|r| r.strip_suffix('\''))
         .unwrap_or(s);
-    Value::String(unquoted.to_owned())
+    Ok(Value::String(unquoted.to_owned()))
 }
 
 /// Reads front matter lines into a map.
@@ -98,7 +119,7 @@ fn parse_fields<'a>(
                 .as_ref()
                 .ok_or_else(|| invalid(format!("list item without a key: {line}")))?;
             if let Some(Value::Array(a)) = map.get_mut(key) {
-                a.push(parse_value(item));
+                a.push(parse_value(item, 0)?);
             }
             continue;
         }
@@ -113,7 +134,7 @@ fn parse_fields<'a>(
             map.insert(k.clone(), Value::Array(Vec::new()));
             list = Some(k);
         } else {
-            map.insert(k, parse_value(v));
+            map.insert(k, parse_value(v, 0)?);
             list = None;
         }
     }

@@ -71,6 +71,7 @@ tasks: [01M7XQ9QK1KC34Q2A6PJ960TJB]
 | 検索の `query` | 1〜512 文字 |
 | `limit` | 既存の `clamp_limit`（既定 20、上限 100） |
 | 取り込みの Markdown・JSON の全体 | 32,768 byte |
+| Markdown の front matter の flow 値の入れ子 | 16 段（`discussion_exchange::FLOW_DEPTH_MAX`。JSON として読める値は `serde_json` の 128 段のまま） |
 | 共有の `message_ids` | 1〜200 件 |
 
 上限を超えた入力は `-32602`（MCP）・422（REST）で拒否し、切り詰めて受けない。未知の欄は `deny_unknown_fields` で拒否する（`approval`・`consent`・

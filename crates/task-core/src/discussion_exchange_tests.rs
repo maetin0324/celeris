@@ -992,3 +992,137 @@ fn external_exchange_share_records_not_in_event_page() {
     assert!(!page.items.is_empty());
     assert!(page.items.iter().all(|e| e.id != id.to_string()));
 }
+
+/// The `source` of a hand-written Markdown import.
+const MD_SOURCE: &str = "{kind: markdown_import, label: chatgpt}";
+
+/// A person's Markdown import (D4.2) with `source` and the `references` line(s); every other field is valid for
+/// [`md_ctx`].
+fn md_import(key: &str, source: &str, references: &str) -> ImportRequest {
+    let body = "人が選んだ要約";
+    ImportRequest {
+        format: ImportFormat::Markdown,
+        client_message_id: key.into(),
+        envelope: None,
+        content: Some(format!(
+            "---\nschema: {ENVELOPE_SCHEMA}\nproject_id: p-ex\nsource: {source}\n{references}\n\
+             source_revision: {{request_sha256: {}, roadmap_version: 3}}\ntimestamp: 2026-11-22T03:10:00Z\n\
+             content_hash: {}\nconfidence: estimated\ndecision_state: discussion\n---\n{body}\n",
+            "d".repeat(64),
+            sha(body)
+        )),
+    }
+}
+
+fn md_ctx() -> InboundContext {
+    InboundContext {
+        project_id: "p-ex".into(),
+        thread_id: "t-ex".into(),
+        caller: ME.into(),
+        caller_scopes: Vec::new(),
+        idempotency: BTreeMap::new(),
+        source_revision: SourceRevision {
+            request_sha256: "d".repeat(64),
+            roadmap_version: Some(3),
+        },
+        now: ts(1),
+    }
+}
+
+/// [`check_import`] on a thread with the 2 MiB stack of tokio's blocking pool (where the REST import runs).
+fn check_import_small_stack(req: ImportRequest) -> Result<Inbound, ExchangeRefusal> {
+    std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(move || check_import(&req, &md_ctx()))
+        .expect("spawn")
+        .join()
+        .expect("the import returns instead of overflowing the stack")
+}
+
+/// Invariant (D1.3): a front matter flow value nested thousands of levels deep inside the 32,768-byte limit is
+/// refused as `exchange_invalid` by the depth limit, and the reader returns on a 2 MiB stack. Before the limit the
+/// reader recursed once per level and a 5,000-level `source: [[…]]` overflowed the stack and aborted the process;
+/// the length limit cannot catch it (10 KB) and no earlier test nests deeper than two levels.
+#[test]
+fn external_exchange_format_depth_deep_nesting_refused() {
+    let none = "references: []".to_owned();
+    let cases = [
+        (
+            format!("{}{}", "[".repeat(5_000), "]".repeat(5_000)),
+            none.clone(),
+        ),
+        (
+            format!("{}x{}", "{a: ".repeat(5_000), "}".repeat(5_000)),
+            none,
+        ),
+        (
+            MD_SOURCE.to_owned(),
+            format!(
+                "references:\n  - {}{}",
+                "[".repeat(15_000),
+                "]".repeat(15_000)
+            ),
+        ),
+    ];
+    for (i, (source, references)) in cases.iter().enumerate() {
+        let req = md_import(&format!("imp-deep-{i}"), source, references);
+        let len = req.content.as_deref().map_or(0, str::len);
+        assert!(
+            len <= DOCUMENT_MAX_BYTES,
+            "case {i} fits the length limit: {len}"
+        );
+        let e = check_import_small_stack(req).expect_err("refused");
+        assert_eq!(e.code, INVALID, "case {i}: {e:?}");
+        assert_eq!(e.http_status(), 422);
+        assert!(e.detail.contains("deeper than 16"), "case {i}: {e:?}");
+    }
+}
+
+/// Invariant (D1.3): [`FLOW_DEPTH_MAX`] (16) levels of a hand-written flow value read, 17 are refused, for flow
+/// mappings and flow lists alike. A JSON value keeps `serde_json`'s limit and is not counted.
+#[test]
+fn external_exchange_format_depth_limit_16() {
+    assert_eq!(FLOW_DEPTH_MAX, 16);
+    let mapping = |v: String| format!("{{n: {v}}}");
+    let list = |v: String| format!("[x, {v}]");
+    for (name, wrap) in [
+        ("mapping", &mapping as &dyn Fn(String) -> String),
+        ("list", &list),
+    ] {
+        // `levels` flow levels: the reference object is the first, `wrap` adds the rest.
+        let reference = |levels: usize| {
+            let mut v = "x".to_owned();
+            for _ in 1..levels {
+                v = wrap(v);
+            }
+            format!("references:\n  - {{kind: url, url: https://example.org, n: {v}}}")
+        };
+        let ok =
+            check_import_small_stack(md_import("imp-16", MD_SOURCE, &reference(FLOW_DEPTH_MAX)))
+                .unwrap_or_else(|e| panic!("{name}: 16 levels read: {e:?}"));
+        let refs = ok.metadata["references"].clone();
+        let mut depth = 0;
+        let mut v = &refs[0];
+        while v.is_object() || v.is_array() {
+            depth += 1;
+            v = if v.is_object() { &v["n"] } else { &v[1] };
+        }
+        assert_eq!(depth, FLOW_DEPTH_MAX, "{name}: {refs}");
+        let e = check_import_small_stack(md_import(
+            "imp-17",
+            MD_SOURCE,
+            &reference(FLOW_DEPTH_MAX + 1),
+        ))
+        .expect_err("17 levels are refused");
+        assert_eq!(e.code, INVALID, "{name}: {e:?}");
+        assert!(e.detail.contains("deeper than 16"), "{name}: {e:?}");
+    }
+    // A JSON value inside a flow mapping is read by serde_json (its own limit is 128): 40 levels are not refused.
+    let json_deep = format!(
+        "references:\n  - {{kind: url, url: https://example.org, n: {}1{}}}",
+        "[".repeat(40),
+        "]".repeat(40)
+    );
+    check_import_small_stack(md_import("imp-json", MD_SOURCE, &json_deep))
+        .expect("a JSON value keeps serde_json's limit");
+}

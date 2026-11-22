@@ -197,7 +197,7 @@ fn active_conn(conn: &Connection, thread_id: &str) -> Result<Option<ChatSession>
     .transpose()
 }
 
-fn retire_conn(conn: &Connection, thread_id: &str, at: &str) -> Result<bool, ChatError> {
+pub(crate) fn retire_conn(conn: &Connection, thread_id: &str, at: &str) -> Result<bool, ChatError> {
     Ok(conn.execute(
         "UPDATE node_sessions SET retired_at=?2 WHERE kind='cos_chat' AND thread_id=?1 \
          AND retired_at IS NULL",

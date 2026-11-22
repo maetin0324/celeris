@@ -1,6 +1,7 @@
 //! CoS chat REST API. Run scheduling belongs to cos-run; writes here only change durable state.
 
 pub mod attachments;
+mod revise;
 pub mod stream;
 
 use std::path::PathBuf;
@@ -71,7 +72,15 @@ pub(crate) fn routes() -> axum::Router<ApiState> {
         )
         .route(
             "/api/v1/chat/threads/{t}/messages/{m}",
-            axum::routing::delete(cancel_message),
+            axum::routing::delete(cancel_message).patch(revise::edit_message),
+        )
+        .route(
+            "/api/v1/chat/threads/{t}/messages/{m}/retract",
+            post(revise::retract_message),
+        )
+        .route(
+            "/api/v1/chat/threads/{t}/messages/{m}/revisions",
+            get(revise::list_revisions),
         )
         .route("/api/v1/chat/threads/{t}/relays", post(post_relay))
         .route("/api/v1/chat/threads/{t}/forwards", post(post_forward))
@@ -98,6 +107,7 @@ pub(crate) fn chat_problem(error: ChatError) -> ApiProblem {
         ChatError::QueueFull { .. } => "chat_queue_full",
         ChatError::CursorExpired(_) => "chat_cursor_expired",
         ChatError::ReadOnly(_) => "chat_thread_read_only",
+        ChatError::EditForbidden(_) => "chat_message_edit_forbidden",
     };
     ApiProblem::new(status, code, error.to_string())
 }

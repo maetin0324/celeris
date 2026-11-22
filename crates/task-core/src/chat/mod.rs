@@ -32,7 +32,7 @@ pub mod relay_rejudge;
 mod relay_rejudge_tests;
 mod review;
 mod run_store;
-mod session;
+pub(crate) mod session;
 #[cfg(test)]
 mod session_tests;
 pub(crate) mod store;
@@ -156,8 +156,10 @@ wire_enum!(ChatEventType {
     Run,
     Queue,
     Card,
-    Thread
+    Thread,
+    MessageRevised
 });
+wire_enum!(ChatMessageRevisionKind { Edit, Retract });
 wire_enum!(ChatStatusPhase {
     Queued,
     Starting,
@@ -251,8 +253,66 @@ pub struct ChatMessage {
     /// Absent for `execute` and for messages that did not choose one (today's behaviour).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub discussion_mode: Option<ChatDiscussionMode>,
+    /// ADR 2026-11-21-chat-discussion-mode D5.2: `metadata_json.revision` (1 when absent; not sent).
+    #[serde(default = "first_revision", skip_serializing_if = "is_first_revision")]
+    pub revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edited: Option<ChatMessageChange>,
+    /// D5.2: the author retracted the message; `text` is empty from then on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retracted: Option<ChatMessageChange>,
     pub created_at: String,
     pub updated_at: String,
+}
+fn first_revision() -> u64 {
+    1
+}
+fn is_first_revision(r: &u64) -> bool {
+    *r == 1
+}
+/// D5.2: who changed a message and when (`by` is always `human:<name>`); `reason` only on a retract.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ChatMessageChange {
+    pub by: String,
+    pub at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+/// D5.1 `PATCH /chat/threads/{t}/messages/{m}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChatMessageEditRequest {
+    pub text: String,
+    pub expected_revision: u64,
+}
+/// D5.1 `POST /chat/threads/{t}/messages/{m}/retract` (`reason` up to 500 characters, may be empty).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChatMessageRetractRequest {
+    pub expected_revision: u64,
+    pub reason: String,
+}
+/// D5.2・D5.4: the `message_revised` event, appended in the edit / retract transaction. It keeps
+/// the previous body (events are append-only and retention never removes this type).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChatMessageRevisedData {
+    pub message_id: String,
+    pub kind: ChatMessageRevisionKind,
+    pub revision: u64,
+    pub previous_revision: u64,
+    pub previous_text: String,
+    pub previous_sha256: String,
+    pub by: String,
+    pub reason: Option<String>,
+    pub checkpoint_reset: Option<ChatCheckpointReset>,
+}
+/// D5.4: the thread summary the change invalidated (the summary covered the changed message).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChatCheckpointReset {
+    pub previous_through_seq: u64,
+    pub previous_summary: String,
 }
 /// §A4: the record of a general CoS proposal to a project CoS. Written by Rust from the verified
 /// run credential; the request body cannot set any of it.
@@ -442,6 +502,7 @@ pub enum ChatEventData {
     Queue(ChatQueueData),
     Card(ChatCardData),
     Thread(ChatThreadData),
+    MessageRevised(ChatMessageRevisedData),
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

@@ -39,6 +39,7 @@ pub mod artifacts;
 /// ADR-0130 D4: task branch の target からの behind commits / age（snapshot と純粋規則）。
 pub mod behind_target;
 pub mod chat;
+pub mod chat_revision;
 /// ADR-0044 D2（Phase 53）: タスク単位のコメント。
 pub mod comment;
 pub mod console_action;

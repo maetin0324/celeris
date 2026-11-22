@@ -325,6 +325,9 @@ fn decode_event(
         ChatEventType::Queue => ChatEventData::Queue(serde_json::from_str(&payload)?),
         ChatEventType::Card => ChatEventData::Card(serde_json::from_str(&payload)?),
         ChatEventType::Thread => ChatEventData::Thread(serde_json::from_str(&payload)?),
+        ChatEventType::MessageRevised => {
+            ChatEventData::MessageRevised(serde_json::from_str(&payload)?)
+        }
     };
     Ok(ChatEvent {
         id: id.to_string(),

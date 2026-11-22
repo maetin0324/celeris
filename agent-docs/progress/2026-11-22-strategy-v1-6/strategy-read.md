@@ -103,7 +103,9 @@ production の純増 +18 の理由: 照会が task-api の private 関数から 
   check 2 は SQL が `store/strategy_reads.rs` にあることを、範囲 check は store の外の新しい file が無いことを求めるので、この WU の範囲では両立しない（規約 9。範囲の外に回避策を置いていない）。
 - 人への決定 `strategy-read-store-size` を result.json に出した（needed_before: self）。案:
   - (a) 照会を store の外の葉でない module `crates/task-core/src/strategy_reads.rs` の自由関数 `strategy_task_creates(store: &SqliteStore, target)`（`with_read_conn`。`cos_inbox.rs` と同じ形）に移し、
-    ADR D1.1・D11 と この unit の check 2・5・範囲を直す（再計画）。store の差分は 0 になり、health は通る見込み（未確認）。推奨。
+    ADR D1.1・D11 と この unit の check 2・5・範囲を直す（再計画）。推奨。
+    確かめたこと: 一時の commit で (a) の形にし、`cargo check -p task-core -p task-api --tests` が通り、`bash scripts/dev/check-health.sh` が verdict=pass
+    （`size.responsibility-growth` pass・`deps.cycle` pass、fail_grade=0）になった。その commit は `git reset --hard` で捨て、branch には残していない。(a) の形での試験の実行は未確認。
   - (b) store に置いたまま、repo health の profile に store の例外を足す（policy の変更なので人の承認が要る）。
 - controller-checkpoint は `strategy_task_creates(Some(root))` の最初の行を root の参照に使う（ADR D1.1）。どちらの案でも関数の名前と戻り値は同じ。
 

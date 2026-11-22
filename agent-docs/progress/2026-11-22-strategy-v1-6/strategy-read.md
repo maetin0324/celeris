@@ -112,6 +112,8 @@ production の純増 +21 の理由: 照会が task-api の private 関数から 
     置き場を変えた理由（store に置くと `size.responsibility-growth` が落ちる）を付記に書く。ADR はこの unit の範囲の外。
   - 後の controller-checkpoint の objective は `strategy_task_creates(store, Some(root))` の自由関数の形で呼ぶ（関数の名前と戻り値は同じ）。
 
+- 2 回目の run（attempt 1 of 3 の再実行）: 前回の run が done を返したため、celeris が計画の check 2（exit 2）と範囲 check（exit 1）を旧い置き場のまま走らせて不合格にした。この run では実装を変えずに、提出時の HEAD で check 1（34 passed、exit 0）、check 2 を crate 直下の path に直した形（exit 0）、store・migration・events・`cos/operations.rs` の base との差分 0 を確かめ、done ではなく `yield.plan_issue` で再計画を申告した。
+
 ## 提案
 
 - 再計画では、ADR の付記と check の直しを 1 つの unit（ADR を範囲に含むもの）にまとめ、この unit は check を直した後に再実行だけにする（実装は branch に commit 済み）。

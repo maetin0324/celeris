@@ -346,3 +346,15 @@ Project.request と承認済み Roadmap は読むだけで書かない。
 - 新しい `strategy_id` を立てて却下した候補を出し直すことは gate では見分けない（CoS の skill の禁止と Critic の C5 だけ）。
 - Critic（reviewer）の判定の質と、人の承認 → Critic の順で人が Critic の指摘を読んで revise するかは、子 6・子 8 の pilot で確かめる。
 - `decision.revise` が `DecisionAnswered` を追記して gate が最後の答えを読むことは、コードを読んだ範囲の推定で、実装の WU が試験で確かめる。
+
+## 付記（2026-11-22、critic-review の実装）
+
+- D3.4 の `experiments[]` は実装していない。X(v)（D2.3）は `cos_operations` の照会で、2026-11-22 の時点で照会の関数はどこにも無い（experiment-gate が
+  `task_api::cos::strategy_gate` に置く予定）。`task_dispatch` は `task_api` に依存できず、dispatcher から引くには `task_core` の store（高 risk の class `store`）に
+  照会を足す必要があり、critic-review の write set（D8）の外である。常に空の欄は置かない。照会を `task_core` の store に置いて gate と review の両方が使うか、
+  `experiments[]` をこの ADR から外すかは、計画の改訂で決める。それまで reviewer は C4・C5 を文書の `evidence` と task の記録から判定する。
+- D3.2 の条件は `task_dispatch::review::reviewer_run_required(task, auto_integrates, critic_subjects)` 1 つにまとめた（`needs_reviewer_run(task)`・
+  `delivery_requires_reviewer_run`（support と tree の子を除く）・`!critic_subjects.is_empty()` の論理和。条件の意味は D3.2 のとおり）。`review_spawn` は
+  `auto_integrates` の値と対象を渡すだけになり、`dispatcher.rs` の `needs_reviewer_run` の import は使われなくなったので外した（`use` の 1 行）。
+- D3.3 の「判定されなかった」不合格（決定的な条件が落ちた・reviewer run が無い・run が判定できなかった）は `review::not_evaluated` 1 つで作り、`review_task` と
+  `run_reviewer_inner` の `fail_all` の両方が使う。reviewer の合格の持ち越し（ADR 2026-10-27 D2）は `review::without_reviewer_run` で、Critic を覆わない。

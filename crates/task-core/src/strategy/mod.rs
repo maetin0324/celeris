@@ -6,6 +6,7 @@
 //! 検査は最初の違反で止まらず、違反を規則（[`Rule`]）つきで全部返す。
 
 pub mod envelope;
+pub mod review;
 #[cfg(test)]
 mod tests;
 
@@ -22,6 +23,10 @@ use crate::chat_citation::{
 use crate::decision::DecisionStatus;
 use crate::project_proposal::sha256_hex;
 use crate::roadmap::ROADMAP_TEXT_MAX;
+pub use review::{
+    CandidateState, ExecutionFacts, Experiment, ExperimentBudget, ExperimentTask, HeldAssumption,
+    check_execution,
+};
 
 pub const SCHEMA: &str = "celeris.strategy/1";
 /// D1.3: 文書の file の上限（byte、UTF-8）。
@@ -70,6 +75,8 @@ pub struct StrategyDocument {
     pub decision_state: DecisionState,
     pub research_question: ResearchQuestion,
     pub candidates: Vec<Candidate>,
+    /// ADR 2026-11-22-strategy-review-critic D1.2: 保留する前提。
+    pub held_assumptions: Vec<HeldAssumption>,
     pub hypotheses: Vec<Hypothesis>,
     pub evidence: Vec<Evidence>,
 }
@@ -213,6 +220,16 @@ pub struct Candidate {
     pub hypotheses: Vec<String>,
     #[serde(default)]
     pub selected: bool,
+    /// ADR 2026-11-22-strategy-review-critic D1.1: 候補の採否（文書の承認の状態とは別）。
+    pub state: CandidateState,
+    /// `rejected` の根拠（同じ文書の、候補の仮説の `refute` の証拠の id）。
+    #[serde(default)]
+    pub rejected_by: Vec<String>,
+    /// 最小の識別実験。
+    pub experiment: Experiment,
+    pub expected_information_value: String,
+    /// 停止条件。
+    pub stop_when: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -398,6 +415,11 @@ pub enum Rule {
     Supersedes,
     RefuteRemoved,
     Idempotency,
+    /// ADR 2026-11-22-strategy-review-critic D5 の 4 つ。
+    ExperimentPhase,
+    Uncritiqued,
+    RevisitRejected,
+    FailureUnread,
 }
 
 impl Rule {
@@ -409,6 +431,10 @@ impl Rule {
             Self::Unapproved | Self::Outbound => "strategy_unapproved",
             Self::RefuteRemoved => "strategy_refute_removed",
             Self::Idempotency => "strategy_idempotency_conflict",
+            Self::ExperimentPhase => "strategy_experiment_phase",
+            Self::Uncritiqued => "strategy_uncritiqued",
+            Self::RevisitRejected => "strategy_revisit_rejected",
+            Self::FailureUnread => "strategy_failure_unread",
             Self::Required
             | Self::Shape
             | Self::Limit
@@ -537,7 +563,7 @@ fn push(out: &mut Vec<Violation>, rule: Rule, path: impl Into<String>, detail: i
 }
 
 /// 共有フォーマットの必須の欄（`source` の欠けは出典の欠損として別に返す）。
-const REQUIRED: [&str; 15] = [
+const REQUIRED: [&str; 16] = [
     "schema",
     "project_id",
     "strategy_id",
@@ -551,6 +577,7 @@ const REQUIRED: [&str; 15] = [
     "decision_state",
     "research_question",
     "candidates",
+    "held_assumptions",
     "hypotheses",
     "evidence",
 ];

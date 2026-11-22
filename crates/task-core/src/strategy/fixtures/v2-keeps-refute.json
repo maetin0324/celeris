@@ -6,9 +6,9 @@
  "supersedes": {
   "task_id": "01M7ZTASKSTRATEGY000000000",
   "name": "strategy/arch-v4-cycle/v1.json",
-  "sha256": "22997da7aa609a928eb6a42cb015c5f979300a0d0ad701d4f8fa81b760eee1a0"
+  "sha256": "2aee19ab3032add761cc25a9f6eb3f5bf7bf7b6ccf55954e5e13205fda69cce3"
  },
- "change_reason": "未確認の議論の証拠 e-chat-note を外し、pilot の候補を捨てた。反証は残す",
+ "change_reason": "v1 の実験の結果を読み、未確認の議論の証拠 e-chat-note を外し、pilot の候補を反証 e-pilot-refute で却下して cut-min-edges を選んだ。反証は残す",
  "idempotency_key": "strategy:arch-v4-cycle:v2",
  "source": {
   "kind": "celeris_task_run",
@@ -58,7 +58,23 @@
    "hypotheses": [
     "h-cycle-edges"
    ],
-   "selected": true
+   "selected": true,
+   "state": "open",
+   "experiment": {
+    "content": "struct-deps の SCC から最小の辺の集合を求め、上位 3 辺だけを切る pilot を 1 つ走らせて task-core の SCC の単位を測る",
+    "discriminates": [
+     "h-cycle-edges"
+    ],
+    "budget": {
+     "usd_max": 40,
+     "wall_hours_max": 6
+    }
+   },
+   "expected_information_value": "SCC の単位が 55 未満になれば h-cycle-edges を支持してこの候補を選ぶ。変わらなければ h-cycle-edges を反証し、この候補を捨てる",
+   "stop_when": [
+    "上位 3 辺を切っても SCC の単位が 55 のまま",
+    "費用が 40 USD を超える"
+   ]
   },
   {
    "id": "continue-pilots",
@@ -76,7 +92,32 @@
    "hypotheses": [
     "h-pilots-enough"
    ],
-   "selected": false
+   "selected": false,
+   "state": "rejected",
+   "rejected_by": [
+    "e-pilot-refute"
+   ],
+   "experiment": {
+    "content": "D と同じ形の pilot を E で 1 つだけ走らせて task-core の SCC の単位を測る",
+    "discriminates": [
+     "h-pilots-enough"
+    ],
+    "budget": {
+     "usd_max": 30,
+     "wall_hours_max": 8
+    }
+   },
+   "expected_information_value": "E の後に SCC の単位が減れば h-pilots-enough を支持する。減らなければ pilot を重ねる候補を捨てる",
+   "stop_when": [
+    "E の後に SCC の単位が減らない"
+   ]
+  }
+ ],
+ "held_assumptions": [
+  {
+   "id": "a-measure-stable",
+   "statement": "struct-deps の SCC の数え方は A〜H の間で変わっていない",
+   "revisit_when": "struct-deps の集計の規則が変わった"
   }
  ],
  "hypotheses": [

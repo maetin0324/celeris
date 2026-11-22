@@ -20,7 +20,7 @@ use time::OffsetDateTime;
 use crate::dispatcher::cos_chat::workspace_files::{WorkspaceCapture, attach, snapshot};
 
 const ME: &str = "human:alice";
-const BASELINE: &str = include_str!("../../task-core/src/strategy/fixtures/baseline-v1.json");
+const BASELINE: &str = include_str!("../../../task-core/src/strategy/fixtures/baseline-v1.json");
 
 fn at(secs: i64) -> OffsetDateTime {
     OffsetDateTime::from_unix_timestamp(1_791_158_400 + secs).expect("valid ts")

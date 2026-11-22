@@ -2,8 +2,14 @@
 //! ADR 2026-10-27-relayed-instructions D4): the standing context (role, delegated grants, user
 //! pages, CoS's memory page, KB entry) and the unexpired relays of the thread. Deterministic: it
 //! reads the store, the KB files and the org; no LLM.
+//!
+//! [`discussion_files`] checks the other way: the draft and summary files a CoS run leaves for its
+//! reply (ADR 2026-11-21-chat-discussion-mode D3・D6), against the same store.
 
 use std::path::Path;
+
+/// D3・D6: CoS の返事に付ける案・要約の file の検査と、その引用の書き込み（dispatcher の外）。
+pub(crate) mod discussion_files;
 
 use task_core::authority::grant_denial;
 use task_core::chat::ChatDiscussionMode;

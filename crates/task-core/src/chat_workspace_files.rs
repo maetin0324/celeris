@@ -1,7 +1,7 @@
 //! ADR 2026-10-08-cos-workspace-files-in-chat D1 and ADR 2026-11-21-chat-discussion-mode D3・D6:
 //! the files of a CoS run's workspace pinned to its reply. The attach records the workspace paths
 //! (`metadata_json.workspace_files`) and, for the summary and draft files that passed the check of
-//! `task_dispatch::discussion_files`, their citations (`metadata_json.citations`, no state) in
+//! `task_dispatch::cos_context::discussion_files`, their citations (`metadata_json.citations`, no state) in
 //! one transaction, after checking the citations again in it. The sha256s already attached under
 //! a path are the version-conflict input of a draft (D3).
 //!

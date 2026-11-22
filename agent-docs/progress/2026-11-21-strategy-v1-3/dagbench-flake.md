@@ -55,8 +55,10 @@ cite 段の統合の check（`bash scripts/dev/test-affected.sh`、8637 試験�
     出して落ちる。既存の試験は全て保険の内に終わるので、他の試験ではこの失敗の報告を確かめられない。ready を出して止まらない
     child（`stubborn`）を 0.5 s・0.2 s の保険で待ち、panic の文に段の名前・`waiting for NEVER_PRINTED`・最後の行 `ready`・`control-1.stderr` が
     あることを確かめる。
-- `crates/campaign/src/dagbench/process.rs`: `OwnedProc::stderr_path()`（`Supervisor::spawn` が作る `<log dir>/<role>-<incarnation>.stderr`）。
-  stderr の path の規則を試験で写さないため。
+- `crates/campaign/src` は変えていない。stderr の path は試験の側で `EventLog::dir()` と role・incarnation から導く
+  （`Supervisor::spawn` の `<log dir>/<role>-<incarnation>.stderr`）。最初は `OwnedProc::stderr_path()` を足したが、
+  repo health の `size.responsibility-growth`（`crates/campaign/src/dagbench` は既に 13187 行で閾値 8000 を超えている）が
+  増分で落ちたので、src の変更をやめた。
 - `.config/nextest.toml` は変えていない（stutter の結果は遅さに比例するだけで、threads-required・test-group で縛る根拠が無い）。
 - 足していないもの: retries、slow-timeout・terminate-after の延長、`#[ignore]`、env による skip。試験は消していない（1 個を 6 個に分けた）。
 
@@ -70,8 +72,8 @@ cite 段の統合の check（`bash scripts/dev/test-affected.sh`、8637 試験�
 
 ## LoC（`git diff --numstat`、基準は `$CELERIS_WU_BASE`）
 
-- production（`crates/campaign/src/dagbench/process.rs`）: +13 −5。
-- test（`crates/campaign/tests/dagbench_process.rs`）: +171 −37。純増の理由: 6 個の試験関数、`Insurance` と `stalled`、失敗の報告の試験。
+- production: 0（変更なし）。
+- test（`crates/campaign/tests/dagbench_process.rs`）: +171 −37。純増の理由: 6 個の試験関数、`Insurance`（`line`・`exit`・`stalled`）、失敗の報告の試験。
 
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 

@@ -276,17 +276,20 @@ const PROBE_BOUND: Duration = Duration::from_secs(60);
 struct Insurance {
     end: Instant,
     span: Duration,
+    /// child の stderr の置き場所（`EventLog` の dir。`Supervisor::spawn` がここに `<role>-<incarnation>.stderr` を作る）。
+    logs: PathBuf,
 }
 
 impl Insurance {
-    fn start() -> Self {
-        Self::within(INSURANCE)
+    fn start(log: &EventLog) -> Self {
+        Self::within(INSURANCE, log.dir())
     }
 
-    fn within(span: Duration) -> Self {
+    fn within(span: Duration, logs: &Path) -> Self {
         Self {
             end: Instant::now() + span,
             span,
+            logs: logs.to_path_buf(),
         }
     }
 
@@ -301,13 +304,7 @@ impl Insurance {
             match p.next_line(self.left()) {
                 Ok(l) if l.contains(marker) => return l[l.find(marker).unwrap_or(0)..].to_string(),
                 Ok(l) => last = Some(l),
-                Err(e) => stalled(
-                    p,
-                    stage,
-                    &format!("waiting for {marker}: {e}"),
-                    self.span,
-                    last,
-                ),
+                Err(e) => self.stalled(p, stage, &format!("waiting for {marker}: {e}"), last),
             }
         }
     }
@@ -316,31 +313,34 @@ impl Insurance {
     fn exit(&self, p: &mut OwnedProc, stage: &str) -> std::process::ExitStatus {
         match p.wait_exit(self.left()).expect("wait") {
             Some(st) => st,
-            None => stalled(p, stage, "child did not exit", self.span, None),
+            None => self.stalled(p, stage, "child did not exit", None),
         }
     }
-}
 
-/// 保険切れ・child の早すぎる終了の報告。child の stdout に残っている行を読み切って最後の行を出す。
-fn stalled(p: &OwnedProc, stage: &str, what: &str, span: Duration, mut last: Option<String>) -> ! {
-    while let Ok(l) = p.next_line(Duration::ZERO) {
-        last = Some(l);
+    /// 保険切れ・child の早すぎる終了の報告。child の stdout に残っている行を読み切って最後の行を出す。
+    fn stalled(&self, p: &OwnedProc, stage: &str, what: &str, mut last: Option<String>) -> ! {
+        while let Ok(l) = p.next_line(Duration::ZERO) {
+            last = Some(l);
+        }
+        let stderr = self
+            .logs
+            .join(format!("{}-{}.stderr", p.role().as_str(), p.incarnation()));
+        let tail = std::fs::read_to_string(&stderr)
+            .map(|s| {
+                let lines: Vec<&str> = s.lines().collect();
+                lines[lines.len().saturating_sub(10)..].join("\n")
+            })
+            .unwrap_or_else(|e| format!("({}: {e})", stderr.display()));
+        panic!(
+            "stage `{stage}` stalled ({what}; insurance {:?}): {} incarnation {} pid {}; \
+             last stdout line: {last:?}; stderr tail ({}):\n{tail}",
+            self.span,
+            p.role().as_str(),
+            p.incarnation(),
+            p.pid(),
+            stderr.display(),
+        )
     }
-    let stderr = p.stderr_path();
-    let tail = std::fs::read_to_string(&stderr)
-        .map(|s| {
-            let lines: Vec<&str> = s.lines().collect();
-            lines[lines.len().saturating_sub(10)..].join("\n")
-        })
-        .unwrap_or_else(|e| format!("({}: {e})", stderr.display()));
-    panic!(
-        "stage `{stage}` stalled ({what}; insurance {span:?}): {} incarnation {} pid {}; \
-         last stdout line: {last:?}; stderr tail ({}):\n{tail}",
-        p.role().as_str(),
-        p.incarnation(),
-        p.pid(),
-        stderr.display(),
-    )
 }
 
 fn scenarios() -> PathBuf {
@@ -651,7 +651,6 @@ fn survive(arm: &'static str, at: Park) {
     let occurrences = externals as u64;
     let nth = 1 + seed % occurrences;
     let limits = cfg_limits();
-    let ins = Insurance::start();
     let (d, _scratch) = run_dir(match at {
         Park::WaitAck => arm.to_string(),
         Park::Poll => format!("{arm}-poll"),
@@ -682,6 +681,7 @@ fn survive(arm: &'static str, at: Park) {
     };
     header.write(&d).expect("header");
     let log = EventLog::create(&d).expect("log");
+    let ins = Insurance::start(&log);
     let mut sup = Supervisor::new(log.clone(), limits.clone()).expect("sup");
 
     let ctl = |inc: u64, nth: Option<u64>| {
@@ -1033,7 +1033,6 @@ fn notice_run(arm: &'static str, stop: Stop) {
     let externals = occurrences as usize;
     let nth = 1 + seed % occurrences;
     let limits = cfg_limits();
-    let ins = Insurance::start();
     let (d, _scratch) = run_dir(format!("notice-{arm}-{}", stop.name()));
     let sd = short_sock_dir();
     let sock = sd.path().join("e.sock");
@@ -1067,6 +1066,7 @@ fn notice_run(arm: &'static str, stop: Stop) {
         .write(&d)
         .expect("header");
     let log = EventLog::create(&d).expect("log");
+    let ins = Insurance::start(&log);
     let mut sup = Supervisor::new(log.clone(), limits.clone()).expect("sup");
 
     let mut ext = sup
@@ -1312,7 +1312,6 @@ fn no_notice_probe(arm: &'static str) {
     let occurrences = externals_of(&s);
     let nth = 1 + seed % occurrences;
     let limits = cfg_limits();
-    let ins = Insurance::start();
     let (d, _scratch) = run_dir(format!("notice-{arm}-probe"));
     let sd = short_sock_dir();
     let sock = sd.path().join("e.sock");
@@ -1321,6 +1320,7 @@ fn no_notice_probe(arm: &'static str) {
         .write(&d)
         .expect("header");
     let log = EventLog::create(&d).expect("log");
+    let ins = Insurance::start(&log);
     let mut sup = Supervisor::new(log.clone(), limits.clone()).expect("sup");
     let mut ext = sup
         .spawn(
@@ -1435,7 +1435,7 @@ fn insurance_names_the_stalled_stage_and_the_last_child_line() {
             ),
         )
         .expect("spawn");
-    let ins = Insurance::within(Duration::from_millis(500));
+    let ins = Insurance::within(Duration::from_millis(500), logd.path());
     let line = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         ins.line(&p, "stage_never_marked", "NEVER_PRINTED")
     }))
@@ -1446,7 +1446,7 @@ fn insurance_names_the_stalled_stage_and_the_last_child_line() {
     assert!(msg.contains(READY_LINE), "last child line: {msg}");
     assert!(msg.contains("control incarnation 1"), "{msg}");
     let exit = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        Insurance::within(Duration::from_millis(200)).exit(&mut p, "stage_never_exits")
+        Insurance::within(Duration::from_millis(200), logd.path()).exit(&mut p, "stage_never_exits")
     }))
     .expect_err("stubborn never exits");
     let msg = exit.downcast_ref::<String>().cloned().unwrap_or_default();

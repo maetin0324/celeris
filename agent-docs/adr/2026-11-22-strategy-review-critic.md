@@ -361,3 +361,14 @@ Project.request と承認済み Roadmap は読むだけで書かない。
   `auto_integrates` の値と対象を渡すだけになり、`dispatcher.rs` の `needs_reviewer_run` の import は使われなくなったので外した（`use` の 1 行）。
 - D3.3 の「判定されなかった」不合格（決定的な条件が落ちた・reviewer run が無い・run が判定できなかった）は `review::not_evaluated` 1 つで作り、`review_task` と
   `run_reviewer_inner` の `fail_all` の両方が使う。reviewer の合格の持ち越し（ADR 2026-10-27 D2）は `review::without_reviewer_run` で、Critic を覆わない。
+
+## 付記（2026-11-22、experiment-gate の実装）
+
+- `cos::strategy_gate::check` は `validate_document` の後に `execution_facts` で事実を集め、`check_execution` を呼ぶ。文書が `StrategyDocument` として読めないときは
+  呼ばない（文書の違反だけを返す）。鎖の版 `chain[i]` の版番号は `version - 1 - i`。
+- X(v)（D2.3）は `cos_operations` を 1 回だけ走査し（`action = 'task.create'`・`state = 'applied'`・`payload_json.strategy.name` のある行）、版ごとに name と
+  sha256（`sha256:` の接頭辞を除いて比べる）で選ぶ。task-core に `cos_operations` を任意の条件で読む公開の口が無いので、gate は `SqliteStore::write_tx` の中で
+  SELECT だけを行う（書かない）。読み取り専用の関数を task-core に置くのは子 4 の `crates/task-core/src/chat/` の統合の後に回す（進捗の提案）。
+- 終端は task の status が `done`・`failed`・`cancelled`。`cos_operations` の行の task が引けないときは終端でない扱い（選択を止める側）。
+- D7.4 の直しで、子 3 の `chat_discussion_summary_strategy_gate_edited_is_stale` の通る起票はもう 1 つの open の候補にした（同じ候補の 2 件目にすると
+  `strategy_experiment_phase` が加わり、`codes == ["strategy_stale"]` の主張が成り立たないため。主張は変えていない）。

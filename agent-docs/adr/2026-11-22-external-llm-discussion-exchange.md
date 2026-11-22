@@ -478,12 +478,14 @@ ChatGPT との議論で人が選んだ要約 …
 | exchange-design | `agent-docs/adr/`・`agent-docs/progress/` |
 | envelope-fix | `crates/task-core/src/strategy/envelope.rs`（と `envelope/`）・`crates/task-core/src/strategy/fixtures/`・`crates/task-core/src/strategy/tests.rs`・`agent-docs/progress/`・`agent-docs/adr/` |
 | exchange-core | `crates/task-core/src/discussion_exchange.rs`（と `discussion_exchange/`・`discussion_exchange_tests.rs`）・`crates/task-core/src/lib.rs`（`pub mod` の 1 行）・`crates/task-core/src/chat/`（既存の関数の公開範囲の変更と、`chat_events` の 2 つの type の追加だけ。本体に関数を足さない）・`crates/task-core/Cargo.toml`・`Cargo.lock`・`agent-docs/progress/`・`agent-docs/adr/` |
-| mcp-tools | `crates/celeris-mcp/`・`crates/task-core/src/mcp.rs`（scope の 2 つ）・`docs/guides/mcp.md`・`Cargo.lock`・`agent-docs/progress/`・`agent-docs/adr/` |
+| mcp-tools | `crates/celeris-mcp/`・`crates/task-core/src/mcp.rs`（scope の 2 つ）・`docs/guides/mcp.md`・`docs/api/v1/api-v1.schema.json`・`web/api/generated/`（`McpScope` の enum の生成物。生成器で書く）・`Cargo.lock`・`agent-docs/progress/`・`agent-docs/adr/` |
 | rest-import | `crates/task-api/`（`cos/strategy_gate*` を除く）・`crates/celerisctl/`・`docs/api/v1/`・`web/api/generated/`・`Cargo.lock`・`agent-docs/progress/`・`agent-docs/adr/`（2026-10-09 の表を含む） |
 | scope-guard | `crates/celeris-mcp/`・`crates/task-core/src/mcp.rs`・`crates/celerisctl/src/commands/mcp.rs`・`docs/guides/mcp.md`・`docs/guides/chatgpt-rdc.md`・`scripts/rdc/`・`agent-docs/progress/`・`agent-docs/adr/` |
 | rdc-path | `crates/celeris-mcp/tests/`・`crates/celeris-mcp/Cargo.toml`・`crates/celerisctl/tests/`・`crates/celerisctl/Cargo.toml`・`Cargo.lock`・`scripts/rdc/`・`docs/guides/mcp.md`・`docs/guides/chatgpt-rdc.md`・`agent-docs/progress/`・`agent-docs/adr/` |
 | close | `agent-docs/progress/` |
 
+- `McpScope` は `ApiV1Schema`（`GET /mcp/clients` の `scopes`）に載るので、scope を足す mcp-tools は公開 API の schema の生成物も書く（計画 v2 で範囲に足した）。
+  rest-import も同じ生成物を変えるが、変わる行が離れているので段の統合の merge で合わさる。
 - 子 5 と重なりうる file は `crates/task-core/src/lib.rs`（module の宣言の行）・`Cargo.lock`・ADR 2026-10-09 の表・`crates/task-api/src/schema.rs`。
   行が違えば統合の機械的な merge で解ける。同じ行の衝突なら、その unit は進捗に書いて止まり、子 5 の統合を待つ。
 - 同じ段の mcp-tools と scope-guard は `crates/celeris-mcp/`・`crates/task-core/src/mcp.rs` を共有するので、scope-guard は mcp-tools の後に走る（計画の依存のとおり）。

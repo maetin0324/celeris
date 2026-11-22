@@ -19650,7 +19650,9 @@
         "skills:read",
         "skills:write",
         "db:read",
-        "api:read"
+        "api:read",
+        "discussion:read",
+        "discussion:propose"
       ],
       "type": "string"
     },

@@ -35465,14 +35465,8 @@
       "$ref": "#/$defs/ChangesView",
       "description": "Phase 54（ADR-0043 D5）: 変更の取り込み（差分・merge・PR・衝突タスク）。"
     },
-    "chat_attachment": {
-      "$ref": "#/$defs/ChatAttachment"
-    },
     "chat_attachment_response": {
       "$ref": "#/$defs/ChatAttachmentResponse"
-    },
-    "chat_event": {
-      "$ref": "#/$defs/ChatEvent"
     },
     "chat_event_list": {
       "$ref": "#/$defs/ChatEventListResponse"
@@ -35492,9 +35486,6 @@
     },
     "chat_forward": {
       "$ref": "#/$defs/ChatForwardRequest"
-    },
-    "chat_message": {
-      "$ref": "#/$defs/ChatMessage"
     },
     "chat_message_edit": {
       "$ref": "#/$defs/ChatMessageEditRequest",
@@ -35538,9 +35529,6 @@
     },
     "chat_stop_response": {
       "$ref": "#/$defs/ChatStopResponse"
-    },
-    "chat_thread": {
-      "$ref": "#/$defs/ChatThread"
     },
     "chat_thread_detail": {
       "$ref": "#/$defs/ChatThreadDetailResponse"
@@ -36448,16 +36436,12 @@
     "eval_trials_created",
     "eval_trial",
     "eval_trial_list",
-    "chat_thread",
-    "chat_message",
-    "chat_attachment",
     "chat_message_edit",
     "chat_message_retract",
     "chat_exchange_share",
     "chat_exchange_share_response",
     "chat_exchange_import",
     "chat_exchange_import_response",
-    "chat_event",
     "chat_thread_open",
     "chat_thread_read",
     "chat_thread_patch",

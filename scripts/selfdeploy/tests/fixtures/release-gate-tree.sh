@@ -10,7 +10,6 @@
 #   SD_SCRIPT_BUNDLE_GATE・SD_WEB_PNPM       TS 制御層の bundle の段と web の release の偽物（export）
 # 偽の道具が読む env（release.sh に渡す）:
 #   CARGO_LOG（必須）: 偽の cargo が引数を 1 行ずつ追記する file
-#   CARGO_ENV_LOG（任意）: 偽の cargo が引数と CELERIS_SECOND_STAGE_TESTS の値（未設定は unset）を 1 行ずつ追記する file
 #   FAKE_SCRATCH: 偽の celerisctl の `scratch lease` が返す target の根
 #   FAKE_NEXTEST_FAIL=1 → nextest の試験が 1 つ落ちる（exit 100）、FAKE_DOC_FAIL=1 → doc-test が落ちる（exit 101）、
 #   FAKE_NEXTEST_NOSUMMARY=1 → exit 0 だが集計の行を出さない、FAKE_NO_NEXTEST=1 → `cargo nextest` が無い
@@ -31,8 +30,6 @@ export SD_SCRIPT_BUNDLE_GATE="$_rgt_fixtures/fake-script-bundle-gate.sh"
 cat >"$root/bin/cargo" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$CARGO_LOG"
-# CARGO_ENV_LOG があれば、試験 7・9 の strict の env（ADR 2026-11-21-release-gate-second-stage-skip G7）を引数と並べて残す。
-[ -z "${CARGO_ENV_LOG:-}" ] || printf '%s CELERIS_SECOND_STAGE_TESTS=%s\n' "$*" "${CELERIS_SECOND_STAGE_TESTS-unset}" >>"$CARGO_ENV_LOG"
 case "$1" in
   metadata) printf '{"workspace_members":["x 0.1.0"],"packages":[{"id":"x 0.1.0","name":"x"}]}\n' ;;
   nextest)

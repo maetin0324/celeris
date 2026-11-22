@@ -98,6 +98,8 @@ token: <64+ 文字の値。この 1 回しか出ない>
 | `skills:write` | `skills_put` |
 | `db:read` | `db_schema` / `db_query`（DB を読み取り専用で問い合わせる。ADR 2026-10-23-mcp-read-only-db-and-api） |
 | `api:read` | `api_get`（`/api/v1` への GET を daemon が代行する。同 ADR） |
+| `discussion:read` | `discussion_snapshot` / `discussion_evidence_search`（案件 thread のうち人が共有した範囲と、その client 自身の propose だけ。ADR 2026-11-22-external-llm-discussion-exchange） |
+| `discussion:propose` | `discussion_propose`（未承認の案を 1 件記録する。同 ADR） |
 
 `tools/list` は**持っているスコープの道具だけ**を返す（無い道具は一覧にすら出ない）。スコープが無い
 道具を `tools/call` で呼んでも JSON-RPC `-32601`（`method not found` と同じ見え方。「その道具は無い」
@@ -205,6 +207,30 @@ token: <64+ 文字の値。この 1 回しか出ない>
   `query` は object（値は文字列・数・真偽）。`method` は省略か `GET`。secret・保存 credential・browser の
   identity と Live View・credential の受け渡し・TOTP 接続・login・添付の生 bytes・SSE は拒否（`-32002`。一覧は ADR）。
   返り値は `{status, content_type, body}`（4xx/5xx もそのまま返す）。応答 1 MiB・30 秒まで。
+
+- **外部 LLM との議論**（ADR 2026-11-22-external-llm-discussion-exchange D1。ChatGPT・Muse など MCP の客は同じ契約）:
+  対象は `project_id`（案件の固定の CoS thread）か `thread_id`（`kind=project` の thread）。両方なら一致しなければ、
+  別案件・統括の thread なら `-32602`（`thread_project_mismatch`・`thread_kind_not_project`）。
+  - `discussion_snapshot { project_id?, thread_id?, after_seq?, limit? }`（scope `discussion:read`）: 人が
+    `exchange/shares` で共有した message（共有した版のまま。撤回・共有後の編集・取り消し・期限切れは `omitted`）と、
+    この客自身の propose だけを `celeris.discussion-snapshot/1` で返す。各 item は `citation`・`content_hash`・`source`・
+    `actor`・`consent`・`references`・`confidence`・`decision_state` を持ち、秘密の形は `[masked]`。共有が無ければ
+    `items: []`。既定 50 件・上限 200 件、続きは `next_after_seq`。要約・戦略の添付 file は今は MCP からは返さない
+    （`McpState` は CoS の workspace を読まない。ADR の D1.7）。
+  - `discussion_evidence_search { project_id?, thread_id?, query, limit? }`（scope `discussion:read`）: snapshot と
+    同じ範囲（マスク後の本文）だけを語で探す（空白で区切った語がすべて含まれるもの、大文字小文字を区別しない）。
+    `query` は 1〜512 文字。返り値は `celeris.discussion-evidence/1` の `hits[]`（`citation`・`snippet` 400 文字まで・
+    `references`・`confidence`・`decision_state`・`actor`・`source`・`content_hash`）。knowledge は探さない。
+  - `discussion_propose { project_id?, thread_id?, idempotency_key, source_label, body, references?, confidence, decision_state }`
+    （scope `discussion:propose`）: 案件 thread に `role=user`・author `mcp:<client_id>`・`discussion_mode: discuss` の
+    message を 1 件作り、`metadata_json.exchange` に envelope（`actor = mcp:<client_id>`、consent は客の scope）を
+    書く。人の発言・承認には数えない。`decision_state` は `discussion` か `proposed` だけ（他は `-32002`）。
+    `actor`・`consent`・`approval` を引数に書くと `-32602`。`kind: chat` の参照はこの客の snapshot に今ある item の
+    `thread_id`・`message_id`・`revision`・`sha256` と一致しなければ `-32002`（`citation_invalid`）、`kind: url` は
+    文字列として保存するだけで取りに行かない。同じ `idempotency_key` と本文は 1 件（`duplicate: true`）、別の本文は
+    `-32002`（`R7:idempotency_conflict`）。key は客ごとの名前空間（`mcp:<client_id>:<key>`）。秘密を含む本文は `-32002`
+    （`exchange_secret`。本文は返さない）。返り値 `{message_id, thread_id, project_id, seq, content_hash, decision_state, duplicate}`。
+  - 3 道具の引数・本文は `mcp_calls.request` に残さない。MCP の客は共有も取り込みもできない（人の REST だけ）。
 
 **resources**（読むだけの客のため。`resources/read { uri }` は対応する `*_get` と同じものを返す）:
 `celeris://knowledge/<path>`、`celeris://tasks/<id>`、`celeris://projects/<id>`、

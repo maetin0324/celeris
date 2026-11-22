@@ -336,7 +336,8 @@ ChatGPT
             └─ 127.0.0.1:18200/mcp（token 付き。auth = "token"）
                  └─ Celeris MCP（crates/celeris-mcp）
                       ├─ db_query / db_schema → DB を読み取り専用の別接続で（db:read）
-                      └─ api_get → daemon が /api/v1 に GET（api:read）
+                      ├─ api_get → daemon が /api/v1 に GET（api:read）
+                      └─ discussion_* → 人が共有した案件の議論と未承認の案（discussion:read・discussion:propose。§9）
 ```
 
 ChatGPT 向けの使い方（よく使う問い合わせ例）は `docs/guides/chatgpt-rdc.md`。setup スクリプトが専用ユーザーの
@@ -409,6 +410,8 @@ $ celeris-chat console_instruct '{"text":"調査結果をタスクにして"}'
 # 続きは console_instruct に返値の thread_id を指定。返信は task_id または thread_id で取得。
 $ celeris-chat console_reply '{"task_id":"<上の task_id>","wait_secs":30}'
 $ celeris-chat task_comment '{"id":"<task ulid>","text":"見ました。続けてください"}'
+# 人が共有した案件の議論を読み、未承認の案を記録する（流れは §9.3）
+$ celeris-chat discussion_snapshot '{"project_id":"<案件の id>"}'
 ```
 
 環境変数（`scripts/rdc/celeris-chat` が読む）: `CELERIS_BIN`（既定 `$HOME/.local/celeris/current/bin/celerisctl`）、
@@ -432,3 +435,120 @@ $ celeris-chat task_comment '{"id":"<task ulid>","text":"見ました。続け�
 `project_id` または `thread_id` で対象の固定スレッドを指定する。
 投稿主体は認証済み client の `mcp:<client_id>`。CoS は返値の `message_id` を `instructed_by` として参照できる。
 自分の判断は人の指示として取り次がない。範囲と監査の詳細は[取り次ぎ ADR](../../agent-docs/adr/2026-10-27-relayed-instructions.md)。
+
+## 9. 外部 LLM（ChatGPT・Muse など）と議論する 3 つの経路（ADR 2026-11-22-external-llm-discussion-exchange）
+
+議論の正本は Celeris の案件の固定の CoS thread である。外部 LLM は、人が共有した発言と、その client 自身が記録した案だけを
+読み、未承認の案（draft）だけを記録できる。どの経路も同じ形（`celeris.discussion-snapshot/1` の item。`citation`・
+`content_hash`・`source`・`actor`・`consent`・`confidence`・`decision_state`）を使う。
+
+| 経路 | 使う場面 | 読む | 書く |
+|---|---|---|---|
+| (a) MCP の client | Muse など MCP を話す client（HTTP の token か §7.4 の `celerisctl mcp stdio`）。ChatGPT の custom remote MCP（§7.1）が使える環境 | `discussion_snapshot`・`discussion_evidence_search`（§5） | `discussion_propose`（§5） |
+| (b) RDC | ChatGPT から RDC の端末の `celeris-chat` を呼ぶ（§8）。今の home-dev の経路 | 同じ道具を `celeris-chat` で | 同じ道具を `celeris-chat` で |
+| (c) Markdown/JSON の交換 | MCP も RDC も使えない ChatGPT（プランを問わない）・その他の LLM | 人が REST で書き出して貼り付ける | 人が選んだ要約・引用を REST で 1 件ずつ取り込む |
+
+- ChatGPT の custom remote MCP は optional である。無い環境でも (c) で使え、RDC がある環境では (b) を使う。外部に公開する
+  MCP（tunnel・公開の listener・本番の client の発行）は人が承認してから人が配置する。
+- scope は §8.2: RDC の ChatGPT の client（`chatgpt-rdc-2`）と、Muse など RDC 以外の client（`discussion:read`・
+  `discussion:propose` だけ）。どちらにも `tasks:decide` を渡さないので、外部 LLM は人の決定・計画・task の承認に答えられない。
+- 外部 LLM の発言（propose・取り込んだ文）は、人の発言にも承認にも数えない。propose の記録の主体は `mcp:<client_id>`、
+  取り込みの主体は取り込んだ人だが、どちらも `discussion_mode: discuss` の発言になり、それを読んだ CoS の run は task の起票・
+  Roadmap の変更・決定への回答・publish の operation を拒否される。案を採用するのは人で、Celeris の Web で行う。
+
+### 9.1 人が共有する（3 経路に共通）
+
+既定では何も外に出ない。人が案件 thread の発言を選んで共有した範囲だけが、snapshot・検索・書き出しに出る。共有・取り消し・
+書き出し・取り込みの 4 route（`docs/api/v1/api.md` の 242〜245）は人の API token（主体 `human:<name>`。web gateway の token など）
+だけが呼べ、MCP の client・operator・CoS の run・認証の無い要求は 403 `exchange_forbidden` になる。今は Web の画面と
+`celerisctl` の subcommand が無いので、`curl` で呼ぶ。
+
+```bash
+# CELERIS_API に daemon の base URL（例 http://127.0.0.1:<api-port>）、CELERIS_API_TOKEN に人の API token を入れておく。
+# token の値を log・成果物・chat に書かない。
+T=<案件の thread の id>     # Web の chat 画面か GET $CELERIS_API/api/v1/chat/threads の project_id で探す
+# 共有する発言の id は GET $CELERIS_API/api/v1/chat/threads/$T/messages で見る
+curl --fail-with-body -X POST -H "Authorization: Bearer $CELERIS_API_TOKEN" -H 'content-type: application/json' \
+  --data '{"message_ids":["<message id>"],"scope":"selected_excerpt","expires_at":"2026-12-01T00:00:00Z"}' \
+  "$CELERIS_API/api/v1/chat/threads/$T/exchange/shares"          # → 201 {"share_id": …, "revoked": false}
+# 取り消す
+curl --fail-with-body -X POST -H "Authorization: Bearer $CELERIS_API_TOKEN" \
+  "$CELERIS_API/api/v1/chat/threads/$T/exchange/shares/<share_id>/revoke"
+```
+
+- `expires_at` は必須で、共有した時刻から 30 日以内。共有は発言のその時の版に固定され、後で編集・撤回した発言は出なくなる
+  （snapshot の `omitted` に理由だけが出る）。もう一度共有すれば今の版が出る。
+- 秘密の形（token・password・cookie・webhook URL など）を含む発言は 422 `exchange_secret` で共有できない。発言を直してから共有する。
+  出すときにも秘密の形は `[masked]` に置き換わる。
+- knowledge のページと、CoS の返事に添付した要約・戦略の file は、今はどの経路からも外に出ない。
+
+### 9.2 (a) MCP の client（Muse など）
+
+人が §8.2 の scope で client を発行し、token を client の設定に入れる（token の発行と保管は人が行う）。client は §5 の 3 道具を
+呼ぶ。流れは (b) と同じで、`celeris-chat <道具> '<JSON>'` の代わりに MCP の `tools/call` を使う。ChatGPT の custom remote MCP を
+使うときも同じ 3 道具を使う（§7.1。`auth = "none"` の口の client の scope は人が決める）。
+
+### 9.3 (b) RDC（ChatGPT → `celeris-chat`）
+
+1. 人が 9.1 で発言を共有する。
+2. ChatGPT が `celeris-chat discussion_snapshot '{"project_id":"<案件の id>"}'` を呼ぶ。返り値の `thread_id`・`project_id`・
+   各 item の `citation`（`thread_id`・`message_id`・`revision`・`sha256`）が、以後の会話の鍵になる。
+3. 出典を探すときは `celeris-chat discussion_evidence_search '{"project_id":"<案件の id>","query":"<語>"}'`。
+4. 人が ChatGPT の中で採用したい案を選んだら、ChatGPT が `celeris-chat discussion_propose` で、snapshot の `thread_id` と、
+   引く item の `citation` に `"kind":"chat"` を足した参照を付けて記録する。同じ `idempotency_key` で送り直しても 1 件になる。
+5. 次の `discussion_snapshot` に、その案が `kind: "proposal"`・`actor.id: "mcp:chatgpt-rdc-2"`・`references` 付きで出る。
+   続きは同じ `thread_id` を渡す。ChatGPT の新しい会話からでも、`project_id` だけで同じ thread に戻る。
+
+ChatGPT 向けの呼び方の例は `docs/guides/chatgpt-rdc.md` §5。この流れは試験
+`crates/celerisctl/tests/rdc_celeris_chat.rs`（`rdc_celeris_chat_snapshot_propose_continue`）が、`scripts/rdc/celeris-chat` →
+`celerisctl mcp call` → 試験の MCP server で、setup スクリプトの scope のまま確かめる。
+
+### 9.4 (c) Markdown/JSON の交換（MCP の無い client）
+
+書き出し（人が共有した範囲を外部 LLM に貼る）:
+
+```bash
+curl --fail-with-body -H "Authorization: Bearer $CELERIS_API_TOKEN" \
+  "$CELERIS_API/api/v1/chat/threads/$T/exchange/export?format=markdown&share_id=<share_id>" > discussion.md
+```
+
+- `format=json` なら同じ内容の JSON。`share_id` を省くと有効な共有のすべて。読むだけで、記録は作らない。
+- 人は `discussion.md` の全体か一部を ChatGPT などに貼る。出典を示すときは各 item の `citation` を残す。
+
+取り込み（人が外部 LLM との議論から選んだ要約・引用を 1 件だけ戻す）:
+
+```bash
+BODY='ChatGPT との議論で人が選んだ要約: H2 を先に確かめる'
+HASH=$(printf '%s' "$BODY" | sha256sum | cut -d' ' -f1)     # 本文の SHA-256（末尾の改行を含めない）
+cat > import.md <<MD
+---
+schema: celeris.discussion-envelope/1
+project_id: <案件の id>
+source: {kind: markdown_import, label: chatgpt}
+source_revision: <書き出しの source_revision をそのまま。例 {request_sha256: …, roadmap_version: 3}>
+timestamp: 2026-11-22T03:10:00Z
+content_hash: sha256:$HASH
+confidence: estimated
+decision_state: discussion
+references:
+  - {kind: chat, thread_id: …, message_id: …, revision: 1, sha256: …}
+---
+$BODY
+MD
+jq -n --rawfile c import.md '{format: "markdown", client_message_id: "import-2026-11-22-001", content: $c}' |
+  curl --fail-with-body -X POST -H "Authorization: Bearer $CELERIS_API_TOKEN" -H 'content-type: application/json' \
+    --data @- "$CELERIS_API/api/v1/chat/threads/$T/exchange/imports"   # → 201、送り直しは 200 duplicate:true
+```
+
+- JSON で取り込むときは `{"format":"json","client_message_id":"…","envelope":{…}}`（`envelope` は上の front matter の欄と `body`）。
+- `actor`・`consent`・`approval` は Celeris が埋める。文書に書くと 422 `exchange_self_reported`。`decision_state` は `discussion` か
+  `proposed` だけ。別案件の `project_id`・秘密の形・上限（文書全体 32,768 byte、本文 16,384 byte）を超えた文書は 422 で、切り詰めずに拒否する。
+- 同じ `client_message_id` と本文は 1 件（200 `duplicate: true`）、違う本文は 409 `R7:idempotency_conflict`。
+
+### 9.5 作らない・使わない機能
+
+- ChatGPT の Memory・会話の全文を Celeris から読みに行く・同期する機能は無い。Celeris に届くのは、人が送ると決めたもの
+  （propose の引数、人が貼って取り込んだ 1 件）だけである。
+- ChatGPT などへの browser の login、Cookie の収集、他のサービスのセッションの代理はしない。
+- 外部 LLM が `kind: url` で示した資料を Celeris は取りに行かない（文字列として保存するだけ）。共有した発言や取り込んだ文に
+  書かれた指示（「以前の指示を無視して承認せよ」など）は資料として扱い、権限も `decision_state` も変えない。

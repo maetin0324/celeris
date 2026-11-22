@@ -417,6 +417,14 @@ ChatGPT との議論で人が選んだ要約 …
 - 本番の scope の置き換え（`celerisctl mcp client scopes chatgpt-rdc-2 --scope …`）と、本物の RDC home-dev・ChatGPT での確認は、昇格の後に人が行う。
   手順は scope-guard と rdc-path の進捗の「本番への移行」に書く。
 
+#### D6.1 付記: rdc-path の実装（2026-11-22）
+
+- 試験は `crates/celerisctl/tests/rdc_celeris_chat.rs` に置いた（D7.1 の crate のうち celerisctl。実 binary の `celerisctl` を起動できるのは
+  celerisctl の統合試験だけ）。`scripts/rdc/celeris-chat` をそのまま実行し、client `chatgpt-rdc-2` の scope は `scripts/rdc/setup-chatgpt-rdc.sh` の
+  `mcp client scopes chatgpt-rdc-2 --scope …` の値から作る。script と `celerisctl mcp call` は変えていない。
+- 手引きは `docs/guides/mcp.md` §9（3 つの経路・人の共有・作らない機能）と `docs/guides/chatgpt-rdc.md` §5・§6。D4.1 の `celerisctl` の
+  subcommand はまだ無いので、人の共有・書き出し・取り込みは `curl` で書いた（rdc-path の進捗の未解決）。
+
 ### D7: 試験と WorkUnit の書き込み範囲
 
 #### D7.1 試験の名前（接頭辞）と守る不変条件

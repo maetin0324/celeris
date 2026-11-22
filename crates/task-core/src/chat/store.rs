@@ -513,7 +513,7 @@ pub(crate) fn emit_message(
         m.run_id.as_deref(),
         Some(&m.id),
         ChatEventType::Message,
-        &ChatEventData::Message(ChatMessageData { message: m.clone() }),
+        &ChatEventData::Message(Box::new(ChatMessageData { message: m.clone() })),
         now,
     )
 }

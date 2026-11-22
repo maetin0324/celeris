@@ -494,11 +494,11 @@ pub struct ChatEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum ChatEventData {
-    Message(ChatMessageData),
+    Message(Box<ChatMessageData>),
     TextDelta(ChatTextDeltaData),
     Status(ChatStatusData),
     Tool(ChatToolData),
-    Run(ChatRunData),
+    Run(Box<ChatRunData>),
     Queue(ChatQueueData),
     Card(ChatCardData),
     Thread(ChatThreadData),

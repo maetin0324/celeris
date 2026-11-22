@@ -215,7 +215,7 @@ fn emit_run(conn: &Connection, run: &ChatRun, now: &str) -> Result<i64, ChatErro
         Some(&run.id),
         None,
         ChatEventType::Run,
-        &ChatEventData::Run(ChatRunData { run: run.clone() }),
+        &ChatEventData::Run(Box::new(ChatRunData { run: run.clone() })),
         now,
     )
 }

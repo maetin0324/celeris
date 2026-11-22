@@ -211,6 +211,7 @@ function ChatConversation({
                 text: pending.text,
                 attachment_ids: pending.attachment_ids,
                 mode: pending.mode,
+                discussion_mode: pending.discussion_mode,
               })
               .catch(() => {}) // session が同じ pending に失敗を記録する。
         }

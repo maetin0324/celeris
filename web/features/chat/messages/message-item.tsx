@@ -8,6 +8,7 @@ import { pendingHumanCount } from "../cards/card-model";
 import { chatPaths } from "../data/client";
 import type { DraftMessage, PendingMessage, ToolEntry } from "../data/reducer";
 import { AttachmentList, chatAttachmentElementId, chatPreviewKind, ToolCallList } from "./parts";
+import { MessageMeta, messageSpeaker, roleName } from "./speaker";
 import { linkWorkspacePaths, workspaceAttachmentFor } from "./workspace-links";
 
 /** カードを差し込む slot。cards 葉の部品を home が渡す。 */
@@ -83,8 +84,6 @@ function Body({
     </div>
   );
 }
-
-const roleName: Record<ChatMessage["role"], string> = { user: "あなた", assistant: "CoS", system: "システム" };
 
 /** 折りたたんだ記録・通知の 1 行目（本文の先頭行。無ければカードの題名の数）。 */
 export function foldedSummary(message: Pick<ChatMessage, "text" | "cards">): string {
@@ -173,7 +172,8 @@ export function MessageItem({
     );
   }
   return (
-    <Bubble speaker={message.role} busy={streaming} label={roleName[message.role]}>
+    <Bubble speaker={message.role} busy={streaming} label={messageSpeaker(message).label}>
+      <MessageMeta message={message} />
       <ToolCallList tools={tools} />
       <Body
         speaker={message.role}
@@ -217,6 +217,7 @@ export function PendingItem({
   const failed = pending.state === "failed";
   return (
     <Bubble speaker="user" busy={!failed} label={roleName.user}>
+      <MessageMeta message={{ role: "user", discussion_mode: pending.discussion_mode }} />
       <Body speaker="user" text={pending.text} />
       {pending.attachment_ids.length > 0 ? (
         <p className="text-label text-muted-foreground">{`添付 ${pending.attachment_ids.length} 件`}</p>

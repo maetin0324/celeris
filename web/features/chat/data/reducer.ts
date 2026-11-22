@@ -10,6 +10,7 @@
 
 import type {
   ChatCard,
+  ChatDiscussionMode,
   ChatEvent,
   ChatMessage,
   ChatMessageListResponse,
@@ -32,6 +33,8 @@ export type PendingMessage = {
   text: string;
   attachment_ids: string[];
   mode: "queue" | "interrupt";
+  /** ADR 2026-11-21-chat-discussion-mode D9: 送った発言の扱い（議論・案）。再送でも同じ値を送る（実行のときは無い）。 */
+  discussion_mode?: ChatDiscussionMode;
   state: "sending" | "failed";
   error?: string;
 };
@@ -71,6 +74,7 @@ export type ChatAction =
       text: string;
       attachmentIds?: string[];
       mode?: "queue" | "interrupt";
+      discussionMode?: ChatDiscussionMode;
     }
   | { type: "pending_ack"; clientMessageId: string; message: ChatMessage }
   | { type: "pending_failed"; clientMessageId: string; error: string }
@@ -287,6 +291,8 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const existing = state.pending[action.clientMessageId];
       const acked = Object.values(state.messages).some((m) => m.client_message_id === action.clientMessageId);
       if (acked) return state;
+      // 同じ client_message_id の再送は、最初の送信の扱いを保つ（本文・添付と同じ）。
+      const discussionMode = existing ? existing.discussion_mode : action.discussionMode;
       return {
         ...state,
         pending: {
@@ -296,6 +302,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             text: existing?.text ?? action.text,
             attachment_ids: existing?.attachment_ids ?? action.attachmentIds ?? [],
             mode: existing?.mode ?? action.mode ?? "queue",
+            ...(discussionMode ? { discussion_mode: discussionMode } : {}),
             state: "sending",
           },
         },

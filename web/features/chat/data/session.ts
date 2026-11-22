@@ -11,7 +11,7 @@ import type {
 } from "../../../api/generated/types";
 import { getThread, listMessages, postMessage } from "./client";
 import { type ChatAction, type ChatState, chatReducer, initialChatState } from "./reducer";
-import { sendWithRetry } from "./send";
+import { discussionModeField, sendWithRetry } from "./send";
 import { type ChatStream, type ChatStreamOptions, createChatStream, type StreamState } from "./stream";
 
 export type ChatSessionApi = {
@@ -146,6 +146,7 @@ export function createChatSession(options: ChatSessionOptions): ChatSession {
         reply_to_id: input.reply_to_id ?? null,
         mode: input.mode ?? "queue",
         resume_queue: input.resume_queue ?? false,
+        ...discussionModeField(input.discussion_mode),
       };
       dispatch({
         type: "pending_add",
@@ -153,6 +154,7 @@ export function createChatSession(options: ChatSessionOptions): ChatSession {
         text: body.text,
         attachmentIds: body.attachment_ids,
         mode: body.mode,
+        discussionMode: body.discussion_mode ?? undefined,
       });
       try {
         const response = await sendWithRetry(() => api.postMessage(options.threadId, body), options.sendRetry);

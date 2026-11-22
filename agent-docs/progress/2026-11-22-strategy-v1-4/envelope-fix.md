@@ -83,7 +83,7 @@ base（`$CELERIS_WU_BASE`）の `envelope.rs` のまま、base の API（`Envelo
   既存の strategy の fixture 試験（受け入れ条件 1）を含む。
 - `cargo clippy --workspace -- -D warnings` → exit 0
 - `cargo fmt --all -- --check` → exit 0
-- `bash scripts/dev/test-affected.sh` → 結果は完了報告に書く（13 crate と web の typecheck+unit・ts-verify が対象）。
+- `bash scripts/dev/test-affected.sh` → exit 0。nextest 8652 tests run: 8652 passed（12 slow）、31 skipped（14 crate）。web は tsc -b が通り、vitest 105 files / 745 passed、node --test 110 pass / 0 fail。test-ts-verify も通った（script bundle SKIP 0 件）。
 - `sh "$CELERIS_WU_SCOPE_PATHS"` → 変更 path はすべて `crates/task-core/src/strategy/{envelope.rs,envelope/,fixtures/,tests.rs}`・`agent-docs/` の中。
 
 ## LoC（`git diff --numstat $CELERIS_WU_BASE HEAD`）

@@ -10,7 +10,10 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use task_core::chat::{ChatOpenThreadRequest, ChatPostMessageRequest, ChatSendMode};
+use task_core::chat::{
+    ChatMessageEditRequest, ChatMessageRetractRequest, ChatOpenThreadRequest,
+    ChatPostMessageRequest, ChatRunState, ChatSendMode,
+};
 use task_core::decision::{
     CostOfReversal, DecisionKind, DecisionOption, DecisionOrigin, DecisionPathEntry,
     DecisionRaisedBy, DecisionRequest, DecisionStatus,
@@ -120,7 +123,7 @@ fn post_message(store: &SqliteStore, thread: &str, key: &str) -> String {
             thread,
             &ChatPostMessageRequest {
                 client_message_id: format!("message-{key}"),
-                text: "最小の辺の集合を先に測りたい".into(),
+                text: MESSAGE_TEXT.into(),
                 attachment_ids: vec![],
                 reply_to_id: None,
                 mode: ChatSendMode::Queue,
@@ -350,6 +353,14 @@ fn produce(w: &World, task: &Task, name: &str, path: &str, bytes: &[u8]) -> Stri
     sha256
 }
 
+/// 案件の thread の発言の本文（chat の参照の sha256 はこの本文の SHA-256）。
+const MESSAGE_TEXT: &str = "最小の辺の集合を先に測りたい";
+
+/// chat の参照（D3: 引いた版の revision と本文の sha256 が要る）。
+fn chat_ref(thread: &str, message: &str, revision: u64, text: &str) -> Value {
+    json!({"kind": "chat", "thread_id": thread, "message_id": message, "revision": revision, "sha256": sha256_hex(text)})
+}
+
 fn evidence_sha() -> String {
     sha(b"scc\t55\n")
 }
@@ -365,7 +376,7 @@ fn baseline(w: &World) -> Value {
     doc["research_question"]["references"] = json!([evidence_task]);
     doc["evidence"][0]["references"] = json!([
         {"kind": "artifact", "task_id": w.evidence.id.to_string(), "name": "struct-deps.tsv", "sha256": evidence_sha()},
-        {"kind": "chat", "thread_id": w.thread, "message_id": w.message},
+        chat_ref(&w.thread, &w.message, 1, MESSAGE_TEXT),
     ]);
     doc["evidence"][1]["references"] =
         json!([evidence_task, {"kind": "url", "url": "https://arxiv.org/abs/2401.00001"}]);
@@ -679,7 +690,7 @@ async fn strategy_gate_other_project_material_is_422() {
     let w = world();
     let mut doc = baseline(&w);
     doc["evidence"][0]["references"][1] =
-        json!({"kind": "chat", "thread_id": w.other_thread, "message_id": w.other_message});
+        chat_ref(&w.other_thread, &w.other_message, 1, MESSAGE_TEXT);
     let s = approved(&w, &doc);
     refused(&w, "p-chat", &s, "strategy_other_project").await;
 
@@ -788,7 +799,7 @@ async fn strategy_gate_ablation_four_rules() {
     let stale = approved(&w, &stale);
     let mut proj = named("n-proj", baseline(&w));
     proj["evidence"][0]["references"][1] =
-        json!({"kind": "chat", "thread_id": w.other_thread, "message_id": w.other_message});
+        chat_ref(&w.other_thread, &w.other_message, 1, MESSAGE_TEXT);
     let proj = approved(&w, &proj);
     let appr_doc = named("n-appr", baseline(&w));
     let appr = publish(&w, &appr_doc);
@@ -850,4 +861,102 @@ async fn discussion_mode_execute_unapproved_strategy_is_422() {
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     assert_eq!(code, "discussion_mode_forbidden", "{body}");
     assert_eq!(created_tasks(&w), before);
+}
+
+/// 統括の thread に `human:alice` の発言を置き、run を終えて配達済みにする（撤回は配達済みの発言だけ）。
+fn delivered_in_general(w: &World, key: &str, text: &str) -> (String, String) {
+    let now = OffsetDateTime::now_utc();
+    let general = w
+        .store
+        .cos_thread_open(&ChatOpenThreadRequest { project_id: None }, now)
+        .expect("general thread")
+        .thread
+        .id;
+    let id = w
+        .store
+        .chat_message_post_as(
+            &general,
+            &ChatPostMessageRequest {
+                client_message_id: format!("general-{key}"),
+                text: text.into(),
+                attachment_ids: vec![],
+                reply_to_id: None,
+                mode: ChatSendMode::Queue,
+                resume_queue: false,
+                discussion_mode: None,
+            },
+            "human:alice",
+            now,
+        )
+        .expect("message")
+        .response
+        .message
+        .id;
+    let run = format!("run-general-{key}");
+    w.store
+        .chat_run_claim_next(&general, &run, &json!({}), now)
+        .expect("claim")
+        .expect("run");
+    w.store
+        .chat_run_finish(&run, ChatRunState::Completed, Some("ok"), None, now)
+        .expect("finish");
+    (general, id)
+}
+
+/// ADR 2026-11-21-chat-discussion-mode D3・D6: `chat` の参照は要約の引用と同じ導出で照合する。引いた版の後に編集された
+/// 発言は `strategy_stale`、撤回された発言は `strategy_source_missing`、revision・sha256 の無い参照は `strategy_invalid`。
+/// どれも task を作らない。base の gate は発言があれば通した（revision を見なかった）ので落ちる。
+#[tokio::test]
+async fn chat_discussion_summary_strategy_gate_edited_is_stale() {
+    let w = world();
+    let (general, edited) = delivered_in_general(&w, "edited", "仮説 A を先に試す");
+    let (_, retracted) = delivered_in_general(&w, "retracted", "前提 B は確かめた");
+    let citing = |id: &str, message: &str, text: &str| {
+        let mut d = baseline(&w);
+        d["strategy_id"] = json!(id);
+        d["idempotency_key"] = json!(format!("strategy:{id}:v1"));
+        d["evidence"][0]["references"][1] = chat_ref(&general, message, 1, text);
+        d
+    };
+    let se = approved(&w, &citing("edited", &edited, "仮説 A を先に試す"));
+    let sr = approved(&w, &citing("retracted", &retracted, "前提 B は確かめた"));
+    let (status, _, _, body) = create(&w, "c-current", &se).await;
+    assert_eq!(status, StatusCode::OK, "a current citation passes: {body}");
+
+    w.store
+        .chat_message_edit(
+            &general,
+            &edited,
+            "human:alice",
+            &ChatMessageEditRequest {
+                text: "仮説 C を先に試す".into(),
+                expected_revision: 1,
+            },
+            OffsetDateTime::now_utc(),
+        )
+        .expect("edit");
+    let body = refused(&w, "c-edited", &se, "strategy_stale").await;
+    assert_eq!(body["codes"], json!(["strategy_stale"]), "{body}");
+
+    w.store
+        .chat_message_retract(
+            &general,
+            &retracted,
+            "human:alice",
+            &ChatMessageRetractRequest {
+                expected_revision: 1,
+                reason: "誤り".into(),
+            },
+            OffsetDateTime::now_utc(),
+        )
+        .expect("retract");
+    refused(&w, "c-retracted", &sr, "strategy_source_missing").await;
+
+    let mut bare = baseline(&w);
+    bare["strategy_id"] = json!("bare");
+    bare["idempotency_key"] = json!("strategy:bare:v1");
+    bare["evidence"][0]["references"][1] =
+        json!({"kind": "chat", "thread_id": w.thread, "message_id": w.message});
+    let sb = approved(&w, &bare);
+    refused(&w, "c-bare", &sb, "strategy_invalid").await;
 }

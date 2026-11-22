@@ -735,9 +735,29 @@ export type ChatCardData = {
 
 export type ChatCardKind = "task" | "decision" | "question" | "approval" | "plan_gate" | "notice" | "operation";
 
+export type ChatCheckpointReset = {
+  "previous_summary": string;
+  "previous_through_seq": number;
+};
+
 export type ChatCheckpointSaved = {
   "summary_through_seq": number;
   "thread_id": string;
+};
+
+export type ChatCitation = {
+  "message_id": string;
+  "revision": number;
+  "sha256": string;
+  "thread_id": string;
+};
+
+export type ChatCitationState = "current" | "edited" | "retracted" | "missing";
+
+export type ChatCitationView = {
+  "citation": ChatCitation;
+  "path": string;
+  "state": ChatCitationState;
 };
 
 export type ChatCosProposal = {
@@ -774,14 +794,14 @@ export type ChatEvent = {
   "type": ChatEventType;
 };
 
-export type ChatEventData = ChatMessageData | ChatTextDeltaData | ChatStatusData | ChatToolData | ChatRunData | ChatQueueData | ChatCardData | ChatThreadData;
+export type ChatEventData = ChatMessageData | ChatTextDeltaData | ChatStatusData | ChatToolData | ChatRunData | ChatQueueData | ChatCardData | ChatThreadData | ChatMessageRevisedData;
 
 export type ChatEventListResponse = {
   "items": Array<ChatEvent>;
   "next_cursor"?: string | null;
 };
 
-export type ChatEventType = "message" | "text_delta" | "status" | "tool" | "run" | "queue" | "card" | "thread";
+export type ChatEventType = "message" | "text_delta" | "status" | "tool" | "run" | "queue" | "card" | "thread" | "message_revised";
 
 export type ChatForwardRequest = {
   "client_message_id": string;
@@ -795,15 +815,19 @@ export type ChatMessage = {
   "attachment_ids": Array<string>;
   "author"?: string | null;
   "cards": Array<ChatCard>;
+  "citations"?: Array<ChatCitationView>;
   "client_message_id"?: string | null;
   "cos_proposal"?: ChatCosProposal | null;
   "created_at": string;
   "discussion_mode"?: ChatDiscussionMode | null;
+  "edited"?: ChatMessageChange | null;
   "escalation"?: ChatEscalationRef | null;
   "id": string;
   "provenance"?: ChatProvenance | null;
   "relay"?: ChatRelay | null;
   "reply_to_id"?: string | null;
+  "retracted"?: ChatMessageChange | null;
+  "revision"?: number;
   "role": ChatMessageRole;
   "run_id"?: string | null;
   "seq": number;
@@ -814,8 +838,19 @@ export type ChatMessage = {
   "workspace_files"?: Array<ChatWorkspaceFile>;
 };
 
+export type ChatMessageChange = {
+  "at": string;
+  "by": string;
+  "reason"?: string | null;
+};
+
 export type ChatMessageData = {
   "message": ChatMessage;
+};
+
+export type ChatMessageEditRequest = {
+  "expected_revision": number;
+  "text": string;
 };
 
 export type ChatMessageListResponse = {
@@ -828,6 +863,25 @@ export type ChatMessageListResponse = {
 export type ChatMessageResponse = {
   "message": ChatMessage;
 };
+
+export type ChatMessageRetractRequest = {
+  "expected_revision": number;
+  "reason": string;
+};
+
+export type ChatMessageRevisedData = {
+  "by": string;
+  "checkpoint_reset"?: ChatCheckpointReset | null;
+  "kind": ChatMessageRevisionKind;
+  "message_id": string;
+  "previous_revision": number;
+  "previous_sha256": string;
+  "previous_text": string;
+  "reason"?: string | null;
+  "revision": number;
+};
+
+export type ChatMessageRevisionKind = "edit" | "retract";
 
 export type ChatMessageRole = "user" | "assistant" | "system";
 

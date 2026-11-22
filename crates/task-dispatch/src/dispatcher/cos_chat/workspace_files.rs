@@ -9,6 +9,9 @@
 //! - 走査は dot で始まる名前（`.taskd/` など run の内部物）と最上位の `attachments/`（人の添付の写し）を除き、
 //!   adapter の run 記録 `runs/` も除き、symlink を辿らず、深さ `MAX_DEPTH`・`MAX_ENTRIES` 項目で打ち切る。
 //! - 保存は既存の `ChatAttachmentStore::upload`（hash・MIME・権限は D4 と同じ）。上限を超える file は付けない。
+//! - 案（`strategy/<id>/v<n>.json`）と要約（`discussion/summary/<name>.json`）は `crate::cos_context::discussion_files` の
+//!   `AttachGate` の検査を通ったものだけ付け、その引用を添付と同じ transaction で返事の
+//!   `metadata_json.citations` に書く（ADR 2026-11-21-chat-discussion-mode D3・D6）。
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, File};
@@ -20,6 +23,8 @@ use task_core::SqliteStore;
 use task_core::chat::attachments::{ChatAttachmentLimits, ChatAttachmentStore};
 use task_core::chat::{ChatMessage, ChatMessageQuery, ChatWorkspaceFile};
 use time::OffsetDateTime;
+
+use crate::cos_context::discussion_files::AttachGate;
 
 /// 走査する深さ（workspace 直下が 1）。
 pub(crate) const MAX_DEPTH: usize = 6;
@@ -187,6 +192,7 @@ pub(crate) fn attach(
     let limits = capture.limits;
     let mut total = 0u64;
     let mut files = Vec::new();
+    let mut gate = AttachGate::new(store, &attachments, thread_id, run_id, limits);
     for rel in rels {
         if files.len() >= limits.max_files_per_message {
             break;
@@ -212,7 +218,10 @@ pub(crate) fn attach(
         };
         let name = rel.rsplit('/').next().unwrap_or(&rel).to_string();
         let key = format!("cos-workspace:{run_id}:{rel}");
-        match attachments.upload(thread_id, &key, &name, Some(size), file, now) {
+        let Some(uploaded) = gate.upload(&rel, &key, &name, size, file, now) else {
+            continue;
+        };
+        match uploaded {
             Ok(row) => {
                 total = total.saturating_add(row.size_bytes);
                 files.push(ChatWorkspaceFile {
@@ -225,12 +234,7 @@ pub(crate) fn attach(
             }
         }
     }
-    if files.is_empty() {
-        return Ok(files);
-    }
-    store
-        .chat_message_attach_workspace_files(thread_id, message_id, &files, now)
-        .map_err(|e| format!("attach workspace files: {e}"))?;
+    gate.finish(message_id, &mut files, now)?;
     Ok(files)
 }
 

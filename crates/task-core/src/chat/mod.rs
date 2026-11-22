@@ -32,7 +32,7 @@ pub mod relay_rejudge;
 mod relay_rejudge_tests;
 mod review;
 mod run_store;
-mod session;
+pub(crate) mod session;
 #[cfg(test)]
 mod session_tests;
 pub(crate) mod store;
@@ -45,6 +45,11 @@ mod triage_tests;
 mod window;
 #[cfg(test)]
 mod window_tests;
+// ADR 2026-11-21-chat-discussion-mode D5: the edit / retract wire types live in a leaf module.
+pub use crate::chat_citation::{
+    ChatCitation, ChatCitationState, ChatCitationView, ChatFileCitation, ChatMessageCitations,
+};
+pub use crate::chat_revision_wire::*;
 pub use credential::{ChatCheckpointSaved, CosRunCredentialError, CosRunIdentity};
 pub use digest_fixture::{COS_DIGEST_GENERATED_CASES, cos_digest_fixture_jsonl};
 pub use discussion_mode::ChatDiscussionMode;
@@ -156,7 +161,8 @@ wire_enum!(ChatEventType {
     Run,
     Queue,
     Card,
-    Thread
+    Thread,
+    MessageRevised
 });
 wire_enum!(ChatStatusPhase {
     Queued,
@@ -251,6 +257,13 @@ pub struct ChatMessage {
     /// Absent for `execute` and for messages that did not choose one (today's behaviour).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub discussion_mode: Option<ChatDiscussionMode>,
+    /// ADR 2026-11-21-chat-discussion-mode D5.2: `revision` / `edited` / `retracted`.
+    #[serde(flatten)]
+    pub edit_state: Box<ChatMessageEditState>,
+    /// D6: `citations` of the summary / draft files attached to this reply, each with its state
+    /// derived from the cited message as it is now (never stored).
+    #[serde(flatten)]
+    pub cited: Box<ChatMessageCitations>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -442,6 +455,8 @@ pub enum ChatEventData {
     Queue(ChatQueueData),
     Card(ChatCardData),
     Thread(ChatThreadData),
+    /// `message_revised` (ADR 2026-11-21-chat-discussion-mode D5.2).
+    Revised(ChatMessageRevisedData),
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

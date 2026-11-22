@@ -1263,7 +1263,7 @@ fn cos_workspace_files_attach_to_assistant_reply() {
 
     assert_eq!(
         status(
-            s.chat_message_attach_workspace_files(&t.id, &input.id, &files, at(3))
+            s.chat_message_attach_workspace_files(&t.id, &input.id, &files, &[], at(3))
                 .expect_err("user message")
         ),
         422
@@ -1274,19 +1274,19 @@ fn cos_workspace_files_attach_to_assistant_reply() {
     }];
     assert_eq!(
         status(
-            s.chat_message_attach_workspace_files(&t.id, &output, &wrong, at(3))
+            s.chat_message_attach_workspace_files(&t.id, &output, &wrong, &[], at(3))
                 .expect_err("other thread")
         ),
         409
     );
 
     let message = s
-        .chat_message_attach_workspace_files(&t.id, &output, &files, at(3))
+        .chat_message_attach_workspace_files(&t.id, &output, &files, &[], at(3))
         .expect("attach");
     assert_eq!(message.attachment_ids, vec![md.to_string()]);
     assert_eq!(message.workspace_files, files);
     // Idempotent, and the run's terminal message event carries the files.
-    s.chat_message_attach_workspace_files(&t.id, &output, &files, at(4))
+    s.chat_message_attach_workspace_files(&t.id, &output, &files, &[], at(4))
         .expect("repeat");
     s.chat_run_finish(
         "run-ws",

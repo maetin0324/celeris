@@ -87,6 +87,8 @@ Live View の grant/check/read は owner attestation を入力するため除外
 | POST | `/browser/trusted-devices/verify` | `browser_credential_attestation` | 人の決定 secrets=exclude。credential・封緘 state・receipt・owner attestation／信頼端末を扱う系列。値を含まない失効・削除も除外。 |
 | DELETE | `/browser/trusted-devices/{id}` | `browser_credential_attestation` | 人の決定 secrets=exclude。credential・封緘 state・receipt・owner attestation／信頼端末を扱う系列。値を含まない失効・削除も除外。 |
 | POST | `/chat/threads/{t}/relays` | `human_instruction_relay` | 人の指示の取り次ぎは認証済み外部主体だけが行う。CoS は指示を作れない。 |
+| PATCH | `/chat/threads/{t}/messages/{m}` | `human_message_edit` | 人の発言の編集は書いた人の token だけが行う。CoS は人の発言を書き換えられない（ADR 2026-11-21-chat-discussion-mode D5.1）。 |
+| POST | `/chat/threads/{t}/messages/{m}/retract` | `human_message_edit` | 人の発言の撤回は書いた人の token だけが行う。CoS は人の発言を撤回できない（ADR 2026-11-21-chat-discussion-mode D5.1）。 |
 | POST | `/cos/inbox/{i}/resolve` | `recursive_cos` | 既存の再帰禁止。操作 envelope 内から CoS 制御 API を呼ばない。override は人の取消・差し戻し専用。 |
 | POST | `/cos/operations` | `recursive_cos` | 既存の再帰禁止。操作 envelope 内から CoS 制御 API を呼ばない。override は人の取消・差し戻し専用。 |
 | POST | `/cos/operations/{o}/override` | `recursive_cos` | 既存の再帰禁止。操作 envelope 内から CoS 制御 API を呼ばない。override は人の取消・差し戻し専用。 |
@@ -309,6 +311,8 @@ R の操作では領域 write は不要だが operation・event・card は同一
 | POST | `/chat/threads/{t}/resume-queue` | A | `chat/mod.rs` | 共通 |
 | POST | `/chat/threads/{t}/stop` | A | `chat/mod.rs` | 共通 |
 | POST | `/chat/threads/{t}/relays` | X: `human_instruction_relay` | `chat/mod.rs` | router のみ |
+| PATCH | `/chat/threads/{t}/messages/{m}` | X: `human_message_edit` | `chat/revise.rs` | 共通 |
+| POST | `/chat/threads/{t}/messages/{m}/retract` | X: `human_message_edit` | `chat/revise.rs` | 共通 |
 | POST | `/chat/threads/{t}/forwards` | A | `chat/mod.rs` | router のみ |
 | POST | `/chat/threads/{t}/proposals` | A | `chat/mod.rs` | router のみ |
 | POST | `/cos/review-report` | A | `cos/review.rs` | 共通 |

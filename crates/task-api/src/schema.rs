@@ -4,12 +4,13 @@
 
 use schemars::JsonSchema;
 use task_core::chat::{
-    ChatAttachment, ChatAttachmentResponse, ChatCard, ChatCheckpointSaved, ChatEvent,
-    ChatEventListResponse, ChatMessage, ChatMessageListResponse, ChatMessageResponse,
-    ChatOpenThreadRequest, ChatPatchThreadRequest, ChatPostMessageRequest, ChatPostMessageResponse,
-    ChatReadThreadRequest, ChatReferenceRequest, ChatReferenceResponse, ChatResumeQueueRequest,
-    ChatRun, ChatRunResponse, ChatStopRequest, ChatStopResponse, ChatThread,
-    ChatThreadDetailResponse, ChatThreadListResponse, ChatThreadResponse, CosOperation,
+    ChatAttachment, ChatAttachmentResponse, ChatCheckpointSaved, ChatEvent, ChatEventListResponse,
+    ChatMessage, ChatMessageEditRequest, ChatMessageListResponse, ChatMessageResponse,
+    ChatMessageRetractRequest, ChatOpenThreadRequest, ChatPatchThreadRequest,
+    ChatPostMessageRequest, ChatPostMessageResponse, ChatReadThreadRequest, ChatReferenceRequest,
+    ChatReferenceResponse, ChatResumeQueueRequest, ChatRunResponse, ChatStopRequest,
+    ChatStopResponse, ChatThread, ChatThreadDetailResponse, ChatThreadListResponse,
+    ChatThreadResponse, CosOperation,
 };
 use task_core::{EventRow, Task};
 use task_ops::daemon::DaemonSnapshot;
@@ -330,9 +331,12 @@ pub struct ApiV1Schema {
     // ---- ADR 2026-10-05-cos-chat-home D2: CoS チャット（スレッド・メッセージ・run・添付・SSE） ----
     pub chat_thread: ChatThread,
     pub chat_message: ChatMessage,
-    pub chat_run: ChatRun,
     pub chat_attachment: ChatAttachment,
-    pub chat_card: ChatCard,
+    /// ADR 2026-11-21-chat-discussion-mode D5.1: `PATCH …/messages/{m}` and `…/retract` bodies
+    /// (`GET …/revisions` answers `ChatEventListResponse`). `ChatRun` and `ChatCard` are not
+    /// listed here: they stay in `$defs` through `ChatRunResponse.run` and `ChatMessage.cards`.
+    pub chat_message_edit: ChatMessageEditRequest,
+    pub chat_message_retract: ChatMessageRetractRequest,
     pub chat_event: ChatEvent,
     pub chat_thread_open: ChatOpenThreadRequest,
     pub chat_thread_read: ChatReadThreadRequest,

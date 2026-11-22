@@ -616,6 +616,9 @@ token_file = "api.token"
 | 236 | POST | `/script/domains/{domain}/exhaustive-runs` | `lane_rules` の全入力を daemon の isolate で流す網羅を始める（人・外部 operator の主体だけ。ADR 2026-11-04 D7。§3.134.6） | `ScriptExhaustiveRun`（202） | `ScriptGenerationControl::exhaustive_start` |
 | 237 | GET | `/script/domains/{domain}/exhaustive-runs` | 網羅の証拠の立場と最新の行（認証された誰でも。§3.134.6） | `ScriptExhaustiveRunList` | store `script_exhaustive_runs`・`script_exhaustive_standing` |
 | 238 | POST | `/cos/knowledge-use` | CoS run の `celerisctl knowledge search\|get`（KB の根を直接読み API を通らない）の 1 回を数える（body `{op: search\|get, ok}`。`record` は operation `knowledge.record` の受け側が数えるので 422。run は credential が決める。`GET /knowledge/tree`・`GET /knowledge/page` も CoS run credential の呼び出しを受け側で数える。ADR 2026-11-12-knowledge-usage-per-run D1） | 200 `{run_id, knowledge_use}` | `crate::cos::knowledge_use` |
+| 239 | PATCH | `/chat/threads/{t}/messages/{m}` | 自分の発言の本文を直す（`expected_revision`。人の token で author 本人だけ。ADR 2026-11-21-chat-discussion-mode D5） | `ChatMessageResponse` | `crate::chat::revise` + `task_core::chat_revision` |
+| 240 | POST | `/chat/threads/{t}/messages/{m}/retract` | 届いた自分の発言を撤回する（本文を空にする。人の token で author 本人だけ。D5） | `ChatMessageResponse` | `crate::chat::revise` + `task_core::chat_revision` |
+| 241 | GET | `/chat/threads/{t}/messages/{m}/revisions` | 発言の前の本文（`message_revised` の event、古い順。D5） | `ChatEventListResponse` | `crate::chat::revise` + `task_core::chat_revision` |
 
 browser の制御（`crate::browser_control`）の 6 本は、route を定数 `BASE`（`/api/v1/tasks/{id}/browser/control/{run}/{session}`）と `format!` で組み立てて登録している（`browser_control.rs` の `routes()`）。詳細は `docs/guides/browser-capability.md`。
 
@@ -3490,12 +3493,15 @@ REST の旧 Console エンドポイントは 2026-11-17 に消した（ADR 2026-
 | POST `/chat/threads` | `{"title","project_id","client_thread_id"}` | 201 `ChatThreadResponse` |
 | GET `/chat/threads/{t}` | なし | 200 `ChatThreadDetailResponse` |
 | PATCH `/chat/threads/{t}` | `{"title"?,"status"?,"expected_revision"}`（title と status の少なくとも一方） | 200 `ChatThreadResponse`。queue や run が残る archive は 409 |
-| GET `/chat/threads/{t}/messages` | `before_seq`、`after_seq`（両方は不可）、`limit` | 200 `ChatMessageListResponse`（seq 昇順） |
+| GET `/chat/threads/{t}/messages` | `before_seq`、`after_seq`（両方は不可）、`limit` | 200 `ChatMessageListResponse`（seq 昇順）。CoS の返事に添付された要約（`discussion/summary/<name>.json`）・案（`strategy/<id>/v<n>.json`）の引用は `ChatMessage.citations`（`ChatCitationView {path, citation{thread_id,message_id,revision,sha256}, state}`）。`state`（`current`・`edited`・`retracted`・`missing`）は保存せず、引いた発言の今の revision・本文・撤回から返すたびに導く。SSE の `message` event（replay を含む）も同じ（ADR 2026-11-21-chat-discussion-mode D6） |
 | POST `/chat/threads/{t}/messages` | `{"client_message_id","text","attachment_ids","reply_to_id","mode":"queue\|interrupt","resume_queue","discussion_mode"?:"discuss\|propose\|execute"}` | 202 `ChatPostMessageResponse`（`run_id`・`queue_position`）。`discussion_mode` は任意。`discuss`・`propose` だけを `metadata_json` と `ChatMessage.discussion_mode` に記録し、省略と `execute` は何も書かない（今と同じ）。3 語の外は 422（ADR 2026-11-21-chat-discussion-mode D1.1） |
 | POST `/chat/threads/{t}/relays` | `{client_message_id, text, said_at, task_ids?, expires_at?, discussion_mode?}` | operator principal のみ。202 `ChatPostMessageResponse`。原文・発言時刻・範囲を保存。`discussion_mode` は人が選んだ mode をそのまま運ぶ（messages と同じ記録） |
 | POST `/chat/threads/{t}/forwards` | `{client_message_id, message_id, task_ids?, expires_at?, grant_id?}` | CoS operation `chat.relay_forward` のみ（直接の呼び出しは 403 `chat_forward_cos_only`）。統括スレッドの人の発言 `message_id` の原文と時刻を案件スレッド `{t}` へ取り次ぐ（`relay.relayed_by = cos:<統括スレッド id>`、`relay.source`）。`grant_id` が無ければ task 1〜20 件と期限が必須。`grant_id`（global か `{t}` の案件の台帳の、範囲が global か案件全体の生きた許可で、元の根拠が `message_id` の人の発言）があれば task と期限を省け、`relay.grant_id` に残る。別の発言に `grant_id` を付けると 422。grant の付いた取り次ぎは `instructed_by` にならず（422 `cos_instruction_invalid`。CoS は grant の id を根拠に挙げる）、許可が取り消し・期限切れになると案件 CoS の prompt の一覧から外れる（ADR 2026-11-11-cos-standing-context D4）。202 `ChatPostMessageResponse`（ADR 2026-10-28-single-human-window-general-cos D3） |
 | POST `/chat/threads/{t}/proposals` | `{client_message_id, text, task_ids, expires_at}` | CoS operation `chat.proposal_forward` のみ（直接の呼び出しは 403 `chat_proposal_cos_only`）。統括スレッドの run が自分の提案を案件スレッド `{t}` へ `role=system`・`state=queued` の入力として置く。本文の先頭に Rust が「【統括 CoS の提案（人の指示ではない）】」を付け、`cos_proposal{proposed_by=cos:<統括スレッド id>, from_thread_id, run_id, operation_id, task_ids, expires_at}` を記録する。`instructed_by` には引けない（422 `cos_instruction_invalid`）。task 1〜20 件と期限が必須。200 `ChatMessageResponse`（ADR 2026-11-04-project-controller §A4） |
 | DELETE `/chat/threads/{t}/messages/{m}` | なし | 200 `ChatMessageResponse`（`state=cancelled`）。queued の人の発言だけ可、開始済みは 409 |
+| PATCH `/chat/threads/{t}/messages/{m}` | `{"text","expected_revision"}`（未知の欄は 400） | 200 `ChatMessageResponse`（`revision` が 1 増え、`edited{by,at}` が付く）。書けるのは `Principal::Human` で、その `human:<name>` が発言の `author` のときだけ。operator・MCP・CoS・別の人・relay の発言・`assistant`・`system` は 403 `chat_message_edit_forbidden`（MCP の token の書き込みは guard が先に 403 `forbidden`、CoS run credential の直接の書き込みは 422 `cos_audit_context_required`。`/cos/operations` の allowlist に無い）。`running`・`cancelled`・撤回済みと `expected_revision` の不一致は 409 `chat_conflict`。`queued` は編集できる。本文の上限・空の規則は POST と同じ、同じ本文は 422。mode は変えず、`human_epoch` を上げない。前の本文は同じ transaction で `chat_events` の `message_revised` に残り、続けて `message` event が流れる。発言の seq が要約の `summary_through_seq` 以下なら要約と cursor を空に戻し（前の要約は event の `checkpoint_reset`）、live の CoS session の `delivered_through_seq` 以下なら session を retire する（ADR 2026-11-21-chat-discussion-mode D5） |
+| POST `/chat/threads/{t}/messages/{m}/retract` | `{"expected_revision","reason"}`（`reason` は 500 文字まで、空でよい） | 200 `ChatMessageResponse`（`text` は空、`retracted{by,at,reason}`）。届いた発言（`completed`・`failed`・`interrupted`）だけ。`queued` は 409（DELETE で取り消す）。権限・409・event・要約と session の扱いは PATCH と同じ。撤回した本文は履歴検索（`GET /chat/threads?q=`）に出ない。添付の参照は残す |
+| GET `/chat/threads/{t}/messages/{m}/revisions` | なし | 200 `ChatEventListResponse`（`type=message_revised` の event、古い順、`next_cursor` は null）。読む権限は thread の読み出しと同じ |
 | POST `/chat/threads/{t}/stop` | `{"run_id"}` | 202 `ChatStopResponse`。終端への再送は 200、現在の run と違えば 409 |
 | POST `/chat/threads/{t}/resume-queue` | `{"expected_revision"}` | 200 `ChatThreadResponse` |
 | GET `/chat/threads/{t}/runs` | `before`（前ページの `next_before`）、`limit`（既定 50、最大 200） | 200 `ChatRunListResponse` |
@@ -3977,6 +3983,7 @@ data: {"reason":"cursor_too_old","cursor":20000}
 | `queue` | `{"message_ids","paused"}` | 順序と pause 状態を全置換 |
 | `card` | `{"card":ChatCard}` | kind・id ごとに全置換 |
 | `thread` | `{"thread":ChatThread}` | 題名・件数・archive の更新 |
+| `message_revised` | `ChatMessageRevisedData` `{"message_id","kind":"edit\|retract","revision","previous_revision","previous_text","previous_sha256","by","reason","checkpoint_reset"}` | 人が発言を直した・撤回した記録（前の本文を持つ）。表示は続く `message` event で直す。retention は消さない |
 
 | 事項 | 決め |
 |---|---|

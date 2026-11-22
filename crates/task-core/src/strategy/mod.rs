@@ -16,6 +16,9 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+use crate::chat_citation::{
+    ChatCitation, ChatCitationState, CitedMessage, citation_shape_ok, citation_state,
+};
 use crate::decision::DecisionStatus;
 use crate::project_proposal::sha256_hex;
 use crate::roadmap::ROADMAP_TEXT_MAX;
@@ -263,7 +266,7 @@ pub struct Evidence {
     pub references: Vec<Reference>,
 }
 
-/// D1.2: 参照の 6 種。
+/// D1.2: 参照の 6 種。`chat` は chat の引用（ADR 2026-11-21-chat-discussion-mode D3・D6。revision と本文の sha256 が要る）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Reference {
@@ -281,10 +284,7 @@ pub enum Reference {
         path: String,
         sha256: String,
     },
-    Chat {
-        thread_id: String,
-        message_id: String,
-    },
+    Chat(ChatCitation),
     Artifact {
         task_id: String,
         name: String,
@@ -318,10 +318,22 @@ pub struct ArtifactFacts {
 }
 
 /// 参照を store で引いた結果。`project_id` が `None` は案件の無いもの（統括の thread・案件でない scope の page）。
+/// `chat` の参照は引いた message の今の事実（[`RefStatus::Cited`]）で、状態は検査のたびに導く（保存しない）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RefStatus {
     Missing,
     Found { project_id: Option<String> },
+    Cited(CitedMessage),
+}
+
+impl RefStatus {
+    fn project_id(&self) -> Option<&str> {
+        match self {
+            Self::Missing => None,
+            Self::Found { project_id } => project_id.as_deref(),
+            Self::Cited(m) => m.project_id.as_deref(),
+        }
+    }
 }
 
 /// 前の版の 1 つ。`bytes` は記録が引けなければ `None`。
@@ -650,6 +662,15 @@ impl<'a> Input<'a> {
             .map(|(_, s)| s)
     }
 
+    /// chat の引用の今の状態（ADR 2026-11-21-chat-discussion-mode D6 の導出。要約の引用と同じ関数）。
+    fn chat_state(&self, reference: &Reference, c: &ChatCitation) -> ChatCitationState {
+        let now = match self.lookup(reference) {
+            Some(RefStatus::Cited(m)) => Some(m),
+            _ => None,
+        };
+        citation_state(c, now)
+    }
+
     /// D2.2 の 1〜5。満たさなければ理由。
     fn human_approval(&self) -> Result<(), String> {
         let Some(a) = &self.ctx.approval else {
@@ -817,10 +838,7 @@ fn check_shape(input: &Input<'_>, out: &mut Vec<Violation>) {
             }),
             Reference::Task { task_id } => !task_id.is_empty(),
             Reference::Knowledge { path, sha256 } => !path.is_empty() && is_hex(sha256, 64),
-            Reference::Chat {
-                thread_id,
-                message_id,
-            } => !thread_id.is_empty() && !message_id.is_empty(),
+            Reference::Chat(c) => citation_shape_ok(c),
             Reference::Artifact {
                 task_id,
                 name,
@@ -830,7 +848,7 @@ fn check_shape(input: &Input<'_>, out: &mut Vec<Violation>) {
         if !ok {
             bad(
                 path,
-                "参照の形が違う（commit は 40 桁 hex、url は userinfo の無い https、sha256 は 64 桁 hex）",
+                "参照の形が違う（commit は 40 桁 hex、url は userinfo の無い https、sha256 は 64 桁 hex、chat は revision が 1 以上）",
             );
         }
     }
@@ -1135,11 +1153,18 @@ fn check_sources(input: &Input<'_>, out: &mut Vec<Violation>) {
         }
     }
     for (path, r) in input.refs() {
-        if matches!(r, Reference::Url { .. }) {
-            continue;
-        }
-        if !matches!(input.lookup(r), Some(RefStatus::Found { .. })) {
-            missing(path, "参照が引けない");
+        match r {
+            Reference::Url { .. } => {}
+            Reference::Chat(c) => match input.chat_state(r, c) {
+                ChatCitationState::Retracted => missing(path, "引いた chat の発言が撤回された"),
+                ChatCitationState::Missing => missing(path, "引いた chat の発言・その版が無い"),
+                ChatCitationState::Current | ChatCitationState::Edited => {}
+            },
+            _ => {
+                if !matches!(input.lookup(r), Some(RefStatus::Found { .. })) {
+                    missing(path, "参照が引けない");
+                }
+            }
         }
     }
     for i in 0..input.expected_prev() {
@@ -1175,6 +1200,18 @@ fn check_stale(input: &Input<'_>, out: &mut Vec<Violation>) {
             "より新しい版が人に承認されている",
         );
     }
+    for (path, r) in input.refs() {
+        if let Reference::Chat(c) = r
+            && input.chat_state(r, c) == ChatCitationState::Edited
+        {
+            push(
+                out,
+                Rule::Stale,
+                path,
+                "引いた chat の発言が引いた版の後に編集された",
+            );
+        }
+    }
 }
 
 fn check_project(input: &Input<'_>, out: &mut Vec<Violation>) {
@@ -1189,9 +1226,7 @@ fn check_project(input: &Input<'_>, out: &mut Vec<Violation>) {
         );
     }
     for (path, r) in input.refs() {
-        if let Some(RefStatus::Found {
-            project_id: Some(p),
-        }) = input.lookup(r)
+        if let Some(p) = input.lookup(r).and_then(RefStatus::project_id)
             && other(p)
         {
             push(out, Rule::OtherProject, path, "参照が別の案件の資料を指す");

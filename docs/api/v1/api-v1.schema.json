@@ -3596,6 +3596,25 @@
       ],
       "type": "string"
     },
+    "ChatCheckpointReset": {
+      "additionalProperties": false,
+      "description": "D5.4: the thread summary the change invalidated (the summary covered the changed message).",
+      "properties": {
+        "previous_summary": {
+          "type": "string"
+        },
+        "previous_through_seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "previous_through_seq",
+        "previous_summary"
+      ],
+      "type": "object"
+    },
     "ChatCheckpointSaved": {
       "properties": {
         "summary_through_seq": {
@@ -3610,6 +3629,79 @@
       "required": [
         "thread_id",
         "summary_through_seq"
+      ],
+      "type": "object"
+    },
+    "ChatCitation": {
+      "additionalProperties": false,
+      "description": "D6: one cited message at the revision the citing text read. `sha256` is the SHA-256 (64\nlowercase hex) of that revision's body. The state is not part of it: it is derived from the\nmessage every time ([`citation_state`]).",
+      "properties": {
+        "message_id": {
+          "type": "string"
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "thread_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id",
+        "message_id",
+        "revision",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "ChatCitationState": {
+      "description": "D6: the state of a citation, derived from the cited message as it is now.",
+      "oneOf": [
+        {
+          "const": "current",
+          "description": "The message is at the cited revision and its body has the cited sha256.",
+          "type": "string"
+        },
+        {
+          "const": "edited",
+          "description": "The author edited the message after the cited revision.",
+          "type": "string"
+        },
+        {
+          "const": "retracted",
+          "description": "The author retracted the message.",
+          "type": "string"
+        },
+        {
+          "const": "missing",
+          "description": "No such message in the cited thread, or the cited revision / body never existed.",
+          "type": "string"
+        }
+      ]
+    },
+    "ChatCitationView": {
+      "additionalProperties": false,
+      "description": "D6: a [`ChatFileCitation`] with its state derived now from the cited message (GET messages and\nthe SSE `message` event). A file with any citation not `current` is stale.",
+      "properties": {
+        "citation": {
+          "$ref": "#/$defs/ChatCitation"
+        },
+        "path": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/ChatCitationState"
+        }
+      },
+      "required": [
+        "path",
+        "citation",
+        "state"
       ],
       "type": "object"
     },
@@ -3795,6 +3887,10 @@
         },
         {
           "$ref": "#/$defs/ChatThreadData"
+        },
+        {
+          "$ref": "#/$defs/ChatMessageRevisedData",
+          "description": "`message_revised` (ADR 2026-11-21-chat-discussion-mode D5.2)."
         }
       ]
     },
@@ -3827,7 +3923,8 @@
         "run",
         "queue",
         "card",
-        "thread"
+        "thread",
+        "message_revised"
       ],
       "type": "string"
     },
@@ -3872,6 +3969,7 @@
       "type": "object"
     },
     "ChatMessage": {
+      "description": "D5.2: `metadata_json.revision` / `edited` / `retracted` of one message, flattened into the\nwire `ChatMessage`. A message never changed carries nothing (`revision` 1 is not sent).",
       "properties": {
         "attachment_ids": {
           "items": {
@@ -3889,6 +3987,13 @@
         "cards": {
           "items": {
             "$ref": "#/$defs/ChatCard"
+          },
+          "type": "array"
+        },
+        "citations": {
+          "description": "D6: the citations of the summary / draft files attached to this reply, each with its\nstate derived from the cited message as it is now (never stored).",
+          "items": {
+            "$ref": "#/$defs/ChatCitationView"
           },
           "type": "array"
         },
@@ -3922,6 +4027,16 @@
             }
           ],
           "description": "ADR 2026-11-21-chat-discussion-mode D1.1: the mode the sender picked (`discuss` / `propose`).\nAbsent for `execute` and for messages that did not choose one (today's behaviour)."
+        },
+        "edited": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatMessageChange"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "escalation": {
           "anyOf": [
@@ -3964,6 +4079,22 @@
             "string",
             "null"
           ]
+        },
+        "retracted": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatMessageChange"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The author retracted the message; its `text` is empty from then on."
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
         },
         "role": {
           "$ref": "#/$defs/ChatMessageRole"
@@ -4014,6 +4145,28 @@
       ],
       "type": "object"
     },
+    "ChatMessageChange": {
+      "description": "D5.2: who changed a message and when (`by` is always `human:<name>`); `reason` only on a retract.",
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "by": {
+          "type": "string"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "by",
+        "at"
+      ],
+      "type": "object"
+    },
     "ChatMessageData": {
       "additionalProperties": false,
       "properties": {
@@ -4023,6 +4176,25 @@
       },
       "required": [
         "message"
+      ],
+      "type": "object"
+    },
+    "ChatMessageEditRequest": {
+      "additionalProperties": false,
+      "description": "D5.1 `PATCH /chat/threads/{t}/messages/{m}`.",
+      "properties": {
+        "expected_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "expected_revision"
       ],
       "type": "object"
     },
@@ -4070,6 +4242,89 @@
         "message"
       ],
       "type": "object"
+    },
+    "ChatMessageRetractRequest": {
+      "additionalProperties": false,
+      "description": "D5.1 `POST /chat/threads/{t}/messages/{m}/retract` (`reason` up to 500 characters, may be empty).",
+      "properties": {
+        "expected_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "expected_revision",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "ChatMessageRevisedData": {
+      "additionalProperties": false,
+      "description": "D5.2・D5.4: the data of a `message_revised` chat event, appended in the edit / retract\ntransaction. It keeps the previous body (events are append-only; retention never removes it).",
+      "properties": {
+        "by": {
+          "type": "string"
+        },
+        "checkpoint_reset": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatCheckpointReset"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/ChatMessageRevisionKind"
+        },
+        "message_id": {
+          "type": "string"
+        },
+        "previous_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "previous_sha256": {
+          "type": "string"
+        },
+        "previous_text": {
+          "type": "string"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "message_id",
+        "kind",
+        "revision",
+        "previous_revision",
+        "previous_text",
+        "previous_sha256",
+        "by"
+      ],
+      "type": "object"
+    },
+    "ChatMessageRevisionKind": {
+      "enum": [
+        "edit",
+        "retract"
+      ],
+      "type": "string"
     },
     "ChatMessageRole": {
       "enum": [
@@ -35101,9 +35356,6 @@
     "chat_attachment_response": {
       "$ref": "#/$defs/ChatAttachmentResponse"
     },
-    "chat_card": {
-      "$ref": "#/$defs/ChatCard"
-    },
     "chat_event": {
       "$ref": "#/$defs/ChatEvent"
     },
@@ -35116,11 +35368,18 @@
     "chat_message": {
       "$ref": "#/$defs/ChatMessage"
     },
+    "chat_message_edit": {
+      "$ref": "#/$defs/ChatMessageEditRequest",
+      "description": "ADR 2026-11-21-chat-discussion-mode D5.1: `PATCH …/messages/{m}` and `…/retract` bodies\n(`GET …/revisions` answers `ChatEventListResponse`). `ChatRun` and `ChatCard` are not\nlisted here: they stay in `$defs` through `ChatRunResponse.run` and `ChatMessage.cards`."
+    },
     "chat_message_list": {
       "$ref": "#/$defs/ChatMessageListResponse"
     },
     "chat_message_response": {
       "$ref": "#/$defs/ChatMessageResponse"
+    },
+    "chat_message_retract": {
+      "$ref": "#/$defs/ChatMessageRetractRequest"
     },
     "chat_post_message": {
       "$ref": "#/$defs/ChatPostMessageRequest"
@@ -35139,9 +35398,6 @@
     },
     "chat_resume_queue": {
       "$ref": "#/$defs/ChatResumeQueueRequest"
-    },
-    "chat_run": {
-      "$ref": "#/$defs/ChatRun"
     },
     "chat_run_list_response": {
       "$ref": "#/$defs/ChatRunListResponse"
@@ -36066,9 +36322,9 @@
     "eval_trial_list",
     "chat_thread",
     "chat_message",
-    "chat_run",
     "chat_attachment",
-    "chat_card",
+    "chat_message_edit",
+    "chat_message_retract",
     "chat_event",
     "chat_thread_open",
     "chat_thread_read",

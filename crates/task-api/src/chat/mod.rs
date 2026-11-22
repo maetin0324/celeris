@@ -1,6 +1,7 @@
 //! CoS chat REST API. Run scheduling belongs to cos-run; writes here only change durable state.
 
 pub mod attachments;
+mod revise;
 pub mod stream;
 
 use std::path::PathBuf;
@@ -71,7 +72,15 @@ pub(crate) fn routes() -> axum::Router<ApiState> {
         )
         .route(
             "/api/v1/chat/threads/{t}/messages/{m}",
-            axum::routing::delete(cancel_message),
+            axum::routing::delete(cancel_message).patch(revise::edit_message),
+        )
+        .route(
+            "/api/v1/chat/threads/{t}/messages/{m}/retract",
+            post(revise::retract_message),
+        )
+        .route(
+            "/api/v1/chat/threads/{t}/messages/{m}/revisions",
+            get(revise::list_revisions),
         )
         .route("/api/v1/chat/threads/{t}/relays", post(post_relay))
         .route("/api/v1/chat/threads/{t}/forwards", post(post_forward))

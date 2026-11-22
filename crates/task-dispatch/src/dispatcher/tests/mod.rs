@@ -3305,6 +3305,9 @@ mod orphan_work_units;
 /// 合格にならず、通常の機能追加には純減を求めない（`src/health_review/reduction_flow_tests.rs`）。
 #[path = "../../health_review/reduction_flow_tests.rs"]
 mod reduction_flow;
+/// ADR 2026-11-22-parent-checkpoint-evaluator D2.3: side review（task の status を変えない reviewer run）の共通の起動口
+/// （`src/dispatcher/tests/reviewer_side_run.rs`）。
+mod reviewer_side_run;
 /// ADR 2026-10-27-project-stagnation-inbox D3: dispatcher の停滞の判定（偽の時計・一時 releases_dir）
 /// （`src/dispatcher/tests/stagnation.rs`）。
 mod stagnation;

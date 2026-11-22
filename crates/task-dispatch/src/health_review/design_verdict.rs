@@ -1,8 +1,8 @@
 //! ADR 2026-11-07-health-review-integration D3.5（3〜5）・I9: 設計 review の結果で計画を採用・replan・人に回す。
 //!
-//! `design_gate.rs` が起こした設計 review の reviewer run の終わり（`Completion::DesignReview`）に、`review.json` の
-//! `design`（`DesignVerdictOut`）を読む。無い・壊れていれば不合格。`Event::DesignReviewed { plan_sha256, review_run, pass,
-//! findings }` を追記して待ち（`DesignReviewRequested` があり同じ `plan_sha256` の `DesignReviewed` が無い間）を閉じる:
+//! `design_gate.rs` が起こした設計 review の reviewer run の終わり（`Completion::SideReview` の
+//! `SideReviewKind::Design`）に、`review.json` の `design`（`DesignVerdictOut`）を読む。無い・壊れていれば不合格。
+//! `Event::DesignReviewed { plan_sha256, review_run, pass, findings }` を追記して待ち（`DesignReviewRequested` があり同じ `plan_sha256` の `DesignReviewed` が無い間）を閉じる:
 //! - 合格: `DesignReviewRequested` の計画を低 risk と同じ経路（`plan_adoption`: unit の gate・子 task の検証・
 //!   `adopt_plan_with_children` / `replan`・木の止め・root の承認）で採用する。
 //! - 不合格: planner を replan で起こす。findings は planner の再試行の文（`planner_retry_message`）に入れて

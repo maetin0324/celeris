@@ -153,3 +153,17 @@ base は試験の型（`ChatMessageEditRequest` など）を持たないので�
 ## 提案
 
 - ADR D5.1 の拒否の表に「guard が先に拒否する principal（MCP・CoS run credential）は guard の code のまま」と付記する（close か integrate-cite で）。
+
+## Run #4（2026-11-22）: plan_issue の申告をやり直した
+
+結論: Run #3 の申告は planner に届かなかった。`result.json` に `yield.plan_issue` と `summary` の両方を書いたため、celeris は done として読んだ
+（`crates/task-worker/src/result_report.rs` の `interpret_result_text` は `question` > `wait` > `summary` > `yield` の順で終端を決める）。
+そのため checks が走って範囲の check だけが落ち、WU は retry（2/2）になった。Run #4 は `summary` を書かずに `{"yield":{"plan_issue":…}}` だけを返す。
+
+- 実装・試験・生成物は Run #2・#3 から変えていない（提出時の HEAD の差分はこの節だけ）。
+- 範囲の check（提出時の HEAD）: exit 1。範囲の外は `agent-docs/adr/2026-10-09-cos-operations-all-mutations.md` と `crates/task-api/src/schema.rs` の 2 path だけ。
+- ADR が要ることの再確認: `cargo test -q -p task-api --lib cos::ops::tests` は HEAD で `4 passed; 0 failed`。ADR だけを `$CELERIS_WU_BASE` の版に戻すと
+  `3 passed; 1 failed`（`cos_ops_registry_matches_adr_domain_assignment_and_exclusions`。registry 側にある PATCH `/api/v1/chat/threads/{}/messages/{}` と
+  POST `…/messages/{}/retract` が ADR の表に無い）。確かめた後に ADR を HEAD の版へ戻した。
+- 他の check（celeris が Run #3 の後に同じ HEAD の実装で走らせた結果）: 試験名の check は exit 0、`test-affected.sh && clippy && fmt` は exit 0（713 秒）、
+  progress-index の check は exit 0、repo-health は verdict=Pass。

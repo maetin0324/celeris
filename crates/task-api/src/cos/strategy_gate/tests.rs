@@ -3,6 +3,10 @@
 //! 作る。それ以外は 422 と規則の code で、task も成果物の行も作らない。`strategy` の無い要求は今と同じ。
 //! task-core の `strategy_contract_` の試験は純関数だけを見るので、store から文脈を集める経路と、実行の入口で
 //! task が作られないことは検出できない（この試験が見る）。
+//!
+//! ADR 2026-11-22-strategy-review-critic D7.4: 基準の要求は実験段階の版（`selected` の無い承認済みの版）に合わせ、
+//! 本文に `execution: atomic`、参照に open の候補 `candidate` を持ち、文書を作った task は `done`（Critic の済んだ版）。
+//! N-x がちょうどその code になる主張は変えない。
 
 use std::path::PathBuf;
 
@@ -28,22 +32,24 @@ use tower::ServiceExt;
 const BASELINE: &str = include_str!("../../../../task-core/src/strategy/fixtures/baseline-v1.json");
 const RUN: &str = "01M7ZRUN00000000000000STV1";
 const OPS: &str = "/api/v1/cos/operations";
+/// 基準の要求が実験を起票する open の候補（D7.4）。
+pub(super) const DEFAULT_CANDIDATE: &str = "cut-min-edges";
 
-struct World {
+pub(super) struct World {
     _tmp: tempfile::TempDir,
-    root: PathBuf,
-    app: axum::Router,
-    store: SqliteStore,
-    project: task_core::Project,
-    other: task_core::Project,
-    source: Task,
-    evidence: Task,
+    pub(super) root: PathBuf,
+    pub(super) app: axum::Router,
+    pub(super) store: SqliteStore,
+    pub(super) project: task_core::Project,
+    pub(super) other: task_core::Project,
+    pub(super) source: Task,
+    pub(super) evidence: Task,
     /// 案件の thread の message（CoS の run の入力。chat の参照にも使う）。
-    thread: String,
-    message: String,
-    other_thread: String,
-    other_message: String,
-    bearer: String,
+    pub(super) thread: String,
+    pub(super) message: String,
+    pub(super) other_thread: String,
+    pub(super) other_message: String,
+    pub(super) bearer: String,
 }
 
 fn project(title: &str, request: &str) -> task_core::Project {
@@ -267,7 +273,7 @@ fn api_state(dir: &std::path::Path) -> crate::ApiState {
         .unwrap_or_else(|e| panic!("{e}"))
 }
 
-fn world() -> World {
+pub(super) fn world() -> World {
     let tmp = tempfile::tempdir().expect("tempdir");
     let root = tmp.path().to_path_buf();
     let state = api_state(&root);
@@ -366,7 +372,7 @@ fn evidence_sha() -> String {
 }
 
 /// 基準の状態 B の文書（承認前。案件・依頼の sha256・参照は World のもの）。
-fn baseline(w: &World) -> Value {
+pub(super) fn baseline(w: &World) -> Value {
     let mut doc: Value = serde_json::from_str(BASELINE).expect("fixture");
     doc["project_id"] = json!(w.project.id.to_string());
     doc["actor"]["id"] = json!(RUN);
@@ -386,7 +392,7 @@ fn baseline(w: &World) -> Value {
 }
 
 /// 文書を `source` の成果物 `strategy/<id>/v<n>.json` として置き、参照 `{task_id, name, sha256}` を返す。
-fn publish(w: &World, doc: &Value) -> Value {
+pub(super) fn publish(w: &World, doc: &Value) -> Value {
     let bytes = serde_json::to_vec_pretty(doc).expect("json");
     let id = doc["strategy_id"].as_str().expect("strategy_id");
     let version = u32::try_from(doc["version"].as_u64().expect("version")).expect("u32");
@@ -396,7 +402,7 @@ fn publish(w: &World, doc: &Value) -> Value {
 }
 
 /// 承認の決定（D2.2）を出し、`answer` が `Some((option, by))` なら答える。
-fn decide(w: &World, doc: &Value, strategy: &Value, answer: Option<(&str, &str)>) {
+pub(super) fn decide(w: &World, doc: &Value, strategy: &Value, answer: Option<(&str, &str)>) {
     let version = u32::try_from(doc["version"].as_u64().expect("version")).expect("u32");
     let id = format!("d-{}", TaskId::new());
     let opt = |key: &str| DecisionOption {
@@ -456,17 +462,27 @@ fn decide(w: &World, doc: &Value, strategy: &Value, answer: Option<(&str, &str)>
     }
 }
 
-fn task_body(w: &World, project: &task_core::Project) -> Value {
+pub(super) fn task_body(w: &World, project: &task_core::Project) -> Value {
     let _ = w;
     json!({
         "title": "戦略の実行: c-cut-edges",
         "objective": "承認された戦略の候補を試す",
         "acceptance": [{"type": "artifact_exists", "name": "result.md"}],
         "project_id": project.id.to_string(),
+        "execution": "atomic",
     })
 }
 
-fn op(key: &str, path: &str, body: Value, strategy: Option<&Value>) -> Value {
+/// 参照に候補が無ければ基準の候補を足す（D7.4。文書の鎖の `supersedes` には候補を書かないので、送る直前に足す）。
+pub(super) fn with_candidate(strategy: &Value) -> Value {
+    let mut s = strategy.clone();
+    if s.get("candidate").is_none() {
+        s["candidate"] = json!(DEFAULT_CANDIDATE);
+    }
+    s
+}
+
+pub(super) fn op(key: &str, path: &str, body: Value, strategy: Option<&Value>) -> Value {
     let mut op = json!({
         "idempotency_key": key,
         "expected_revision": null,
@@ -480,7 +496,7 @@ fn op(key: &str, path: &str, body: Value, strategy: Option<&Value>) -> Value {
     op
 }
 
-async fn post(w: &World, body: &Value) -> (StatusCode, Value) {
+pub(super) async fn post(w: &World, body: &Value) -> (StatusCode, Value) {
     let request = Request::post(OPS)
         .header("host", "127.0.0.1:7710")
         .header("content-type", "application/json")
@@ -503,7 +519,7 @@ async fn post(w: &World, body: &Value) -> (StatusCode, Value) {
     )
 }
 
-fn created_tasks(w: &World) -> i64 {
+pub(super) fn created_tasks(w: &World) -> i64 {
     let conn = rusqlite::Connection::open(w.root.join("celeris.db")).expect("db");
     conn.query_row(
         "SELECT COUNT(*) FROM tasks WHERE title = '戦略の実行: c-cut-edges'",
@@ -525,7 +541,7 @@ async fn create(
             key,
             "/api/v1/tasks",
             task_body(w, &w.project),
-            Some(strategy),
+            Some(&with_candidate(strategy)),
         ),
     )
     .await;
@@ -556,7 +572,7 @@ async fn refused(w: &World, key: &str, strategy: &Value, want: &str) -> Value {
     body
 }
 
-fn approved(w: &World, doc: &Value) -> Value {
+pub(super) fn approved(w: &World, doc: &Value) -> Value {
     let s = publish(w, doc);
     decide(w, doc, &s, Some((strategy::APPROVE_OPTION, "human:rmaeda")));
     s
@@ -571,7 +587,11 @@ async fn strategy_gate_human_approved_latest_document_creates_the_task() {
     let (status, _, _, body) = create(&w, "ok-1", &s).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["operation"]["action"], "task.create", "{body}");
-    assert_eq!(body["operation"]["payload"]["strategy"], s, "{body}");
+    assert_eq!(
+        body["operation"]["payload"]["strategy"],
+        with_candidate(&s),
+        "{body}"
+    );
     assert_eq!(created_tasks(&w), 1);
     let (again, _, _, replay) = create(&w, "ok-1", &s).await;
     assert_eq!(again, StatusCode::OK, "{replay}");
@@ -676,7 +696,7 @@ async fn strategy_gate_stale_revision_is_422() {
         "s-relayed",
         "/api/v1/tasks",
         task_body(&w, &w.project),
-        Some(&s2),
+        Some(&with_candidate(&s2)),
     );
     relayed["instructed_by"] = json!(w.message);
     let (status, body) = post(&w, &relayed).await;
@@ -706,7 +726,7 @@ async fn strategy_gate_other_project_material_is_422() {
             "p-target",
             "/api/v1/tasks",
             task_body(&w, &w.other),
-            Some(&s),
+            Some(&with_candidate(&s)),
         ),
     )
     .await;
@@ -920,7 +940,10 @@ async fn chat_discussion_summary_strategy_gate_edited_is_stale() {
     };
     let se = approved(&w, &citing("edited", &edited, "仮説 A を先に試す"));
     let sr = approved(&w, &citing("retracted", &retracted, "前提 B は確かめた"));
-    let (status, _, _, body) = create(&w, "c-current", &se).await;
+    // 同じ版の 2 件目の実験にならないよう、通る起票はもう 1 つの open の候補（D7.4）。
+    let mut current = se.clone();
+    current["candidate"] = json!("continue-pilots");
+    let (status, _, _, body) = create(&w, "c-current", &current).await;
     assert_eq!(status, StatusCode::OK, "a current citation passes: {body}");
 
     w.store

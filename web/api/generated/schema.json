@@ -30593,6 +30593,13 @@
       "additionalProperties": false,
       "description": "`/cos/operations` の欄 `strategy`: 実行する戦略の文書（作った task・成果物の name・記録の sha256）。",
       "properties": {
+        "candidate": {
+          "description": "ADR 2026-11-22-strategy-review-critic D2.2: どの候補の task か（`[a-z0-9-]{1,40}`）。実験段階の版では\nopen の候補、実行段階の版では省略か `selected` の候補。`cos_operations.payload_json.strategy.candidate` が記録になる。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "name": {
           "type": "string"
         },

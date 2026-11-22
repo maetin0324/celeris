@@ -26,3 +26,6 @@ libc = "0.2"
 tempfile = "3"
 # ADR-0095 D6: 試験で `schema_migrations` を古い／新しい版に書き換える。
 rusqlite = { version = "0.32", features = ["bundled"] }
+# ADR 2026-11-22-external-llm-discussion-exchange D7.1: `tests/rdc_celeris_chat.rs` が試験の MCP server を別 thread の runtime で動かし、
+# 本体の thread で `scripts/rdc/celeris-chat` を同期に実行する。
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time"] }

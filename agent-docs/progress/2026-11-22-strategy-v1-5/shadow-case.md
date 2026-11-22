@@ -107,7 +107,7 @@ ADR D7.3 は 2 つ目を「C の進捗の 17・198・756」と書いたが、C �
 |---|---|
 | `strategy_review_shadow_fixture_is_e_mid_only` | fixture はちょうど E-mid の 3 file で manifest と一致、全 event が cutoff 以下、引く 2 文が slice の中に実在、アーキv4 の初回の起票は子 8 件 |
 | `strategy_review_shadow_rejects_input_with_lines_after_cutoff` | 負の試験: cutoff の 1 ns 後の行を混ぜた `events.jsonl` を、その行（`#999999`）を名指しして拒否し、manifest の sha256 とも食い違う。cutoff ちょうどの行は拒否しない。余分な file を置いた dir も拒否 |
-| `strategy_review_shadow_experiments_first_then_select` | 段 1〜11。初回の固定計画が止まり、実験 3 件だけが通り、結果を引いて選んだ版だけが compound を通す。v2 が実験 task 3 件を全部参照し、却下の根拠が反証の証拠 |
+| `strategy_review_shadow_experiments_first_then_select` | 段 1〜11。初回の固定計画が止まり、実験 3 件だけが通り、終端の実験 task を全部証拠に引いて選んだ版で compound が通る（選ぶ版を書いた時刻は gate では止めない）。v2 が実験 task 3 件を全部参照し、却下の根拠が反証の証拠 |
 | `strategy_review_shadow_revisit_rejected_after_failure` | 段 12a。本実装の失敗の後に却下した候補に戻る版は `strategy_revisit_rejected` だけで止まる |
 | `strategy_review_shadow_dropped_terminal_experiment_is_unread` | 段 12b。失敗した実験 task を読まない版は `strategy_failure_unread` だけで止まる |
 | `strategy_review_regression_bug_fix_without_strategy_unchanged_by_experiment_phase` | 案件に承認済みの実験段階の版と実験があっても、strategy の無いバグ修正（`execution` 省略）は通り、応答・`cos_operations` の全列・監査の `cos_operation` の event が戦略の無い案件と同じ（id・時刻・`event_id` を伏せて比べる。`request_hash` は伏せずに一致）。同じ案件で strategy を付けた compound は 422（gate が効いている対照） |

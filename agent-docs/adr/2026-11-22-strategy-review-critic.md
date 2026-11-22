@@ -107,8 +107,10 @@ D1 の規則は `validate_document`（子 2）に入れ、Record（chat の案�
 実行段階の版を参照する `task.create` は、`execution` を問わない（`compound` の本実装の計画を起票できる）。ただし次を満たす。
 
 5. `candidate` は省くか、`selected` の候補の id（`selected` でない `open` の候補は `strategy_experiment_phase`、`rejected` の候補は `strategy_revisit_rejected`）。
-6. 版の鎖（子 2 の `supersedes`）の前の版の X の合併が 1 件以上あり、そのすべてが終端（`done`・`failed`・`cancelled`）である。v1 に `selected` を書いた版・
-   実験の結果を待たずに選んだ版は `strategy_experiment_phase`（結果を見てから選ぶ）。
+6. 版の鎖（子 2 の `supersedes`）の前の版の X の合併が 1 件以上あり、そのすべてが終端（`done`・`failed`・`cancelled`）である。gate はこれを
+   `task.create` の時点の task の status で見る。前の版に実験 task が無い版（v1 に `selected` を書いた版など）と、前の版の実験 task が 1 件でも終端でない時点の
+   起票は `strategy_experiment_phase` になる。gate は版を書いた時刻を見ないので、選ぶ版を実験の結果より先に書くことは gate では止めない
+   （確かめるのは人の承認と Critic の C4。「未確認と残る穴」）。
 
 ### D3: Critic（既存の reviewer の 1 回の run が final review で判定する）
 
@@ -203,7 +205,11 @@ gate の規則（code `strategy_uncritiqued`）: 参照した文書を作った 
 
 参照した版 v<sub>n</sub>（n ≥ 2）で、鎖の前の版 v<sub>1</sub>〜v<sub>n−1</sub> の X の合併（D2.3）のうち gate の時点で終端（`done`・`failed`・`cancelled`）の task は、
 すべて v<sub>n</sub> の証拠の参照（`task` の `task_id`、または `artifact` の `task_id`）に現れなければならない。現れない task が 1 件でもあれば拒否する。
-v<sub>n</sub> を書いた後に前の版の実験が終われば、v<sub>n</sub> は拒否され、その記録を読んだ v<sub>n+1</sub> が要る。Record（chat の案）には掛けない（実験の集合が無い）。
+Record（chat の案）には掛けない（実験の集合が無い）。
+gate が保証するのは、`task.create` の時点で終端の task がすべて v<sub>n</sub> の証拠の参照に現れることまでである。`task` の参照は task の status によらず
+実在すれば通る（`cos::strategy_gate` の `Reader::lookup`）。したがって、走っている実験 task を先に参照して `selected` を書いた v<sub>n</sub> は、
+実験が走る間は D2.4 の 6 で止まるが、実験が終われば D2.4 の 6 もこの規則も通る。v<sub>n</sub> が参照した task の結果を読んで選んだかは gate では止めない
+（確かめるのは人の承認 D3.7 と Critic の C4。「未確認と残る穴」）。
 
 ### D5: gate の順と 422 の code
 
@@ -337,7 +343,9 @@ Project.request と承認済み Roadmap は読むだけで書かない。
 
 ## 守る不変条件
 
-- 実験段階の版を参照する `task.create` は、`open` の候補ごとに 1 件の atomic の実験だけが通る。compound の計画は `selected` のある版（実験の結果を見て選んだ版）が要る。
+- 実験段階の版を参照する `task.create` は、`open` の候補ごとに 1 件の atomic の実験だけが通る。compound の計画は `selected` のある版が要り、
+  その `task.create` の時点で、前の版の実験 task（X の合併）が 1 件以上あり、そのすべてが終端で、そのすべてが版の証拠の `task`・`artifact` の参照に現れる。
+  gate の保証はここまでで、選ぶ版を実験の結果より先に書くことは gate では止めない（「未確認と残る穴」）。
 - 戦略の成果物を作った task は、Critic の条件に合格しないと `done` にならず、`done` でない task の文書は実行の入口を通らない。
 - 却下した候補は次の版で消えず、選べず、実験・実行の対象にできない。前の版の実験の終端の記録を参照しない版は実行の入口を通らない。
 - strategy の無い `task.create` の検査・応答・監査、戦略の成果物の無い task の reviewer の prompt・`request.json`・reviewer run の数は base と同じ。
@@ -348,6 +356,14 @@ Project.request と承認済み Roadmap は読むだけで書かない。
 - strategy の無い `task.create` は止めないので、CoS が `strategy` を付けずに大きな計画を起票すれば実験段階を通らない。通常の task の経路を変えない条件と引き換えで、
   監査（`cos_operations` に strategy の無い行が残る）と子 6 の Evaluator で見つける。人がこの穴を閉じたいなら、案件の状態で起票を止める設計を人が決める。
 - 新しい `strategy_id` を立てて却下した候補を出し直すことは gate では見分けない（CoS の skill の禁止と Critic の C5 だけ）。
+- 選ぶ版（`selected` を書いた版）を実験の結果より先に書くことは gate では止めない。gate（D2.4 の 6・D4.2）は `task.create` の時点で、前の版の実験 task が
+  1 件以上あり、すべて終端で、すべて版の証拠に参照されていることだけを見る。`task` の参照は task の status によらず通るので、走っている実験 task を先に参照して
+  `selected` を書いた版は、実験が走る間は `strategy_experiment_phase` で止まるが、実験が終われば通る。
+  - 確かめる者: 人の承認（D3.7。人は承認の前に、版が参照した task の結果を読める）と Critic の C4（reviewer の LLM の判定で、決定的ではない）だけである。
+    CoS の手順（skill の手順 (4)）は結果を読んでから次の版を書くことを求めるが、手順は強制されない。
+  - 決定的に閉じる案: 版 v<sub>n</sub> の `ArtifactProduced` の時刻と、前の版の実験 task の終端の event の時刻を比べ、v<sub>n</sub> がすべての終端より後に
+    作られていなければ拒否する。gate が読む events の範囲が広がり、版を作った後に終わった実験を読み直す版が要る。
+  - 採否を決める者: 子 6 の設計（checkpoint が次の版を作る経路）か、親 01M7XQ9PS0AFKKMRJ7P5ZMKQQE の closeout で人が決める。子 5 では実装しない。
 - Critic（reviewer）の判定の質と、人の承認 → Critic の順で人が Critic の指摘を読んで revise するかは、子 6・子 8 の pilot で確かめる。
 - `decision.revise` が `DecisionAnswered` を追記して gate が最後の答えを読むことは、コードを読んだ範囲の推定で、実装の WU が試験で確かめる。
 
@@ -383,3 +399,15 @@ Project.request と承認済み Roadmap は読むだけで書かない。
 - X(v)（D2.3）には版 v を参照して起票した本実装の task も入る。したがって再評価の版 v<sub>n+1</sub> は、v<sub>n</sub> の本実装の task が終端になるまで D2.4 の 6 で止まり、
   終端になった本実装の task も D4.2 で証拠に参照する必要がある（文のとおりで、変えていない）。実行中に pivot するには、走っている task を先に cancel する。
   shadow の試験の v3 はこの順で作った。手順に書くかは子 6 で決める（shadow-case の進捗の提案）。
+
+## 付記（2026-11-22、gate が保証する範囲の訂正）
+
+- 子 5 の final review（reviewer 01M826CFDQH1YGY0DZG7GHDZ1J、条件 4）の指摘で、gate の保証を実装の範囲に直した。直した節は D2.4 の 6（2 文目を書き直し）、
+  D4.2（最後の文を消し、gate の保証の範囲と止めない場合の文を足した）、「守る不変条件」の 1 項目め、「未確認と残る穴」（1 項目を足した）の 4 か所である。
+- 理由: `task_core::strategy::review` の `check_execution` は前の版の実験 task が 1 件以上あり、`task.create` の時点ですべて終端かを、`check_failures_read` は
+  終端の task が版の証拠の `task`・`artifact` の参照に現れるかを見るだけで、版を書いた時刻を見ない。`cos::strategy_gate` の `Reader::lookup` は `Reference::Task` を
+  task の status によらず実在すれば通す。したがって、走っている実験 task を先に参照して `selected` を書いた版は、実験が終われば gate を通る。
+  直す前の 3 か所の文は、選ぶ版を実験の結果を読んでから書いたことまで gate が保証すると読めた。
+- コード・schema・試験は変えていない（このとおりの挙動を文書に合わせただけ）。CoS の手順 `config/skills/cos-operator/strategy-review.md` の compound が通る条件の文も
+  同じ範囲に直した（`metadata.version` は変えない。手順の意味は変わらない）。決定的に閉じる案（版の `ArtifactProduced` の時刻と前の版の実験 task の終端の event の時刻の比較）
+  の採否は「未確認と残る穴」に書いたとおり、子 6 の設計か親の closeout で人が決める。

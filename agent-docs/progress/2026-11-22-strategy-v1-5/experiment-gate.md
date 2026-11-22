@@ -36,7 +36,7 @@ completed: 2026-11-22
    鎖の全版の X を Rust で選ぶ（task-core に `cos_operations` を任意の条件で読む公開の口が無い。書かない）。
 5. 新しい状態・分岐・fallback・port: 状態・表・event・migration は無し。`StrategyRef.candidate`（任意の欄、ADR D2.2）だけ。fallback は無い。
 6. 撤去対象: 無し（子 2 の gate の経路に規則を足すだけ。旧い入口は残らない）。子 2 の試験の基準の要求は D7.4 のとおり直した（下）。
-7. 不変条件: 実験段階の版は open の候補ごとに atomic の実験 1 件だけを通す。結果を見て選んだ版だけが compound を通す。却下した候補は起票できない。
+7. 不変条件: 実験段階の版は open の候補ごとに atomic の実験 1 件だけを通す。compound は `selected` のある版で、`task.create` の時点で前の版の実験 task が 1 件以上あり、すべて終端で、すべて版の証拠に参照されているときだけ通す（選ぶ版を実験の結果より先に書くことは gate では止めない。ADR の付記「gate が保証する範囲の訂正」）。却下した候補は起票できない。
    拒否は task を作らず監査に残り、`instructed_by` で外れない。strategy の無い `task.create` は変わらない。試験は下の表。
 
 ## 変更
@@ -64,7 +64,7 @@ Critic の対象を引く経路と、422 で task が作られないこと・監
 | `…_rejected_candidate_task_is_revisit` | 次の版で却下した候補の起票を拒否し、同じ版の open の候補（足した 3 件目）の実験は通る | `strategy_revisit_rejected` だけ |
 | `…_source_task_not_done_is_uncritiqued` | 文書の task が `reviewing`・`ready`（reopen）なら拒否。同じ task に新しい版（未承認）があると、承認済みの古い版は Critic の対象でなく拒否（stale ではない） | `strategy_uncritiqued` だけ |
 | `…_failure_unread_is_422` | 前の版の終端の実験（done・failed）の 1 件を証拠が参照しない `selected` の版を拒否 | `strategy_failure_unread` だけ |
-| `…_selected_without_experiments_is_422` | v1 で `selected` を書いた版と、前の版の実験が終わる前に選んだ版を拒否 | `strategy_experiment_phase` だけ |
+| `…_selected_without_experiments_is_422` | v1 で `selected` を書いた版と、前の版の実験 task が終端でない時点の起票を拒否 | `strategy_experiment_phase` だけ |
 | `…_selected_version_allows_compound` | 前の版の実験が全部終端（done・cancelled）で全部を参照した `selected` の版は、候補の省略でも `selected` の候補でも compound を通す。却下した候補は拒否 | 通過 2 件、`strategy_revisit_rejected` だけ |
 | `…_refusals_are_audited` | 4 つの code の拒否がそれぞれ `action = 'rejected'` の `cos_operations` の行（理由 `rejected: the strategy cannot be executed…` と要求の `strategy.candidate`）を残し、task は実験の 2 件だけ | 4 code |
 | `…_instructed_by_cannot_waive` | 人の発言の中継（`instructed_by`）でも実験段階・却下と失敗の未読・Critic 未了の拒否が外れない | `[phase]`、`[unread, revisit]`、`[uncritiqued]` |

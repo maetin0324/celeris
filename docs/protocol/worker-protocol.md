@@ -103,7 +103,7 @@ celeris ◀─stdout── {"type":"progress", ...}\n
 | `context.interrupt` | string | –（省略可。Phase 53, ADR-0044 D2） | **直前の run を人のコメントで止めた**とき、そのコメントの本文。前置きのいちばん先に「**人からの割り込み**: …」として出る。割り込みの直後の run にだけ載る（その run が終わったら消える） |
 | `context.comments_enabled` | bool | –（省略可。既定 false。Phase 53, ADR-0044 D2） | この run は `comment` を書ける。true のときだけ前置きに「短い進捗や判断の記録はコメントに書け」が出る。**仕事の run は true、対話 run（Phase 28 の「返事だけをする」run）とレビュー run は false** |
 | `context.recent_work` | array | –（省略可。空なら省略。Phase 33, ADR-0033 D4 追記） | 対話 run にだけ、担当の直近の仕事（最大 10 件、更新の新しい順。案件を選んでいればその案件のものを先に。対話・まとめ・承認・レビューは除く）。`RecentWork`: `{task_id, title, project_title?, status, finished_at?, outcome?, artifacts: string[]}`。`outcome` は終端の要約（`done` なら summary の 1 行目、`failed` なら理由、`blocked` なら質問）で、ストアのタスクとイベントから決定的に組む（LLM は使わない） |
-| `context.review` | object | –（省略可） | Review run だけ。`ReviewRequest`: `{summary, evidence, criteria, decisions?, answers?, checks?, policy_violations?, health?, design?, diff_design?, strategy_critic?}`（§10.2） |
+| `context.review` | object | –（省略可） | Review run だけ。`ReviewRequest`: `{summary, evidence, criteria, decisions?, answers?, checks?, policy_violations?, health?, design?, diff_design?, strategy_critic?, parent_checkpoint?}`（§10.2） |
 | `context.available_genres` | array | –（省略可。空なら省略。v3） | 分解・委譲できる run に渡す分野の一覧。`GenreContext`: `{id, description, capabilities?, input_artifacts?, output_artifacts?, roles?, harness?}` |
 | `context.subject_genre` | object | –（省略可） | レビュー対象の仕事の分野（`GenreContext`） |
 | `context.clusters` | array | –（省略可。空なら省略） | 使えるクラスタ。`{id, connected, work_dir?}` |
@@ -744,12 +744,12 @@ task.acceptance.len()`。受け入れ条件の無い Plan〈R6 で撤去した `
 `Check::Reviewer` 条件を判定する際、ディスパッチャは対象タスクとは別の run を起動する。
 `RunRequest.task` は永続化されない合成タスク（`kind = "review"`、`title = "Review: <対象 title>"`、
 `objective`/`acceptance`/`workspace`/`budget` は対象タスクと同じ）。`RunRequest.context.review` に
-`ReviewRequest{summary, evidence, criteria, decisions?, answers?, checks?, policy_violations?, health?, design?, diff_design?, strategy_critic?}` が入る（`criteria` は判定すべき `task.acceptance` の
+`ReviewRequest{summary, evidence, criteria, decisions?, answers?, checks?, policy_violations?, health?, design?, diff_design?, strategy_critic?, parent_checkpoint?}` が入る（`criteria` は判定すべき `task.acceptance` の
 インデックス一覧、`summary`/`evidence` は対象 run の `done` の内容、`decisions` / `answers` は人の決定と回答、
 `checks` は daemon が走らせた決定的な検査の結果、`policy_violations` は検出した subagent・別 LLM の起動、
 `health` は final review にだけ渡す健全性の材料、`design` は採用前の設計 review の run にだけ渡す計画の材料、
 `diff_design` は final review にだけ渡す差分の設計の材料、`strategy_critic` は戦略の文書を作った task の final review にだけ渡す
-Critic の材料）。`context.inputs` には対象 run の
+Critic の材料、`parent_checkpoint` は strategy root の checkpoint で起こす親の途中評価の run にだけ渡す入力。下の「親の途中評価」）。`context.inputs` には対象 run の
 `ArtifactProduced` が入る。run は対象タスクと同じ作業ディレクトリで実行される（成果物を直接読めるように
 するため。ワーカーには読み取り専用で振る舞うよう指示するが強制はしない。既知の制約）。
 
@@ -853,7 +853,7 @@ final review の candidate の差分が、採用した計画の設計 review の
 - `subjects[]`（`StrategyCriticSubject`）: `{name, path, sha256, strategy_id, version}`。`name` は成果物の名前
   `strategy/<strategy_id>/v<version>.json`、`path` は workspace からの相対 path（reviewer はこの file を読む）、`sha256` は最後の
   `ArtifactProduced` の記録の値。
-- `rubric[]`（`CriticRubricItem`）: `{id, text}`。固定の基準 C1〜C5（`task_core::strategy_critic::CRITIC_RUBRIC` の写し。文書や run は変えられない）。
+- `rubric[]`（`RubricItem`）: `{id, text}`。固定の基準 C1〜C5（`task_core::strategy_critic::CRITIC_RUBRIC` の写し。文書や run は変えられない）。
   C1 は欠陥（候補ごとの根本原因の仮説・approach・費用・risk・保留する前提、`commit` の参照の実在、人の承認 `strategy-approve-v<n>` の sha256 と対象の
   sha256 の一致）、C2 は反証条件（`falsified_by` が観測で確かめられるか）、C3 は識別実験（`experiment` が `discriminates` の仮説を区別でき、予算が最小か）、
   C4 は比較（期待情報価値・費用・risk。`selected` があれば、文書の `evidence` が参照する task の実験の結果から選んだ理由が成り立つか）、C5 は逆戻り
@@ -888,6 +888,67 @@ dispatcher は workspace の文書の file から `candidates[].id` だけを読
 
 不合格の理由は verdict の `reason` に `strategy_critic: <食い違い・ok=false の項目>` として残る。Critic を判定しない review は合格にならない。
 `critic` は省略で読めるので、`strategy_critic` を渡さない review の `review.json` は従来のまま。
+
+#### 親の途中評価（ADR 2026-11-22-parent-checkpoint-evaluator D3）
+
+strategy root（CoS の `task.create` で `strategy` を付けて起票した root）の checkpoint（子の終端の数・子の失敗・反証の証拠・予算の
+割合。D1.2）で、dispatcher は既存の reviewer run を 1 回起こし、子の done とは別に親の目的への効き目を評価させる（D2.3。起こすのと
+結果の写しは controller-checkpoint の実装）。その run の `context.review` は `summary`・`evidence`・`criteria` が空で、
+`parent_checkpoint`（`ParentCheckpointRequest`）を持つ。reviewer は task の受け入れ条件を判定せず、`verdicts` は空の配列にする。
+`parent_checkpoint` の無い review では `None` で省略され、`request.json` も reviewer の prompt も base と同じ（試験
+`parent_evaluation_absent_request_json_unchanged`・`parent_evaluation_absent_prompt_unchanged`）。`PROTOCOL_VERSION` は上げない（欄を足すだけ）。
+
+入力 `context.review.parent_checkpoint`（`ParentCheckpointRequest`）は
+`{decision_id, root_id, triggers, goal, strategy, children, metrics, previous?, rubric}`。欄は判断の行・snapshot・root の events から
+決定的に集め、worker・CoS の報告の文は入れない。Project.request の全文は `context.lineage.project` で届く。子 0 の answer key は入らない:
+
+- `decision_id`: controller の `evaluate` の判断の id。`root_id`: 評価する strategy root の task id。
+- `triggers[]`: 発火した trigger の key（`children:<k>`・`child_failed:<task id>`・`refute:<strategy_id>:v<n>:<evidence id>`・`budget:<p>`。1〜8 件）。
+- `goal`（`ParentCheckpointGoal`）: `{request_sha256, outcomes}`。`request_sha256` は Project.request の sha256。
+  `outcomes[]`（`ParentCheckpointOutcome`）は `{id, title, acceptance, reached}` で、`reached` は Rust の D6 の判定（評価は到達を書かない）。
+- `strategy`（`ParentCheckpointStrategy`）: `{task_id, name, sha256, candidate?}`。root が実行している戦略の版（`name` は
+  `strategy/<strategy_id>/v<n>.json`、`candidate` は実行している候補。実験段階の版では省略）。
+- `children[]`（`ParentCheckpointChild`）: root の直下の子 `{task_id, title, status, reviewer_passed, criteria}`。`criteria[]`
+  （`ParentCheckpointCriterion`）は `{text, kind, result}`（`kind` は check の種類、`result` は `pass`・`fail`・`not_run`）。
+- `metrics`（`ParentCheckpointMetrics`）: `{children_terminal, children_total, tokens_used, max_tokens?}`（D1.2 の trigger と同じ値。
+  `max_tokens` は root の token 予算で、無ければ省略）。
+- `previous[]`（`ParentCheckpointPrevious`）: 同じ root の前の評価の記録 `{name, sha256}`（無ければ省略）。
+- `rubric[]`（`RubricItem`）: `{id, text}`。固定の基準 E1〜E6（`task_core::parent_checkpoint::PARENT_EVALUATION_RUBRIC` の写し。文書や run は変えられない）。
+
+出力: reviewer は `review.json` に `{"verdicts":[], "parent_evaluation":{…}}` を書く。`parent_evaluation`（`ParentEvaluation`、schema
+`celeris.parent-evaluation/1`）の形の正本は `task_core::parent_checkpoint::ParentEvaluation` で、`worker-protocol.schema.json` の
+`ParentEvaluation` はそこから生成する（未知の欄を受けない）。欄は `{schema, verdict, next, axes, measured, learned, refuted, uncertainty, reason}`:
+
+- `verdict`（`ParentEvaluationVerdict`）: `on_track`・`at_risk`・`off_track`・`unknown`。
+- `next`（`ParentEvaluationNext`）: `continue`・`discriminating_experiment`・`pivot`・`ask_human`。
+- `axes`（`ParentEvaluationAxes`）: `{execution, epistemic, goal}`。`execution`（`ParentEvaluationExecution`）は `succeeded`・`partial`・`failed`・`unknown`、
+  `epistemic`（`ParentEvaluationEpistemic`）は `advanced`・`none`・`unknown`、`goal`（`ParentEvaluationGoal`）は `met`・`not_met`・`unknown`。
+  負の研究結果は `execution: succeeded`・`epistemic: advanced`・`goal: not_met` と支持された反証で表す（D7）。
+- `measured[]`（`ParentEvaluationMeasured`）: `{claim, metric, before, after, references}`。
+- `learned[]`（`ParentEvaluationLearned`）: `{statement, references}`。
+- `refuted[]`（`ParentEvaluationRefuted`）: `{hypothesis, statement, references}`。
+- `uncertainty[]`（`ParentEvaluationUncertainty`）: `{statement, resolve_by}`。
+- `references[]` は子 2 の `task_core::strategy::Reference`（`kind` が `commit`・`url`・`task`・`knowledge`・`chat`・`artifact`）。
+- `reason`: `next` を選んだ理由。各列は 16 件まで、文は 2,000 文字まで、`metric`・`before`・`after` は 200 文字まで、1 件の参照は 16 件まで。
+
+```json
+{"verdicts":[],
+ "parent_evaluation":{"schema":"celeris.parent-evaluation/1","verdict":"off_track","next":"discriminating_experiment",
+  "axes":{"execution":"succeeded","epistemic":"advanced","goal":"not_met"},
+  "measured":[{"claim":"SCC は減っていない","metric":"task-core SCC","before":"55","after":"55","references":[{"kind":"artifact","task_id":"…","name":"scc.json","sha256":"…"}]}],
+  "learned":[{"statement":"子の done は SCC を動かさない","references":[{"kind":"task","task_id":"…"}]}],
+  "refuted":[{"hypothesis":"H1","statement":"file 分割で SCC が減る","references":[{"kind":"commit","repo":"agent-platform","sha":"…"}]}],
+  "uncertainty":[{"statement":"S1 の file 数が減るか","resolve_by":"S1 を 1 回測る"}],
+  "reason":"子 A・B の done の後も SCC は 55 のまま"}}
+```
+
+wire（`ReviewOutput.parent_evaluation`）は JSON の値のまま読むので、形の崩れた評価でも `review.json` は `ReviewOutput` として読める。
+形・上限・参照・到達の判定は `task_core::parent_checkpoint::check_evaluation`（D4 の R1〜R7。LLM を呼ばない）が行う:
+未知の欄・上の値以外・空の文・上限超え・`parent_evaluation` の無い出力は `invalid`、`task`・`artifact`・`commit` の解決した参照の無い
+主張は unsupported に数えて `on_track` を無効にし、`axes.goal` の `met` は Rust の D6 の到達だけが決める。結果を root の成果物
+`parent-evaluation/<decision_id>.json`（`celeris.parent-evaluation-record/1`）に写すのは dispatcher（D3.4）。
+`parent_evaluation` は省略で読めるので、`parent_checkpoint` を渡さない review の `review.json` は従来のまま
+（試験 `parent_evaluation_absent_old_review_json_parses`）。
 
 ### 10.3 run 開始前のクリーンアップ
 

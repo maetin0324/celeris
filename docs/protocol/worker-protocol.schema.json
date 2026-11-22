@@ -1818,22 +1818,6 @@
       ],
       "type": "object"
     },
-    "CriticRubricItem": {
-      "description": "Critic の基準 1 項目（`C1`〜`C5`）。",
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "text": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "id",
-        "text"
-      ],
-      "type": "object"
-    },
     "CriticSubjectVerdict": {
       "description": "対象 1 件の Critic の判定。",
       "properties": {
@@ -3547,6 +3531,465 @@
       ],
       "type": "object"
     },
+    "ParentCheckpointChild": {
+      "description": "root の直下の子 1 件（events から導いた事実）。",
+      "properties": {
+        "criteria": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ParentCheckpointCriterion"
+          },
+          "type": "array"
+        },
+        "reviewer_passed": {
+          "description": "子の reviewer の判定が合格か（子の done は親の進捗ではない）。",
+          "type": "boolean"
+        },
+        "status": {
+          "$ref": "#/$defs/Status"
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "title",
+        "status",
+        "reviewer_passed"
+      ],
+      "type": "object"
+    },
+    "ParentCheckpointCriterion": {
+      "description": "子の受け入れ条件 1 件と、その判定の結果。",
+      "properties": {
+        "kind": {
+          "description": "check の種類（`command`・`artifact_exists`・`reviewer`・`human` など）。",
+          "type": "string"
+        },
+        "result": {
+          "description": "判定の結果（`pass`・`fail`・`not_run`）。",
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "kind",
+        "result"
+      ],
+      "type": "object"
+    },
+    "ParentCheckpointGoal": {
+      "description": "親 Outcome。`reached` は Rust の D6（`recorded_outcomes`・`root_satisfies`）の値で、評価は到達を書かない。",
+      "properties": {
+        "outcomes": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ParentCheckpointOutcome"
+          },
+          "type": "array"
+        },
+        "request_sha256": {
+          "description": "Project.request の sha256（全文は `context.lineage.project`）。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_sha256"
+      ],
+      "type": "object"
+    },
+    "ParentCheckpointMetrics": {
+      "description": "決定的なメトリクス（D1.2 の trigger と同じ値）。",
+      "properties": {
+        "children_terminal": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "children_total": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_tokens": {
+          "description": "root の token 予算（無ければ省略）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "tokens_used": {
+          "description": "root の subtree の全 run の使った token。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "children_terminal",
+        "children_total",
+        "tokens_used"
+      ],
+      "type": "object"
+    },
+    "ParentCheckpointOutcome": {
+      "description": "承認済み Roadmap の Outcome 1 件。",
+      "properties": {
+        "acceptance": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "reached": {
+          "description": "Rust の判定（D6）。",
+          "type": "boolean"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "reached"
+      ],
+      "type": "object"
+    },
+    "ParentCheckpointPrevious": {
+      "description": "前の評価の記録 1 件（root の `ArtifactProduced`）。",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "ParentCheckpointRequest": {
+      "description": "D3.1: 親の途中評価の入力。`Some` のとき `ReviewRequest.criteria` は空で、reviewer は task の受け入れ条件を判定しない\n（`verdicts` は空）。",
+      "properties": {
+        "children": {
+          "default": [],
+          "description": "root の直下の子。",
+          "items": {
+            "$ref": "#/$defs/ParentCheckpointChild"
+          },
+          "type": "array"
+        },
+        "decision_id": {
+          "description": "controller の `evaluate` の判断の id（評価の記録の name `parent-evaluation/<decision_id>.json` に使う）。",
+          "type": "string"
+        },
+        "goal": {
+          "$ref": "#/$defs/ParentCheckpointGoal"
+        },
+        "metrics": {
+          "$ref": "#/$defs/ParentCheckpointMetrics"
+        },
+        "previous": {
+          "description": "同じ root の前の評価の記録（無ければ省略）。",
+          "items": {
+            "$ref": "#/$defs/ParentCheckpointPrevious"
+          },
+          "type": "array"
+        },
+        "root_id": {
+          "$ref": "#/$defs/TaskId",
+          "description": "評価する strategy root。"
+        },
+        "rubric": {
+          "description": "固定の基準 E1〜E6（[`ParentCheckpointRequest::fixed_rubric`]）。",
+          "items": {
+            "$ref": "#/$defs/RubricItem"
+          },
+          "type": "array"
+        },
+        "strategy": {
+          "$ref": "#/$defs/ParentCheckpointStrategy"
+        },
+        "triggers": {
+          "description": "発火した trigger の key（`children:<k>`・`child_failed:<task id>`・`refute:<strategy_id>:v<n>:<evidence id>`・\n`budget:<p>`。1〜8 件）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "decision_id",
+        "root_id",
+        "triggers",
+        "goal",
+        "strategy",
+        "metrics",
+        "rubric"
+      ],
+      "type": "object"
+    },
+    "ParentCheckpointStrategy": {
+      "description": "root が実行している戦略の版（CoS の `task.create` の `strategy`。子 2 D3.4）。",
+      "properties": {
+        "candidate": {
+          "description": "実行している候補（`selected`）。実験段階の版では省略。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "成果物の name `strategy/<strategy_id>/v<n>.json`。",
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId",
+          "description": "文書を作った task。"
+        }
+      },
+      "required": [
+        "task_id",
+        "name",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "ParentEvaluation": {
+      "additionalProperties": false,
+      "description": "D3.2: `ReviewOutput.parent_evaluation` の中身。",
+      "properties": {
+        "axes": {
+          "$ref": "#/$defs/ParentEvaluationAxes"
+        },
+        "learned": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ParentEvaluationLearned"
+          },
+          "type": "array"
+        },
+        "measured": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ParentEvaluationMeasured"
+          },
+          "type": "array"
+        },
+        "next": {
+          "$ref": "#/$defs/ParentEvaluationNext"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "refuted": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ParentEvaluationRefuted"
+          },
+          "type": "array"
+        },
+        "schema": {
+          "type": "string"
+        },
+        "uncertainty": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ParentEvaluationUncertainty"
+          },
+          "type": "array"
+        },
+        "verdict": {
+          "$ref": "#/$defs/ParentEvaluationVerdict"
+        }
+      },
+      "required": [
+        "schema",
+        "verdict",
+        "next",
+        "axes",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "ParentEvaluationAxes": {
+      "additionalProperties": false,
+      "properties": {
+        "epistemic": {
+          "$ref": "#/$defs/ParentEvaluationEpistemic"
+        },
+        "execution": {
+          "$ref": "#/$defs/ParentEvaluationExecution"
+        },
+        "goal": {
+          "$ref": "#/$defs/ParentEvaluationGoal"
+        }
+      },
+      "required": [
+        "execution",
+        "epistemic",
+        "goal"
+      ],
+      "type": "object"
+    },
+    "ParentEvaluationEpistemic": {
+      "enum": [
+        "advanced",
+        "none",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "ParentEvaluationExecution": {
+      "enum": [
+        "succeeded",
+        "partial",
+        "failed",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "ParentEvaluationGoal": {
+      "enum": [
+        "met",
+        "not_met",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "ParentEvaluationLearned": {
+      "additionalProperties": false,
+      "properties": {
+        "references": {
+          "default": [],
+          "description": "子 2 の `task_core::strategy::Reference`（`kind` が `commit`・`url`・`task`・`knowledge`・`chat`・`artifact`）。",
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "statement": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "statement"
+      ],
+      "type": "object"
+    },
+    "ParentEvaluationMeasured": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "type": "string"
+        },
+        "before": {
+          "type": "string"
+        },
+        "claim": {
+          "type": "string"
+        },
+        "metric": {
+          "type": "string"
+        },
+        "references": {
+          "default": [],
+          "description": "子 2 の `task_core::strategy::Reference`（`kind` が `commit`・`url`・`task`・`knowledge`・`chat`・`artifact`）。",
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "claim",
+        "metric",
+        "before",
+        "after"
+      ],
+      "type": "object"
+    },
+    "ParentEvaluationNext": {
+      "enum": [
+        "continue",
+        "discriminating_experiment",
+        "pivot",
+        "ask_human"
+      ],
+      "type": "string"
+    },
+    "ParentEvaluationRefuted": {
+      "additionalProperties": false,
+      "properties": {
+        "hypothesis": {
+          "type": "string"
+        },
+        "references": {
+          "default": [],
+          "description": "子 2 の `task_core::strategy::Reference`（`kind` が `commit`・`url`・`task`・`knowledge`・`chat`・`artifact`）。",
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "statement": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "hypothesis",
+        "statement"
+      ],
+      "type": "object"
+    },
+    "ParentEvaluationUncertainty": {
+      "additionalProperties": false,
+      "properties": {
+        "resolve_by": {
+          "type": "string"
+        },
+        "statement": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "statement",
+        "resolve_by"
+      ],
+      "type": "object"
+    },
+    "ParentEvaluationVerdict": {
+      "enum": [
+        "on_track",
+        "at_risk",
+        "off_track",
+        "unknown"
+      ],
+      "type": "string"
+    },
     "ParentUnit": {
       "additionalProperties": false,
       "description": "D4 (4): 子 task が親の計画のどの unit から作られたか（`Task.tree.parent_unit`）。",
@@ -4041,6 +4484,17 @@
           ],
           "description": "ADR 2026-11-07-health-review-integration D5.1: 構造化 health verdict。`ReviewRequest.health` を渡した\nreview では必須（無ければ不合格。I7）。旧 reviewer の `review.json` は省略で読める。"
         },
+        "parent_evaluation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ParentEvaluation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-11-22-parent-checkpoint-evaluator D3.2: 親の途中評価（`celeris.parent-evaluation/1`）。\n`ReviewRequest.parent_checkpoint` を渡した run だけが書く。形の正本は `task_core::parent_checkpoint::ParentEvaluation`\nで、schema はそこから作る。wire は JSON の値のまま読み、形と上限の検査（R1〜R7）は\n`task_core::parent_checkpoint::check_evaluation` が行う（呼ぶのは dispatcher の結果の写し。ADR D3.4）。形の崩れた\n評価でも `review.json` は読め、検査が違反として記録する。旧 reviewer の `review.json` は省略で読める。"
+        },
         "verdicts": {
           "items": {
             "$ref": "#/$defs/ReviewVerdictOut"
@@ -4210,6 +4664,17 @@
             }
           ],
           "description": "ADR 2026-11-07-health-review-integration D4.1: base（target）→ candidate の diff 統計・owner 地図の行・\nrepo health の new findings の要約。dispatcher が candidate SHA ごとに 1 回だけ作り、final review\nにだけ渡す。`None`（WU の review・review 方針の無い repo・旧 daemon）の `request.json` は従来と同じ。"
+        },
+        "parent_checkpoint": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ParentCheckpointRequest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-11-22-parent-checkpoint-evaluator D3.1: strategy root の checkpoint で dispatcher が起こす親の途中評価の\nrun だけが持つ（`summary`・`evidence`・`criteria` は空）。reviewer は `verdicts` を空にして\n`ReviewOutput.parent_evaluation` を書く。`None` の `request.json` と reviewer prompt は従来と同じ。"
         },
         "policy_violations": {
           "description": "ADR 2026-10-07-worker-no-subagents-no-llm-cli D6: 対象 run で検出された subagent 道具・別 LLM CLI / API の\n起動（dispatcher が `Event::WorkerPolicyViolation` から集める。LLM は関与しない）。",
@@ -4387,6 +4852,22 @@
         "rule_id",
         "ok",
         "detail"
+      ],
+      "type": "object"
+    },
+    "RubricItem": {
+      "description": "固定の基準 1 項目（Critic の `C1`〜`C5`、親の途中評価の `E1`〜`E6`）。定義は task-core の定数の表で、文書や run は\n変えられない。",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "text"
       ],
       "type": "object"
     },
@@ -4924,7 +5405,7 @@
         "rubric": {
           "description": "固定の基準（`task_core::strategy_critic::CRITIC_RUBRIC` の写し）。",
           "items": {
-            "$ref": "#/$defs/CriticRubricItem"
+            "$ref": "#/$defs/RubricItem"
           },
           "type": "array"
         },

@@ -1216,6 +1216,8 @@ impl ReviewHumanContext {
             health: material.health,
             // ADR 2026-11-22-strategy-review-critic D3.4: 戦略の文書を作った task だけ `Some`。
             strategy_critic: self.critic,
+            // ADR 2026-11-22-parent-checkpoint-evaluator D3.1: final review は親の途中評価の run ではないので常に `None`。
+            parent_checkpoint: None,
         }
     }
 }

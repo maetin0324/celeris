@@ -1,6 +1,7 @@
 //! CoS chat REST API. Run scheduling belongs to cos-run; writes here only change durable state.
 
 pub mod attachments;
+pub mod exchange;
 mod revise;
 pub mod stream;
 
@@ -92,6 +93,7 @@ pub(crate) fn routes() -> axum::Router<ApiState> {
         .route("/api/v1/chat/threads/{t}/runs/{r}", get(get_run))
         .merge(stream::routes())
         .merge(attachments::routes())
+        .merge(exchange::routes())
 }
 
 pub(crate) fn chat_problem(error: ChatError) -> ApiProblem {

@@ -337,6 +337,13 @@ pub struct ApiV1Schema {
     /// listed here: they stay in `$defs` through `ChatRunResponse.run` and `ChatMessage.cards`.
     pub chat_message_edit: ChatMessageEditRequest,
     pub chat_message_retract: ChatMessageRetractRequest,
+    /// ADR 2026-11-22-external-llm-discussion-exchange D4.1: `POST …/exchange/shares` (and `…/revoke`) and
+    /// `POST …/exchange/imports`. `GET …/exchange/export` answers the `celeris.discussion-snapshot/1` document of
+    /// the ADR's D1.4 (JSON or Markdown), not listed here.
+    pub chat_exchange_share: crate::chat::exchange::ChatExchangeShareRequest,
+    pub chat_exchange_share_response: crate::chat::exchange::ChatExchangeShareResponse,
+    pub chat_exchange_import: crate::chat::exchange::ChatExchangeImportRequest,
+    pub chat_exchange_import_response: crate::chat::exchange::ChatExchangeImportResponse,
     pub chat_event: ChatEvent,
     pub chat_thread_open: ChatOpenThreadRequest,
     pub chat_thread_read: ChatReadThreadRequest,

@@ -139,14 +139,18 @@ reviewer run の数は変わらない。対象がある task では、`Check::Re
 
 - `criterion_idx`: D3.3 の番号。
 - `subjects[]`: `{name, path, sha256, strategy_id, version}`（D3.1）。reviewer は workspace の `path` を読む。
-- `experiments[]`: 鎖の前の版の X の task（D2.3）の `{version, candidate, task_id, status, summary_tail}`。`summary_tail` は最後の run の要約の末尾 1,000 文字
-  （`CHECK_REASON_TAIL_CHARS` と同じ）。dispatcher が store から集める（反証・失敗の記録）。
 - `rubric[]`: 下の固定の基準（`task_core::strategy_critic::CRITIC_RUBRIC` の定数。文書や run が変えられない）。
   - C1 欠陥: 候補ごとに、根本原因の仮説・approach・費用・risk・保留する前提の欠陥を探して挙げる。`commit` の参照が実在するかも確かめる。
   - C2 反証条件: 候補の仮説の `falsified_by` が観測で確かめられる条件か。
   - C3 識別実験: `experiment` が `discriminates` の仮説を区別でき、予算が最小か。
-  - C4 比較: 候補を期待情報価値・費用・risk で比べたか。`selected` があれば、`experiments` の結果と証拠から選んだ理由が成り立つか。
-  - C5 逆戻り: `open` の候補が、同じ文書に残る `rejected` の候補の approach を名前を変えて出していないか。`experiments` の失敗・反証を証拠が読んでいるか。
+  - C4 比較: 候補を期待情報価値・費用・risk で比べたか。`selected` があれば、文書の `evidence` が参照する task（読み取り専用の DB で読める）の実験の結果から、
+    選んだ理由が成り立つか。
+  - C5 逆戻り: `open` の候補が、同じ文書に残る `rejected` の候補の approach を名前を変えて出していないか。文書の `evidence` が参照する前の版の実験 task の
+    失敗・反証を読み、証拠がそれを反映しているか。
+
+前の版の実験 task の記録は入力の欄にしない（計画 v2 の決定、2026-11-22）。D4.2（`strategy_failure_unread`）で gate が、次の版の証拠が前の版の終端の実験 task を
+すべて参照することを決定的に保証する。reviewer は読み取り専用の DB（ADR-0095）で証拠の task を読めるので、dispatcher が `task_core` の store（高 risk の class
+`store`）に照会を足して同じ記録を写す必要が無い。reviewer は C4・C5 を、文書の `evidence` の `task`（と `artifact` の `task_id`）の参照から読んだ実験の結果と失敗で判定する。
 
 reviewer は既存の ADR-0117 D1 の `decisions` で人の承認（`strategy-approve-v<n>`）も見る。承認した sha256 と対象の sha256 が違えば C1 の欠陥として挙げる。
 
@@ -166,7 +170,7 @@ dispatcher（`task_dispatch::review::critic`）は形だけを確かめる。LLM
 
 #### D3.6 reviewer の prompt
 
-`task_worker::change_rules::review` に `critic_section` を足す。`strategy_critic` が `None` なら空文字列を返し、prompt は変わらない。`Some` なら対象・実験の記録・
+`task_worker::change_rules::review` に `critic_section` を足す。`strategy_critic` が `None` なら空文字列を返し、prompt は変わらない。`Some` なら対象・
 C1〜C5 と出力の形（`final_example` に `critic` を加える。`diff_design` と同じ置き方）を出す。
 
 #### D3.7 人の承認（子 2 D2.2）と Critic の順: 人の承認 → Critic
@@ -349,10 +353,9 @@ Project.request と承認済み Roadmap は読むだけで書かない。
 
 ## 付記（2026-11-22、critic-review の実装）
 
-- D3.4 の `experiments[]` は実装していない。X(v)（D2.3）は `cos_operations` の照会で、2026-11-22 の時点で照会の関数はどこにも無い（experiment-gate が
-  `task_api::cos::strategy_gate` に置く予定）。`task_dispatch` は `task_api` に依存できず、dispatcher から引くには `task_core` の store（高 risk の class `store`）に
-  照会を足す必要があり、critic-review の write set（D8）の外である。常に空の欄は置かない。照会を `task_core` の store に置いて gate と review の両方が使うか、
-  `experiments[]` をこの ADR から外すかは、計画の改訂で決める。それまで reviewer は C4・C5 を文書の `evidence` と task の記録から判定する。
+- 最初の版の D3.4 にあった入力の欄 `experiments[]`（前の版の実験 task の記録を dispatcher が store から集める）は、計画 v2 の決定で外し、実装していない
+  （理由は D3.4 の本文）。reviewer は C4・C5 で、文書の `evidence` が参照する task を読み取り専用の DB で読み、実験の結果と失敗を確かめる。
+  `CRITIC_RUBRIC` の C4・C5 の文も同じ意味に直した。
 - D3.2 の条件は `task_dispatch::review::reviewer_run_required(task, auto_integrates, critic_subjects)` 1 つにまとめた（`needs_reviewer_run(task)`・
   `delivery_requires_reviewer_run`（support と tree の子を除く）・`!critic_subjects.is_empty()` の論理和。条件の意味は D3.2 のとおり）。`review_spawn` は
   `auto_integrates` の値と対象を渡すだけになり、`dispatcher.rs` の `needs_reviewer_run` の import は使われなくなったので外した（`use` の 1 行）。

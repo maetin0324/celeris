@@ -1772,6 +1772,13 @@ fn build_review_prompt(task: &Task, context: &RunContext, run_id: &str, artifact
         Some(review) if review.design.is_some() => {
             out.push_str(&crate::change_rules::review::design_section(Some(review)));
         }
+        // ADR 2026-11-22-parent-checkpoint-evaluator D3.3: 親の途中評価の run（`parent_checkpoint`）は親の目的への効き目を
+        // 評価する。受け入れ条件の判定と worker の evidence の節は出さない。
+        Some(review) if review.parent_checkpoint.is_some() => {
+            out.push_str(&crate::change_rules::review::parent_checkpoint_section(
+                Some(review),
+            ));
+        }
         Some(review) => {
             if !review.decisions.is_empty() || !review.answers.is_empty() {
                 out.push_str("## Human decisions and answers (authoritative)\n\

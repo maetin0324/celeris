@@ -12,6 +12,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -355,8 +356,9 @@ fn refute_triggers(strategy: &StrategyFacts) -> Vec<(TriggerKind, String, Option
 
 // ---------------------------------------------------------------- 評価の形（D3.2）
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[schemars(rename = "ParentEvaluationVerdict")]
 pub enum Verdict {
     OnTrack,
     AtRisk,
@@ -364,8 +366,9 @@ pub enum Verdict {
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[schemars(rename = "ParentEvaluationNext")]
 pub enum Next {
     Continue,
     DiscriminatingExperiment,
@@ -373,8 +376,9 @@ pub enum Next {
     AskHuman,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[schemars(rename = "ParentEvaluationExecution")]
 pub enum ExecutionAxis {
     Succeeded,
     Partial,
@@ -382,67 +386,80 @@ pub enum ExecutionAxis {
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[schemars(rename = "ParentEvaluationEpistemic")]
 pub enum EpistemicAxis {
     Advanced,
     None,
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[schemars(rename = "ParentEvaluationGoal")]
 pub enum GoalAxis {
     Met,
     NotMet,
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "ParentEvaluationAxes")]
 pub struct Axes {
     pub execution: ExecutionAxis,
     pub epistemic: EpistemicAxis,
     pub goal: GoalAxis,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "ParentEvaluationMeasured")]
 pub struct Measured {
     pub claim: String,
     pub metric: String,
     pub before: String,
     pub after: String,
+    /// 子 2 の `task_core::strategy::Reference`（`kind` が `commit`・`url`・`task`・`knowledge`・`chat`・`artifact`）。
     #[serde(default)]
+    #[schemars(with = "Vec<serde_json::Map<String, Value>>")]
     pub references: Vec<Reference>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "ParentEvaluationLearned")]
 pub struct Learned {
     pub statement: String,
+    /// 子 2 の `task_core::strategy::Reference`（`kind` が `commit`・`url`・`task`・`knowledge`・`chat`・`artifact`）。
     #[serde(default)]
+    #[schemars(with = "Vec<serde_json::Map<String, Value>>")]
     pub references: Vec<Reference>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "ParentEvaluationRefuted")]
 pub struct Refuted {
     pub hypothesis: String,
     pub statement: String,
+    /// 子 2 の `task_core::strategy::Reference`（`kind` が `commit`・`url`・`task`・`knowledge`・`chat`・`artifact`）。
     #[serde(default)]
+    #[schemars(with = "Vec<serde_json::Map<String, Value>>")]
     pub references: Vec<Reference>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "ParentEvaluationUncertainty")]
 pub struct Uncertainty {
     pub statement: String,
     pub resolve_by: String,
 }
 
 /// D3.2: `ReviewOutput.parent_evaluation` の中身。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ParentEvaluation {
     pub schema: String,

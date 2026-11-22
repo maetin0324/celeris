@@ -88,6 +88,11 @@ pub struct ReviewRequest {
     /// `None` の `request.json` と reviewer prompt は従来と同じ。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strategy_critic: Option<Box<StrategyCriticRequest>>,
+    /// ADR 2026-11-22-parent-checkpoint-evaluator D3.1: strategy root の checkpoint で dispatcher が起こす親の途中評価の
+    /// run だけが持つ（`summary`・`evidence`・`criteria` は空）。reviewer は `verdicts` を空にして
+    /// `ReviewOutput.parent_evaluation` を書く。`None` の `request.json` と reviewer prompt は従来と同じ。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_checkpoint: Option<Box<ParentCheckpointRequest>>,
 }
 
 /// ADR 2026-11-22-strategy-review-critic D3.4: reviewer への Critic の入力。
@@ -98,19 +103,13 @@ pub struct StrategyCriticRequest {
     /// 判定する文書（`strategy_id` ごとに最大の版）。reviewer は workspace の `path` を読む。
     pub subjects: Vec<StrategyCriticSubject>,
     /// 固定の基準（`task_core::strategy_critic::CRITIC_RUBRIC` の写し）。
-    pub rubric: Vec<CriticRubricItem>,
+    pub rubric: Vec<RubricItem>,
 }
 
 impl StrategyCriticRequest {
     /// `task_core::strategy_critic::CRITIC_RUBRIC` を wire の形にしたもの（基準の定義はそちらだけ）。
-    pub fn fixed_rubric() -> Vec<CriticRubricItem> {
-        task_core::strategy_critic::CRITIC_RUBRIC
-            .iter()
-            .map(|(id, text)| CriticRubricItem {
-                id: (*id).to_string(),
-                text: (*text).to_string(),
-            })
-            .collect()
+    pub fn fixed_rubric() -> Vec<RubricItem> {
+        RubricItem::from_table(&task_core::strategy_critic::CRITIC_RUBRIC)
     }
 }
 
@@ -124,11 +123,25 @@ pub struct StrategyCriticSubject {
     pub version: u32,
 }
 
-/// Critic の基準 1 項目（`C1`〜`C5`）。
+/// 固定の基準 1 項目（Critic の `C1`〜`C5`、親の途中評価の `E1`〜`E6`）。定義は task-core の定数の表で、文書や run は
+/// 変えられない。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct CriticRubricItem {
+pub struct RubricItem {
     pub id: String,
     pub text: String,
+}
+
+impl RubricItem {
+    /// task-core の `(id, 本文)` の定数の表を wire の形にする。
+    pub fn from_table(table: &[(&str, &str)]) -> Vec<Self> {
+        table
+            .iter()
+            .map(|(id, text)| Self {
+                id: (*id).to_string(),
+                text: (*text).to_string(),
+            })
+            .collect()
+    }
 }
 
 /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D6: reviewer に見せる検出 1 件（`Event::WorkerPolicyViolation` の写し）。
@@ -1188,6 +1201,14 @@ pub struct ReviewOutput {
     /// だけが書く（無ければ暗黙の条件 `strategy_critic` は不合格）。旧 reviewer の `review.json` は省略で読める。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub critic: Option<CriticVerdictOut>,
+    /// ADR 2026-11-22-parent-checkpoint-evaluator D3.2: 親の途中評価（`celeris.parent-evaluation/1`）。
+    /// `ReviewRequest.parent_checkpoint` を渡した run だけが書く。形の正本は `task_core::parent_checkpoint::ParentEvaluation`
+    /// で、schema はそこから作る。wire は JSON の値のまま読み、形と上限の検査（R1〜R7）は
+    /// `task_core::parent_checkpoint::check_evaluation` が行う（呼ぶのは dispatcher の結果の写し。ADR D3.4）。形の崩れた
+    /// 評価でも `review.json` は読め、検査が違反として記録する。旧 reviewer の `review.json` は省略で読める。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<task_core::parent_checkpoint::ParentEvaluation>")]
+    pub parent_evaluation: Option<serde_json::Value>,
 }
 
 /// D3.5: Critic の判定（対象ごと）。
@@ -1541,6 +1562,14 @@ mod campaign;
 pub use campaign::{CampaignRunPin, CampaignSelected};
 mod design_review;
 pub use design_review::{DesignReviewRequest, DesignVerdictOut};
+mod parent_checkpoint;
+#[cfg(test)]
+pub(crate) use parent_checkpoint::tests as parent_checkpoint_tests;
+pub use parent_checkpoint::{
+    ParentCheckpointChild, ParentCheckpointCriterion, ParentCheckpointGoal,
+    ParentCheckpointMetrics, ParentCheckpointOutcome, ParentCheckpointPrevious,
+    ParentCheckpointRequest, ParentCheckpointStrategy,
+};
 mod health;
 pub use health::{
     DiffStat, HealthFindingCounts, HealthFindingKind, HealthFindingOut, HealthFindingsSummary,

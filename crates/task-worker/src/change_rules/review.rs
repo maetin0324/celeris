@@ -19,6 +19,10 @@
 //! - finding 種別は `HealthFindingKind::ALL` から列挙し、局所修復を許す種別は `allows_local_repair` から選ぶ。
 //!   種別の意味は汎用規約（`GENERIC_RULES`）の各項目の括弧内の名前で指し、説明文をここに写さない。
 //!
+//! - ADR 2026-11-22-parent-checkpoint-evaluator D3.3: `parent_checkpoint_section` は `ReviewRequest.parent_checkpoint`
+//!   （親の途中評価の run）が `Some` のときだけ入力と固定の rubric E1〜E6 の節を出す。`result_section` はその run では
+//!   `verdicts` を空にして `parent_evaluation` を書く形を出す。例の評価は task-core の `ParentEvaluation` を serde で書き出す。
+//!
 //! ここは純粋関数だけで、I/O も LLM も無い。
 
 use std::collections::BTreeMap;
@@ -36,6 +40,7 @@ use crate::protocol::{
     HealthVerdictOut, OwnerRow, PolicyVerdictOut, ReviewOutput, ReviewRepairHint, ReviewRequest,
     ReviewVerdictOut, StrategyCriticRequest,
 };
+use task_core::parent_checkpoint as checkpoint;
 
 /// ADR 2026-11-22-strategy-review-critic D3.6: Critic の節の見出し。
 pub const CRITIC_HEADING: &str = "## Strategy Critic（戦略の文書の欠陥を探す判定）";
@@ -68,6 +73,97 @@ pub fn critic_section(review: Option<&ReviewRequest>) -> String {
     out.push_str(
         "\n人の決定（上の Human decisions）に `strategy-approve-v<n>` があれば、承認した sha256 と文書の sha256 を比べる。\n\n",
     );
+    out
+}
+
+/// ADR 2026-11-22-parent-checkpoint-evaluator D3.3: 親の途中評価の節の見出し。
+pub const PARENT_CHECKPOINT_HEADING: &str = "## Parent checkpoint（親の目的への途中評価）";
+
+/// D3.3: 親の途中評価の節。`ReviewRequest.parent_checkpoint` が `None` なら空文字列（prompt は従来と同じ）。目的・入力・
+/// 固定の基準 E1〜E6 を出す。出力の形は [`result_section`] が `parent_evaluation` の例として出す。
+pub fn parent_checkpoint_section(review: Option<&ReviewRequest>) -> String {
+    let Some(pc) = review.and_then(|r| r.parent_checkpoint.as_deref()) else {
+        return String::new();
+    };
+    let mut out = format!(
+        "{PARENT_CHECKPOINT_HEADING}\n\
+         この run は上の task（strategy root `{root}`）の受け入れ条件を判定しない。あなたは子の done とは別の独立の \
+         Evaluator として、親の Outcome（案件の目的は上の lineage の Project.request）に対する実測の改善・得た知識と反証・\
+         成功の根拠・残る不確実性を評価し、結果を下の Result 節の `parent_evaluation` に書く。証拠は読み取り専用の DB と \
+         workspace の成果物で確かめ、file を変えない。worker・CoS の報告の文は証拠に数えない。\n\n\
+         ### 判断\n\
+         - decision_id: `{decision}`\n\
+         - triggers: {triggers}\n\n\
+         ### 親の Outcome（`reached` は celeris の Rust の判定。評価は到達を書かない）\n\
+         - Project.request の sha256: `{sha}`\n",
+        root = pc.root_id,
+        decision = pc.decision_id,
+        triggers = pc
+            .triggers
+            .iter()
+            .map(|t| format!("`{t}`"))
+            .collect::<Vec<_>>()
+            .join("、"),
+        sha = pc.goal.request_sha256,
+    );
+    if pc.goal.outcomes.is_empty() {
+        out.push_str("- （Outcome の記録は無い）\n");
+    }
+    for o in &pc.goal.outcomes {
+        out.push_str(&format!(
+            "- outcome `{}`: {}（reached={}）\n",
+            o.id, o.title, o.reached
+        ));
+        for a in &o.acceptance {
+            out.push_str(&format!("  - acceptance: {a}\n"));
+        }
+    }
+    let s = &pc.strategy;
+    out.push_str(&format!(
+        "\n### 戦略の今の版\n- `{}` (sha256={}, task {}{})\n\n### 子（root の直下）\n",
+        s.name,
+        s.sha256,
+        s.task_id,
+        s.candidate
+            .as_deref()
+            .map(|c| format!(", candidate={c}"))
+            .unwrap_or_default(),
+    ));
+    if pc.children.is_empty() {
+        out.push_str("- （子は無い）\n");
+    }
+    for c in &pc.children {
+        out.push_str(&format!(
+            "- `{}` {}（status={}, reviewer_passed={}）\n",
+            c.task_id,
+            c.title,
+            c.status.as_str(),
+            c.reviewer_passed
+        ));
+        for k in &c.criteria {
+            out.push_str(&format!("  - [{}] {}: {}\n", k.kind, k.result, k.text));
+        }
+    }
+    let m = &pc.metrics;
+    out.push_str(&format!(
+        "\n### 決定的なメトリクス\n- 終端の子 / 子: {} / {}\n- token の使用 / 予算: {} / {}\n",
+        m.children_terminal,
+        m.children_total,
+        m.tokens_used,
+        m.max_tokens
+            .map_or_else(|| "予算なし".to_string(), |t| t.to_string()),
+    ));
+    if !pc.previous.is_empty() {
+        out.push_str("\n### 前の評価の記録\n");
+        for p in &pc.previous {
+            out.push_str(&format!("- `{}` (sha256={})\n", p.name, p.sha256));
+        }
+    }
+    out.push_str("\n### 基準（固定）\n");
+    for item in &pc.rubric {
+        out.push_str(&format!("- {}: {}\n", item.id, item.text));
+    }
+    out.push('\n');
     out
 }
 
@@ -502,6 +598,14 @@ pub fn result_section(review: Option<&ReviewRequest>, artifacts: &str) -> String
         out.push_str(&design_verdict_lines(DesignTarget::Plan));
         return out;
     }
+    if review.is_some_and(|r| r.parent_checkpoint.is_some()) {
+        out.push_str(&format!(
+            "`{}`\n",
+            example_json(&parent_evaluation_example())
+        ));
+        out.push_str(&parent_evaluation_lines());
+        return out;
+    }
     let health = review.and_then(|r| r.health.as_ref());
     let diff_design = review.is_some_and(|r| r.diff_design.is_some());
     let criterion = review
@@ -565,7 +669,87 @@ fn design_example() -> ReviewOutput {
         health: None,
         design: Some(design_verdict_example("brief と計画のどこが規約に反するか")),
         critic: None,
+        parent_evaluation: None,
     }
+}
+
+/// D3.2: `parent_evaluation` の例。task-core の `ParentEvaluation`（形の正本）を serde で書き出す。
+fn parent_evaluation_example() -> ReviewOutput {
+    use task_core::strategy::Reference;
+    let artifact = Reference::Artifact {
+        task_id: "子の task id".to_string(),
+        name: "成果物の name".to_string(),
+        sha256: "成果物の sha256".to_string(),
+    };
+    let evaluation = checkpoint::ParentEvaluation {
+        schema: checkpoint::EVALUATION_SCHEMA.to_string(),
+        verdict: checkpoint::Verdict::AtRisk,
+        next: checkpoint::Next::DiscriminatingExperiment,
+        axes: checkpoint::Axes {
+            execution: checkpoint::ExecutionAxis::Partial,
+            epistemic: checkpoint::EpistemicAxis::Advanced,
+            goal: checkpoint::GoalAxis::NotMet,
+        },
+        measured: vec![checkpoint::Measured {
+            claim: "親 Outcome の指標の前後".to_string(),
+            metric: "指標の名前".to_string(),
+            before: "子の成果の前の値".to_string(),
+            after: "子の成果の後の値".to_string(),
+            references: vec![artifact],
+        }],
+        learned: vec![checkpoint::Learned {
+            statement: "支持された仮説と根拠".to_string(),
+            references: vec![Reference::Task {
+                task_id: "子の task id".to_string(),
+            }],
+        }],
+        refuted: vec![checkpoint::Refuted {
+            hypothesis: "戦略の文書の仮説の id".to_string(),
+            statement: "反証した観測".to_string(),
+            references: vec![Reference::Commit {
+                repo: "repo の id".to_string(),
+                sha: "commit の sha".to_string(),
+            }],
+        }],
+        uncertainty: vec![checkpoint::Uncertainty {
+            statement: "まだ分からないこと".to_string(),
+            resolve_by: "それを確かめる最小の実験か判断".to_string(),
+        }],
+        reason: "next を選んだ理由".to_string(),
+    };
+    ReviewOutput {
+        verdicts: Vec::new(),
+        health: None,
+        design: None,
+        critic: None,
+        parent_evaluation: serde_json::to_value(evaluation).ok(),
+    }
+}
+
+/// D3.2・D4: `parent_evaluation` の書き方。値の集合と上限は task-core の型と定数から出す。
+fn parent_evaluation_lines() -> String {
+    format!(
+        "- この run は親の途中評価なので、`verdicts` は空の配列 `[]` のまま書く（判定する受け入れ条件が無い）。\
+         評価は `parent_evaluation` に書き、`schema` は `{schema}`。\n\
+         - `verdict` は `on_track`・`at_risk`・`off_track`・`unknown`、`next` は `continue`・`discriminating_experiment`・\
+         `pivot`・`ask_human` のどれか。`axes.execution` は `succeeded`・`partial`・`failed`・`unknown`、`axes.epistemic` は \
+         `advanced`・`none`・`unknown`、`axes.goal` は `met`・`not_met`・`unknown`。\n\
+         - `measured`・`learned`・`refuted` の 1 件は `references` に `task`・`artifact`・`commit` の参照を付けたときだけ\
+         支持に数える。参照の無い・解決しない・`url`・`knowledge`・`chat` だけの主張は unsupported に数え、1 件でもあれば \
+         `on_track` は無効になる（`unknown` になる）。\n\
+         - `axes.goal` の `met` は上の Outcome の `reached` が決める。`reached` が false なのに `met` と書くと unsupported に\
+         数える。`axes.execution` は celeris が子の終端の事実で決め、評価の値と違えば違反に記録する。\n\
+         - `off_track`・`unknown` の評価で `continue` を選ぶと `ask_human` に読み替える。実験と pivot は戦略の新しい版（人の\
+         承認）でしか行えない。\n\
+         - 各列は {list} 件まで、文は {text} 文字まで、`metric`・`before`・`after` は {short} 文字まで、1 件の参照は {refs} 件\
+         まで。未知の欄・上の値以外・空の文を書いた評価、`parent_evaluation` の無い review.json は形の違反（invalid）に\
+         数え、評価として使わない。\n\n",
+        schema = checkpoint::EVALUATION_SCHEMA,
+        list = checkpoint::LIST_MAX,
+        text = checkpoint::TEXT_MAX_CHARS,
+        short = checkpoint::SHORT_MAX_CHARS,
+        refs = checkpoint::REFS_PER_ITEM_MAX,
+    )
 }
 
 fn final_example(
@@ -613,6 +797,7 @@ fn final_example(
         health,
         design: diff_design.then(|| design_verdict_example("差分のどこが規約に反するか")),
         critic: critic.map(critic_example),
+        parent_evaluation: None,
     }
 }
 

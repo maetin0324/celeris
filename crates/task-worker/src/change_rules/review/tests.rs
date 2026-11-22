@@ -1361,3 +1361,105 @@ fn parent_evaluation_absent_old_review_json_parses() {
         assert_eq!(back, old);
     }
 }
+
+// ADR 2026-11-22-parent-checkpoint-evaluator D3.3（prefix `parent_evaluation_wire_`）: 節のある review の prompt。
+
+fn parent_checkpoint_prompt() -> String {
+    let context = RunContext {
+        review: Some(ReviewRequest {
+            parent_checkpoint: Some(Box::new(
+                crate::protocol::parent_checkpoint_tests::sample_parent_checkpoint(),
+            )),
+            ..ReviewRequest::default()
+        }),
+        ..RunContext::default()
+    };
+    build_prompt(
+        &absent_fixed_task(),
+        &context,
+        "run-parent-evaluation",
+        "artifacts",
+    )
+}
+
+/// 不変条件: `parent_checkpoint` を渡した run の prompt には節がちょうど 1 回出て、判断の id・root・trigger・Outcome と
+/// Rust の到達の値・strategy の版・子・メトリクス・前の評価・固定の E1〜E6 を持つ。受け入れ条件の判定の節（判定する
+/// criterion・worker の申告）は出ない。節を渡さない review には出ない。
+#[test]
+fn parent_evaluation_wire_prompt_section() {
+    let prompt = parent_checkpoint_prompt();
+    assert_eq!(
+        prompt.matches(PARENT_CHECKPOINT_HEADING).count(),
+        1,
+        "{prompt}"
+    );
+    for needle in [
+        "01M82FC782QS6F23C4EN9P72CT",
+        "01M7MZT8KX547464YYS76QNP4G",
+        "`children:2`",
+        "`budget:50`",
+        "task-core の SCC を減らす",
+        "reached=false",
+        "strategy/arch-v4/v1.json",
+        "candidate=fixed-plan",
+        "01M7MZT8KX547464YYS76QNP4A",
+        "2 / 8",
+        "1000 / 2000",
+        "parent-evaluation/01M82FC782QS6F23C4EN9P72CS.json",
+    ] {
+        assert!(prompt.contains(needle), "{needle} missing:\n{prompt}");
+    }
+    for (id, text) in task_core::parent_checkpoint::PARENT_EVALUATION_RUBRIC {
+        assert!(
+            prompt.contains(&format!("- {id}: {text}")),
+            "{id} missing:\n{prompt}"
+        );
+    }
+    assert!(
+        !prompt.contains("## Criteria you must judge in this run"),
+        "{prompt}"
+    );
+    assert!(
+        !prompt.contains("## Worker's self-reported summary"),
+        "{prompt}"
+    );
+    assert_eq!(parent_checkpoint_section(None), "");
+    let without = ReviewRequest {
+        criteria: vec![0],
+        ..Default::default()
+    };
+    assert_eq!(parent_checkpoint_section(Some(&without)), "");
+    assert!(!review_prompt(Some(without)).contains(PARENT_CHECKPOINT_HEADING));
+}
+
+/// 不変条件: 節のある run の Result 節の例の JSON は `ReviewOutput` として読め、`verdicts` は空、`parent_evaluation` は
+/// task-core の `check_evaluation` の形の規則（R1）を通る（例をそのまま写した評価が形の違反で invalid にならない）。
+#[test]
+fn parent_evaluation_wire_result_example_passes_shape_check() {
+    let prompt = parent_checkpoint_prompt();
+    let example = result_example(&prompt);
+    assert!(example.verdicts.is_empty(), "{example:?}");
+    assert!(example.critic.is_none() && example.design.is_none() && example.health.is_none());
+    let facts = task_core::parent_checkpoint::EvaluationFacts {
+        resolved: Vec::new(),
+        goal_reached: false,
+        children: Default::default(),
+    };
+    let checked =
+        task_core::parent_checkpoint::check_evaluation(example.parent_evaluation.as_ref(), &facts);
+    assert_eq!(
+        checked.status,
+        task_core::parent_checkpoint::RecordStatus::Checked,
+        "{:?}",
+        checked.violations
+    );
+    let result = section_after(&prompt, "## Result\n");
+    for needle in [
+        "`verdicts` は空の配列",
+        "`parent_evaluation`",
+        "`on_track`",
+        "`ask_human`",
+    ] {
+        assert!(result.contains(needle), "{needle} missing:\n{result}");
+    }
+}

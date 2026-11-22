@@ -1,14 +1,14 @@
 ---
-title: 戦略層 v1 子 6 strategy-read — StrategyRef の型を task-core に 1 つ置き、cos_operations の strategy の照会を strategy_reads.rs に 1 本化
+title: 戦略層 v1 子 6 strategy-read — StrategyRef の型を task-core に 1 つ置き、cos_operations の strategy の照会を task_core::strategy_reads に 1 本化し、ADR の置き場を直す
 tasks: [01M7XQ9QWK58ESMW42Q1TGT3WZ]
 wu: strategy-read
-status: running
+status: done
 updated: 2026-11-22
 ---
 # strategy-read（WorkUnit）
 
-完了日: 未完。実装と `bash scripts/dev/test-affected.sh`・clippy・fmt は提出時の HEAD で通った。計画の check 2 と範囲 check が旧い置き場（`store/strategy_reads.rs`）を求めるので、再計画を申告した（下の「未解決」）。
-設計の正本は [ADR 2026-11-22-parent-checkpoint-evaluator](../../adr/2026-11-22-parent-checkpoint-evaluator.md) の D1.1・D11（adr-revise で改訂した版）。ADR は書いていない。
+完了日: 2026-11-22。計画の全 check（再計画の後の 6 件）は提出時の HEAD で exit 0（下の「検査」）。
+設計の正本は [ADR 2026-11-22-parent-checkpoint-evaluator](../../adr/2026-11-22-parent-checkpoint-evaluator.md) の D1.1・D11（adr-revise で改訂した版）。この WU の最後の run で、D1.1・D11・足さないもの・実装前 brief・保証の表の照会の置き場を crate 直下に直し、末尾に付記（WU strategy-read）を足した。
 基準はこの WU の `$CELERIS_WU_BASE`。検査は提出時の HEAD で実行した。
 
 ## commit（件名）
@@ -18,6 +18,9 @@ updated: 2026-11-22
 3. `strategy-v1 6 strategy-read: 案 (a) の health の確認を進捗に書く`
 4. `strategy-v1 6 strategy-read: 照会を store の外の task_core::strategy_reads の自由関数に移す（人の決定 strategy-read-store-size の (a)）`
 5. `strategy-v1 6 strategy-read: 置き場の移動の後の検査と再計画の申告を進捗に書く`
+6. `strategy-v1 6 strategy-read: check の不合格の確認と再計画の再申告を進捗に書く`
+7. `strategy-v1 6 strategy-read: ADR D1.1・D11 の照会の置き場を crate 直下の task_core::strategy_reads に直し、理由を付記に書く`
+8. `strategy-v1 6 strategy-read: 再計画の後の全 check の結果と完了を進捗に書く`
 
 ## 実装前 brief
 
@@ -87,33 +90,30 @@ cargo nextest run -p task-core --lib -E 'test(strategy_reads_)'
 production の純増 +21 の理由: 照会が task-api の private 関数から task-core の公開の関数になり、module の doc comment（ADR の参照と store の外に置いた理由）と SQL の定数の説明が増えた。
 型の数は 2 → 1、`cos_operations` の strategy の照会は 1 か所（`git grep -n "strategy.name') IS NOT NULL" -- crates` は `crates/task-core/src/strategy_reads.rs` の 1 件）。
 
-## 検査（提出時の HEAD）
+## 検査（提出時の HEAD。再計画の後の計画の check）
 
-- `bash scripts/dev/test-affected.sh` → exit 0。repo health は `verdict=pass exit=0 fail_grade=0`（`size.responsibility-growth` pass・`deps.cycle` pass、`new=8 worsened=2` は fail-grade でない）。
-  nextest は `8720 tests run: 8720 passed (9 slow), 31 skipped`。
-- `cargo clippy --workspace -- -D warnings && cargo fmt --all -- --check` → exit 0。
-- 計画の check 1（`cargo nextest run -p task-core -p task-api -p task-worker --no-fail-fast -E 'test(/strategy_reads_|strategy_gate_|committed_schema_matches_generated|parent_evaluation_wire_/)'`）→ 34 tests run: 34 passed（exit 0）。
-- 計画の check 5（migration・events・operations.rs の差分なし、store の差分は許した file だけ、書き込みの SQL の句なし）→ exit 0。store の差分は 0。
-  `git diff -U0 $(git merge-base HEAD main) -- crates/task-core/src/strategy_reads.rs` にも書き込みの SQL の句は無い。
-- 計画の check 2 → exit 2（`grep: crates/task-core/src/store/strategy_reads.rs: No such file or directory`）。最後の `grep -q 'FROM cos_operations'` の対象を
-  `crates/task-core/src/strategy_reads.rs` にすると exit 0（他の 3 条件は今の形で pass）。
-- 範囲 check → exit 1（`out of scope: crates/task-core/src/strategy_reads.rs`・`crates/task-core/src/strategy_reads_tests.rs`）。
+1. check 1 `cargo nextest run -p task-core -p task-api -p task-worker --no-fail-fast -E 'test(/strategy_reads_|strategy_gate_|committed_schema_matches_generated|parent_evaluation_wire_/)'`
+   → 34 tests run: 34 passed, 3724 skipped（exit 0）。
+2. check 2（`pub struct StrategyRef` が crates で 1 件、`ParentCheckpointStrategy` 無し、`strategy_gate.rs` に `FROM cos_operations`・`StrategyOperation` 無し、
+   `crates/task-core/src/strategy_reads.rs` に `FROM cos_operations` あり、store の下に照会の file 無し、ADR に旧い置き場の 3 つの形が無い）→ exit 0。
+3. check 3 `bash scripts/dev/test-affected.sh` → exit 0。repo health は `verdict=pass exit=0 fail_grade=0`（`size.responsibility-growth` pass・`deps.cycle` pass・`doc.links` pass・`adr.numbers` pass、
+   `new=8 worsened=2` は fail-grade でない）。nextest は `8720 tests run: 8720 passed (7 slow), 31 skipped`。task-api・task-core の変更なので web の typecheck と unit 試験も走り、通った。
+4. check 4 `cargo clippy --workspace -- -D warnings && cargo fmt --all -- --check && sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh`
+   → exit 0（`check-doc-links: ok`、`check-adr-numbers: ok (479 files)`）。
+5. check 5（`git merge-base HEAD main` から store・migration・`model/events.rs`・`store/events.rs`・`cos/operations.rs` の差分 0、`strategy_reads.rs` の追加行に書き込みの SQL の句が無い）→ exit 0。
+6. 範囲 check（`sh "$CELERIS_WU_SCOPE_PATHS"`）→ exit 0。変更した path は `crates/task-core/src/{lib,strategy_ref,strategy_reads,strategy_reads_tests}.rs`・`crates/task-api/src/cos/strategy_gate.rs`・
+   `crates/task-worker/src/protocol.rs`・`crates/task-worker/src/protocol/parent_checkpoint.rs`・`…/parent_checkpoint/tests.rs`・`docs/protocol/worker-protocol.{md,schema.json}`・
+   ADR 2026-11-22-parent-checkpoint-evaluator・この進捗。
 
 ## 未解決
 
 - 人の決定 `strategy-read-store-size` の答えは (a)（CoS の代答。人の選択ではない）: 照会を crate 直下の `task_core::strategy_reads` の自由関数に移し、ADR D1.1・D11 とこの unit の check を再計画で直す。
-  repo health の profile・rule は変えない。この run で (a) の実装を済ませた（上の「検査」）。
-- 再計画で直すもの（この run では変えられないので `plan_issue` で申告した）:
-  - この unit の check 2: 最後の `grep -q 'FROM cos_operations' crates/task-core/src/store/strategy_reads.rs` の path を `crates/task-core/src/strategy_reads.rs` にする。
-  - この unit の範囲 check: `store/(strategy_reads(_tests)?|mod)\.rs$` を外し、`crates/task-core/src/strategy_reads(_tests)?\.rs$` を足す。
-  - この unit の check 5 と done_when 3: store の差分は 0（`git diff --quiet $b -- crates/task-core/src/store`）に、書き込みの SQL の句の検査の対象を `crates/task-core/src/strategy_reads.rs` にする。
-  - ADR 2026-11-22-parent-checkpoint-evaluator の D1.1（35・40 行目）・D11 の表（343・355 行目）・brief（384 行目）・不変条件の表（421 行目）の `store/strategy_reads.rs`・`store::strategy_reads`・
-    `SqliteStore::strategy_task_creates` を `crates/task-core/src/strategy_reads.rs`・`task_core::strategy_reads::strategy_task_creates(store, target)` に直し、高 risk の class `store` に当たらなくなったことと、
-    置き場を変えた理由（store に置くと `size.responsibility-growth` が落ちる）を付記に書く。ADR はこの unit の範囲の外。
-  - 後の controller-checkpoint の objective は `strategy_task_creates(store, Some(root))` の自由関数の形で呼ぶ（関数の名前と戻り値は同じ）。
-
-- 2 回目の run（attempt 1 of 3 の再実行）: 前回の run が done を返したため、celeris が計画の check 2（exit 2）と範囲 check（exit 1）を旧い置き場のまま走らせて不合格にした。この run では実装を変えずに、提出時の HEAD で check 1（34 passed、exit 0）、check 2 を crate 直下の path に直した形（exit 0）、store・migration・events・`cos/operations.rs` の base との差分 0 を確かめ、done ではなく `yield.plan_issue` で再計画を申告した。
+  repo health の profile・rule は変えていない（例外も足していない）。
+- 経過: 置き場を移した後も計画の check 2 と範囲 check が旧い置き場を見ていた。1 回目の run は進捗に再計画の申告を書いて done を返し（check が不合格）、2 回目の run は `plan_issue` を返し、再計画で check が直った。最後の run で ADR を直し、全 check を再実行した。
+- ADR の付記: 置き場を変えた理由（store の module は `size.responsibility-growth` の上限に達しており、1 行の増加でも repo health が落ちる）、高 risk の class `store` に当たらなくなったこと、
+  controller-checkpoint の呼び出しの形 `strategy_task_creates(store, Some(root))` を書いた。
+- 未確認: 照会の性能（`cos_operations` の全件を読む gate の照会は旧い生の SQL と同じ条件・同じ順で、索引も同じ。本番の行数での時間は測っていない）。
 
 ## 提案
 
-- 再計画では、ADR の付記と check の直しを 1 つの unit（ADR を範囲に含むもの）にまとめ、この unit は check を直した後に再実行だけにする（実装は branch に commit 済み）。
+- 計画の check に path を固定した grep を置くときは、人の決定で置き場が変わりうる file（repo health の size の上限に近い module の下）なら、決定の答えを待ってから check を確定する。

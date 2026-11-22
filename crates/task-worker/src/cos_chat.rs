@@ -620,7 +620,11 @@ fn discussion_files_guide(chat: &CosChatContext) -> String {
             "- 案: `strategy/<strategy_id>/v<version>.json`（`celeris.strategy/1`）。`decision_state` は `discussion` か `proposed`、\
              `source` は `{\"kind\":\"celeris_cos_thread\",\"label\":…,\"thread_id\":<この thread>}`、`actor` は \
              `{\"kind\":\"cos\",\"id\":\"cos:<この thread>\"}`、`project_id` はこの thread の案件。`chat` の参照は `{\"kind\":\"chat\", <引用の 4 欄>}`。\
-             同じ name で中身の違う file は版の衝突として拒否される。\n",
+             同じ name で中身の違う file は版の衝突として拒否される。\n\
+             - 案の候補は 2〜8 件（`open` は 3 件まで、`selected` の無い版は `open` が 2〜3 件）。各候補に `state`（`open`・`rejected`）、\
+             `rejected` なら `rejected_by`（候補の仮説の `refute` の証拠の id）、`experiment` `{\"content\",\"discriminates\":[<仮説の id>],\
+             \"budget\":{\"usd_max\",\"wall_hours_max\"}}`（予算は候補の `cost` 以下）、`expected_information_value`、`stop_when`（1〜8 件）を書き、\
+             文書に `held_assumptions` `[{\"id\",\"statement\",\"revisit_when\"}]`（0〜16 件）を書く。前の版で `rejected` の候補は消さず・書き換えず・選ばない。\n",
         );
     }
     for input in &chat.inputs {

@@ -252,6 +252,7 @@ pub mod roadmap;
 /// ADR 2026-11-21-strategy-evidence-contract: 戦略・仮説・証拠の文書 `celeris.strategy/1` と検証の純関数。
 pub mod strategy;
 pub mod strategy_critic;
+pub mod strategy_reads;
 pub mod strategy_ref;
 pub use org::{
     Milestone, MilestoneDecision, MilestoneId, MilestoneStatus, OrgError, OrgKind, OrgNode,

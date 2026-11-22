@@ -12,6 +12,7 @@ use time::format_description::well_known::Rfc3339;
 use crate::chat::{AuditContext, ChatActor, ChatError};
 use crate::model::TaskId;
 use crate::store::SqliteStore;
+use crate::strategy_reads::strategy_task_creates;
 use crate::strategy_ref::StrategyRef;
 
 fn at(s: &str) -> OffsetDateTime {
@@ -162,7 +163,7 @@ fn fixture() -> Fixture {
 #[test]
 fn strategy_reads_all_rows_in_order() {
     let f = fixture();
-    let rows = f.store.strategy_task_creates(None).expect("read");
+    let rows = strategy_task_creates(&f.store, None).expect("read");
     assert_eq!(
         rows,
         vec![
@@ -177,19 +178,19 @@ fn strategy_reads_all_rows_in_order() {
 fn strategy_reads_by_target() {
     let f = fixture();
     assert_eq!(
-        f.store.strategy_task_creates(Some(f.first)).expect("read"),
+        strategy_task_creates(&f.store, Some(f.first)).expect("read"),
         vec![
             (f.first.to_string(), strategy(1, Some("fixed-plan"))),
             (f.first.to_string(), strategy(2, Some("pivot"))),
         ]
     );
     assert_eq!(
-        f.store.strategy_task_creates(Some(f.second)).expect("read"),
+        strategy_task_creates(&f.store, Some(f.second)).expect("read"),
         vec![(f.second.to_string(), strategy(1, None))]
     );
     for none in [f.rejected, f.plain, TaskId::new()] {
         assert_eq!(
-            f.store.strategy_task_creates(Some(none)).expect("read"),
+            strategy_task_creates(&f.store, Some(none)).expect("read"),
             Vec::new(),
             "{none}"
         );
@@ -216,8 +217,7 @@ fn strategy_reads_same_created_at_orders_by_id() {
             },
         );
     }
-    let versions: Vec<String> = store
-        .strategy_task_creates(Some(target))
+    let versions: Vec<String> = strategy_task_creates(&store, Some(target))
         .expect("read")
         .into_iter()
         .map(|(_, s)| s.name)

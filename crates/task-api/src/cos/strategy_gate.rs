@@ -10,7 +10,7 @@
 //! 欄の無い `task.create` はここを通らない（呼び出し側の `operations::create_operation` が欄のあるときだけ呼ぶ）。
 //!
 //! ADR 2026-11-22-strategy-review-critic D2・D3.7・D4・D5: 文書の検査に続けて、実行の入口の事実（文書を作った task の
-//! status、`task_core::strategy_critic::critic_subjects` による Critic の対象、`cos_operations` から `SqliteStore::strategy_task_creates` で導く鎖の版ごとの
+//! status、`task_core::strategy_critic::critic_subjects` による Critic の対象、`cos_operations` から `task_core::strategy_reads::strategy_task_creates` で導く鎖の版ごとの
 //! 実験 task の集合 X(v) とその終端、起票の `execution`・`max_wall_secs`・`strategy.candidate`）を集めて
 //! [`task_core::strategy::check_execution`] に渡す。規則はそこにあり、ここには書かない。違反は文書の違反と同じ 422 に並ぶ。
 
@@ -29,6 +29,7 @@ use task_core::strategy::{
     StrategyDocument, Violation,
 };
 use task_core::strategy_critic::critic_subjects;
+use task_core::strategy_reads;
 use task_core::{ExecutionMode, Project, ProjectId};
 
 use super::operations::{DispatchEnv, Matched, unprocessable};
@@ -243,7 +244,7 @@ fn execution_facts(
         versions.push((version, &prev.pointer.name, &prev.pointer.sha256));
     }
     // D2.3 の X(v) の元（ADR 2026-11-22-parent-checkpoint-evaluator D1.1 の照会の全件。版ごとの選別はここで行う）。
-    let operations = store.strategy_task_creates(None).map_err(store_problem)?;
+    let operations = strategy_reads::strategy_task_creates(store, None).map_err(store_problem)?;
     let mut experiments = Vec::new();
     for (version, name, sha256) in versions {
         let of_version = operations

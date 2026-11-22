@@ -1,7 +1,7 @@
 //! ADR 2026-11-22-parent-checkpoint-evaluator D1.1: 戦略の文書の参照の型（crates で 1 つ）。
 //!
 //! CoS の `/cos/operations` の欄 `strategy`（子 5 の gate）、`cos_operations.payload_json.strategy` の照会
-//! （`SqliteStore::strategy_task_creates`）、親の途中評価の入力 `ParentCheckpointRequest.strategy` が同じ型を使う。
+//! （`strategy_reads::strategy_task_creates`）、親の途中評価の入力 `ParentCheckpointRequest.strategy` が同じ型を使う。
 //! この module は task-core の他の module を use しない（serde・schemars だけ。D11 の deps.cycle）。
 
 use serde::{Deserialize, Serialize};

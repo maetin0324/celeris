@@ -1,12 +1,12 @@
 ---
 title: 戦略層 v1 子 3 edit-retract — 人の message の編集・撤回（前の本文を chat_events に残し、要約と session を戻す）
 tasks: [01M7XQ9QE8STND208NXG90F743]
-status: blocked
+status: done
 updated: 2026-11-22
 ---
 # edit-retract（WorkUnit。子 3 の段 cite）
 
-完了日: 2026-11-22（Run #2。Run #1 は予算切れで、実装と試験はそこで済んでいた）。設計は [ADR 2026-11-21-chat-discussion-mode](../../adr/2026-11-21-chat-discussion-mode.md) の D5・D7・D8.1。
+完了日: 2026-11-22（Run #5。実装と試験は Run #2 で済み、Run #3〜#4 は範囲の check の計画の問題を申告し、計画 v3 で範囲が直った）。設計は [ADR 2026-11-21-chat-discussion-mode](../../adr/2026-11-21-chat-discussion-mode.md) の D5・D7・D8.1。
 基準は `$CELERIS_WU_BASE`。検査は提出時の HEAD で実行した。
 
 ## したこと
@@ -167,3 +167,18 @@ base は試験の型（`ChatMessageEditRequest` など）を持たないので�
   POST `…/messages/{}/retract` が ADR の表に無い）。確かめた後に ADR を HEAD の版へ戻した。
 - 他の check（celeris が Run #3 の後に同じ HEAD の実装で走らせた結果）: 試験名の check は exit 0、`test-affected.sh && clippy && fmt` は exit 0（713 秒）、
   progress-index の check は exit 0、repo-health は verdict=Pass。
+
+## Run #5（2026-11-22）: 計画 v3 の check を提出時の HEAD で再実行した
+
+結論: 計画 v3 は範囲の check の許可に `agent-docs/adr/2026-10-09-cos-operations-all-mutations\.md$` と `crates/task-api/src/schema\.rs$` を足した。
+実装・試験・生成物は変えず、計画 v3 の 4 つの check を提出時の HEAD（この節の commit の前の HEAD。後の差分はこの進捗 file だけ）で走らせ、すべて exit 0 だった。
+
+- 範囲の check（計画 v3 の正規表現）: exit 0。範囲の外の path は 0。
+- 試験名の check（`cargo test -p task-core -p task-api chat_message_ -- --list` で数え、4 つの filter で実行）: exit 0。`chat_message_edit_`・`chat_message_retract_` の試験は 17 件（下限 6）。
+  task-core `chat_message_edit_` 10 passed・`chat_message_retract_` 1 passed、task-api の lib 1 passed・`tests/chat_message_revise.rs` 4 passed（edit）・1 passed（retract）。failed は 0。
+- `bash scripts/dev/test-affected.sh`: exit 0（728 秒）。repo-health verdict=pass（fail_grade=0、new=0、worsened=2 は上の `dup.state`）、`repo_health_gate: all checks passed`、
+  web の型検査と unit 試験 101 file・705 件 pass、test-ts-verify 20 passed・0 failed、Rust `8618 tests run: 8618 passed (7 slow), 31 skipped`。
+  終わりに scratch の `.trash-*` の削除で `rm: Permission denied` が 3 行出たが、exit には影響していない（試験の結果ではない）。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+- `cargo fmt --all -- --check`: exit 0。
+- `test -f agent-docs/progress/2026-11-21-strategy-v1-3/edit-retract.md && sh scripts/dev/progress-index.sh --check`: exit 0（この節を足した後にも再実行する）。

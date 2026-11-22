@@ -422,6 +422,7 @@ pub(crate) fn message_from_raw(conn: &Connection, r: MessageRaw) -> Result<ChatM
         cos_proposal,
         discussion_mode: super::ChatDiscussionMode::of_metadata(&meta),
         edit_state: super::ChatMessageEditState::of_metadata(&meta)?,
+        citations: crate::chat_citation::citation_views_of_metadata(conn, &meta)?,
         created_at: r.created_at,
         updated_at: r.updated_at,
     })

@@ -745,6 +745,21 @@ export type ChatCheckpointSaved = {
   "thread_id": string;
 };
 
+export type ChatCitation = {
+  "message_id": string;
+  "revision": number;
+  "sha256": string;
+  "thread_id": string;
+};
+
+export type ChatCitationState = "current" | "edited" | "retracted" | "missing";
+
+export type ChatCitationView = {
+  "citation": ChatCitation;
+  "path": string;
+  "state": ChatCitationState;
+};
+
 export type ChatCosProposal = {
   "expires_at": string;
   "from_thread_id": string;
@@ -800,6 +815,7 @@ export type ChatMessage = {
   "attachment_ids": Array<string>;
   "author"?: string | null;
   "cards": Array<ChatCard>;
+  "citations"?: Array<ChatCitationView>;
   "client_message_id"?: string | null;
   "cos_proposal"?: ChatCosProposal | null;
   "created_at": string;

@@ -46,7 +46,9 @@ mod window;
 #[cfg(test)]
 mod window_tests;
 // ADR 2026-11-21-chat-discussion-mode D5: the edit / retract wire types live in a leaf module.
-pub use crate::chat_citation::{ChatCitation, ChatCitationState};
+pub use crate::chat_citation::{
+    ChatCitation, ChatCitationState, ChatCitationView, ChatFileCitation,
+};
 pub use crate::chat_revision_wire::*;
 pub use credential::{ChatCheckpointSaved, CosRunCredentialError, CosRunIdentity};
 pub use digest_fixture::{COS_DIGEST_GENERATED_CASES, cos_digest_fixture_jsonl};
@@ -258,6 +260,10 @@ pub struct ChatMessage {
     /// ADR 2026-11-21-chat-discussion-mode D5.2: `revision` / `edited` / `retracted`.
     #[serde(flatten)]
     pub edit_state: Box<ChatMessageEditState>,
+    /// D6: the citations of the summary / draft files attached to this reply, each with its
+    /// state derived from the cited message as it is now (never stored).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub citations: Vec<ChatCitationView>,
     pub created_at: String,
     pub updated_at: String,
 }

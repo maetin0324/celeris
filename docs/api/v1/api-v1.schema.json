@@ -3632,6 +3632,79 @@
       ],
       "type": "object"
     },
+    "ChatCitation": {
+      "additionalProperties": false,
+      "description": "D6: one cited message at the revision the citing text read. `sha256` is the SHA-256 (64\nlowercase hex) of that revision's body. The state is not part of it: it is derived from the\nmessage every time ([`citation_state`]).",
+      "properties": {
+        "message_id": {
+          "type": "string"
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "thread_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id",
+        "message_id",
+        "revision",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "ChatCitationState": {
+      "description": "D6: the state of a citation, derived from the cited message as it is now.",
+      "oneOf": [
+        {
+          "const": "current",
+          "description": "The message is at the cited revision and its body has the cited sha256.",
+          "type": "string"
+        },
+        {
+          "const": "edited",
+          "description": "The author edited the message after the cited revision.",
+          "type": "string"
+        },
+        {
+          "const": "retracted",
+          "description": "The author retracted the message.",
+          "type": "string"
+        },
+        {
+          "const": "missing",
+          "description": "No such message in the cited thread, or the cited revision / body never existed.",
+          "type": "string"
+        }
+      ]
+    },
+    "ChatCitationView": {
+      "additionalProperties": false,
+      "description": "D6: a [`ChatFileCitation`] with its state derived now from the cited message (GET messages and\nthe SSE `message` event). A file with any citation not `current` is stale.",
+      "properties": {
+        "citation": {
+          "$ref": "#/$defs/ChatCitation"
+        },
+        "path": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/ChatCitationState"
+        }
+      },
+      "required": [
+        "path",
+        "citation",
+        "state"
+      ],
+      "type": "object"
+    },
     "ChatCosProposal": {
       "description": "§A4: the record of a general CoS proposal to a project CoS. Written by Rust from the verified\nrun credential; the request body cannot set any of it.",
       "properties": {
@@ -3914,6 +3987,13 @@
         "cards": {
           "items": {
             "$ref": "#/$defs/ChatCard"
+          },
+          "type": "array"
+        },
+        "citations": {
+          "description": "D6: the citations of the summary / draft files attached to this reply, each with its\nstate derived from the cited message as it is now (never stored).",
+          "items": {
+            "$ref": "#/$defs/ChatCitationView"
           },
           "type": "array"
         },

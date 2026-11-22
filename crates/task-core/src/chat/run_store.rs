@@ -889,11 +889,30 @@ impl SqliteStore {
         thread_id: &str,
         message_id: &str,
         files: &[ChatWorkspaceFile],
+        citations: &[super::ChatFileCitation],
         now: OffsetDateTime,
     ) -> Result<ChatMessage, ChatError> {
         let mut conn = writer(self)?;
         let tx = immediate(&mut conn)?;
         let message = message_require(&tx, thread_id, message_id)?;
+        // ADR 2026-11-21-chat-discussion-mode D6: the citations are checked again in this
+        // transaction (an edit between the file check and here makes the attach a conflict).
+        for f in citations {
+            let now_msg = crate::chat_citation::cited_message_conn(
+                &tx,
+                &f.citation.thread_id,
+                &f.citation.message_id,
+            )?;
+            if let Err(refusal) =
+                crate::chat_citation::verify_citation(thread_id, &f.citation, now_msg.as_ref())
+            {
+                return Err(ChatError::Conflict(format!(
+                    "{}: {}",
+                    refusal.code(),
+                    f.path
+                )));
+            }
+        }
         if message.role != ChatMessageRole::Assistant {
             return Err(ChatError::Invalid(format!(
                 "message {message_id} is not an assistant reply"
@@ -936,6 +955,9 @@ impl SqliteStore {
             meta = json!({});
         }
         meta["workspace_files"] = serde_json::to_value(files)?;
+        if !citations.is_empty() {
+            meta["citations"] = serde_json::to_value(citations)?;
+        }
         tx.execute(
             "UPDATE chat_messages SET metadata_json=?2,updated_at=?3 WHERE id=?1",
             params![message_id, serde_json::to_string(&meta)?, chat_ts(now)],
@@ -1061,8 +1083,23 @@ impl SqliteStore {
             let items = rows
                 .into_iter()
                 .take(limit as usize)
-                .map(decode_event)
-                .collect::<Result<Vec<_>, _>>()?;
+                .map(|row| {
+                    let mut event = decode_event(row)?;
+                    // D6: a replayed message shows its citations' state as of now.
+                    if let ChatEventData::Message(data) = &mut event.data {
+                        for view in &mut data.message.citations {
+                            let c = &view.citation;
+                            let now = crate::chat_citation::cited_message_conn(
+                                conn,
+                                &c.thread_id,
+                                &c.message_id,
+                            )?;
+                            view.state = crate::chat_citation::citation_state(c, now.as_ref());
+                        }
+                    }
+                    Ok(event)
+                })
+                .collect::<Result<Vec<_>, ChatError>>()?;
             let next_cursor = if more {
                 items.last().map(|e| e.id.clone())
             } else {

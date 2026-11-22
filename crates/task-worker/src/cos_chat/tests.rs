@@ -997,3 +997,40 @@ fn discussion_mode_prompt_names_discuss_and_propose_runs() {
         assert!(inputs.contains("`discussion_mode_forbidden`"), "{inputs}");
     }
 }
+
+/// ADR 2026-11-21-chat-discussion-mode D3・D6 (WU cite-attach): a discuss / propose run's prompt
+/// says how to write a summary file and gives each input's citation (revision and body sha256);
+/// only a propose run is told how to write a draft. An execute run (no mode) gets none of it, as
+/// before. The guarantee is the dispatcher's attach check (task-dispatch `discussion_files`).
+#[test]
+fn chat_discussion_summary_prompt_names_file_and_citation_form() {
+    use sha2::{Digest, Sha256};
+    let mut c = chat();
+    let none = super::inputs_section(&c);
+    assert!(!none.contains("discussion/summary/"), "{none}");
+    let input = c.inputs.first().cloned().expect("an input");
+    let sha = format!("{:x}", Sha256::digest(input.text.as_bytes()));
+    let line = format!(
+        "{{\"thread_id\":\"{}\",\"message_id\":\"{}\",\"revision\":1,\"sha256\":\"{sha}\"}}",
+        c.thread_id, input.id
+    );
+    c.discussion_mode = Some(task_core::chat::ChatDiscussionMode::Discuss);
+    let discuss = super::inputs_section(&c);
+    assert!(
+        discuss.contains("discussion/summary/<name>.json"),
+        "{discuss}"
+    );
+    assert!(
+        discuss.contains("celeris.discussion-summary/1"),
+        "{discuss}"
+    );
+    assert!(discuss.contains(&line), "{line} missing in\n{discuss}");
+    assert!(!discuss.contains("strategy/<strategy_id>"), "{discuss}");
+    c.discussion_mode = Some(task_core::chat::ChatDiscussionMode::Propose);
+    let propose = super::inputs_section(&c);
+    assert!(
+        propose.contains("strategy/<strategy_id>/v<version>.json"),
+        "{propose}"
+    );
+    assert!(propose.contains("\"cos:<この thread>\""), "{propose}");
+}

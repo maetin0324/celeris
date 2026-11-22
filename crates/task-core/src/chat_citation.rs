@@ -4,12 +4,18 @@
 //! summary file (`celeris.discussion-summary/1`). The strategy document's `chat` reference
 //! (`crate::strategy::Reference::Chat`) is the same type and goes through the same functions.
 //!
-//! A leaf of pure functions: it depends on nothing in this crate, so [`crate::chat`] re-exports the
-//! types and [`crate::strategy`] uses the functions without a module cycle. The facts about the
-//! cited message ([`CitedMessage`]) are read by `crate::discussion_citation`.
+//! A leaf: it depends on nothing in this crate but the leaf [`crate::chat_revision_wire`], so
+//! [`crate::chat`] re-exports the types and builds the wire [`ChatCitationView`]s of a message
+//! ([`citation_views`], GET and SSE) and [`crate::strategy`] uses the functions without a module
+//! cycle. The facts about a cited message ([`CitedMessage`]) are read by [`cited_message_conn`].
 
+use rusqlite::{Connection, OptionalExtension, params};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+
+use crate::chat_revision_wire::ChatMessageEditState;
 
 /// D6: the schema of a discussion summary file `discussion/summary/<name>.json`.
 pub const DISCUSSION_SUMMARY_SCHEMA: &str = "celeris.discussion-summary/1";
@@ -42,6 +48,27 @@ pub enum ChatCitationState {
     Retracted,
     /// No such message in the cited thread, or the cited revision / body never existed.
     Missing,
+}
+
+/// D6: one citation of a file attached to a CoS reply, as stored once in the reply's
+/// `metadata_json.citations` (no state: the state is derived on every read).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChatFileCitation {
+    /// The workspace path of the cited-from file (`strategy/<id>/v<n>.json`,
+    /// `discussion/summary/<name>.json`), as in `ChatMessage.workspace_files`.
+    pub path: String,
+    pub citation: ChatCitation,
+}
+
+/// D6: a [`ChatFileCitation`] with its state derived now from the cited message (GET messages and
+/// the SSE `message` event). A file with any citation not `current` is stale.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChatCitationView {
+    pub path: String,
+    pub citation: ChatCitation,
+    pub state: ChatCitationState,
 }
 
 /// The cited message as it is now (read from `chat_messages` / `chat_threads`).
@@ -290,4 +317,87 @@ pub fn check_discussion_summary(
         }
     }
     out
+}
+
+/// SHA-256 (64 lowercase hex) of a message body (the `sha256` of a [`ChatCitation`]).
+pub fn body_sha256(text: &str) -> String {
+    format!("{:x}", Sha256::digest(text.as_bytes()))
+}
+
+/// The message `message_id` of thread `thread_id` as it is now, or `None` if the thread has no
+/// such message. Reads only; usable inside the caller's transaction.
+pub fn cited_message_conn(
+    conn: &Connection,
+    thread_id: &str,
+    message_id: &str,
+) -> rusqlite::Result<Option<CitedMessage>> {
+    let row = conn
+        .query_row(
+            "SELECT m.seq, m.text, m.metadata_json, t.project_id, t.kind \
+             FROM chat_messages m JOIN chat_threads t ON t.id=m.thread_id \
+             WHERE m.id=?1 AND m.thread_id=?2",
+            params![message_id, thread_id],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((seq, text, meta, project_id, kind)) = row else {
+        return Ok(None);
+    };
+    let bad = |e: serde_json::Error| {
+        rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e))
+    };
+    let meta: Value = serde_json::from_str(&meta).map_err(bad)?;
+    let state = ChatMessageEditState::of_metadata(&meta).map_err(bad)?;
+    Ok(Some(CitedMessage {
+        thread_id: thread_id.to_string(),
+        message_id: message_id.to_string(),
+        project_id,
+        general_thread: kind == "general",
+        seq: u64::try_from(seq).unwrap_or_default(),
+        revision: state.revision,
+        sha256: body_sha256(&text),
+        retracted: state.retracted.is_some(),
+    }))
+}
+
+/// D6: the wire views of `stored` (a reply's `metadata_json.citations`), each with its state
+/// derived now from the cited message.
+pub fn citation_views(
+    conn: &Connection,
+    stored: &[ChatFileCitation],
+) -> rusqlite::Result<Vec<ChatCitationView>> {
+    stored
+        .iter()
+        .map(|f| {
+            let c = &f.citation;
+            let now = cited_message_conn(conn, &c.thread_id, &c.message_id)?;
+            Ok(ChatCitationView {
+                path: f.path.clone(),
+                citation: c.clone(),
+                state: citation_state(c, now.as_ref()),
+            })
+        })
+        .collect()
+}
+
+/// [`citation_views`] of a message's `metadata_json` (no `citations` key: none).
+pub fn citation_views_of_metadata(
+    conn: &Connection,
+    meta: &Value,
+) -> rusqlite::Result<Vec<ChatCitationView>> {
+    let stored: Vec<ChatFileCitation> = match meta.get("citations") {
+        Some(v) if !v.is_null() => serde_json::from_value(v.clone()).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e))
+        })?,
+        _ => return Ok(Vec::new()),
+    };
+    citation_views(conn, &stored)
 }

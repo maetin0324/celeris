@@ -9,16 +9,24 @@
 //! - 走査は dot で始まる名前（`.taskd/` など run の内部物）と最上位の `attachments/`（人の添付の写し）を除き、
 //!   adapter の run 記録 `runs/` も除き、symlink を辿らず、深さ `MAX_DEPTH`・`MAX_ENTRIES` 項目で打ち切る。
 //! - 保存は既存の `ChatAttachmentStore::upload`（hash・MIME・権限は D4 と同じ）。上限を超える file は付けない。
+//! - 案（`strategy/<id>/v<n>.json`）と要約（`discussion/summary/<name>.json`）は `discussion_files::check` を
+//!   通ったものだけ付け、その引用の列を添付と同じ transaction で返事の `metadata_json.citations` に書く
+//!   （ADR 2026-11-21-chat-discussion-mode D3・D6）。通らない file は付けず、code を run の status に出す。
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, File};
+use std::io::Read;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use task_core::SqliteStore;
 use task_core::chat::attachments::{ChatAttachmentLimits, ChatAttachmentStore};
-use task_core::chat::{ChatMessage, ChatMessageQuery, ChatWorkspaceFile};
+use task_core::chat::{
+    ChatError, ChatFileCitation, ChatMessage, ChatMessageQuery, ChatStatusPhase, ChatWorkspaceFile,
+};
+
+use super::discussion_files::{self, ReplyFacts};
 use time::OffsetDateTime;
 
 /// 走査する深さ（workspace 直下が 1）。
@@ -187,6 +195,9 @@ pub(crate) fn attach(
     let limits = capture.limits;
     let mut total = 0u64;
     let mut files = Vec::new();
+    let mut citations: Vec<ChatFileCitation> = Vec::new();
+    let mut refused: Vec<(String, String)> = Vec::new();
+    let mut facts: Option<ReplyFacts> = None;
     for rel in rels {
         if files.len() >= limits.max_files_per_message {
             break;
@@ -212,9 +223,31 @@ pub(crate) fn attach(
         };
         let name = rel.rsplit('/').next().unwrap_or(&rel).to_string();
         let key = format!("cos-workspace:{run_id}:{rel}");
-        match attachments.upload(thread_id, &key, &name, Some(size), file, now) {
+        let mut cited = Vec::new();
+        let uploaded = match discussion_files::kind_of(&rel) {
+            None => attachments.upload(thread_id, &key, &name, Some(size), file, now),
+            Some(kind) => {
+                let mut bytes = Vec::new();
+                if let Err(error) = file.take(limits.max_file_bytes).read_to_end(&mut bytes) {
+                    tracing::debug!(%rel, %error, "CoS workspace file unreadable; not attached");
+                    continue;
+                }
+                let sha256 = format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(&bytes));
+                let facts = facts.get_or_insert_with(|| ReplyFacts::read(store, thread_id, run_id));
+                match discussion_files::check(store, facts, kind, &rel, &bytes, &sha256) {
+                    Ok(c) => cited = c,
+                    Err(code) => {
+                        refused.push((rel, code.to_string()));
+                        continue;
+                    }
+                }
+                attachments.upload(thread_id, &key, &name, Some(size), &bytes[..], now)
+            }
+        };
+        match uploaded {
             Ok(row) => {
                 total = total.saturating_add(row.size_bytes);
+                citations.extend(cited);
                 files.push(ChatWorkspaceFile {
                     path: rel,
                     attachment_id: row.id,
@@ -225,12 +258,39 @@ pub(crate) fn attach(
             }
         }
     }
-    if files.is_empty() {
-        return Ok(files);
+    if !files.is_empty() {
+        match store
+            .chat_message_attach_workspace_files(thread_id, message_id, &files, &citations, now)
+        {
+            // D6: a cited message changed after the file check; the cited files are not attached.
+            Err(ChatError::Conflict(reason)) if !citations.is_empty() => {
+                let cited: HashSet<&str> = citations.iter().map(|c| c.path.as_str()).collect();
+                for path in &cited {
+                    refused.push(((*path).to_string(), reason.clone()));
+                }
+                files.retain(|f| !cited.contains(f.path.as_str()));
+                if !files.is_empty() {
+                    store
+                        .chat_message_attach_workspace_files(
+                            thread_id,
+                            message_id,
+                            &files,
+                            &[],
+                            now,
+                        )
+                        .map_err(|e| format!("attach workspace files: {e}"))?;
+                }
+            }
+            Err(e) => return Err(format!("attach workspace files: {e}")),
+            Ok(_) => {}
+        }
     }
-    store
-        .chat_message_attach_workspace_files(thread_id, message_id, &files, now)
-        .map_err(|e| format!("attach workspace files: {e}"))?;
+    for (rel, code) in refused {
+        let summary = format!("{code}: {rel} は添付しなかった");
+        if let Err(error) = store.chat_run_status(run_id, ChatStatusPhase::Working, &summary, now) {
+            tracing::warn!(%error, %run_id, "CoS discussion file refusal not recorded");
+        }
+    }
     Ok(files)
 }
 

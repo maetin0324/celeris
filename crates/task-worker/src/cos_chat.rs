@@ -253,6 +253,7 @@ fn inputs_section(chat: &CosChatContext) -> String {
              `discussion_mode_forbidden` で拒否する。読む・話す・案を返事の file に書くだけにする）\n\n",
             mode.as_str()
         ));
+        out.push_str(&discussion_files_guide(chat));
     }
     for input in &chat.inputs {
         let marker = if input.interrupt {
@@ -599,6 +600,38 @@ fn skills_section(chat: &CosChatContext) -> String {
             .collect::<Vec<_>>()
             .join("、")
     )
+}
+
+/// ADR 2026-11-21-chat-discussion-mode D3・D6: how to write a summary / draft file and cite a
+/// message. The guarantee is the dispatcher's check at the run's end (a file that fails it is not
+/// attached and its code is in the run's status); these lines only explain it.
+fn discussion_files_guide(chat: &CosChatContext) -> String {
+    use sha2::{Digest, Sha256};
+    let mut out = String::from(
+        "要約と案の file（返事に添付される。検査を通らない file は添付されず、code が run の status に出る）:\n\
+         - 要約: `discussion/summary/<name>.json` に `{\"schema\":\"celeris.discussion-summary/1\",\"project_id\":<この thread の案件 id か null>,\
+         \"thread_id\":<この thread>,\"through_seq\":<要約した最後の seq>,\"body\":<Markdown、16384 byte まで>,\"citations\":[<引用 1〜256 件>]}`。\
+         返事の本文は短い案内にする。\n\
+         - 引用の形: `{\"thread_id\",\"message_id\",\"revision\",\"sha256\"}`（sha256 は引いた版の本文の SHA-256、64 桁の小文字 hex）。\
+         引けるのはこの thread か統括の thread の今の版の発言だけ。今回の入力は下の値を写す（入力の前に編集された発言は revision が 2 以上で、この値は拒否される）。\n",
+    );
+    if chat.discussion_mode == Some(task_core::chat::ChatDiscussionMode::Propose) {
+        out.push_str(
+            "- 案: `strategy/<strategy_id>/v<version>.json`（`celeris.strategy/1`）。`decision_state` は `discussion` か `proposed`、\
+             `source` は `{\"kind\":\"celeris_cos_thread\",\"label\":…,\"thread_id\":<この thread>}`、`actor` は \
+             `{\"kind\":\"cos\",\"id\":\"cos:<この thread>\"}`、`project_id` はこの thread の案件。`chat` の参照は `{\"kind\":\"chat\", <引用の 4 欄>}`。\
+             同じ name で中身の違う file は版の衝突として拒否される。\n",
+        );
+    }
+    for input in &chat.inputs {
+        let sha = format!("{:x}", Sha256::digest(input.text.as_bytes()));
+        out.push_str(&format!(
+            "  - seq {}: {{\"thread_id\":\"{}\",\"message_id\":\"{}\",\"revision\":1,\"sha256\":\"{sha}\"}}\n",
+            input.seq, chat.thread_id, input.id
+        ));
+    }
+    out.push('\n');
+    out
 }
 
 #[cfg(test)]

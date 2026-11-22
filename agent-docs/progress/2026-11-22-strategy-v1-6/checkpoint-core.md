@@ -84,7 +84,8 @@ base には親の途中評価の発火・評価の検査・行動の表の関数
 2. `cargo clippy --workspace -- -D warnings`: exit 0（`deno_core` の vendor の既存の warning 1 件だけで、`-D warnings` の対象外）。`cargo fmt --all -- --check`: exit 0。
 3. 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` は `crates/task-core/src/lib.rs`・`parent_checkpoint.rs`・`parent_checkpoint/tests.rs` とこの file だけ。
    `git diff --name-only $CELERIS_WU_BASE -- crates/task-core/src/store crates/task-core/migrations crates/task-core/src/model/events.rs crates/task-core/src/project_proposal.rs` は 0 行（受け入れ条件 2）。
-4. `bash scripts/dev/test-affected.sh`: 結果は下の「test-affected」の節。
+4. `bash scripts/dev/test-affected.sh`: exit 0。対象は task-core と逆依存の 12 crate・web（typecheck+unit）・ts-verify。
+   nextest `8709 tests run: 8709 passed (11 slow), 31 skipped`、web `Tests 745 passed (745)`（105 file）、`test-ts-verify: 20 passed, 0 failed`、`repo_health_gate: all checks passed`（`deps.cycle` を含む）。
 
 ## LoC（`git diff --numstat $CELERIS_WU_BASE`）
 
@@ -108,7 +109,6 @@ base には親の途中評価の発火・評価の検査・行動の表の関数
 
 ## 未解決
 
-- `test-affected.sh` の結果は下の節（提出時の HEAD で実行）。
 - 評価の質（LLM の reviewer の出力が answer key と合うか）はこの WU の範囲外。ADR「未確認」のまま。
 - `ChildTransition.at` と `StrategyDocumentFacts.at` は RFC 3339 の UTC の文字列で、文字列の順を時刻の順として使う。events の ts の書式が混ざる場合の扱いは呼び出し側（controller-checkpoint）で確かめていない。
 

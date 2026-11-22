@@ -3816,7 +3816,8 @@
           "$ref": "#/$defs/ChatThreadData"
         },
         {
-          "$ref": "#/$defs/ChatMessageRevisedData"
+          "$ref": "#/$defs/ChatMessageRevisedData",
+          "description": "`message_revised` (ADR 2026-11-21-chat-discussion-mode D5.2)."
         }
       ]
     },
@@ -3895,6 +3896,7 @@
       "type": "object"
     },
     "ChatMessage": {
+      "description": "D5.2: `metadata_json.revision` / `edited` / `retracted` of one message, flattened into the\nwire `ChatMessage`. A message never changed carries nothing (`revision` 1 is not sent).",
       "properties": {
         "attachment_ids": {
           "items": {
@@ -4007,10 +4009,9 @@
               "type": "null"
             }
           ],
-          "description": "D5.2: the author retracted the message; `text` is empty from then on."
+          "description": "The author retracted the message; its `text` is empty from then on."
         },
         "revision": {
-          "description": "ADR 2026-11-21-chat-discussion-mode D5.2: `metadata_json.revision` (1 when absent; not sent).",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
@@ -4183,7 +4184,7 @@
     },
     "ChatMessageRevisedData": {
       "additionalProperties": false,
-      "description": "D5.2・D5.4: the `message_revised` event, appended in the edit / retract transaction. It keeps\nthe previous body (events are append-only and retention never removes this type).",
+      "description": "D5.2・D5.4: the data of a `message_revised` chat event, appended in the edit / retract\ntransaction. It keeps the previous body (events are append-only; retention never removes it).",
       "properties": {
         "by": {
           "type": "string"

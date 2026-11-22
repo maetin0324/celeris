@@ -92,10 +92,6 @@ pub enum ChatError {
     /// The cursor points into events removed by retention (410, code chat-cursor-expired).
     #[error("chat cursor {0} expired")]
     CursorExpired(String),
-    /// ADR 2026-11-21-chat-discussion-mode D5.1: only the person who wrote a message edits or
-    /// retracts it (403, code chat_message_edit_forbidden).
-    #[error("forbidden: {0}")]
-    EditForbidden(String),
 }
 
 impl From<rusqlite::Error> for ChatError {
@@ -120,7 +116,7 @@ impl ChatError {
             Self::Conflict(_) => 409,
             Self::TooLarge(_) => 413,
             Self::QueueFull { .. } => 429,
-            Self::ReadOnly(_) | Self::EditForbidden(_) => 403,
+            Self::ReadOnly(_) => 403,
             Self::CursorExpired(_) => 410,
         }
     }
@@ -425,19 +421,10 @@ pub(crate) fn message_from_raw(conn: &Connection, r: MessageRaw) -> Result<ChatM
         provenance,
         cos_proposal,
         discussion_mode: super::ChatDiscussionMode::of_metadata(&meta),
-        revision: meta.get("revision").and_then(Value::as_u64).unwrap_or(1),
-        edited: change_of(&meta, "edited")?,
-        retracted: change_of(&meta, "retracted")?,
+        edit_state: super::ChatMessageEditState::of_metadata(&meta)?,
         created_at: r.created_at,
         updated_at: r.updated_at,
     })
-}
-
-fn change_of(meta: &Value, key: &str) -> Result<Option<super::ChatMessageChange>, ChatError> {
-    match meta.get(key) {
-        Some(v) if !v.is_null() => Ok(Some(serde_json::from_value(v.clone())?)),
-        _ => Ok(None),
-    }
 }
 
 pub(crate) fn message_get_conn(
@@ -513,7 +500,7 @@ pub(crate) fn emit_message(
         m.run_id.as_deref(),
         Some(&m.id),
         ChatEventType::Message,
-        &ChatEventData::Message(Box::new(ChatMessageData { message: m.clone() })),
+        &ChatEventData::Message(ChatMessageData { message: m.clone() }),
         now,
     )
 }

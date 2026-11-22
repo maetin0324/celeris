@@ -215,7 +215,7 @@ fn emit_run(conn: &Connection, run: &ChatRun, now: &str) -> Result<i64, ChatErro
         Some(&run.id),
         None,
         ChatEventType::Run,
-        &ChatEventData::Run(Box::new(ChatRunData { run: run.clone() })),
+        &ChatEventData::Run(ChatRunData { run: run.clone() }),
         now,
     )
 }
@@ -325,9 +325,7 @@ fn decode_event(
         ChatEventType::Queue => ChatEventData::Queue(serde_json::from_str(&payload)?),
         ChatEventType::Card => ChatEventData::Card(serde_json::from_str(&payload)?),
         ChatEventType::Thread => ChatEventData::Thread(serde_json::from_str(&payload)?),
-        ChatEventType::MessageRevised => {
-            ChatEventData::MessageRevised(serde_json::from_str(&payload)?)
-        }
+        ChatEventType::MessageRevised => ChatEventData::Revised(serde_json::from_str(&payload)?),
     };
     Ok(ChatEvent {
         id: id.to_string(),

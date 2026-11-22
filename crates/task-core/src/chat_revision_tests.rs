@@ -6,6 +6,7 @@ use serde_json::json;
 use time::OffsetDateTime;
 
 use crate::chat::*;
+use crate::chat_revision::ChatRevisionError;
 use crate::store::SqliteStore;
 
 const ME: &str = "human:alice";
@@ -83,7 +84,7 @@ fn revised(s: &SqliteStore, t: &str, m: &str) -> Vec<ChatMessageRevisedData> {
         .items
         .into_iter()
         .map(|e| match e.data {
-            ChatEventData::MessageRevised(d) => d,
+            ChatEventData::Revised(d) => d,
             other => panic!("not message_revised: {other:?}"),
         })
         .collect()
@@ -107,22 +108,31 @@ fn chat_message_edit_by_author_keeps_previous_body_in_chat_events() {
     let s = SqliteStore::open_in_memory().expect("store");
     let t = thread(&s);
     let m = delivered(&s, &t, "k1", "first words", 0);
-    assert_eq!(m.revision, 1);
+    assert_eq!(m.edit_state.revision, 1);
     let wire = serde_json::to_value(&m).expect("wire");
     assert!(wire.get("revision").is_none() && wire.get("edited").is_none());
 
     let e1 = s
         .chat_message_edit(&t, &m.id, ME, &edit("second words", 1), at(10))
         .expect("edit");
-    assert_eq!((e1.text.as_str(), e1.revision), ("second words", 2));
-    assert_eq!(e1.edited.as_ref().map(|c| c.by.as_str()), Some(ME));
+    assert_eq!(
+        (e1.text.as_str(), e1.edit_state.revision),
+        ("second words", 2)
+    );
+    assert_eq!(
+        e1.edit_state.edited.as_ref().map(|c| c.by.as_str()),
+        Some(ME)
+    );
     assert_eq!(e1.discussion_mode, m.discussion_mode, "edit keeps the mode");
     let e2 = s
         .chat_message_retract(&t, &m.id, ME, &retract(2, "wrong thread"), at(11))
         .expect("retract");
-    assert_eq!((e2.text.as_str(), e2.revision), ("", 3));
+    assert_eq!((e2.text.as_str(), e2.edit_state.revision), ("", 3));
     assert_eq!(
-        e2.retracted.as_ref().and_then(|c| c.reason.as_deref()),
+        e2.edit_state
+            .retracted
+            .as_ref()
+            .and_then(|c| c.reason.as_deref()),
         Some("wrong thread")
     );
 
@@ -173,7 +183,7 @@ fn chat_message_edit_forbidden_for_non_author_principals() {
         let e = s
             .chat_message_edit(&t, &m.id, by, &edit("theirs", 1), at(5))
             .expect_err("edit by another principal");
-        assert!(matches!(e, ChatError::EditForbidden(_)), "{by}: {e:?}");
+        assert!(matches!(e, ChatRevisionError::Forbidden(_)), "{by}: {e:?}");
         let r = s
             .chat_message_retract(&t, &m.id, by, &retract(1, ""), at(5))
             .expect_err("retract by another principal");
@@ -184,7 +194,7 @@ fn chat_message_edit_forbidden_for_non_author_principals() {
     let e = s
         .chat_message_edit(&t, &op.id, "operator:claude-code", &edit("x", 1), at(7))
         .expect_err("operator cannot edit");
-    assert!(matches!(e, ChatError::EditForbidden(_)));
+    assert!(matches!(e, ChatRevisionError::Forbidden(_)));
     assert!(revised(&s, &t, &m.id).is_empty());
     assert_eq!(s.chat_message_get(&t, &m.id).expect("get").text, "mine");
 }
@@ -215,7 +225,7 @@ fn chat_message_edit_forbidden_for_relay_message() {
         let e = s
             .chat_message_edit(&t, &relay.id, by, &edit("changed", 1), at(2))
             .expect_err("relay is not editable");
-        assert!(matches!(e, ChatError::EditForbidden(_)), "{by}");
+        assert!(matches!(e, ChatRevisionError::Forbidden(_)), "{by}");
     }
 }
 
@@ -237,15 +247,21 @@ fn chat_message_edit_assistant_or_system_is_403() {
     let e = s
         .chat_message_edit(&t, &reply.id, ME, &edit("x", 1), at(3))
         .expect_err("assistant");
-    assert!(matches!(e, ChatError::EditForbidden(_)));
+    assert!(matches!(e, ChatRevisionError::Forbidden(_)));
     let system = s
         .chat_system_message_add(&t, "daemon request", &[], at(4))
         .expect("system");
     let e = s
         .chat_message_retract(&t, &system.id, ME, &retract(1, ""), at(5))
         .expect_err("system");
-    assert!(matches!(e, ChatError::EditForbidden(_)));
-    assert_eq!(s.chat_message_get(&t, &m.id).expect("get").revision, 1);
+    assert!(matches!(e, ChatRevisionError::Forbidden(_)));
+    assert_eq!(
+        s.chat_message_get(&t, &m.id)
+            .expect("get")
+            .edit_state
+            .revision,
+        1
+    );
 }
 
 /// Invariant: an input a run is reading (`running`) is not changed; a stale revision is a
@@ -263,21 +279,27 @@ fn chat_message_edit_running_is_409() {
     let e = s
         .chat_message_retract(&t, &m.id, ME, &retract(2, ""), at(2))
         .expect_err("queued retract");
-    assert!(matches!(e, ChatError::Conflict(_)), "{e:?}");
+    assert!(
+        matches!(e, ChatRevisionError::Chat(ChatError::Conflict(_))),
+        "{e:?}"
+    );
     let run = claim(&s, &t, "run-1", 3);
     assert_eq!(run.input_message_id, m.id);
     for result in [
         s.chat_message_edit(&t, &m.id, ME, &edit("too late", 2), at(4)),
         s.chat_message_retract(&t, &m.id, ME, &retract(2, ""), at(4)),
     ] {
-        assert!(matches!(result, Err(ChatError::Conflict(_))), "{result:?}");
+        assert!(
+            matches!(result, Err(ChatRevisionError::Chat(ChatError::Conflict(_)))),
+            "{result:?}"
+        );
     }
     let c = post(&s, &t, "k2", "to cancel", ME, 5);
     s.chat_message_cancel(&t, &c.id, at(6)).expect("cancel");
     let e = s
         .chat_message_edit(&t, &c.id, ME, &edit("x", 1), at(7))
         .expect_err("cancelled");
-    assert!(matches!(e, ChatError::Conflict(_)));
+    assert!(matches!(e, ChatRevisionError::Chat(ChatError::Conflict(_))));
 }
 
 #[test]
@@ -290,13 +312,19 @@ fn chat_message_edit_stale_revision_is_409() {
     let e = s
         .chat_message_edit(&t, &m.id, ME, &edit("v3", 1), at(6))
         .expect_err("stale");
-    assert!(matches!(e, ChatError::Conflict(_)), "{e:?}");
+    assert!(
+        matches!(e, ChatRevisionError::Chat(ChatError::Conflict(_))),
+        "{e:?}"
+    );
     s.chat_message_retract(&t, &m.id, ME, &retract(2, ""), at(7))
         .expect("retract");
     let e = s
         .chat_message_edit(&t, &m.id, ME, &edit("v4", 3), at(8))
         .expect_err("retracted");
-    assert!(matches!(e, ChatError::Conflict(_)), "{e:?}");
+    assert!(
+        matches!(e, ChatRevisionError::Chat(ChatError::Conflict(_))),
+        "{e:?}"
+    );
     assert_eq!(revised(&s, &t, &m.id).len(), 2);
 }
 
@@ -453,16 +481,16 @@ fn chat_message_edit_validates_text_and_reason() {
     let e = s
         .chat_message_edit(&t, &m.id, ME, &edit("same", 1), at(5))
         .expect_err("no-op");
-    assert!(matches!(e, ChatError::Invalid(_)));
+    assert!(matches!(e, ChatRevisionError::Chat(ChatError::Invalid(_))));
     let e = s
         .chat_message_edit(&t, &m.id, ME, &edit("  ", 1), at(5))
         .expect_err("blank");
-    assert!(matches!(e, ChatError::Invalid(_)));
+    assert!(matches!(e, ChatRevisionError::Chat(ChatError::Invalid(_))));
     let long = "x".repeat(crate::chat_revision::CHAT_RETRACT_REASON_MAX_CHARS + 1);
     let e = s
         .chat_message_retract(&t, &m.id, ME, &retract(1, &long), at(5))
         .expect_err("reason");
-    assert!(matches!(e, ChatError::Invalid(_)));
+    assert!(matches!(e, ChatRevisionError::Chat(ChatError::Invalid(_))));
     let e = s
         .chat_message_edit(&t, "missing", ME, &edit("x", 1), at(5))
         .expect_err("missing");

@@ -85,7 +85,7 @@ fn edit_body(text: &str, rev: u64) -> Value {
 
 fn text_of(env: &TestEnv, t: &str, m: &str) -> (String, u64) {
     let msg = env.store.chat_message_get(t, m).expect("message");
-    (msg.text, msg.revision)
+    (msg.text, msg.edit_state.revision)
 }
 
 /// Invariant: the author edits and retracts their message over HTTP, the wire message carries

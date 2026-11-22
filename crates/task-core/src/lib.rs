@@ -40,6 +40,7 @@ pub mod artifacts;
 pub mod behind_target;
 pub mod chat;
 pub mod chat_revision;
+pub mod chat_revision_wire;
 /// ADR-0044 D2（Phase 53）: タスク単位のコメント。
 pub mod comment;
 pub mod console_action;

@@ -27,6 +27,43 @@ use crate::store::SqliteStore;
 /// D5.1: the longest retract reason, in characters.
 pub const CHAT_RETRACT_REASON_MAX_CHARS: usize = 500;
 
+/// An edit / retract refusal: D5.1's 403 `chat_message_edit_forbidden`, or any [`ChatError`].
+#[derive(Debug, thiserror::Error)]
+pub enum ChatRevisionError {
+    /// Only the person who wrote a `role=user` message changes it (403).
+    #[error("forbidden: {0}")]
+    Forbidden(String),
+    #[error(transparent)]
+    Chat(#[from] ChatError),
+}
+
+impl From<crate::StoreError> for ChatRevisionError {
+    fn from(e: crate::StoreError) -> Self {
+        Self::Chat(ChatError::Store(e))
+    }
+}
+
+impl From<rusqlite::Error> for ChatRevisionError {
+    fn from(e: rusqlite::Error) -> Self {
+        Self::Chat(e.into())
+    }
+}
+
+impl From<serde_json::Error> for ChatRevisionError {
+    fn from(e: serde_json::Error) -> Self {
+        Self::Chat(e.into())
+    }
+}
+
+impl ChatRevisionError {
+    pub fn http_status(&self) -> u16 {
+        match self {
+            Self::Forbidden(_) => 403,
+            Self::Chat(e) => e.http_status(),
+        }
+    }
+}
+
 enum Change<'a> {
     Edit(&'a str),
     Retract(&'a str),
@@ -42,7 +79,7 @@ impl SqliteStore {
         by: &str,
         req: &ChatMessageEditRequest,
         now: OffsetDateTime,
-    ) -> Result<ChatMessage, ChatError> {
+    ) -> Result<ChatMessage, ChatRevisionError> {
         self.write_tx(|tx| {
             revise_tx(
                 tx,
@@ -63,7 +100,7 @@ impl SqliteStore {
         by: &str,
         req: &ChatMessageRetractRequest,
         now: OffsetDateTime,
-    ) -> Result<ChatMessage, ChatError> {
+    ) -> Result<ChatMessage, ChatRevisionError> {
         self.write_tx(|tx| {
             revise_tx(
                 tx,
@@ -114,7 +151,7 @@ impl SqliteStore {
                     run_id,
                     message_id: Some(message_id.to_string()),
                     at,
-                    data: ChatEventData::MessageRevised(serde_json::from_str(&payload)?),
+                    data: ChatEventData::Revised(serde_json::from_str(&payload)?),
                 });
             }
             Ok(ChatEventListResponse {
@@ -133,7 +170,7 @@ fn revise_tx(
     expected_revision: u64,
     change: Change<'_>,
     now: OffsetDateTime,
-) -> Result<ChatMessage, ChatError> {
+) -> Result<ChatMessage, ChatRevisionError> {
     let at = chat_ts(now);
     thread_require(tx, thread_id)?;
     let message = message_require(tx, thread_id, message_id)?;
@@ -142,12 +179,12 @@ fn revise_tx(
         || !by.starts_with("human:")
         || message.author.as_deref() != Some(by)
     {
-        return Err(ChatError::EditForbidden(format!(
+        return Err(ChatRevisionError::Forbidden(format!(
             "only the person who wrote message {message_id} can edit or retract it"
         )));
     }
     let refused = match (&change, message.state) {
-        _ if message.retracted.is_some() => Some("retracted"),
+        _ if message.edit_state.retracted.is_some() => Some("retracted"),
         (_, ChatMessageState::Running) => Some("being read by a CoS run"),
         (_, ChatMessageState::Cancelled) => Some("cancelled"),
         (Change::Retract(_), ChatMessageState::Queued) => {
@@ -156,33 +193,38 @@ fn revise_tx(
         _ => None,
     };
     if let Some(why) = refused {
-        return Err(ChatError::Conflict(format!(
+        return Err(ChatRevisionError::Chat(ChatError::Conflict(format!(
             "message {message_id} is {why}"
-        )));
+        ))));
     }
-    if expected_revision != message.revision {
-        return Err(ChatError::Conflict(format!(
+    let current = message.edit_state.revision;
+    if expected_revision != current {
+        return Err(ChatRevisionError::Chat(ChatError::Conflict(format!(
             "message {message_id} is at revision {}, not {expected_revision}",
-            message.revision
-        )));
+            current
+        ))));
     }
     match change {
         Change::Edit(text) if text.len() > CHAT_MESSAGE_TEXT_MAX_BYTES => {
-            return Err(ChatError::TooLarge(format!(
+            return Err(ChatRevisionError::Chat(ChatError::TooLarge(format!(
                 "text is {} bytes (max {CHAT_MESSAGE_TEXT_MAX_BYTES})",
                 text.len()
-            )));
+            ))));
         }
         Change::Edit(text) if text.trim().is_empty() && message.attachment_ids.is_empty() => {
-            return Err(ChatError::Invalid("blank text needs an attachment".into()));
+            return Err(ChatRevisionError::Chat(ChatError::Invalid(
+                "blank text needs an attachment".into(),
+            )));
         }
         Change::Edit(text) if text == message.text => {
-            return Err(ChatError::Invalid("text is unchanged".into()));
+            return Err(ChatRevisionError::Chat(ChatError::Invalid(
+                "text is unchanged".into(),
+            )));
         }
         Change::Retract(reason) if reason.chars().count() > CHAT_RETRACT_REASON_MAX_CHARS => {
-            return Err(ChatError::Invalid(format!(
+            return Err(ChatRevisionError::Chat(ChatError::Invalid(format!(
                 "reason is longer than {CHAT_RETRACT_REASON_MAX_CHARS} characters"
-            )));
+            ))));
         }
         _ => {}
     }
@@ -204,11 +246,11 @@ fn revise_tx(
     )?;
     let mut meta: Value = serde_json::from_str(&raw)?;
     let Some(fields) = meta.as_object_mut() else {
-        return Err(ChatError::Invalid(format!(
+        return Err(ChatRevisionError::Chat(ChatError::Invalid(format!(
             "message {message_id} has unreadable metadata"
-        )));
+        ))));
     };
-    let revision = message.revision + 1;
+    let revision = current + 1;
     fields.insert("revision".into(), json!(revision));
     let (kind, text, reason) = match change {
         Change::Edit(text) => (ChatMessageRevisionKind::Edit, text, None),
@@ -232,7 +274,7 @@ fn revise_tx(
         message_id: message_id.to_string(),
         kind,
         revision,
-        previous_revision: message.revision,
+        previous_revision: current,
         previous_sha256: sha256_hex(&message.text),
         previous_text: message.text,
         by: by.to_string(),
@@ -245,7 +287,7 @@ fn revise_tx(
         None,
         Some(message_id),
         ChatEventType::MessageRevised,
-        &ChatEventData::MessageRevised(data),
+        &ChatEventData::Revised(data),
         &at,
     )?;
     touch_thread(tx, thread_id, &at)?;

@@ -107,7 +107,6 @@ pub(crate) fn chat_problem(error: ChatError) -> ApiProblem {
         ChatError::QueueFull { .. } => "chat_queue_full",
         ChatError::CursorExpired(_) => "chat_cursor_expired",
         ChatError::ReadOnly(_) => "chat_thread_read_only",
-        ChatError::EditForbidden(_) => "chat_message_edit_forbidden",
     };
     ApiProblem::new(status, code, error.to_string())
 }

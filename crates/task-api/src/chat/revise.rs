@@ -8,6 +8,7 @@ use axum::body::Body;
 use axum::extract::{RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};
 use task_core::chat::{ChatMessageEditRequest, ChatMessageResponse, ChatMessageRetractRequest};
+use task_core::chat_revision::ChatRevisionError;
 use time::OffsetDateTime;
 
 use super::{authorize, changed, chat_json, chat_problem};
@@ -24,12 +25,22 @@ pub(crate) fn editor(caller: &Caller) -> Result<String, ApiProblem> {
         Principal::Operator { .. }
         | Principal::Mcp { .. }
         | Principal::Cos { .. }
-        | Principal::Unauthenticated => Err(chat_problem(
-            task_core::chat::ChatError::EditForbidden(format!(
-                "{} cannot edit or retract chat messages; only the person who wrote one can",
-                caller.actor()
-            )),
-        )),
+        | Principal::Unauthenticated => Err(forbidden(format!(
+            "{} cannot edit or retract chat messages; only the person who wrote one can",
+            caller.actor()
+        ))),
+    }
+}
+
+fn forbidden(detail: String) -> ApiProblem {
+    ApiProblem::new(StatusCode::FORBIDDEN, "chat_message_edit_forbidden", detail)
+}
+
+/// The store's refusal: `Forbidden` is 403 `chat_message_edit_forbidden`, the rest as `chat_problem`.
+fn revise_problem(error: ChatRevisionError) -> ApiProblem {
+    match error {
+        ChatRevisionError::Forbidden(detail) => forbidden(detail),
+        ChatRevisionError::Chat(error) => chat_problem(error),
     }
 }
 
@@ -49,7 +60,7 @@ pub(super) async fn edit_message(
         .blocking(move |store| {
             store
                 .chat_message_edit(&t, &m, &by, &req, OffsetDateTime::now_utc())
-                .map_err(chat_problem)
+                .map_err(revise_problem)
         })
         .await?;
     changed(&state);
@@ -75,7 +86,7 @@ pub(super) async fn retract_message(
         .blocking(move |store| {
             store
                 .chat_message_retract(&t, &m, &by, &req, OffsetDateTime::now_utc())
-                .map_err(chat_problem)
+                .map_err(revise_problem)
         })
         .await?;
     changed(&state);

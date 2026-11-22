@@ -88,7 +88,10 @@ fn parent_checkpoint_contract_children_every_n() {
     two.evaluated.insert("children:2".into());
     two.children.push(done("C", "2026-11-18T10:48:28Z"));
     let ts = triggers(&two, &s);
-    assert!(due(&ts).is_empty(), "3 件目で新しい checkpoint が出た: {ts:?}");
+    assert!(
+        due(&ts).is_empty(),
+        "3 件目で新しい checkpoint が出た: {ts:?}"
+    );
     assert_eq!(
         find(&ts, "children:2").map(|t| t.state),
         Some(TriggerState::Evaluated)
@@ -107,7 +110,10 @@ fn parent_checkpoint_contract_children_every_n() {
         done("A", "2026-11-17T18:45:41Z"),
         done("B", "2026-11-17T21:55:57Z"),
     ]);
-    assert!(triggers(&two_children, &n3).is_empty(), "N = 3 で 2 件で発火した");
+    assert!(
+        triggers(&two_children, &n3).is_empty(),
+        "N = 3 で 2 件で発火した"
+    );
 }
 
 /// 不変条件: 終端は `done`・`failed`・`cancelled` の 3 つで、c が一度に 2 段以上進んだら最大の k だけが出る
@@ -150,12 +156,10 @@ fn parent_checkpoint_contract_review_fail_retry_not_counted() {
     let ts = triggers(&f, &s);
     assert!(ts.is_empty(), "review_fail の再試行を数えた: {ts:?}");
 
-    f.children[0]
-        .transitions
-        .push(ChildTransition {
-            to: Status::Done,
-            at: "2026-11-17T22:00:00Z".into(),
-        });
+    f.children[0].transitions.push(ChildTransition {
+        to: Status::Done,
+        at: "2026-11-17T22:00:00Z".into(),
+    });
     assert_eq!(due(&triggers(&f, &s)), vec!["children:2"]);
 }
 
@@ -204,10 +208,7 @@ fn doc(version: u32, extra_refute: Option<&str>) -> Vec<u8> {
         let mut e = v["evidence"][0].clone();
         e["id"] = json!(id);
         e["stance"] = json!("refute");
-        v["evidence"]
-            .as_array_mut()
-            .expect("evidence")
-            .push(e);
+        v["evidence"].as_array_mut().expect("evidence").push(e);
     }
     serde_json::to_vec(&v).expect("serialize")
 }
@@ -230,8 +231,16 @@ fn parent_checkpoint_contract_refute_new_evidence_only() {
     let f = TriggerFacts {
         strategy: strategy(vec![
             produced(1, Some(doc(1, None)), "2026-11-18T00:00:00Z"),
-            produced(2, Some(doc(2, Some("e-new-refute"))), "2026-11-18T06:00:00Z"),
-            produced(3, Some(doc(3, Some("e-new-refute"))), "2026-11-18T07:00:00Z"),
+            produced(
+                2,
+                Some(doc(2, Some("e-new-refute"))),
+                "2026-11-18T06:00:00Z",
+            ),
+            produced(
+                3,
+                Some(doc(3, Some("e-new-refute"))),
+                "2026-11-18T07:00:00Z",
+            ),
             StrategyDocumentFacts {
                 name: artifact_name("other", 2),
                 bytes: Some(serde_json::to_vec(&other).expect("other")),
@@ -298,7 +307,10 @@ fn parent_checkpoint_contract_budget_thresholds() {
 
     f.max_tokens = None;
     f.tokens_used = u64::MAX;
-    assert!(triggers(&f, &s).is_empty(), "max_tokens の無い root で発火した");
+    assert!(
+        triggers(&f, &s).is_empty(),
+        "max_tokens の無い root で発火した"
+    );
     f.max_tokens = Some(0);
     assert!(triggers(&f, &s).is_empty(), "max_tokens = 0 で発火した");
 
@@ -664,10 +676,19 @@ fn parent_checkpoint_contract_shape_invalid() {
     let mut v = evaluation("on_track", "continue", ["succeeded", "none", "unknown"]);
     v["achieved"] = json!(true);
     cases.push(v);
-    cases.push(evaluation("great", "continue", ["succeeded", "none", "unknown"]));
-    cases.push(evaluation("at_risk", "publish", ["succeeded", "none", "unknown"]));
+    cases.push(evaluation(
+        "great",
+        "continue",
+        ["succeeded", "none", "unknown"],
+    ));
+    cases.push(evaluation(
+        "at_risk",
+        "publish",
+        ["succeeded", "none", "unknown"],
+    ));
     let mut v = evaluation("at_risk", "continue", ["succeeded", "none", "unknown"]);
-    v["measured"] = json!([{"claim": "", "metric": "m", "before": "1", "after": "2", "references": []}]);
+    v["measured"] =
+        json!([{"claim": "", "metric": "m", "before": "1", "after": "2", "references": []}]);
     cases.push(v);
     let mut v = evaluation("at_risk", "continue", ["succeeded", "none", "unknown"]);
     v["reason"] = json!("");
@@ -690,7 +711,10 @@ fn parent_checkpoint_contract_input_limits() {
     let base = || evaluation("at_risk", "continue", ["succeeded", "unknown", "unknown"]);
 
     let mut ok = base();
-    ok["uncertainty"] = json!(vec![json!({"statement": "あ".repeat(TEXT_MAX_CHARS), "resolve_by": "い".repeat(TEXT_MAX_CHARS)}); LIST_MAX]);
+    ok["uncertainty"] = json!(vec![
+        json!({"statement": "あ".repeat(TEXT_MAX_CHARS), "resolve_by": "い".repeat(TEXT_MAX_CHARS)});
+        LIST_MAX
+    ]);
     ok["measured"] = json!([{"claim": "c", "metric": "m".repeat(SHORT_MAX_CHARS), "before": "b", "after": "a", "references": vec![a.clone(); REFS_PER_ITEM_MAX]}]);
     let c = check_evaluation(Some(&ok), &f);
     assert_eq!(c.status, RecordStatus::Checked, "{:?}", c.violations);
@@ -721,7 +745,12 @@ fn parent_checkpoint_contract_input_limits() {
     huge["reason"] = json!("x".repeat(EVALUATION_MAX_BYTES));
     let c = check_evaluation(Some(&huge), &f);
     assert_eq!(c.status, RecordStatus::Invalid);
-    assert_eq!(c.violations.len(), 1, "byte の上限は形の検査より先: {:?}", c.violations);
+    assert_eq!(
+        c.violations.len(),
+        1,
+        "byte の上限は形の検査より先: {:?}",
+        c.violations
+    );
     assert_eq!(c.violations[0].rule, Rule::Limit);
 }
 
@@ -731,7 +760,10 @@ fn parent_checkpoint_contract_references_to_resolve() {
     let a = artifact_ref("T1", "scc.tsv");
     let commit = json!({"kind": "commit", "repo": "agent-platform", "sha": "4".repeat(40)});
     let mut e = evaluation("at_risk", "continue", ["succeeded", "unknown", "unknown"]);
-    e["measured"] = json!([measured(vec![a.clone(), json!({"kind": "url", "url": "https://example.org"})])]);
+    e["measured"] = json!([measured(vec![
+        a.clone(),
+        json!({"kind": "url", "url": "https://example.org"})
+    ])]);
     e["learned"] = json!([learned(vec![a.clone(), task_ref("T1")])]);
     e["refuted"] = json!([refuted(vec![commit.clone()])]);
     assert_eq!(
@@ -804,16 +836,40 @@ fn parent_checkpoint_contract_allowed_actions_table() {
         vec![Escalate]
     );
 
-    let pivot = allowed_actions(RecordStatus::Checked, &effective(Verdict::OffTrack, Next::Pivot));
+    let pivot = allowed_actions(
+        RecordStatus::Checked,
+        &effective(Verdict::OffTrack, Next::Pivot),
+    );
     let key = checkpoint_question_key("D9");
     assert_eq!(key, "checkpoint:D9");
-    assert!(action_allowed(&pivot, "D9", "replan", Some(REASON_PIVOT), None));
-    assert!(!action_allowed(&pivot, "D9", "replan", Some(REASON_EXPERIMENT), None));
+    assert!(action_allowed(
+        &pivot,
+        "D9",
+        "replan",
+        Some(REASON_PIVOT),
+        None
+    ));
+    assert!(!action_allowed(
+        &pivot,
+        "D9",
+        "replan",
+        Some(REASON_EXPERIMENT),
+        None
+    ));
     assert!(!action_allowed(&pivot, "D9", "continue", None, None));
     assert!(!action_allowed(&pivot, "D9", "launch_root", None, None));
     assert!(action_allowed(&pivot, "D9", "escalate", None, Some(&key)));
-    assert!(!action_allowed(&pivot, "D9", "escalate", None, Some("no_progress:3")));
-    let cont = allowed_actions(RecordStatus::Checked, &effective(Verdict::AtRisk, Next::Continue));
+    assert!(!action_allowed(
+        &pivot,
+        "D9",
+        "escalate",
+        None,
+        Some("no_progress:3")
+    ));
+    let cont = allowed_actions(
+        RecordStatus::Checked,
+        &effective(Verdict::AtRisk, Next::Continue),
+    );
     assert!(action_allowed(&cont, "D9", "wait", None, None));
     assert!(!action_allowed(&cont, "D9", "mark_milestone", None, None));
 }
@@ -868,7 +924,10 @@ fn parent_checkpoint_contract_action_kinds_match_project_action() {
 #[test]
 fn parent_checkpoint_contract_record_roundtrip() {
     assert_eq!(evaluation_artifact_name("D1"), "parent-evaluation/D1.json");
-    assert_eq!(evaluation_decision_id("parent-evaluation/D1.json"), Some("D1"));
+    assert_eq!(
+        evaluation_decision_id("parent-evaluation/D1.json"),
+        Some("D1")
+    );
     for bad in [
         "parent-evaluation/.json",
         "parent-evaluation/a/b.json",
@@ -900,7 +959,8 @@ fn parent_checkpoint_contract_record_roundtrip() {
     assert_eq!(back, record);
 
     let invalid = check_evaluation(None, &ev_facts(vec![], false, passed(2)));
-    let record = ParentEvaluationRecord::new("D2", "ROOT", vec!["budget:50".into()], None, &invalid);
+    let record =
+        ParentEvaluationRecord::new("D2", "ROOT", vec!["budget:50".into()], None, &invalid);
     let v = serde_json::to_value(&record).expect("record");
     assert_eq!(v["status"], json!("invalid"));
     assert_eq!(v["evaluation"], Value::Null);
@@ -913,6 +973,10 @@ fn parent_checkpoint_contract_record_roundtrip() {
 fn parent_checkpoint_contract_rubric_fixed() {
     let ids: Vec<&str> = PARENT_EVALUATION_RUBRIC.iter().map(|(id, _)| *id).collect();
     assert_eq!(ids, vec!["E1", "E2", "E3", "E4", "E5", "E6"]);
-    assert!(PARENT_EVALUATION_RUBRIC.iter().all(|(_, text)| !text.is_empty()));
+    assert!(
+        PARENT_EVALUATION_RUBRIC
+            .iter()
+            .all(|(_, text)| !text.is_empty())
+    );
     assert!(PARENT_EVALUATION_RUBRIC[5].1.contains("reached"));
 }

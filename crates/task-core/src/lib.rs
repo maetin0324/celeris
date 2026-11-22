@@ -106,10 +106,10 @@ pub mod mountinfo;
 pub mod node_session;
 pub mod notify;
 pub mod org;
-/// ADR-0074 D2（Phase F3 途中確認）: `PausePolicy` の解決の純粋な型と関数。
-pub mod pause;
 /// ADR 2026-11-22-parent-checkpoint-evaluator D1・D4・D5.2: 親の途中評価の発火・評価の検査・行動の表（純関数、葉）。
 pub mod parent_checkpoint;
+/// ADR-0074 D2（Phase F3 途中確認）: `PausePolicy` の解決の純粋な型と関数。
+pub mod pause;
 pub mod plan;
 /// ADR-0046 D1（Phase 59）: 組織 = Agent Profile の継承木。
 pub mod profile;

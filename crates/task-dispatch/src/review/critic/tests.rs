@@ -7,16 +7,18 @@ use std::time::Duration;
 use async_trait::async_trait;
 use task_core::strategy_critic::{CriticSubject, critic_subjects};
 use task_core::*;
-use task_worker::protocol::{RunRequest, Terminal};
+use task_worker::Terminal;
+use task_worker::protocol::RunRequest;
 use task_worker::{AdapterError, EventSink, LocalWorkspace, RunLimits, RunOutcome, WorkerAdapter};
 
 use crate::review::tests::task_with;
 use crate::review::{
-    REVIEW_FILE_NAME, ReviewExtras, ReviewOutcome, ReviewerRun, review_task, reviewer_hint,
-    reviewer_run_required,
+    REVIEW_FILE_NAME, ReviewExtras, ReviewOutcome, ReviewerRun, needs_reviewer_run, review_task,
+    reviewer_hint, reviewer_run_required,
 };
 
-const DOC: &str = r#"{"schema":"celeris.strategy/1","candidates":[{"id":"fixed-plan"},{"id":"probe-first"}]}"#;
+const DOC: &str =
+    r#"{"schema":"celeris.strategy/1","candidates":[{"id":"fixed-plan"},{"id":"probe-first"}]}"#;
 
 struct Stub {
     review_json: String,
@@ -177,7 +179,11 @@ async fn strategy_critic_missing_section_fails_review() {
     assert_eq!(critic.criterion_idx, 0);
     assert_eq!(critic.rubric.len(), 5);
     assert!(!out.all_pass(), "{:?}", out.verdicts);
-    let v = out.verdicts.iter().find(|v| v.criterion_idx == 0).expect("verdict");
+    let v = out
+        .verdicts
+        .iter()
+        .find(|v| v.criterion_idx == 0)
+        .expect("verdict");
     assert!(v.reason.contains("strategy_critic"), "{}", v.reason);
 }
 
@@ -193,7 +199,10 @@ async fn strategy_critic_all_ok_passes() {
     let (out, runs, _) = review(vec![Check::Reviewer], json, true).await;
     assert_eq!(runs, 1);
     assert_eq!(
-        out.verdicts.iter().map(|v| (v.criterion_idx, v.pass)).collect::<Vec<_>>(),
+        out.verdicts
+            .iter()
+            .map(|v| (v.criterion_idx, v.pass))
+            .collect::<Vec<_>>(),
         vec![(0, true), (1, true)],
         "{:?}",
         out.verdicts
@@ -218,7 +227,12 @@ async fn strategy_critic_subject_sha_mismatch_or_candidate_missing_fails() {
     }
     let mut empty_reason = critic_json(&sha, &["fixed-plan", "probe-first"], true);
     empty_reason["subjects"][0]["comparison"]["reason"] = serde_json::json!("");
-    let (out, _, _) = review(vec![], serde_json::json!({"verdicts": [], "critic": empty_reason}), true).await;
+    let (out, _, _) = review(
+        vec![],
+        serde_json::json!({"verdicts": [], "critic": empty_reason}),
+        true,
+    )
+    .await;
     assert!(!out.all_pass(), "{:?}", out.verdicts);
 }
 
@@ -231,7 +245,11 @@ async fn strategy_critic_not_evaluated_when_deterministic_fails() {
     }];
     let (out, runs, _) = review(checks, serde_json::json!({"verdicts": []}), true).await;
     assert_eq!(runs, 0);
-    let v = out.verdicts.iter().find(|v| v.criterion_idx == 1).expect("critic verdict");
+    let v = out
+        .verdicts
+        .iter()
+        .find(|v| v.criterion_idx == 1)
+        .expect("critic verdict");
     assert!(!v.pass);
 }
 
@@ -240,11 +258,13 @@ async fn strategy_critic_not_evaluated_when_deterministic_fails() {
 #[tokio::test]
 async fn strategy_critic_absent_reviewer_run_count_unchanged() {
     let dir = tempfile::tempdir().expect("tempdir");
-    assert!(!reviewer_run_required(&task_with(vec![], dir.path()), false, &[]));
-    assert!(reviewer_run_required(&task_with(vec![Check::Reviewer], dir.path()), false, &[]));
-    assert!(reviewer_run_required(&task_with(vec![], dir.path()), true, &[]));
+    let plain = needs_reviewer_run(&task_with(vec![], dir.path()));
+    let with_reviewer = needs_reviewer_run(&task_with(vec![Check::Reviewer], dir.path()));
+    assert!(!reviewer_run_required(plain, false, &[]));
+    assert!(reviewer_run_required(with_reviewer, false, &[]));
+    assert!(reviewer_run_required(plain, true, &[]));
     let (subjects, _) = subjects_in(dir.path());
-    assert!(reviewer_run_required(&task_with(vec![], dir.path()), false, &subjects));
+    assert!(reviewer_run_required(plain, false, &subjects));
 
     let (out, runs, _) = review(vec![], serde_json::json!({"verdicts": []}), false).await;
     assert_eq!(runs, 0);
@@ -256,7 +276,11 @@ async fn strategy_critic_absent_reviewer_run_count_unchanged() {
     assert!(out.all_pass());
     let review = req.and_then(|r| r.context.review).expect("review");
     assert!(review.strategy_critic.is_none());
-    assert!(!serde_json::to_string(&review).expect("json").contains("strategy_critic"));
+    assert!(
+        !serde_json::to_string(&review)
+            .expect("json")
+            .contains("strategy_critic")
+    );
 }
 
 /// 不変条件: 戦略の成果物を作った task は reviewer の合格の持ち越し（`reviewer_reuse`）で Critic を飛ばせない。
@@ -281,6 +305,10 @@ async fn strategy_critic_reuse_not_applied() {
         },
     )
     .await;
-    let critic = out.verdicts.iter().find(|v| v.criterion_idx == 1).expect("critic verdict");
+    let critic = out
+        .verdicts
+        .iter()
+        .find(|v| v.criterion_idx == 1)
+        .expect("critic verdict");
     assert!(!critic.pass, "{:?}", out.verdicts);
 }

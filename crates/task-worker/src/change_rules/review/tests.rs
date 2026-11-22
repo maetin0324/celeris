@@ -1064,7 +1064,10 @@ fn strategy_critic_absent_prompt_unchanged() {
     use sha2::{Digest, Sha256};
     let prompt = base_shaped_review_prompt();
     let sha = format!("{:x}", Sha256::digest(prompt.as_bytes()));
-    assert_eq!(sha, "0f7107b41adf496e635f82a9726e6af9dc199dee8ee98272ee22fc522ea0b5e0", "prompt:\n{prompt}");
+    assert_eq!(
+        sha, "0f7107b41adf496e635f82a9726e6af9dc199dee8ee98272ee22fc522ea0b5e0",
+        "prompt:\n{prompt}"
+    );
 }
 
 fn critic_request() -> crate::protocol::StrategyCriticRequest {
@@ -1098,9 +1101,15 @@ fn strategy_critic_section_appears_once() {
     };
     let prompt = build_prompt(&task, &context, "run-critic", "artifacts");
     assert_eq!(prompt.matches(CRITIC_HEADING).count(), 1, "{prompt}");
-    assert!(prompt.contains("artifacts/strategy/arch/v1.json"), "{prompt}");
+    assert!(
+        prompt.contains("artifacts/strategy/arch/v1.json"),
+        "{prompt}"
+    );
     for (id, _) in task_core::strategy_critic::CRITIC_RUBRIC {
-        assert!(prompt.contains(&format!("{id}:")), "{id} missing:\n{prompt}");
+        assert!(
+            prompt.contains(&format!("{id}:")),
+            "{id} missing:\n{prompt}"
+        );
     }
     assert!(prompt.contains("\"critic\""), "{prompt}");
     assert!(prompt.contains("\"falsification\""), "{prompt}");

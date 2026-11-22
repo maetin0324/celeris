@@ -1882,6 +1882,9 @@ fn build_review_prompt(task: &Task, context: &RunContext, run_id: &str, artifact
             if review.diff_design.is_some() {
                 out.push_str(&crate::change_rules::review::design_section(Some(review)));
             }
+            // ADR 2026-11-22-strategy-review-critic D3.6: 戦略の文書を作った task の final review だけ Critic の節を足す
+            // （`strategy_critic` が `None` なら空文字列）。codex・acp もこの関数で prompt を組む。
+            out.push_str(&crate::change_rules::review::critic_section(Some(review)));
         }
         None => {
             out.push_str("## Review context\nno review context\n\n");

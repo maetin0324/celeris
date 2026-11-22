@@ -27,17 +27,42 @@ fn produced(seq: u64, run_id: &str, name: &str, sha256: &str) -> (u64, Event) {
 #[test]
 fn strategy_critic_subjects_latest_version_over_all_runs() {
     let events = vec![
-        produced(1, "wu-run-1", &crate::strategy::artifact_name("arch", 1), SHA_A),
-        produced(2, "wu-run-2", &crate::strategy::artifact_name("arch", 2), SHA_B),
+        produced(
+            1,
+            "wu-run-1",
+            &crate::strategy::artifact_name("arch", 1),
+            SHA_A,
+        ),
+        produced(
+            2,
+            "wu-run-2",
+            &crate::strategy::artifact_name("arch", 2),
+            SHA_B,
+        ),
         produced(3, "run-final", "summary.md", SHA_A),
-        produced(4, "wu-run-1", &crate::strategy::artifact_name("other", 1), SHA_A),
+        produced(
+            4,
+            "wu-run-1",
+            &crate::strategy::artifact_name("other", 1),
+            SHA_A,
+        ),
     ];
     let subjects = critic_subjects(&events);
     let got: Vec<(&str, u32, &str, bool)> = subjects
         .iter()
-        .map(|s| (s.strategy_id.as_str(), s.version, s.sha256.as_str(), s.conflict))
+        .map(|s| {
+            (
+                s.strategy_id.as_str(),
+                s.version,
+                s.sha256.as_str(),
+                s.conflict,
+            )
+        })
         .collect();
-    assert_eq!(got, vec![("arch", 2, SHA_B, false), ("other", 1, SHA_A, false)]);
+    assert_eq!(
+        got,
+        vec![("arch", 2, SHA_B, false), ("other", 1, SHA_A, false)]
+    );
     assert_eq!(subjects[0].name, "strategy/arch/v2.json");
     assert_eq!(subjects[0].path, "artifacts/strategy/arch/v2.json");
 }
@@ -69,7 +94,10 @@ fn strategy_critic_same_name_two_sha_is_conflict() {
         produced(2, "r2", &name, &format!("sha256:{SHA_A}")),
     ];
     assert!(!critic_subjects(&events)[0].conflict);
-    let events = vec![produced(1, "r1", &name, SHA_A), produced(2, "r2", &name, SHA_B)];
+    let events = vec![
+        produced(1, "r1", &name, SHA_A),
+        produced(2, "r2", &name, SHA_B),
+    ];
     let subjects = critic_subjects(&events);
     assert_eq!(subjects.len(), 1);
     assert!(subjects[0].conflict);

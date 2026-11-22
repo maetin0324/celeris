@@ -372,3 +372,14 @@ Project.request と承認済み Roadmap は読むだけで書かない。
 - 終端は task の status が `done`・`failed`・`cancelled`。`cos_operations` の行の task が引けないときは終端でない扱い（選択を止める側）。
 - D7.4 の直しで、子 3 の `chat_discussion_summary_strategy_gate_edited_is_stale` の通る起票はもう 1 つの open の候補にした（同じ候補の 2 件目にすると
   `strategy_experiment_phase` が加わり、`codes == ["strategy_stale"]` の主張が成り立たないため。主張は変えていない）。
+
+## 付記（2026-11-22、shadow-case の実装）
+
+- D7.3 の引く文の 2 つ目「C の進捗の 17・198・756」は、C の進捗の file が E-mid の slice の `snapshot/` にあり、fixture の 3 file（`goal.md`・`events.jsonl`・`slice.json`）の
+  外にある。`events.jsonl` の中で同じ値を書いた文は B#1119（`review_verdict` の `reason` の「新 17 件・198・756・1,827」。B の後の値で、C の進捗の値と同じ）なので、
+  試験はこれを引いて実在を確かめる。D#1446 の「未達/要判断として書いたもの: handlers ⇄ cos」は D7.3 のとおり。
+- 数える値は試験の出力で「戦略を選ぶまでに起票した task = 5（文書の task 2・識別実験 3）」、アーキv4 の初回の起票（fixture の `created` の event から、親の作成の 60 秒以内に
+  作られた子）は 8 件。
+- X(v)（D2.3）には版 v を参照して起票した本実装の task も入る。したがって再評価の版 v<sub>n+1</sub> は、v<sub>n</sub> の本実装の task が終端になるまで D2.4 の 6 で止まり、
+  終端になった本実装の task も D4.2 で証拠に参照する必要がある（文のとおりで、変えていない）。実行中に pivot するには、走っている task を先に cancel する。
+  shadow の試験の v3 はこの順で作った。手順に書くかは子 6 で決める（shadow-case の進捗の提案）。

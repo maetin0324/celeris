@@ -22,6 +22,11 @@ pub const CHAT_EVENT_PAGE_DEFAULT: u32 = 100;
 pub const CHAT_EVENT_PAGE_MAX: u32 = 500;
 /// D2: retention of text/tool detail events of finished runs (days).
 pub const CHAT_EVENT_RETENTION_DAYS: i64 = 30;
+/// ADR 2026-11-22-external-llm-discussion-exchange D2.1: a person's share of messages with external LLMs and its
+/// revocation, appended to `chat_events` by `crate::discussion_exchange`. They are audit records, not SSE events:
+/// [`SqliteStore::chat_events_page`] skips them (the wire `ChatEventType` does not change).
+pub const CHAT_EVENT_EXCHANGE_SHARED: &str = "exchange_shared";
+pub const CHAT_EVENT_EXCHANGE_SHARE_REVOKED: &str = "exchange_share_revoked";
 /// D2: tool detail limit after redaction (bytes).
 pub const CHAT_TOOL_DETAIL_MAX_BYTES: usize = 4 * 1024;
 
@@ -985,11 +990,19 @@ impl SqliteStore {
             check_cursor(conn, thread_id, after)?;
             let mut stmt = conn.prepare_cached(
                 "SELECT id,thread_id,run_id,message_id,type,payload_json,created_at FROM chat_events \
-                 WHERE thread_id=?1 AND id>?2 AND (?3 IS NULL OR run_id=?3) ORDER BY id LIMIT ?4",
+                 WHERE thread_id=?1 AND id>?2 AND (?3 IS NULL OR run_id=?3) AND type NOT IN (?5,?6) \
+                 ORDER BY id LIMIT ?4",
             )?;
             let rows = stmt
                 .query_map(
-                    params![thread_id, after, query.run_id, i64::from(limit) + 1],
+                    params![
+                        thread_id,
+                        after,
+                        query.run_id,
+                        i64::from(limit) + 1,
+                        CHAT_EVENT_EXCHANGE_SHARED,
+                        CHAT_EVENT_EXCHANGE_SHARE_REVOKED
+                    ],
                     event_from_row,
                 )?
                 .collect::<Result<Vec<_>, _>>()?;

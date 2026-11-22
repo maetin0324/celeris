@@ -354,6 +354,25 @@ ChatGPT との議論で人が選んだ要約 …
   決定、負の case は `mcp:`・`cos:` の決定と自己申告の欄）。子 0 の進捗の fixture と参照の検査器 `validate.py` は、子 0 の時点の記録として変えない
   （試験からは読まなくなる。他の task の進捗を書き換えない）。
 
+#### D5.3 付記: envelope-fix の実装（2026-11-22）
+
+- 公開した純関数（`task_core::strategy::envelope`）: `human_approved`（R10）・`outbound_allowed`（R13）・`consent_ok`（R8）・`state_allowed` と
+  `contains_injection`（R11）・`contains_secret`（R9。`super` の関数の再公開）・`mask_secrets`（D2.4）。`validate_envelope` もこれらを呼ぶ。
+  型は `EnvelopeContext { project_id, idempotency, caller, caller_scopes, approval, outbound_share }`・`OutboundShare`・`Masked`。
+  `EnvelopeContext` は `Deserialize` を外した（呼び出し側が store と認証から組む。文書から読まない）。
+- R10 の決定は D2.2 の形に限る: `key == approval_decision_key(問いの版)`、`status = answered`、最後の回答が `(approve, human:<名前>)`、
+  問いの sha256 が `content_hash` と一致。
+- R3 の主体の一致と R8 の呼んだ主体との照合は、受け取る外部の文（`direction` が `outbound` でない、`human_paste`・`mcp_client`・`markdown_import`）
+  だけに掛ける。外へ出す item の actor・consent は元の記録の主体で、読む client と違ってよい。
+- R8 は D5.2 より 1 点厳しくした: MCP の client の propose も `consent.granted_by == caller` と `consent.scope == "mcp_scope:discussion:propose"`
+  （D1.6 で Celeris が埋める形）を求める。client が人の consent を書いても通らない。外へ出す item では記録の形（人の抜粋・要約の許可か、
+  `mcp:` の主体と上の scope）だけを見る。
+- scope の名前 `discussion:propose` は `envelope::MCP_PROPOSE_SCOPE` に 1 回だけ書いた。mcp-tools が `McpScope::DiscussionPropose` を足すときは、
+  `as_str()` をこの定数にする（同じ文字列を 2 か所に書かない）。
+- マスクは秘密の形が見つかった所から行末までを `[masked]` に置き換える。`password:`・`cookie:` は正規表現が前置きだけに当たるので、値ごと消すため。
+- 文書の検査（`strategy/mod.rs` の `Input::human_approval`）にも「最後の回答が `approve` で `human:` の主体」の照合がある。子 5 と並行するため
+  `mod.rs` は変えず、envelope 側に `human_approved` を置いた。子 5 の統合の後に、文書の検査が `human_approved` を呼ぶ形にそろえる（envelope-fix の進捗の提案）。
+
 ### D6: RDC home-dev → celeris-chat → MCP で thread_id・project_id・出典で続ける
 
 既存の経路は ChatGPT → RDC の device agent（専用ユーザー `chatgpt-rdc`）→ `scripts/rdc/celeris-chat` → `celerisctl mcp call` →

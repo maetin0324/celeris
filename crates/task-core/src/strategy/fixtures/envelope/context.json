@@ -1,0 +1,8 @@
+{
+ "idempotency": {
+  "ext-chatgpt-2026-11-21-001": "sha256:51bda22f44f79e62ae91c09331e087df37ef5455cb014cafbbce5eb8886644c0"
+ },
+ "note": "全 case に共通の文脈（thread の案件と、既に受けた idempotency の key → content_hash）。case ごとの context（caller・caller_scopes・approval・outbound_share）は各 file にある",
+ "project_id": "01M2WTS3DKNZBSZ2JMVB4CZMBW",
+ "thread_id": "01M5JJTVPW15CKFRCA0FAYCHK4"
+}

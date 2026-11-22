@@ -2,22 +2,25 @@
 title: 戦略層 v1 子 6 evaluator-wire — reviewer run の wire（ReviewRequest.parent_checkpoint・ReviewOutput.parent_evaluation）と prompt の節
 tasks: [01M7XQ9QWK58ESMW42Q1TGT3WZ]
 wu: evaluator-wire
-status: running
+status: done
 updated: 2026-11-22
+completed: 2026-11-22
 ---
 # evaluator-wire（WorkUnit）
 
+完了日: 2026-11-22。
 設計の正本は [ADR 2026-11-22-parent-checkpoint-evaluator](../../adr/2026-11-22-parent-checkpoint-evaluator.md)（D3.1・D3.2・D3.3・D9.2・D11）。
 基準はこの WU の `$CELERIS_WU_BASE`。検査は提出時の HEAD で実行した。
 
-**状態: 範囲の内側は実装と検査を終えた。範囲の外の 1 行（下の「範囲外の 1 行」）が要るので `plan_issue` で計画に申告した。**
-`crates/task-dispatch/src/review.rs` が直るまで task-dispatch はコンパイルできず、`bash scripts/dev/test-affected.sh` と
-`cargo clippy --workspace -- -D warnings` はまだ通らない（未実行ではなく、task-dispatch のコンパイルで落ちることを確かめた）。
+**状態: done。** 1 回目の run は範囲外の 1 行（下の「範囲外の 1 行」）で `plan_issue` を申告した。計画が範囲に
+`crates/task-dispatch/src/review\.rs$` を足し、2 回目の run がその 1 行を書いて `bash scripts/dev/test-affected.sh` と
+`cargo clippy --workspace -- -D warnings` を通した（下の検査 6・7）。
 
 ## commit（件名）
 
 1. `strategy-v1 6 evaluator-wire: parent_evaluation_absent_ の回帰の試験（base の prompt・request.json の sha256）` — base の状態で通る回帰の試験 3 件。
 2. `strategy-v1 6 evaluator-wire: ReviewRequest.parent_checkpoint・ReviewOutput.parent_evaluation と prompt の節` — wire の試験・型・prompt・schema・md とこの file。
+3. `strategy-v1 6 evaluator-wire: final review の request に parent_checkpoint: None と進捗の検査の結果` — task-dispatch の 1 行とこの file の更新。
 
 ## 実装前 brief
 
@@ -94,6 +97,7 @@ $ cargo nextest run -p task-worker -p task-core --no-fail-fast
 - `crates/task-worker/src/protocol/{design_review,health}/tests.rs`: `ReviewOutput` の literal に `parent_evaluation: None`。
 - `crates/task-core/src/parent_checkpoint.rs`: 評価の 11 型に `JsonSchema` の derive と schema の名前（`ParentEvaluation*`）、`references` の schema は object の配列（`Reference` は範囲外の `strategy/mod.rs` にあり derive が無い）。
 - `docs/protocol/worker-protocol.md`: `context.review` の表の行・§10.2 の列挙と説明・新しい節「親の途中評価」・`CriticRubricItem` → `RubricItem`。
+- `crates/task-dispatch/src/review.rs`: `ReviewHumanContext::into_request` に `parent_checkpoint: None` と comment（+2 行。2 回目の run）。
 - `docs/protocol/worker-protocol.schema.json`: `UPDATE_SCHEMA=1 cargo nextest run -p task-worker -E 'test(committed_schema_matches_generated)'` で再生成。
 - この file。
 
@@ -107,9 +111,10 @@ error[E0063]: missing field `parent_checkpoint` in initializer of `ReviewRequest
     --> crates/task-dispatch/src/review.rs:1201:9
 ```
 
-直しは final review の request に `parent_checkpoint: None` の 1 行（final review は親の途中評価の run ではない）。この path はこの WU の範囲 check の正規表現に無いので書いていない。
-計画の範囲に `crates/task-dispatch/src/review\.rs$` を足すよう `plan_issue` で申告した。他の `ReviewRequest {` の literal（task-dispatch の試験・`design_gate.rs`）は
-`..Default::default()` を使うので変更は要らない。
+1 回目の run では、この path が範囲 check の正規表現に無かったので書かず、`plan_issue` で申告した。計画が範囲 check に
+`crates/task-dispatch/src/review\.rs$` を足し、2 回目の run が final review の request に `parent_checkpoint: None` と comment
+（final review は親の途中評価の run ではない）を書いた。差分はこの file の 2 行だけ（`git diff --stat -- crates/task-dispatch/src/review.rs` → 2 insertions）。
+他の `ReviewRequest {` の literal（task-dispatch の試験・`design_gate.rs`）は `..Default::default()` を使うので変えていない。
 
 ## 検査（提出時の HEAD）
 
@@ -117,12 +122,19 @@ error[E0063]: missing field `parent_checkpoint` in initializer of `ReviewRequest
 2. schema・md の check（plan の check 2）: exit 0。
 3. `cargo nextest run -p task-worker -p task-core --no-fail-fast`: exit 0、2785 passed（`committed_schema_matches_generated`・`strategy_critic_absent_prompt_unchanged` を含む）。
 4. `cargo clippy -p task-worker -p task-core -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
-5. 範囲 check（plan の check 5）: exit 0。
-6. `bash scripts/dev/test-affected.sh` と `cargo clippy --workspace -- -D warnings`: task-dispatch のコンパイルで落ちる（上の範囲外の 1 行）。範囲が足された run で実行する。
+5. 範囲 check（plan の check 5。`crates/task-dispatch/src/review\.rs$` を足した版）: exit 0。
+6. `bash scripts/dev/test-affected.sh`: exit 0。対象は celeris・celeris-campaign・celeris-credentiald・celeris-mcp・celeris-script・celerisctl・e2e・llm-proxy・
+   routing-eval・task-api・task-core・task-dispatch・task-ops・task-worker と web（typecheck+unit）・ts-verify。
+   nextest `8717 tests run: 8717 passed (9 slow), 31 skipped`、web `Tests 745 passed (745)`、`test-ts-verify: 20 passed, 0 failed`、
+   `repo_health_gate: all checks passed`、script bundle SKIP 0 件。
+7. `cargo clippy --workspace -- -D warnings`: exit 0（`deno_core` の vendor の既存の warning 1 件だけで、`-D warnings` の対象外）。`cargo fmt --all -- --check`: exit 0。
+
+検査 1・2・5 は 2 回目の run（task-dispatch の 1 行を足した後の HEAD）で再実行し、結果は上と同じ（1: 8 passed、2・5: exit 0）。検査 3・4 は 1 回目の run の結果で、
+2 回目の run では再実行していない。同じ crate（task-worker・task-core）は検査 6・7 の対象に入っている。
 
 ## LoC（`git diff --numstat $CELERIS_WU_BASE` と新しい file の行数）
 
-- production: +380 行・−22 行（`protocol/parent_checkpoint.rs` +120、`change_rules/review.rs` +185、`protocol.rs` +40・−11、`prompt.rs` +7、`task-core/src/parent_checkpoint.rs` +28・−11）。
+- production: +382 行・−22 行（`task-dispatch/src/review.rs` +2、`protocol/parent_checkpoint.rs` +120、`change_rules/review.rs` +185、`protocol.rs` +40・−11、`prompt.rs` +7、`task-core/src/parent_checkpoint.rs` +28・−11）。
   `StrategyCriticRequest::fixed_rubric` の写しの処理は `RubricItem::from_table` に移し、親の途中評価と共有した。
 - test: +555 行（`protocol/parent_checkpoint/tests.rs` +234、`change_rules/review/tests.rs` +319、literal の 2 行）。
 - 文書・生成物: md +65・−4、schema +498・−17（生成）。
@@ -130,7 +142,7 @@ error[E0063]: missing field `parent_checkpoint` in initializer of `ReviewRequest
 
 ## 未解決
 
-- 範囲外の 1 行（上）。直るまで task-dispatch・task-api などの逆依存の crate はコンパイルできない。
+- 範囲外の 1 行は解決した（上）。task-dispatch と逆依存の crate はコンパイルでき、test-affected・clippy --workspace は exit 0。
 - ADR D9.2 は `parent_evaluation_absent_*` を task-worker・task-dispatch に置くと書くが、この WU の範囲は task-worker だけなので task-worker に置いた。
   dispatcher が組む request の試験は controller-checkpoint（`dispatcher/parent_evaluation.rs` が `parent_checkpoint` を組む WU）の範囲。
 - `ParentCheckpointCriterion.result` の値（`pass`・`fail`・`not_run`）と `kind` の値は文字列で、値を決めて詰めるのは controller-checkpoint の組み立て。型で閉じていない。

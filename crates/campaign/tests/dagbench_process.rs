@@ -262,10 +262,86 @@ const POINT: &str = "camp-1";
 const CTL_ENV: &str = "DAGBENCH_TEST_CTL";
 /// raw / log の保存先（絶対 path の run 成果物 dir）。
 const RAW_DIR_ENV: &str = "DAGBENCH_PROCESS_RAW_DIR";
-/// 出来事待ちの長い保険（これを超えたら試験を失敗させる）。
-const INSURANCE: Duration = Duration::from_secs(600);
+/// 1 scenario（External 起動から control 再開の exit まで）の出来事待ちの保険。nextest の打ち切り
+/// （`.config/nextest.toml` の 60 s × 10 = 600 s）より短くし、2 scenario を直列に回す試験でも 600 s に届かない
+/// ようにする。単独では 1 scenario が 0.6〜6.2 s なので、約 40 倍の余裕がある。超えたら止まった段の名前と
+/// child の最後の行を出して落ちる（[`Insurance`]）。
+const INSURANCE: Duration = Duration::from_secs(240);
 /// 通知が来ない再開 control を待つ上限（凍結した時計で失敗するはずなので短い）。超えたら kill して回収する。
 const PROBE_BOUND: Duration = Duration::from_secs(60);
+
+/// 1 scenario の保険の期限。各段の待ちは残りの時間だけ待つ。期限を超えた段は、段の名前・child の role と
+/// incarnation・child が stdout に出した最後の行・stderr の末尾を出して試験を落とす（nextest の TIMEOUT で
+/// 止まった段が分からなくなるのを防ぐ）。
+struct Insurance {
+    end: Instant,
+    span: Duration,
+    /// child の stderr の置き場所（`EventLog` の dir。`Supervisor::spawn` がここに `<role>-<incarnation>.stderr` を作る）。
+    logs: PathBuf,
+}
+
+impl Insurance {
+    fn start(log: &EventLog) -> Self {
+        Self::within(INSURANCE, log.dir())
+    }
+
+    fn within(span: Duration, logs: &Path) -> Self {
+        Self {
+            end: Instant::now() + span,
+            span,
+            logs: logs.to_path_buf(),
+        }
+    }
+
+    fn left(&self) -> Duration {
+        self.end.saturating_duration_since(Instant::now())
+    }
+
+    /// `marker` を含む行が来るまで待つ。読んだ行は `last` に残す。
+    fn line(&self, p: &OwnedProc, stage: &str, marker: &str) -> String {
+        let mut last = None;
+        loop {
+            match p.next_line(self.left()) {
+                Ok(l) if l.contains(marker) => return l[l.find(marker).unwrap_or(0)..].to_string(),
+                Ok(l) => last = Some(l),
+                Err(e) => self.stalled(p, stage, &format!("waiting for {marker}: {e}"), last),
+            }
+        }
+    }
+
+    /// child の exit を待つ。期限を超えたら段の名前を出して落ちる（child は Drop で kill・回収される）。
+    fn exit(&self, p: &mut OwnedProc, stage: &str) -> std::process::ExitStatus {
+        match p.wait_exit(self.left()).expect("wait") {
+            Some(st) => st,
+            None => self.stalled(p, stage, "child did not exit", None),
+        }
+    }
+
+    /// 保険切れ・child の早すぎる終了の報告。child の stdout に残っている行を読み切って最後の行を出す。
+    fn stalled(&self, p: &OwnedProc, stage: &str, what: &str, mut last: Option<String>) -> ! {
+        while let Ok(l) = p.next_line(Duration::ZERO) {
+            last = Some(l);
+        }
+        let stderr = self
+            .logs
+            .join(format!("{}-{}.stderr", p.role().as_str(), p.incarnation()));
+        let tail = std::fs::read_to_string(&stderr)
+            .map(|s| {
+                let lines: Vec<&str> = s.lines().collect();
+                lines[lines.len().saturating_sub(10)..].join("\n")
+            })
+            .unwrap_or_else(|e| format!("({}: {e})", stderr.display()));
+        panic!(
+            "stage `{stage}` stalled ({what}; insurance {:?}): {} incarnation {} pid {}; \
+             last stdout line: {last:?}; stderr tail ({}):\n{tail}",
+            self.span,
+            p.role().as_str(),
+            p.incarnation(),
+            p.pid(),
+            stderr.display(),
+        )
+    }
+}
 
 fn scenarios() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/dagbench/scenarios.json")
@@ -531,17 +607,6 @@ fn cfg_limits() -> Limits {
     }
 }
 
-fn wait_line(p: &OwnedProc, marker: &str) -> String {
-    loop {
-        let l = p
-            .next_line(INSURANCE)
-            .unwrap_or_else(|e| panic!("waiting for {marker} from {}: {e}", p.role().as_str()));
-        if l.contains(marker) {
-            return l[l.find(marker).unwrap_or(0)..].to_string();
-        }
-    }
-}
-
 /// raw 保存先: `DAGBENCH_PROCESS_RAW_DIR`（絶対）の下の run 用 dir。未指定のときは何も残さない作業用 dir
 /// （試験後に消え、raw としては記録しない。相対 path は拒否する）。
 fn run_dir(arm: String) -> (PathBuf, Option<tempfile::TempDir>) {
@@ -616,6 +681,7 @@ fn survive(arm: &'static str, at: Park) {
     };
     header.write(&d).expect("header");
     let log = EventLog::create(&d).expect("log");
+    let ins = Insurance::start(&log);
     let mut sup = Supervisor::new(log.clone(), limits.clone()).expect("sup");
 
     let ctl = |inc: u64, nth: Option<u64>| {
@@ -639,13 +705,13 @@ fn survive(arm: &'static str, at: Park) {
             role_cmd_cfg("external", &sock, &ledger, &ext_cfg(&s)),
         )
         .expect("spawn external");
-    wait_ready(&ext);
+    ins.line(&ext, "external_ready", READY_LINE);
 
     // 1. control: submit / 待機 ack が nth 件目に達するまで走る。
     let mut c1 = sup
         .spawn(Role::Control, ctl(1, (at == Park::WaitAck).then_some(nth)))
         .expect("spawn control");
-    let acked_line = wait_line(&c1, "CONTROL_ACKED");
+    let acked_line = ins.line(&c1, "control_1_stop_point", "CONTROL_ACKED");
     log.barrier(
         B_CONTROL_ACKED,
         json!({"control_pid": c1.pid(), "external_pid": ext.pid(),
@@ -721,7 +787,7 @@ fn survive(arm: &'static str, at: Park) {
     let mut c2 = sup
         .spawn(Role::Control, ctl(2, None))
         .expect("respawn control");
-    let resend = wait_line(&c2, "CONTROL_RESEND");
+    let resend = ins.line(&c2, "control_2_resend", "CONTROL_RESEND");
     assert_eq!(
         resend,
         format!(
@@ -738,10 +804,7 @@ fn survive(arm: &'static str, at: Park) {
     )
     .expect("barrier");
     c2.send_line("go").expect("go");
-    let st = c2
-        .wait_exit(INSURANCE)
-        .expect("wait")
-        .unwrap_or_else(|| panic!("control did not finish within the insurance deadline"));
+    let st = ins.exit(&mut c2, "control_2_run_to_completion");
     assert!(st.success(), "resumed control failed: {st:?}");
     log.barrier(B_CONTROL_DONE, json!({"exit_code": st.code()}))
         .expect("barrier");
@@ -1003,6 +1066,7 @@ fn notice_run(arm: &'static str, stop: Stop) {
         .write(&d)
         .expect("header");
     let log = EventLog::create(&d).expect("log");
+    let ins = Insurance::start(&log);
     let mut sup = Supervisor::new(log.clone(), limits.clone()).expect("sup");
 
     let mut ext = sup
@@ -1011,7 +1075,7 @@ fn notice_run(arm: &'static str, stop: Stop) {
             role_cmd_cfg("external", &sock, &ledger, &cfg),
         )
         .expect("spawn external");
-    wait_ready(&ext);
+    ins.line(&ext, "external_ready", READY_LINE);
 
     // 1. control: nth 件目（受理後 / 待機後 / 応答喪失後）まで走って止まる。
     let mut c1 = sup
@@ -1020,7 +1084,7 @@ fn notice_run(arm: &'static str, stop: Stop) {
             notice_ctl(arm, &d, &sock, seed, 1, Some((stop, nth)), false),
         )
         .expect("spawn control");
-    let acked_line = wait_line(&c1, "CONTROL_ACKED");
+    let acked_line = ins.line(&c1, "control_1_stop_point", "CONTROL_ACKED");
     log.barrier(
         B_CONTROL_ACKED,
         json!({"control_pid": c1.pid(), "external_pid": ext.pid(),
@@ -1112,11 +1176,8 @@ fn notice_run(arm: &'static str, stop: Stop) {
             notice_ctl(arm, &d, &sock, seed, 2, None, false),
         )
         .expect("respawn control");
-    wait_line(&c2, "CONTROL_RESUMED");
-    let st = c2
-        .wait_exit(INSURANCE)
-        .expect("wait")
-        .unwrap_or_else(|| panic!("control did not finish within the insurance deadline"));
+    ins.line(&c2, "control_2_resumed", "CONTROL_RESUMED");
+    let st = ins.exit(&mut c2, "control_2_run_to_completion");
     assert!(st.success(), "resumed control failed: {st:?}");
     log.barrier(B_CONTROL_DONE, json!({"exit_code": st.code()}))
         .expect("barrier");
@@ -1259,6 +1320,7 @@ fn no_notice_probe(arm: &'static str) {
         .write(&d)
         .expect("header");
     let log = EventLog::create(&d).expect("log");
+    let ins = Insurance::start(&log);
     let mut sup = Supervisor::new(log.clone(), limits.clone()).expect("sup");
     let mut ext = sup
         .spawn(
@@ -1266,14 +1328,14 @@ fn no_notice_probe(arm: &'static str) {
             role_cmd_cfg("external", &sock, &ledger, &ext_cfg(&s)),
         )
         .expect("spawn external");
-    wait_ready(&ext);
+    ins.line(&ext, "external_ready", READY_LINE);
     let mut c1 = sup
         .spawn(
             Role::Control,
             notice_ctl(arm, &d, &sock, seed, 1, Some((Stop::AfterWait, nth)), false),
         )
         .expect("spawn control");
-    wait_line(&c1, "CONTROL_ACKED");
+    ins.line(&c1, "control_1_stop_point", "CONTROL_ACKED");
     c1.kill("fault_after_wait_ack").expect("kill");
     assert!(c1.try_exit().expect("wait").is_some());
 
@@ -1283,9 +1345,9 @@ fn no_notice_probe(arm: &'static str) {
             notice_ctl(arm, &d, &sock, seed, 2, None, true),
         )
         .expect("respawn control");
-    wait_line(&c2, "CONTROL_RESUMED");
+    ins.line(&c2, "control_2_resumed", "CONTROL_RESUMED");
     // 通知が来ないので、時計を進める要求の拒否で止まる（来ない完了を待ち続けない）。
-    let st = c2.wait_exit(PROBE_BOUND).expect("wait");
+    let st = c2.wait_exit(PROBE_BOUND.min(ins.left())).expect("wait");
     match st {
         Some(st) => assert!(!st.success(), "resumed without any notice: {st:?}"),
         None => {
@@ -1316,13 +1378,85 @@ fn no_notice_probe(arm: &'static str) {
         .expect("stop external");
 }
 
+// 通知主導の再開は arm（baseline / celeris）× 段（通知なしの probe・受理後の停止・待機後の停止）の 6 scenario を
+// それぞれ別の試験にする（nextest は試験ごとに別 process・別の打ち切りで回すので、1 つが止まっても他の scenario の
+// 結果は残り、止まった scenario の名前が出る）。
+
 #[test]
-fn recovery_notice_continuation() {
-    for arm in ["baseline", "celeris"] {
-        no_notice_probe(arm);
-        notice_run(arm, Stop::AfterAccept);
-        notice_run(arm, Stop::AfterWait);
-    }
+fn recovery_notice_continuation_baseline_probe() {
+    no_notice_probe("baseline");
+}
+
+#[test]
+fn recovery_notice_continuation_baseline_after_accept() {
+    notice_run("baseline", Stop::AfterAccept);
+}
+
+#[test]
+fn recovery_notice_continuation_baseline_after_wait() {
+    notice_run("baseline", Stop::AfterWait);
+}
+
+#[test]
+fn recovery_notice_continuation_celeris_probe() {
+    no_notice_probe("celeris");
+}
+
+#[test]
+fn recovery_notice_continuation_celeris_after_accept() {
+    notice_run("celeris", Stop::AfterAccept);
+}
+
+#[test]
+fn recovery_notice_continuation_celeris_after_wait() {
+    notice_run("celeris", Stop::AfterWait);
+}
+
+/// 保険を超えた段は、段の名前と child の最後の行を出して落ちる（nextest の TIMEOUT では止まった段が出なかった）。
+/// 既存の試験は全て保険の内に終わるので、この失敗の報告は他の試験では確かめられない。ready を出して止まらない
+/// child（`stubborn`）を短い保険で待つ。
+#[test]
+fn insurance_names_the_stalled_stage_and_the_last_child_line() {
+    let logd = tempfile::tempdir().expect("log dir");
+    let work = tempfile::tempdir().expect("work");
+    let limits = Limits {
+        stop_grace: Duration::from_millis(300),
+        ..cfg_limits()
+    };
+    let log = EventLog::create(logd.path()).expect("log");
+    let mut sup = Supervisor::new(log, limits).expect("sup");
+    let mut p = sup
+        .spawn(
+            Role::Control,
+            role_cmd(
+                "stubborn",
+                &work.path().join("s.sock"),
+                &work.path().join("s.jsonl"),
+            ),
+        )
+        .expect("spawn");
+    let ins = Insurance::within(Duration::from_millis(500), logd.path());
+    let line = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ins.line(&p, "stage_never_marked", "NEVER_PRINTED")
+    }))
+    .expect_err("the marker never comes");
+    let msg = line.downcast_ref::<String>().cloned().unwrap_or_default();
+    assert!(msg.contains("stage `stage_never_marked` stalled"), "{msg}");
+    assert!(msg.contains("waiting for NEVER_PRINTED"), "{msg}");
+    assert!(msg.contains(READY_LINE), "last child line: {msg}");
+    assert!(msg.contains("control incarnation 1"), "{msg}");
+    let exit = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        Insurance::within(Duration::from_millis(200), logd.path()).exit(&mut p, "stage_never_exits")
+    }))
+    .expect_err("stubborn never exits");
+    let msg = exit.downcast_ref::<String>().cloned().unwrap_or_default();
+    assert!(
+        msg.contains("stage `stage_never_exits` stalled (child did not exit"),
+        "{msg}"
+    );
+    assert!(msg.contains("control-1.stderr"), "{msg}");
+    let r = p.stop(None, "test_done").expect("stop");
+    assert!(r.killed, "{r:?}");
 }
 
 #[test]

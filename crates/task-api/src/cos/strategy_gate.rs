@@ -10,20 +10,19 @@
 //! 欄の無い `task.create` はここを通らない（呼び出し側の `operations::create_operation` が欄のあるときだけ呼ぶ）。
 //!
 //! ADR 2026-11-22-strategy-review-critic D2・D3.7・D4・D5: 文書の検査に続けて、実行の入口の事実（文書を作った task の
-//! status、`task_core::strategy_critic::critic_subjects` による Critic の対象、`cos_operations` から導く鎖の版ごとの
+//! status、`task_core::strategy_critic::critic_subjects` による Critic の対象、`cos_operations` から `SqliteStore::strategy_task_creates` で導く鎖の版ごとの
 //! 実験 task の集合 X(v) とその終端、起票の `execution`・`max_wall_secs`・`strategy.candidate`）を集めて
 //! [`task_core::strategy::check_execution`] に渡す。規則はそこにあり、ここには書かない。違反は文書の違反と同じ 422 に並ぶ。
 
 use std::collections::BTreeMap;
 use std::path::{Component, Path};
 
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use task_core::decision::{DecisionRow, DecisionStatus};
 use task_core::model::{ArtifactRef, Event, Status, Task, TaskId};
 use task_core::project_proposal::sha256_hex;
-use task_core::store::{SqliteStore, StoreError};
+use task_core::store::SqliteStore;
 use task_core::strategy::{
     self, APPROVE_OPTION, ApprovalRecord, ArtifactFacts, ArtifactPointer, CheckContext,
     ExecutionFacts, ExperimentTask, Intent, PreviousVersion, RefStatus, Reference, Rule,
@@ -38,18 +37,8 @@ use crate::problem::{ApiProblem, store_problem};
 /// `strategy` を `task.create` 以外の操作に付けた（D4）。
 pub(crate) const STRATEGY_NOT_APPLICABLE: &str = "strategy_not_applicable";
 
-/// `/cos/operations` の欄 `strategy`: 実行する戦略の文書（作った task・成果物の name・記録の sha256）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct StrategyRef {
-    pub task_id: String,
-    pub name: String,
-    pub sha256: String,
-    /// ADR 2026-11-22-strategy-review-critic D2.2: どの候補の task か（`[a-z0-9-]{1,40}`）。実験段階の版では
-    /// open の候補、実行段階の版では省略か `selected` の候補。`cos_operations.payload_json.strategy.candidate` が記録になる。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub candidate: Option<String>,
-}
+/// `/cos/operations` の欄 `strategy` の型（ADR 2026-11-22-parent-checkpoint-evaluator D1.1。定義は task-core の 1 つ）。
+pub(crate) use task_core::strategy_ref::StrategyRef;
 
 /// 欄 `strategy` のある要求の検査。通れば `Ok(())`、違反があれば 422。
 pub(crate) fn check(
@@ -253,14 +242,15 @@ fn execution_facts(
         };
         versions.push((version, &prev.pointer.name, &prev.pointer.sha256));
     }
-    let operations = strategy_operations(store)?;
+    // D2.3 の X(v) の元（ADR 2026-11-22-parent-checkpoint-evaluator D1.1 の照会の全件。版ごとの選別はここで行う）。
+    let operations = store.strategy_task_creates(None).map_err(store_problem)?;
     let mut experiments = Vec::new();
     for (version, name, sha256) in versions {
         let of_version = operations
             .iter()
-            .filter(|op| op.name == name && bare(&op.sha256) == bare(sha256));
-        for op in of_version {
-            let task_id = op.task_id.clone();
+            .filter(|(_, op)| op.name == name && bare(&op.sha256) == bare(sha256));
+        for (target_id, op) in of_version {
+            let task_id = target_id.clone();
             let terminal = match task_id.parse::<TaskId>() {
                 Ok(id) => store.get(id).map_err(store_problem)?.is_some_and(|t| {
                     matches!(t.status, Status::Done | Status::Failed | Status::Cancelled)
@@ -285,44 +275,6 @@ fn execution_facts(
         candidate: strategy.candidate.clone(),
         max_wall_secs: body.get("max_wall_secs").and_then(Value::as_u64),
     })
-}
-
-/// `strategy` 付きで作った task の操作（`cos_operations` の 1 行）。
-struct StrategyOperation {
-    name: String,
-    sha256: String,
-    task_id: String,
-    candidate: Option<String>,
-}
-
-/// D2.3 の X(v) の元: `cos_operations` の `task.create`・`applied` の行のうち `payload_json.strategy` のあるものの全件
-/// （版ごとの X は呼び出し側が name と sha256 で選ぶ。鎖の版の数だけ走査しない）。子 2 D3.4 の「ある task がどの戦略を
-/// 実行するか」と同じ照会で、表も索引も足さない。task-core の store に cos_operations を任意の条件で読む公開の口が無いので、
-/// `write_tx` の中で SELECT だけを行う（書かない。即座に commit する）。
-fn strategy_operations(store: &SqliteStore) -> Result<Vec<StrategyOperation>, ApiProblem> {
-    store
-        .write_tx(|tx| -> Result<Vec<StrategyOperation>, StoreError> {
-            let mut stmt = tx.prepare(
-                "SELECT json_extract(payload_json, '$.strategy.name'), \
-                 json_extract(payload_json, '$.strategy.sha256'), target_id, \
-                 json_extract(payload_json, '$.strategy.candidate') FROM cos_operations \
-                 WHERE action = 'task.create' AND state = 'applied' \
-                 AND json_extract(payload_json, '$.strategy.name') IS NOT NULL \
-                 ORDER BY created_at, id",
-            )?;
-            let rows = stmt
-                .query_map([], |r| {
-                    Ok(StrategyOperation {
-                        name: r.get(0)?,
-                        sha256: r.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                        task_id: r.get(2)?,
-                        candidate: r.get(3)?,
-                    })
-                })?
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(rows)
-        })
-        .map_err(store_problem)
 }
 
 /// 最後の `DecisionAnswered` の `(option, by)`。

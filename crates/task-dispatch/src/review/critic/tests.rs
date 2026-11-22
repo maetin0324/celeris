@@ -258,13 +258,14 @@ async fn strategy_critic_not_evaluated_when_deterministic_fails() {
 #[tokio::test]
 async fn strategy_critic_absent_reviewer_run_count_unchanged() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let plain = needs_reviewer_run(&task_with(vec![], dir.path()));
-    let with_reviewer = needs_reviewer_run(&task_with(vec![Check::Reviewer], dir.path()));
-    assert!(!reviewer_run_required(plain, false, &[]));
-    assert!(reviewer_run_required(with_reviewer, false, &[]));
-    assert!(reviewer_run_required(plain, true, &[]));
+    let plain = task_with(vec![], dir.path());
+    let with_reviewer = task_with(vec![Check::Reviewer], dir.path());
+    assert!(!needs_reviewer_run(&plain) && needs_reviewer_run(&with_reviewer));
+    assert!(!reviewer_run_required(&plain, false, &[]));
+    assert!(reviewer_run_required(&with_reviewer, false, &[]));
+    assert!(reviewer_run_required(&plain, true, &[]));
     let (subjects, _) = subjects_in(dir.path());
-    assert!(reviewer_run_required(plain, false, &subjects));
+    assert!(reviewer_run_required(&plain, false, &subjects));
 
     let (out, runs, _) = review(vec![], serde_json::json!({"verdicts": []}), false).await;
     assert_eq!(runs, 0);

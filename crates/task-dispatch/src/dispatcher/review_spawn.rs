@@ -5,6 +5,7 @@ use super::token_budget::run_watch;
 use super::*;
 use crate::review::{RepoHealth, artifact_candidates, reviewer_run_required};
 use crate::review_decision;
+use task_core::strategy_critic::critic_subjects;
 use task_worker::check_slots::CheckLimits;
 
 /// ADR-0118 D4 付記 / ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D3・D4: 直近の遷移（自動の
@@ -409,19 +410,9 @@ impl Dispatcher {
             }
         };
 
-        let delivery_requires_reviewer_run =
-            task_ops::delivery::auto_integrates(&self.store, &task).unwrap_or(false)
-                && task_core::support_kind(&task).is_none()
-                && !task_core::tree::is_tree_child(&task);
-        // ADR 2026-11-22-strategy-review-critic D3.1・D3.2: run（WorkUnit の run を含む）が戦略の文書を作った task は、
-        // `Check::Reviewer` が無くても reviewer run を 1 回起こし、その同じ run が Critic を判定する。
-        let critic_subjects =
-            task_core::strategy_critic::critic_subjects(&self.store.events_for(task_id)?);
-        let reviewer = if reviewer_run_required(
-            needs_reviewer_run(&task),
-            delivery_requires_reviewer_run,
-            &critic_subjects,
-        ) {
+        let critic_subjects = critic_subjects(&self.store.events_for(task_id)?);
+        let delivers = task_ops::delivery::auto_integrates(&self.store, &task).unwrap_or(false);
+        let reviewer = if reviewer_run_required(&task, delivers, &critic_subjects) {
             match self.pick_reviewer(&task, &run_id, run_watch(&self.store, &task, None)) {
                 Some(r) => Some(r),
                 None => {
@@ -1004,7 +995,6 @@ impl Dispatcher {
                 policy_violations,
                 // ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D2。
                 reviewer_reuse,
-                // ADR 2026-11-22-strategy-review-critic D3.3。
                 critic_subjects,
             };
             let mut outcome = review_task(

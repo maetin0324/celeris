@@ -229,15 +229,67 @@ pub fn needs_reviewer_run(task: &Task) -> bool {
         .any(|c| matches!(c.check, Check::Reviewer))
 }
 
-/// reviewer run を起こすか（ADR-0007 D5・`delivery_requires_reviewer_run` の前例・ADR 2026-11-22-strategy-review-critic D3.2）。
-/// 戦略の成果物の無い task（`critic_subjects` が空）では従来と同じ条件で、reviewer run の数は変わらない。
-/// `has_reviewer_criterion` は [`needs_reviewer_run`] の値。
+/// reviewer run を起こすか（ADR-0007 D5）。`Check::Reviewer` を持つ task、自動で届ける root task（`auto_integrates` は
+/// `task_ops::delivery::auto_integrates` の値。support・tree の子は除く）、ADR 2026-11-22-strategy-review-critic D3.1・D3.2
+/// の戦略の文書を作った task（`critic_subjects` が空でない。同じ run が Critic を判定する）。`critic_subjects` が空なら
+/// 従来と同じ条件で、reviewer run の数は変わらない。
 pub fn reviewer_run_required(
-    has_reviewer_criterion: bool,
-    delivery_requires_reviewer_run: bool,
+    task: &Task,
+    auto_integrates: bool,
     critic_subjects: &[task_core::strategy_critic::CriticSubject],
 ) -> bool {
-    has_reviewer_criterion || delivery_requires_reviewer_run || !critic_subjects.is_empty()
+    let delivery_requires_reviewer_run = auto_integrates
+        && task_core::support_kind(task).is_none()
+        && !task_core::tree::is_tree_child(task);
+    needs_reviewer_run(task) || delivery_requires_reviewer_run || !critic_subjects.is_empty()
+}
+
+/// reviewer が判定しなかった条件（`criteria` と Critic）を `reason` で不合格にする（ADR-0007 D5・ADR
+/// 2026-11-22-strategy-review-critic D3.3）。
+fn not_evaluated(
+    criteria: &[usize],
+    critic: Option<&critic::Critic>,
+    reason: &str,
+) -> Vec<Verdict> {
+    criteria
+        .iter()
+        .map(|&idx| Verdict {
+            criterion_idx: idx,
+            pass: false,
+            reason: reason.to_string(),
+            repair_hint: None,
+        })
+        .chain(critic.map(|c| c.fail(reason)))
+        .collect()
+}
+
+/// reviewer run が無い回の verdict。`reuse` があれば `Check::Reviewer` の条件をその理由で合格にする（ADR 2026-10-27
+/// review-resync-halt-visible-and-reviewer-reuse D2）。持ち越しは Critic を覆わない（D3.2）。
+fn without_reviewer_run(
+    criteria: &[usize],
+    critic: Option<&critic::Critic>,
+    reuse: Option<&str>,
+) -> Vec<Verdict> {
+    let Some(reuse) = reuse else {
+        return not_evaluated(
+            criteria,
+            critic,
+            "not evaluated: no reviewer run was available",
+        );
+    };
+    criteria
+        .iter()
+        .map(|&idx| Verdict {
+            criterion_idx: idx,
+            pass: true,
+            reason: format!("reviewer pass reused: {reuse}"),
+            repair_hint: None,
+        })
+        .chain(
+            critic
+                .map(|c| c.fail("not evaluated: a reused reviewer pass does not cover the Critic")),
+        )
+        .collect()
 }
 
 /// `Reviewer` run に使う `WorkerHint`（DESIGN §5.7: `Standard` tier）。
@@ -877,10 +929,7 @@ pub async fn review_task(
 
     // ADR-0046 D4（Phase 59）: `mode = research` は「結果に出典か計測の記録があること」を暗黙の条件に足す。
     if research {
-        let idx = task.acceptance.len()
-            + usize::from(plan.is_some())
-            + usize::from(aggregate)
-            + extra_check_count;
+        let idx = base + extra_check_count;
         let (pass, reason) = research_evidence(artifacts_dir, &artifacts_rel);
         implicit.insert(idx, ("research_evidence", None));
         verdicts.push(Verdict {
@@ -892,18 +941,8 @@ pub async fn review_task(
     }
 
     // ADR 2026-11-22-strategy-review-critic D3.3: 戦略の文書を作った task は暗黙の条件 `strategy_critic` を最後に足す。
-    // 合否は reviewer の同じ run の `critic` の節だけで決まり、判定されなければ不合格。
-    let critic = critic::Critic::new(
-        task.acceptance.len()
-            + usize::from(plan.is_some())
-            + usize::from(aggregate)
-            + extra_check_count
-            + usize::from(research),
-        critic_subjects,
-    );
-    if let Some(c) = &critic {
-        implicit.insert(c.idx, (critic::CRITIC_KIND, None));
-    }
+    let critic_idx = base + extra_check_count + usize::from(research);
+    let critic = critic::Critic::new(critic_idx, critic_subjects, &mut implicit);
 
     // ADR-0007 D5 2./3.: 決定的条件が全 pass のときだけ LLM レビュー run を起動する。
     let mut provider_failure = None;
@@ -911,38 +950,18 @@ pub async fn review_task(
     if !reviewer_criteria.is_empty() || critic.is_some() {
         let deterministic_ok = verdicts.iter().all(|v| v.pass);
         let reviewer_verdicts = if !deterministic_ok {
-            reviewer_criteria
-                .iter()
-                .map(|&idx| Verdict {
-                    criterion_idx: idx,
-                    pass: false,
-                    reason: REVIEWER_NOT_EVALUATED_REASON.to_string(),
-                    repair_hint: None,
-                })
-                .chain(
-                    critic
-                        .as_ref()
-                        .map(|c| c.fail(REVIEWER_NOT_EVALUATED_REASON)),
-                )
-                .collect()
+            not_evaluated(
+                &reviewer_criteria,
+                critic.as_ref(),
+                REVIEWER_NOT_EVALUATED_REASON,
+            )
         } else {
             match reviewer {
-                None => reviewer_criteria
-                    .iter()
-                    .map(|&idx| Verdict {
-                        criterion_idx: idx,
-                        pass: reviewer_reuse.is_some(),
-                        reason: match &reviewer_reuse {
-                            Some(reason) => format!("reviewer pass reused: {reason}"),
-                            None => "not evaluated: no reviewer run was available".to_string(),
-                        },
-                        repair_hint: None,
-                    })
-                    // D3.2: reviewer の合格の持ち越しは Critic を覆わない。
-                    .chain(critic.as_ref().map(|c| {
-                        c.fail("not evaluated: no reviewer run was available (a reused reviewer pass does not cover the Critic)")
-                    }))
-                    .collect(),
+                None => without_reviewer_run(
+                    &reviewer_criteria,
+                    critic.as_ref(),
+                    reviewer_reuse.as_deref(),
+                ),
                 Some(run) => {
                     let human_context = ReviewHumanContext {
                         inputs: human_inputs,
@@ -1315,16 +1334,7 @@ async fn run_reviewer_inner(
 ) -> Result<Vec<Verdict>, ReviewerProviderFailure> {
     // ADR 2026-11-22-strategy-review-critic D3.3: 判定できなかった run は Critic も不合格にする。
     let fail_all = |reason: String| -> Result<Vec<Verdict>, ReviewerProviderFailure> {
-        Ok(criteria
-            .iter()
-            .map(|&idx| Verdict {
-                criterion_idx: idx,
-                pass: false,
-                reason: reason.clone(),
-                repair_hint: None,
-            })
-            .chain(critic.map(|c| c.fail(&reason)))
-            .collect())
+        Ok(not_evaluated(criteria, critic, &reason))
     };
     let subject_genre = run.subject_genre.clone();
     let review_path = artifacts_dir.join(REVIEW_FILE_NAME);
@@ -1499,16 +1509,13 @@ async fn run_reviewer_inner(
     };
     // ADR 2026-11-07-health-review-integration D5: health を渡した review は health verdict も読んで写す。
     // ADR 2026-11-17-boundary-change-risk-review D3: `diff_design` を渡した review は `design` の合格も要る。
-    let mut verdicts =
-        Verdict::from_final_review(&text, review.as_ref(), criteria, &tag, &review_rel)
-            .or_else(fail_all)?;
-    // ADR 2026-11-22-strategy-review-critic D3.5: `from_final_review` が落ちたときは `fail_all` が Critic も落とした。
-    if let Some(c) = critic
-        && !verdicts.iter().any(|v| v.criterion_idx == c.idx)
-    {
-        verdicts.push(c.judge(&text, workspace_dir, &tag));
-    }
-    Ok(verdicts)
+    // ADR 2026-11-22-strategy-review-critic D3.5: 読めた review は Critic の節も判定する（落ちたら `fail_all` が落とす）。
+    Verdict::from_final_review(&text, review.as_ref(), criteria, &tag, &review_rel)
+        .map(|mut verdicts| {
+            verdicts.extend(critic.map(|c| c.judge(&text, workspace_dir, &tag)));
+            verdicts
+        })
+        .or_else(fail_all)
 }
 
 /// ADR 2026-10-18-artifact-exists-directory: ディレクトリの成果物の要約。`dir` 以下の通常ファイル

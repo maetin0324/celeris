@@ -380,7 +380,7 @@ fn parse_rfc3339(s: &str) -> Option<OffsetDateTime> {
 
 use crate::review::{
     HumanVerdicts, PLAN_FILE_NAME, PlanCheck, ReviewExtras, ReviewOutcome, ReviewSubject,
-    ReviewerRun, Verdict, needs_reviewer_run, review_task,
+    ReviewerRun, Verdict, review_task,
 };
 
 /// `task_ops::derive::ReviewNote` をワーカープロトコルの `task_worker::PriorReview` に写す

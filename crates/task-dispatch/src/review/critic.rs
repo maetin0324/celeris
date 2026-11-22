@@ -5,7 +5,7 @@
 //! 候補が文書と食い違う・理由が空か長すぎる・どれか 1 つでも `ok: false`・対象が衝突している・文書の file が記録の後に
 //! 書き換えられた、のどれでも不合格（fail closed）。文書の検査は gate の仕事で、ここでは `candidates[].id` だけを読む。
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
 use task_core::strategy_critic::{CriticSubject, bare_sha256};
@@ -27,9 +27,18 @@ pub(crate) struct Critic {
 }
 
 impl Critic {
-    /// 対象が空なら `None`（Critic と無関係の task。review は従来と同じ）。
-    pub(crate) fn new(idx: usize, subjects: Vec<CriticSubject>) -> Option<Self> {
-        (!subjects.is_empty()).then_some(Self { idx, subjects })
+    /// 対象が空なら `None`（Critic と無関係の task。review は従来と同じで、`implicit` も変えない）。空でなければ番号 `idx`
+    /// を暗黙の条件 [`CRITIC_KIND`] として `implicit` に登録する。
+    pub(crate) fn new(
+        idx: usize,
+        subjects: Vec<CriticSubject>,
+        implicit: &mut HashMap<usize, (&'static str, Option<String>)>,
+    ) -> Option<Self> {
+        if subjects.is_empty() {
+            return None;
+        }
+        implicit.insert(idx, (CRITIC_KIND, None));
+        Some(Self { idx, subjects })
     }
 
     /// reviewer への入力（`ReviewRequest.strategy_critic`）。

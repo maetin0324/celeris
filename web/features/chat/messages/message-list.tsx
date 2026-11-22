@@ -29,6 +29,7 @@ import {
 } from "./logic";
 import { DraftItem, MessageItem, PendingItem, type RenderCards } from "./message-item";
 import { JumpToLatest, StatusLine, ToolCallList } from "./parts";
+import type { MessageRevisionActions } from "./revision";
 
 /** 上端からこの px 以内に来たら古い頁を読む。 */
 const TOP_LOAD_PX = 64;
@@ -43,6 +44,8 @@ export type MessageListProps = {
   onLoadOlder?: () => Promise<unknown> | undefined;
   onRetryPending?: (pending: PendingMessage) => void;
   onDiscardPending?: (pending: PendingMessage) => void;
+  /** 自分の発言の編集・撤回（viewer は state から渡す）。無ければ操作を出さない。 */
+  revision?: Omit<MessageRevisionActions, "viewer">;
   /** 空の会話に出す内容。 */
   empty?: ReactNode;
   className?: string;
@@ -61,9 +64,14 @@ export function MessageList({
   onLoadOlder,
   onRetryPending,
   onDiscardPending,
+  revision,
   empty,
   className,
 }: MessageListProps) {
+  const revisionActions = useMemo(
+    () => (revision ? { ...revision, viewer: state.viewer } : undefined),
+    [revision, state.viewer],
+  );
   const items = useMemo(() => selectTimeline(state), [state]);
   const tools = useMemo(() => groupTools(state), [state]);
   const active = selectActiveRun(state);
@@ -147,7 +155,14 @@ export function MessageList({
         <ol className="mx-auto flex w-full min-w-0 max-w-3xl flex-col gap-4">
           {items.map((item) => (
             <li key={item.key} data-key={item.key} className="min-w-0">
-              {renderItem(item, { attachments, renderCards, tools: tools.byMessage, onRetryPending, onDiscardPending })}
+              {renderItem(item, {
+                attachments,
+                renderCards,
+                tools: tools.byMessage,
+                onRetryPending,
+                onDiscardPending,
+                revision: revisionActions,
+              })}
             </li>
           ))}
           {tools.loose.length > 0 || status ? (
@@ -180,6 +195,7 @@ function renderItem(
     tools: ReturnType<typeof groupTools>["byMessage"];
     onRetryPending?: (pending: PendingMessage) => void;
     onDiscardPending?: (pending: PendingMessage) => void;
+    revision?: MessageRevisionActions;
   },
 ): ReactNode {
   switch (item.kind) {
@@ -191,6 +207,7 @@ function renderItem(
           tools={context.tools[item.message.id]}
           attachments={context.attachments}
           renderCards={context.renderCards}
+          revision={context.revision}
         />
       );
     case "draft":

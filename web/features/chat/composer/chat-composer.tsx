@@ -8,11 +8,13 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import type { ChatDiscussionMode, ChatThread } from "../../../api/generated/types";
 import { Button } from "../../../components/ui/button";
+import { Select } from "../../../components/ui/select";
 import { cancelMessage, resumeQueue, stopRun } from "../data/client";
 import { selectActiveRun } from "../data/reducer";
-import { newClientId } from "../data/send";
-import type { ChatSession, ChatSessionSnapshot } from "../data/session";
+import { DISCUSSION_MODE_LABEL, discussionModeField, newClientId } from "../data/send";
+import type { ChatSession, ChatSessionSnapshot, SendInput } from "../data/session";
 import { createUploadQueue, pastedFiles, shouldSendOnEnter, type UploadApi } from "./upload-queue";
 
 export type ChatComposerProps = {
@@ -27,6 +29,38 @@ export type ChatComposerProps = {
 /** ADR 2026-10-22-cos-fixed-threads D3: 統括・案件の CoS の composer の placeholder。 */
 export const COS_COMPOSER_PLACEHOLDER = "この CoS に聞く・指示する（受信箱の件もここで）";
 
+/**
+ * ADR 2026-11-21-chat-discussion-mode D9: 発言の扱いを選べるのは案件の CoS thread だけ（統括・review の composer は今のまま）。
+ * 選択肢は議論・案・実行の順で、既定は「実行」（欄を送らない。mode を選ぶ前と同じ送信）。
+ */
+export const DISCUSSION_MODE_CHOICES: readonly ChatDiscussionMode[] = ["discuss", "propose", "execute"];
+export const DEFAULT_DISCUSSION_MODE: ChatDiscussionMode = "execute";
+export const DISCUSSION_MODE_NOTE: Partial<Record<ChatDiscussionMode, string>> = {
+  discuss: "議論: CoS は task の起票・案件と roadmap の変更・公開をしません（API が拒否します）",
+  propose: "案: CoS は案を返事の添付で返すだけで、起票・変更はしません（API が拒否します）",
+};
+
+export function offersDiscussionMode(thread: Pick<ChatThread, "kind"> | null | undefined): boolean {
+  return thread?.kind === "project";
+}
+
+/** composer の入力から送信の要求を組む（client_message_id は呼び出し側が再試行の鍵で決める）。 */
+export function composerSendInput(draft: {
+  text: string;
+  attachmentIds: string[];
+  mode: "queue" | "interrupt";
+  paused: boolean;
+  discussionMode?: ChatDiscussionMode;
+}): Omit<SendInput, "client_message_id"> {
+  return {
+    text: draft.text,
+    attachment_ids: draft.attachmentIds,
+    mode: draft.mode,
+    resume_queue: draft.paused,
+    ...discussionModeField(draft.discussionMode),
+  };
+}
+
 function bytes(size: number) {
   return size < 1024 ? `${size} B` : `${(size / 1024).toFixed(1)} KiB`;
 }
@@ -37,6 +71,7 @@ export function ChatComposer({ threadId, session, snapshot, uploadApi, placehold
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState("");
+  const [discussionMode, setDiscussionMode] = useState<ChatDiscussionMode>(DEFAULT_DISCUSSION_MODE);
   const input = useRef<HTMLInputElement>(null);
   const composing = useRef(false);
   const sending = useRef(false);
@@ -46,6 +81,7 @@ export function ChatComposer({ threadId, session, snapshot, uploadApi, placehold
   useEffect(() => () => queue.dispose(), [queue]);
 
   const chat = snapshot.chat;
+  const choosesMode = offersDiscussionMode(chat.thread);
   const activeRun = selectActiveRun(chat);
   // キュー（停止含む）は chat.queue が正本（snapshot でも queue event でも導かれる）。
   const paused = chat.queue.paused;
@@ -75,7 +111,15 @@ export function ChatComposer({ threadId, session, snapshot, uploadApi, placehold
     const sentUploads = uploads;
     const ids = sentUploads.map((item) => item.id);
     const attachmentIds = sentUploads.map((item) => item.attachment?.id).filter((id): id is string => !!id);
-    const fingerprint = JSON.stringify([threadId, sentText, attachmentIds, mode, paused]);
+    const input = composerSendInput({
+      text: sentText,
+      attachmentIds,
+      mode,
+      paused,
+      discussionMode: choosesMode ? discussionMode : undefined,
+    });
+    // 扱いを変えた送り直しは別の発言（同じ client_message_id で本文の違う要求を送らない）。
+    const fingerprint = JSON.stringify([threadId, input]);
     const clientId = retryKey.current?.fingerprint === fingerprint ? retryKey.current.id : newClientId();
     retryKey.current = { fingerprint, id: clientId };
     // 送信中の印は id を作り終えてから立てる（id の生成が例外になっても『送信中』のまま固まらない）。
@@ -83,13 +127,7 @@ export function ChatComposer({ threadId, session, snapshot, uploadApi, placehold
     setBusy(true);
     sentFileIds.current = new Set(ids);
     try {
-      await session.send({
-        client_message_id: clientId,
-        text: sentText,
-        attachment_ids: attachmentIds,
-        mode,
-        resume_queue: paused,
-      });
+      await session.send({ client_message_id: clientId, ...input });
       retryKey.current = null;
       setText((current) => (current === sentText ? "" : current));
       queue.clearSent(ids);
@@ -273,10 +311,29 @@ export function ChatComposer({ threadId, session, snapshot, uploadApi, placehold
           rows={2}
           className="min-h-11 min-w-0 flex-1 resize-y rounded-md border border-input bg-background px-3 py-2 text-foreground"
         />
+        {choosesMode && (
+          <Select
+            aria-label="発言の扱い"
+            value={discussionMode}
+            onChange={(event) => setDiscussionMode(event.currentTarget.value as ChatDiscussionMode)}
+            className="w-auto shrink-0"
+          >
+            {DISCUSSION_MODE_CHOICES.map((choice) => (
+              <option key={choice} value={choice}>
+                {DISCUSSION_MODE_LABEL[choice]}
+              </option>
+            ))}
+          </Select>
+        )}
         <Button variant="primary" disabled={!canSend} onClick={() => void send("queue")}>
           送信
         </Button>
       </div>
+      {choosesMode && DISCUSSION_MODE_NOTE[discussionMode] && (
+        <p data-discussion-mode-note={discussionMode} className="pt-1 text-label text-muted-foreground">
+          {DISCUSSION_MODE_NOTE[discussionMode]}
+        </p>
+      )}
       {(activeRun || paused) && (
         <div className="flex flex-wrap gap-2 pt-2">
           {activeRun && (

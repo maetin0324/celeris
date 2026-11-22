@@ -4,7 +4,13 @@ import type { ChatAttachment } from "../../../api/generated/types";
 import { message, run, thread } from "../data/fixtures.test-support";
 import { initialChatState } from "../data/reducer";
 import type { ChatSession, ChatSessionSnapshot } from "../data/session";
-import { ChatComposer, COS_COMPOSER_PLACEHOLDER } from "./chat-composer";
+import {
+  ChatComposer,
+  COS_COMPOSER_PLACEHOLDER,
+  composerSendInput,
+  DISCUSSION_MODE_NOTE,
+  offersDiscussionMode,
+} from "./chat-composer";
 import { createUploadQueue, pastedFiles, shouldSendOnEnter } from "./upload-queue";
 
 const flush = async () => {
@@ -177,5 +183,81 @@ describe("chat_cos_composer", () => {
     expect(html).toContain(`placeholder="${COS_COMPOSER_PLACEHOLDER}"`);
     expect(html).toContain('aria-label="CoS へのメッセージ"');
     expect(html).toContain("送信");
+  });
+});
+
+// ADR 2026-11-21-chat-discussion-mode D9: 案件 thread の composer だけが発言の扱い（議論・案・実行）を選ばせ、既定の「実行」は
+// 欄を送らない。守る不変条件: 統括・review の composer は変わらず、既定の送信の本文は mode を選ぶ前と同じ。既存の composer の
+// 試験は送信の本文の組み立てと thread の種類ごとの選択の有無を見ないので、欄の付け忘れ・既定での送信を検出できない。
+describe("chat_discussion_mode_composer", () => {
+  const render = (kind: "general" | "project" | "review") => {
+    const chat = initialChatState("t1");
+    chat.thread = thread({ kind });
+    const snapshot: ChatSessionSnapshot = { chat, stream: "open", loading: false, loadError: undefined };
+    return renderToStaticMarkup(<ChatComposer threadId="t1" snapshot={snapshot} session={{} as ChatSession} />);
+  };
+
+  it("chat_discussion_mode_composer_project_thread_offers_discuss_propose_execute_with_execute_default", () => {
+    const html = render("project");
+    expect(html).toContain('aria-label="発言の扱い"');
+    const options = [...html.matchAll(/<option value="(\w+)"( selected="")?>([^<]+)<\/option>/g)].map((m) => [
+      m[1],
+      m[2] ? "selected" : "",
+      m[3],
+    ]);
+    expect(options).toEqual([
+      ["discuss", "", "議論"],
+      ["propose", "", "案"],
+      ["execute", "selected", "実行"],
+    ]);
+    // 既定（実行）では説明の行を出さない。
+    expect(html).not.toContain("data-discussion-mode-note");
+    expect(offersDiscussionMode({ kind: "project" })).toBe(true);
+  });
+
+  it("chat_discussion_mode_composer_general_and_review_threads_are_unchanged", () => {
+    for (const kind of ["general", "review"] as const) {
+      const html = render(kind);
+      expect(html).not.toContain("発言の扱い");
+      expect(html).not.toContain("<select");
+      expect(offersDiscussionMode({ kind })).toBe(false);
+    }
+    expect(offersDiscussionMode(null)).toBe(false);
+  });
+
+  it("chat_discussion_mode_composer_send_body_carries_the_chosen_mode", () => {
+    const draft: Parameters<typeof composerSendInput>[0] = {
+      text: "仮説を批判して",
+      attachmentIds: ["a1"],
+      mode: "queue",
+      paused: false,
+    };
+    expect(composerSendInput({ ...draft, discussionMode: "discuss" })).toStrictEqual({
+      text: "仮説を批判して",
+      attachment_ids: ["a1"],
+      mode: "queue",
+      resume_queue: false,
+      discussion_mode: "discuss",
+    });
+    expect(composerSendInput({ ...draft, mode: "interrupt", discussionMode: "propose" }).discussion_mode).toBe(
+      "propose",
+    );
+    expect(DISCUSSION_MODE_NOTE.discuss).toContain("起票");
+    expect(DISCUSSION_MODE_NOTE.propose).toContain("案");
+  });
+
+  it("chat_discussion_mode_composer_default_execute_sends_the_same_body_as_before", () => {
+    const draft: Parameters<typeof composerSendInput>[0] = {
+      text: "直して",
+      attachmentIds: [],
+      mode: "queue",
+      paused: true,
+    };
+    const before = { text: "直して", attachment_ids: [], mode: "queue", resume_queue: true };
+    for (const discussionMode of ["execute", undefined] as const) {
+      const input = composerSendInput({ ...draft, discussionMode });
+      expect(input).toStrictEqual(before);
+      expect("discussion_mode" in input).toBe(false);
+    }
   });
 });

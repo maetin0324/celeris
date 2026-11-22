@@ -10,8 +10,10 @@ import type {
   ChatAttachment,
   ChatAttachmentResponse,
   ChatEventListResponse,
+  ChatMessageEditRequest,
   ChatMessageListResponse,
   ChatMessageResponse,
+  ChatMessageRetractRequest,
   ChatOpenThreadRequest,
   ChatPostMessageRequest,
   ChatPostMessageResponse,
@@ -53,6 +55,8 @@ export const chatPaths = {
   thread: (t: string) => `${API}/chat/threads/${seg(t)}`,
   messages: (t: string) => `${API}/chat/threads/${seg(t)}/messages`,
   message: (t: string, m: string) => `${API}/chat/threads/${seg(t)}/messages/${seg(m)}`,
+  messageRetract: (t: string, m: string) => `${API}/chat/threads/${seg(t)}/messages/${seg(m)}/retract`,
+  messageRevisions: (t: string, m: string) => `${API}/chat/threads/${seg(t)}/messages/${seg(m)}/revisions`,
   read: (t: string) => `${API}/chat/threads/${seg(t)}/read`,
   stop: (t: string) => `${API}/chat/threads/${seg(t)}/stop`,
   resumeQueue: (t: string) => `${API}/chat/threads/${seg(t)}/resume-queue`,
@@ -116,6 +120,29 @@ export function postMessage(threadId: string, body: ChatPostMessageRequest, sign
 /** queued の人の発言だけ取り消せる（開始済みは 409）。 */
 export function cancelMessage(threadId: string, messageId: string, signal?: AbortSignal) {
   return apiMutate<ChatMessageResponse>("DELETE", chatPaths.message(threadId, messageId), undefined, signal);
+}
+
+/**
+ * ADR 2026-11-21-chat-discussion-mode D5.1: 自分の発言を編集する。`expected_revision` が今の revision と違えば 409
+ * （再読込を促す）。書いた人の `human:` token だけが通り、他は 403。
+ */
+export function editMessage(threadId: string, messageId: string, body: ChatMessageEditRequest, signal?: AbortSignal) {
+  return apiMutate<ChatMessageResponse>("PATCH", chatPaths.message(threadId, messageId), body, signal);
+}
+
+/** D5.1: 届いた自分の発言を撤回する（本文は空になり、前の本文は revisions に残る）。409・403 は編集と同じ。 */
+export function retractMessage(
+  threadId: string,
+  messageId: string,
+  body: ChatMessageRetractRequest,
+  signal?: AbortSignal,
+) {
+  return apiMutate<ChatMessageResponse>("POST", chatPaths.messageRetract(threadId, messageId), body, signal);
+}
+
+/** D5.1: 発言の前の版（`message_revised` の event を古い順）。読む権限は thread の読み出しと同じ。 */
+export function listMessageRevisions(threadId: string, messageId: string, signal?: AbortSignal) {
+  return apiGet<ChatEventListResponse>(chatPaths.messageRevisions(threadId, messageId), signal);
 }
 
 // ---- run ----

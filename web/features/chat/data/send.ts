@@ -3,6 +3,7 @@
 // 4xx（409 の本文不一致・422・413・429 など）は送り直さずに返す。
 
 import { isApiError } from "../../../api/client";
+import type { ChatDiscussionMode, ChatPostMessageRequest } from "../../../api/generated/types";
 import { randomId } from "../../../lib/random-id";
 
 export const SEND_ATTEMPTS = 3;
@@ -16,6 +17,23 @@ export function isRetryableSendError(error: unknown): boolean {
 /** client_message_id を 1 度だけ作る（再試行・再送ではこの値を使い回す）。 */
 export function newClientId(prefix = "c"): string {
   return `${prefix}-${randomId()}`;
+}
+
+/** ADR 2026-11-21-chat-discussion-mode D9: 人が選ぶ発言の扱いの表示名（composer の選択肢と発言の印で同じ語を使う）。 */
+export const DISCUSSION_MODE_LABEL: Record<ChatDiscussionMode, string> = {
+  discuss: "議論",
+  propose: "案",
+  execute: "実行",
+};
+
+/**
+ * ADR 2026-11-21-chat-discussion-mode D1.1・D9: 要求の `discussion_mode` の欄。議論（discuss）と案（propose）だけ送る。
+ * 「実行」（execute）と未選択は欄ごと省く（mode を選ぶ前と同じ送信の本文。daemon も execute を省略と同じに扱う）。
+ */
+export function discussionModeField(
+  mode: ChatDiscussionMode | null | undefined,
+): Pick<ChatPostMessageRequest, "discussion_mode"> {
+  return mode === "discuss" || mode === "propose" ? { discussion_mode: mode } : {};
 }
 
 export async function sendWithRetry<T>(

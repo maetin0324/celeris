@@ -3,27 +3,41 @@
 // text_delta の offset 不一致（reducer の resync）と 410（cursor 失効）は、stream を止めて snapshot から取り直す。
 // stream の切断・再接続は run の状態を変えない（停止は run event か stop API の結果だけで表す）。
 
+import { isApiError } from "../../../api/client";
 import type {
+  ChatMessage,
+  ChatMessageEditRequest,
   ChatMessageListResponse,
+  ChatMessageResponse,
+  ChatMessageRetractRequest,
   ChatPostMessageRequest,
   ChatPostMessageResponse,
   ChatThreadDetailResponse,
 } from "../../../api/generated/types";
-import { getThread, listMessages, postMessage } from "./client";
+import { editMessage, getThread, listMessages, postMessage, retractMessage } from "./client";
 import { type ChatAction, type ChatState, chatReducer, initialChatState } from "./reducer";
-import { sendWithRetry } from "./send";
+import { messageRevision, type RevisionChange, type RevisionOutcome } from "./revision";
+import { discussionModeField, sendWithRetry } from "./send";
 import { type ChatStream, type ChatStreamOptions, createChatStream, type StreamState } from "./stream";
 
 export type ChatSessionApi = {
   getThread: (threadId: string, signal?: AbortSignal) => Promise<ChatThreadDetailResponse>;
   listMessages: (threadId: string, signal?: AbortSignal) => Promise<ChatMessageListResponse>;
   postMessage: (threadId: string, body: ChatPostMessageRequest) => Promise<ChatPostMessageResponse>;
+  editMessage: (threadId: string, messageId: string, body: ChatMessageEditRequest) => Promise<ChatMessageResponse>;
+  retractMessage: (
+    threadId: string,
+    messageId: string,
+    body: ChatMessageRetractRequest,
+  ) => Promise<ChatMessageResponse>;
 };
 
 export const defaultChatSessionApi: ChatSessionApi = {
   getThread: (threadId, signal) => getThread(threadId, signal),
   listMessages: (threadId, signal) => listMessages(threadId, {}, signal),
   postMessage: (threadId, body) => postMessage(threadId, body),
+  editMessage: (threadId, messageId, body) => editMessage(threadId, messageId, body),
+  retractMessage: (threadId, messageId, body) => retractMessage(threadId, messageId, body),
 };
 
 export type ChatSessionSnapshot = {
@@ -36,7 +50,8 @@ export type ChatSessionSnapshot = {
 
 export type ChatSessionOptions = {
   threadId: string;
-  api?: ChatSessionApi;
+  /** 差し替える口だけ（試験）。残りは defaultChatSessionApi。 */
+  api?: Partial<ChatSessionApi>;
   createStream?: (options: ChatStreamOptions) => ChatStream;
   /** 送信の再試行の待ち（既定 send.ts）。 */
   sendRetry?: { attempts?: number; delayMs?: number };
@@ -58,12 +73,17 @@ export type ChatSession = {
   dispatch(action: ChatAction): void;
   /** client_message_id を固定して送る。失敗後に同じ id で呼べば吹き出しは増えない。 */
   send(input: SendInput): Promise<ChatPostMessageResponse>;
+  /**
+   * ADR 2026-11-21-chat-discussion-mode D5.1: 自分の発言を、表示している revision を expected_revision にして編集・撤回する。
+   * 再送しない（結果の分からない失敗も error で返し、人が再読込して確かめる）。成功した message はすぐ表示に入れる。
+   */
+  revise(message: ChatMessage, change: RevisionChange): Promise<RevisionOutcome>;
   getSnapshot(): ChatSessionSnapshot;
   subscribe(listener: () => void): () => void;
 };
 
 export function createChatSession(options: ChatSessionOptions): ChatSession {
-  const api = options.api ?? defaultChatSessionApi;
+  const api: ChatSessionApi = { ...defaultChatSessionApi, ...options.api };
   const listeners = new Set<() => void>();
   let snapshot: ChatSessionSnapshot = {
     chat: initialChatState(options.threadId),
@@ -146,6 +166,7 @@ export function createChatSession(options: ChatSessionOptions): ChatSession {
         reply_to_id: input.reply_to_id ?? null,
         mode: input.mode ?? "queue",
         resume_queue: input.resume_queue ?? false,
+        ...discussionModeField(input.discussion_mode),
       };
       dispatch({
         type: "pending_add",
@@ -153,6 +174,7 @@ export function createChatSession(options: ChatSessionOptions): ChatSession {
         text: body.text,
         attachmentIds: body.attachment_ids,
         mode: body.mode,
+        discussionMode: body.discussion_mode ?? undefined,
       });
       try {
         const response = await sendWithRetry(() => api.postMessage(options.threadId, body), options.sendRetry);
@@ -165,6 +187,22 @@ export function createChatSession(options: ChatSessionOptions): ChatSession {
           error: error instanceof Error ? error.message : String(error),
         });
         throw error;
+      }
+    },
+    async revise(message, change) {
+      const expected_revision = messageRevision(message);
+      try {
+        const response =
+          change.kind === "edit"
+            ? await api.editMessage(options.threadId, message.id, { text: change.text, expected_revision })
+            : await api.retractMessage(options.threadId, message.id, { reason: change.reason, expected_revision });
+        dispatch({ type: "message_put", message: response.message });
+        return { kind: "ok", message: response.message };
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        if (isApiError(error) && error.status === 409) return { kind: "conflict", detail };
+        if (isApiError(error) && error.status === 403) return { kind: "forbidden", detail };
+        return { kind: "error", detail };
       }
     },
     getSnapshot: () => snapshot,

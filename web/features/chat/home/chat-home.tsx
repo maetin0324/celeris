@@ -1,5 +1,5 @@
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { ChatMessage, ChatThread } from "../../../api/generated/types";
 import { ScreenFrame } from "../../../components/shell/screen-frame";
 import { Button } from "../../../components/ui/button";
@@ -181,6 +181,8 @@ function ChatConversation({
   }, [model, threadId, lastSeq]);
   const history = useOlderMessages(chat, session.dispatch);
   const attachments = useAttachmentMap(attachmentIdsOf(chat));
+  // ADR 2026-11-21-chat-discussion-mode D5・D9: 自分の発言の編集・撤回。409 の後は snapshot から取り直す。
+  const revision = useMemo(() => ({ revise: session.revise, reload: () => void session.refresh() }), [session]);
   return (
     <>
       <ThreadBar thread={chat.thread ?? null} onBackToGeneral={onBackToGeneral} />
@@ -211,12 +213,14 @@ function ChatConversation({
                 text: pending.text,
                 attachment_ids: pending.attachment_ids,
                 mode: pending.mode,
+                discussion_mode: pending.discussion_mode,
               })
               .catch(() => {}) // session が同じ pending に失敗を記録する。
         }
         onDiscardPending={(pending) =>
           session.dispatch({ type: "pending_discard", clientMessageId: pending.client_message_id })
         }
+        revision={revision}
         empty={<p className="mx-auto max-w-3xl text-muted-foreground">CoS にメッセージを送って会話を始めましょう。</p>}
       />
       <ConversationInput thread={chat.thread ?? undefined} threadId={threadId} session={session} snapshot={snapshot} />

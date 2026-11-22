@@ -9,9 +9,22 @@
 //!   （source・actor・project_id）、各 `chat` 参照の [`verify_citation`]。discuss の run の案は
 //!   `discussion_mode_forbidden`。
 //! - 要約: `celeris.discussion-summary/1` の [`check_discussion_summary`]。
+//!
+//! `dispatcher::cos_chat::workspace_files::attach` は run ごとに [`AttachGate`] を 1 つ作り、各 file を
+//! [`AttachGate::upload`] で保存し、最後に [`AttachGate::finish`] で返事に pin する（dispatcher の外に置く。
+//! repo health の `size.responsibility-growth`）。
+
+use std::collections::HashSet;
+use std::fs::File;
+use std::io::Read;
 
 use task_core::SqliteStore;
-use task_core::chat::{ChatDiscussionMode, ChatFileCitation};
+use task_core::chat::attachments::{
+    AttachmentError, ChatAttachmentLimits, ChatAttachmentStore, StoredAttachment,
+};
+use task_core::chat::{
+    ChatDiscussionMode, ChatError, ChatFileCitation, ChatStatusPhase, ChatWorkspaceFile,
+};
 use task_core::chat_citation::{
     ChatCitation, CitedMessage, DiscussionSummary, SummaryContext, check_discussion_summary,
     verify_citation,
@@ -52,6 +65,122 @@ pub(crate) fn kind_of(rel: &str) -> Option<DiscussionFile> {
             Some(DiscussionFile::Summary)
         }
         _ => None,
+    }
+}
+
+/// 1 つの run の workspace file の添付。案と要約は検査を通ったものだけ保存し、その引用を添付と一緒に書く。
+/// 他の file は今までどおり保存する。
+pub(crate) struct AttachGate<'a> {
+    store: &'a SqliteStore,
+    attachments: &'a ChatAttachmentStore,
+    thread_id: &'a str,
+    run_id: &'a str,
+    limits: ChatAttachmentLimits,
+    facts: Option<ReplyFacts>,
+    citations: Vec<ChatFileCitation>,
+    refused: Vec<(String, String)>,
+}
+
+impl<'a> AttachGate<'a> {
+    pub(crate) fn new(
+        store: &'a SqliteStore,
+        attachments: &'a ChatAttachmentStore,
+        thread_id: &'a str,
+        run_id: &'a str,
+        limits: ChatAttachmentLimits,
+    ) -> Self {
+        Self {
+            store,
+            attachments,
+            thread_id,
+            run_id,
+            limits,
+            facts: None,
+            citations: Vec::new(),
+            refused: Vec::new(),
+        }
+    }
+
+    /// `file`（workspace の `rel`）を保存する。案・要約で検査を通らない、または読めないなら保存せず
+    /// `None`（通らない code は [`Self::finish`] が run の status に出す）。
+    pub(crate) fn upload(
+        &mut self,
+        rel: &str,
+        key: &str,
+        name: &str,
+        size: u64,
+        file: File,
+        now: time::OffsetDateTime,
+    ) -> Option<Result<StoredAttachment, AttachmentError>> {
+        let (thread_id, attachments) = (self.thread_id, self.attachments);
+        let Some(kind) = kind_of(rel) else {
+            return Some(attachments.upload(thread_id, key, name, Some(size), file, now));
+        };
+        let mut bytes = Vec::new();
+        if let Err(error) = file
+            .take(self.limits.max_file_bytes)
+            .read_to_end(&mut bytes)
+        {
+            tracing::debug!(%rel, %error, "CoS workspace file unreadable; not attached");
+            return None;
+        }
+        let sha256 = format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(&bytes));
+        let (store, run_id) = (self.store, self.run_id);
+        let facts = self
+            .facts
+            .get_or_insert_with(|| ReplyFacts::read(store, thread_id, run_id));
+        let cited = match check(store, facts, kind, rel, &bytes, &sha256) {
+            Ok(cited) => cited,
+            Err(code) => {
+                self.refused.push((rel.to_string(), code.to_string()));
+                return None;
+            }
+        };
+        let uploaded = attachments.upload(thread_id, key, name, Some(size), &bytes[..], now);
+        if uploaded.is_ok() {
+            self.citations.extend(cited);
+        }
+        Some(uploaded)
+    }
+
+    /// `files` を出力 message に pin し、引用を同じ transaction で書く。その間に引いた発言が変わって
+    /// いれば（409）引用を持つ file を外して pin し直す。外した file と検査を通らなかった file は code を
+    /// run の status に出す。`files` は pin した file だけになる。
+    pub(crate) fn finish(
+        mut self,
+        message_id: &str,
+        files: &mut Vec<ChatWorkspaceFile>,
+        now: time::OffsetDateTime,
+    ) -> Result<(), String> {
+        let (store, thread_id) = (self.store, self.thread_id);
+        let attach = |files: &[ChatWorkspaceFile], citations: &[ChatFileCitation]| {
+            if files.is_empty() {
+                return Ok(());
+            }
+            store
+                .chat_message_attach_workspace_files(thread_id, message_id, files, citations, now)
+                .map(drop)
+        };
+        match attach(files, &self.citations) {
+            Err(ChatError::Conflict(reason)) if !self.citations.is_empty() => {
+                let cited: HashSet<&str> = self.citations.iter().map(|c| c.path.as_str()).collect();
+                for path in &cited {
+                    self.refused.push(((*path).to_string(), reason.clone()));
+                }
+                files.retain(|f| !cited.contains(f.path.as_str()));
+                attach(files, &[]).map_err(|e| format!("attach workspace files: {e}"))?;
+            }
+            other => other.map_err(|e| format!("attach workspace files: {e}"))?,
+        }
+        for (rel, code) in self.refused {
+            let summary = format!("{code}: {rel} は添付しなかった");
+            if let Err(error) =
+                store.chat_run_status(self.run_id, ChatStatusPhase::Working, &summary, now)
+            {
+                tracing::warn!(%error, run_id = %self.run_id, "CoS discussion file refusal not recorded");
+            }
+        }
+        Ok(())
     }
 }
 

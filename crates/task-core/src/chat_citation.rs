@@ -6,7 +6,7 @@
 //!
 //! A leaf: it depends on nothing in this crate but the leaf [`crate::chat_revision_wire`], so
 //! [`crate::chat`] re-exports the types and builds the wire [`ChatCitationView`]s of a message
-//! ([`citation_views`], GET and SSE) and [`crate::strategy`] uses the functions without a module
+//! ([`ChatMessageCitations::of_metadata`], GET; [`refresh_citation_states`], SSE replay) and [`crate::strategy`] uses the functions without a module
 //! cycle. The facts about a cited message ([`CitedMessage`]) are read by [`cited_message_conn`].
 
 use rusqlite::{Connection, OptionalExtension, params};
@@ -368,36 +368,58 @@ pub fn cited_message_conn(
     }))
 }
 
-/// D6: the wire views of `stored` (a reply's `metadata_json.citations`), each with its state
-/// derived now from the cited message.
-pub fn citation_views(
+/// D6: sets the state of each view (a replayed `message` event, SSE) from the cited message as it
+/// is now.
+pub fn refresh_citation_states(
     conn: &Connection,
-    stored: &[ChatFileCitation],
-) -> rusqlite::Result<Vec<ChatCitationView>> {
-    stored
-        .iter()
-        .map(|f| {
-            let c = &f.citation;
-            let now = cited_message_conn(conn, &c.thread_id, &c.message_id)?;
-            Ok(ChatCitationView {
-                path: f.path.clone(),
-                citation: c.clone(),
-                state: citation_state(c, now.as_ref()),
-            })
-        })
-        .collect()
+    views: &mut [ChatCitationView],
+) -> rusqlite::Result<()> {
+    for view in views {
+        view.state = state_now(conn, &view.citation)?;
+    }
+    Ok(())
 }
 
-/// [`citation_views`] of a message's `metadata_json` (no `citations` key: none).
-pub fn citation_views_of_metadata(
-    conn: &Connection,
-    meta: &Value,
-) -> rusqlite::Result<Vec<ChatCitationView>> {
-    let stored: Vec<ChatFileCitation> = match meta.get("citations") {
-        Some(v) if !v.is_null() => serde_json::from_value(v.clone()).map_err(|e| {
-            rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e))
-        })?,
-        _ => return Ok(Vec::new()),
-    };
-    citation_views(conn, &stored)
+fn state_now(conn: &Connection, c: &ChatCitation) -> rusqlite::Result<ChatCitationState> {
+    let now = cited_message_conn(conn, &c.thread_id, &c.message_id)?;
+    Ok(citation_state(c, now.as_ref()))
+}
+
+/// D6: the citations of the summary and draft files attached to a CoS reply, flattened into the
+/// wire `ChatMessage` (boxed there, like the edit state), each with its state derived from the
+/// cited message as it is now. A reply without them carries nothing.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ChatMessageCitations {
+    /// D6: the citations of the summary / draft files attached to this reply, each with its
+    /// state derived from the cited message as it is now (never stored).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub citations: Vec<ChatCitationView>,
+}
+
+impl ChatMessageCitations {
+    /// The views of a message's `metadata_json.citations` (no key: none), states derived now.
+    pub fn of_metadata(conn: &Connection, meta: &Value) -> rusqlite::Result<Box<Self>> {
+        let stored: Vec<ChatFileCitation> = match meta.get("citations") {
+            Some(v) if !v.is_null() => serde_json::from_value(v.clone()).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    2,
+                    rusqlite::types::Type::Text,
+                    Box::new(e),
+                )
+            })?,
+            _ => Vec::new(),
+        };
+        let citations = stored
+            .into_iter()
+            .map(|f| {
+                let state = state_now(conn, &f.citation)?;
+                Ok(ChatCitationView {
+                    path: f.path,
+                    citation: f.citation,
+                    state,
+                })
+            })
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(Box::new(Self { citations }))
+    }
 }

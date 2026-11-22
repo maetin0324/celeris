@@ -1,7 +1,6 @@
 pub mod attachments;
 pub(crate) mod control;
 pub(crate) mod digest;
-pub(crate) mod discussion_files;
 pub(crate) mod fallback;
 pub mod launch;
 pub(crate) mod policy;

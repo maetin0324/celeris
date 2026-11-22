@@ -14,6 +14,7 @@ use super::store::{
     page_limit, queue_order, read_tx, thread_require, touch_thread, writer,
 };
 use super::*;
+use crate::chat_citation::refresh_citation_states;
 use crate::store::SqliteStore;
 
 /// D2: run events page limit (default / max).
@@ -880,93 +881,6 @@ impl SqliteStore {
         Ok(id)
     }
 
-    /// ADR 2026-10-08-cos-workspace-files-in-chat D1: pins workspace files (already uploaded as
-    /// attachments of the same thread) to an assistant reply and records their workspace paths in
-    /// `metadata_json.workspace_files`, in one transaction. Repeating the same files is idempotent.
-    /// No event is emitted here: the run's terminal `message` event carries the result.
-    pub fn chat_message_attach_workspace_files(
-        &self,
-        thread_id: &str,
-        message_id: &str,
-        files: &[ChatWorkspaceFile],
-        citations: &[super::ChatFileCitation],
-        now: OffsetDateTime,
-    ) -> Result<ChatMessage, ChatError> {
-        let mut conn = writer(self)?;
-        let tx = immediate(&mut conn)?;
-        let message = message_require(&tx, thread_id, message_id)?;
-        // ADR 2026-11-21-chat-discussion-mode D6: the citations are checked again in this
-        // transaction (an edit between the file check and here makes the attach a conflict).
-        for f in citations {
-            let now_msg = crate::chat_citation::cited_message_conn(
-                &tx,
-                &f.citation.thread_id,
-                &f.citation.message_id,
-            )?;
-            if let Err(refusal) =
-                crate::chat_citation::verify_citation(thread_id, &f.citation, now_msg.as_ref())
-            {
-                return Err(ChatError::Conflict(format!(
-                    "{}: {}",
-                    refusal.code(),
-                    f.path
-                )));
-            }
-        }
-        if message.role != ChatMessageRole::Assistant {
-            return Err(ChatError::Invalid(format!(
-                "message {message_id} is not an assistant reply"
-            )));
-        }
-        let mut seen = std::collections::HashSet::new();
-        for file in files {
-            if file.path.is_empty() || !seen.insert(file.attachment_id.as_str()) {
-                return Err(ChatError::Invalid(
-                    "duplicate or empty workspace file".into(),
-                ));
-            }
-            let owner: Option<String> = tx
-                .query_row(
-                    "SELECT thread_id FROM chat_attachments WHERE id=?1 AND state='ready'",
-                    [&file.attachment_id],
-                    |r| r.get(0),
-                )
-                .optional()?;
-            match owner {
-                Some(owner) if owner == thread_id => {}
-                Some(_) => {
-                    return Err(ChatError::Conflict(format!(
-                        "attachment {} belongs to another thread",
-                        file.attachment_id
-                    )));
-                }
-                None => return Err(ChatError::not_found("attachment", &file.attachment_id)),
-            }
-            super::attachments::add_ref_tx(&tx, &file.attachment_id, "message", message_id, now)
-                .map_err(|e| ChatError::Invalid(e.to_string()))?;
-        }
-        let raw: String = tx.query_row(
-            "SELECT metadata_json FROM chat_messages WHERE id=?1",
-            [message_id],
-            |r| r.get(0),
-        )?;
-        let mut meta: Value = serde_json::from_str(&raw).unwrap_or_else(|_| json!({}));
-        if !meta.is_object() {
-            meta = json!({});
-        }
-        meta["workspace_files"] = serde_json::to_value(files)?;
-        if !citations.is_empty() {
-            meta["citations"] = serde_json::to_value(citations)?;
-        }
-        tx.execute(
-            "UPDATE chat_messages SET metadata_json=?2,updated_at=?3 WHERE id=?1",
-            params![message_id, serde_json::to_string(&meta)?, chat_ts(now)],
-        )?;
-        let message = message_require(&tx, thread_id, message_id)?;
-        tx.commit()?;
-        Ok(message)
-    }
-
     /// Ends a live run with a terminal `state`. `final_text` (if any) replaces the output text.
     /// Input/output messages become completed, failed or interrupted. Repeating the same terminal
     /// state is idempotent; a different terminal state is a conflict.
@@ -1087,15 +1001,7 @@ impl SqliteStore {
                     let mut event = decode_event(row)?;
                     // D6: a replayed message shows its citations' state as of now.
                     if let ChatEventData::Message(data) = &mut event.data {
-                        for view in &mut data.message.citations {
-                            let c = &view.citation;
-                            let now = crate::chat_citation::cited_message_conn(
-                                conn,
-                                &c.thread_id,
-                                &c.message_id,
-                            )?;
-                            view.state = crate::chat_citation::citation_state(c, now.as_ref());
-                        }
+                        refresh_citation_states(conn, &mut data.message.cited.citations)?;
                     }
                     Ok(event)
                 })

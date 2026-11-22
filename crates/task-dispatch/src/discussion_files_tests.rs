@@ -17,10 +17,10 @@ use task_core::chat::*;
 use task_core::org::{Project, ProjectId, ProjectStatus};
 use time::OffsetDateTime;
 
-use super::super::workspace_files::{WorkspaceCapture, attach, snapshot};
+use crate::dispatcher::cos_chat::workspace_files::{WorkspaceCapture, attach, snapshot};
 
 const ME: &str = "human:alice";
-const BASELINE: &str = include_str!("../../../../task-core/src/strategy/fixtures/baseline-v1.json");
+const BASELINE: &str = include_str!("../../task-core/src/strategy/fixtures/baseline-v1.json");
 
 fn at(secs: i64) -> OffsetDateTime {
     OffsetDateTime::from_unix_timestamp(1_791_158_400 + secs).expect("valid ts")
@@ -251,13 +251,16 @@ fn chat_discussion_summary_attached_with_citations() {
     assert_eq!(attached, vec![SUMMARY.to_string(), "notes.md".to_string()]);
     let message = reply(&f, &t, &out);
     assert_eq!(
-        message.citations,
+        message.cited.citations,
         vec![ChatCitationView {
             path: SUMMARY.into(),
             citation: cite.clone(),
             state: ChatCitationState::Current,
         }]
     );
+    // wire では message の `citations`（flatten）。
+    let wire = serde_json::to_value(&message).expect("wire");
+    assert_eq!(wire["citations"][0]["state"], json!("current"));
     // 状態は保存しない: `metadata_json.citations` は path と引用だけ。
     let raw: String = rusqlite::Connection::open(f.root.join("celeris.db"))
         .expect("read the db")
@@ -312,7 +315,7 @@ fn chat_discussion_summary_edit_makes_get_and_sse_edited() {
         .expect("edit");
 
     assert_eq!(
-        reply(&f, &t, &out).citations[0].state,
+        reply(&f, &t, &out).cited.citations[0].state,
         ChatCitationState::Edited
     );
     // GET messages（`chat_message_list`）も今の revision から導く。
@@ -324,7 +327,7 @@ fn chat_discussion_summary_edit_makes_get_and_sse_edited() {
         .into_iter()
         .find(|m| m.id == out)
         .expect("reply listed");
-    assert_eq!(listed.citations[0].state, ChatCitationState::Edited);
+    assert_eq!(listed.cited.citations[0].state, ChatCitationState::Edited);
     // SSE の replay（`chat_events_page`）も今の状態を導く。
     let replayed: Vec<ChatCitationState> = f
         .store
@@ -334,7 +337,7 @@ fn chat_discussion_summary_edit_makes_get_and_sse_edited() {
         .into_iter()
         .filter_map(|e| match e.data {
             ChatEventData::Message(d) if d.message.id == out => {
-                d.message.citations.first().map(|c| c.state)
+                d.message.cited.citations.first().map(|c| c.state)
             }
             _ => None,
         })
@@ -363,7 +366,7 @@ fn chat_discussion_summary_other_project_citation_not_attached() {
 
     assert!(attach_now(&f, &capture, &t, &out, "run-1").is_empty());
     let message = reply(&f, &t, &out);
-    assert!(message.workspace_files.is_empty() && message.citations.is_empty());
+    assert!(message.workspace_files.is_empty() && message.cited.citations.is_empty());
     let statuses = f.statuses(&t);
     assert!(
         statuses
@@ -394,9 +397,9 @@ fn discussion_mode_propose_attaches_valid_strategy_draft() {
         f.statuses(&t)
     );
     let message = reply(&f, &t, &out);
-    assert_eq!(message.citations.len(), 1);
-    assert_eq!(message.citations[0].path, DRAFT);
-    assert_eq!(message.citations[0].state, ChatCitationState::Current);
+    assert_eq!(message.cited.citations.len(), 1);
+    assert_eq!(message.cited.citations[0].path, DRAFT);
+    assert_eq!(message.cited.citations[0].state, ChatCitationState::Current);
     let sha = f
         .store
         .chat_workspace_file_sha256s(&t, DRAFT)
@@ -415,7 +418,7 @@ fn discussion_mode_propose_refuses_approved_state_draft() {
     write(&capture, DRAFT, &draft(&project, &t, &cite, "approved"));
 
     assert!(attach_now(&f, &capture, &t, &out, "run-1").is_empty());
-    assert!(reply(&f, &t, &out).citations.is_empty());
+    assert!(reply(&f, &t, &out).cited.citations.is_empty());
     let statuses = f.statuses(&t);
     assert!(
         statuses

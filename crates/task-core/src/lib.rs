@@ -43,6 +43,8 @@ pub mod chat;
 pub mod chat_citation;
 pub mod chat_revision;
 pub mod chat_revision_wire;
+/// ADR 2026-10-08 D1・ADR 2026-11-21-chat-discussion-mode D6: CoS の返事に workspace file と引用を付ける。
+pub mod chat_workspace_files;
 /// ADR-0044 D2（Phase 53）: タスク単位のコメント。
 pub mod comment;
 pub mod console_action;

@@ -60,11 +60,11 @@ Run #2（2026-11-22）は置き場所を直して size の 2 件を解き、検�
 - `cargo test -p task-dispatch --lib -- discussion_files` → 7 passed。
 - `cargo test -p task-core --lib -- chat::store_tests discussion_citation chat_citation` → 41 passed（module 移動の直前の HEAD）。
 - `UPDATE_SCHEMA=1 cargo test -p task-api --lib -- schema::` → 2 passed、`node web/scripts/gen-types.mjs` → 生成物の差分 0。
-- `bash scripts/dev/test-affected.sh`（`cos_context` へ移す直前の HEAD）→ exit 0。nextest 8637 passed・31 skipped、
-  web の型検査と unit 101 files・705 passed、ts-verify 20 passed、repo health verdict=pass。
+- `bash scripts/dev/test-affected.sh`（提出時の HEAD。この進捗の節を書き直す前の commit）→ exit 0。nextest 8637 passed・31 skipped、
+  web の型検査と unit 101 files・705 passed、ts-verify 20 passed、repo health verdict=pass（new=0）。
   optional の `dup.state` の worsened 2 件（chat_threads・chat_messages の書き手が 3 dir）は WU の base でも同じ 2 件。
 - `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0（同じ HEAD）。
-- 提出時の HEAD での test-affected・clippy・fmt の再実行の結果は、WU の報告（result.json）に書く。
+- 変更前に落ちること: Run #1 の `negative-before.txt`（`workspace_files.rs` を実装前に戻すと 7 件とも FAILED）。
 
 ## LoC（`git diff --numstat $CELERIS_WU_BASE HEAD`）
 

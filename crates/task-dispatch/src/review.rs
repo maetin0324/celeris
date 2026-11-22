@@ -236,6 +236,7 @@ pub fn reviewer_hint() -> WorkerHint {
     }
 }
 
+mod critic;
 mod required;
 pub use required::{
     HEALTH_CHECK_ERROR, HealthItem, RepoHealth, RequiredCheckBinding, RequiredRepoChecks,

@@ -17,7 +17,9 @@ completed: 2026-11-22
   - `POST …/messages/{m}/retract` 本文 `{expected_revision, reason}`（reason は 500 文字まで、空でよい）
   - `GET …/messages/{m}/revisions`（`message_revised` の event を古い順に `ChatEventListResponse` で返す。応答の型は既存のものを使う）
   - 書けるのは `Principal::Human` だけ（`editor()`）。そのうえで store が `author == human:<name>` を確かめる。operator・別の人・relay の発言・`assistant`・`system` は
-    403 `chat_message_edit_forbidden`。CoS の `/cos/operations` の allowlist には足していない。`human_epoch` を上げない（`HumanEpoch` を呼ばない）。
+    403 `chat_message_edit_forbidden`。CoS の `/cos/operations` の allowlist には足さず、registry の `EXCLUDED`（`cos/ops/surface.rs`、理由 `human_message_edit`）と
+    [ADR 2026-10-09-cos-operations-all-mutations](../../adr/2026-10-09-cos-operations-all-mutations.md) の除外表・surface 表に 2 行ずつ登録した（registry の試験がこの 3 つの一致を求める）。
+    `human_epoch` を上げない（`HumanEpoch` を呼ばない）。
 - 処理（`crates/task-core/src/chat_revision.rs`。`task_core::chat` の外の兄弟 module）:
   - 状態: `running`・`cancelled`・撤回済みは 409。`queued` は編集だけ（撤回は 409。DELETE を使う）。`expected_revision` の不一致は 409 `chat_conflict`。
   - `metadata_json.revision`（無ければ 1）を 1 上げ、`edited{by,at}` か `retracted{by,at,reason}` を書く。撤回は `text=''`（FTS5 は既存の trigger で追従）。mode・添付・添付の参照は変えない。
@@ -94,7 +96,16 @@ base は試験の型（`ChatMessageEditRequest` など）を持たないので�
 - `cargo clippy --workspace -- -D warnings`: exit 0。
 - `bash scripts/dev/check-health.sh`: verdict=pass、fail_grade=0、new=0、worsened=2（上の `dup.state`、optional）。
 - `bash scripts/dev/test-affected.sh`: 下の「test-affected の結果」。
-- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` の 17 path（上の file とこの進捗）。Objective の範囲の外の path は無い。
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` の 19 path（上の file・`cos/ops/surface.rs`・ADR 2026-10-09 の表・この進捗）。
+
+### test-affected の結果
+
+- 1 回目（registry の登録の前）: exit 100。repo health pass、web の型検査と unit 試験 101 file・705 件 pass、ts-verify 20 件 pass、
+  Rust 8618 件のうち 8617 件 pass・1 件 fail・31 件 skip。fail は `task-api` の `cos::ops::tests::cos_ops_registry_classifies_every_mutation_as_allowed_or_excluded`
+  （新しい PATCH・retract が ALLOWED にも EXCLUDED にも無い）。
+- 直した後: `cargo test -p task-api --lib cos::ops::tests` で 4 件 pass（registry と ADR の表の一致の試験を含む）。
+- 未確認: 直した後に test-affected の全体（15 分）は時間が足りず走らせていない。直した後の変更は `surface.rs` の `EXCLUDED` 2 行と ADR の表 4 行だけで、
+  影響するのは task-api の registry の試験（上で pass）。Objective の範囲の外の path は無い。
 
 ## LoC（`git diff --numstat` を `$CELERIS_WU_BASE` に当てた。型を葉の module に移す前の値で概数。移した後も合計はほぼ同じ）
 

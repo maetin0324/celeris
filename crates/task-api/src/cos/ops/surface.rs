@@ -128,6 +128,16 @@ pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[
         "human_instruction_relay: 人の指示の取り次ぎは認証済み外部主体だけが行う。CoS は指示を作れない。",
     ),
     (
+        "PATCH",
+        "/api/v1/chat/threads/{t}/messages/{m}",
+        "human_message_edit: 人の発言の編集は書いた人の token だけが行う。CoS は人の発言を書き換えられない（ADR 2026-11-21-chat-discussion-mode D5.1）。",
+    ),
+    (
+        "POST",
+        "/api/v1/chat/threads/{t}/messages/{m}/retract",
+        "human_message_edit: 人の発言の撤回は書いた人の token だけが行う。CoS は人の発言を撤回できない（ADR 2026-11-21-chat-discussion-mode D5.1）。",
+    ),
+    (
         "POST",
         "/api/v1/routing-eval/trials",
         "evaluation_dispatch: 評価試行の投入は評価 dispatcher 専用の運用操作。",

@@ -7,6 +7,8 @@
 // - 終端の run の後に届いたその run の text_delta・tool・status は捨てる。
 // - streaming 中の本文は message と同じ id の 1 項目として持ち、最終 message はそれを置き換える（二重表示しない）。
 // - 送信中の人の発言は client_message_id で 1 つだけ持ち、確定した message が来たら消す（再送で吹き出しを増やさない）。
+// - message の revision は下がらない（古い版の message は捨てる）。編集・撤回（message_revised と続く message）では、
+//   その発言を引く他の message の引用の状態を読み直す（ADR 2026-11-21-chat-discussion-mode D6・D9。revision.ts）。
 
 import type {
   ChatCard,
@@ -14,6 +16,7 @@ import type {
   ChatEvent,
   ChatMessage,
   ChatMessageListResponse,
+  ChatMessageRevisedData,
   ChatQueueData,
   ChatRun,
   ChatRunState,
@@ -22,6 +25,13 @@ import type {
   ChatThreadDetailResponse,
   ChatToolData,
 } from "../../../api/generated/types";
+import {
+  type CitedFacts,
+  citedFactsOfMessage,
+  citedFactsOfRevision,
+  messageRevision,
+  restateMessageCitations,
+} from "./revision";
 
 export type ResyncReason = "offset_mismatch" | "cursor_expired";
 
@@ -61,6 +71,11 @@ export type ChatState = {
   lastEventId: string;
   /** null 以外なら thread と messages を取り直す。取り直すまで event を適用しない。 */
   resync: ResyncReason | null;
+  /**
+   * 表示している人の主体（`human:<name>`）。この画面が送った発言の確定（pending_ack）で daemon の記録から知る。
+   * 知るまでは null（編集・撤回の操作は人の発言に出し、他人の発言は daemon が 403 にする）。
+   */
+  viewer: string | null;
 };
 
 export type ChatAction =
@@ -78,7 +93,9 @@ export type ChatAction =
     }
   | { type: "pending_ack"; clientMessageId: string; message: ChatMessage }
   | { type: "pending_failed"; clientMessageId: string; error: string }
-  | { type: "pending_discard"; clientMessageId: string };
+  | { type: "pending_discard"; clientMessageId: string }
+  /** 編集・撤回の応答の message（SSE を待たずに表示を直す）。 */
+  | { type: "message_put"; message: ChatMessage };
 
 const TERMINAL_RUN: ReadonlySet<ChatRunState> = new Set(["completed", "stopped", "failed", "interrupted"]);
 
@@ -118,6 +135,7 @@ export function initialChatState(threadId: string): ChatState {
     cards: {},
     lastEventId: "0",
     resync: null,
+    viewer: null,
   };
 }
 
@@ -132,11 +150,37 @@ function withoutPendingFor(pending: Record<string, PendingMessage>, message: Cha
   return message.client_message_id ? omit(pending, message.client_message_id) : pending;
 }
 
-/** message を全置換し、同じ id の draft と送信中の発言を消す。 */
+/** `citedId` の発言を引く他の message の引用の状態を、その発言の今の事実で読み直す。 */
+function restateCitations(
+  messages: Record<string, ChatMessage>,
+  threadId: string,
+  citedId: string,
+  cited: CitedFacts,
+): Record<string, ChatMessage> {
+  let next = messages;
+  for (const message of Object.values(messages)) {
+    if (message.id === citedId) continue;
+    const restated = restateMessageCitations(message, threadId, citedId, cited);
+    if (restated === message) continue;
+    if (next === messages) next = { ...messages };
+    next[message.id] = restated;
+  }
+  return next;
+}
+
+/** message を全置換し、同じ id の draft と送信中の発言を消す。古い revision の message は捨てる。 */
 function putMessage(state: ChatState, message: ChatMessage): ChatState {
+  const existing = state.messages[message.id];
+  if (existing && messageRevision(existing) > messageRevision(message)) return state;
+  const messages = restateCitations(
+    { ...state.messages, [message.id]: message },
+    state.threadId,
+    message.id,
+    citedFactsOfMessage(message),
+  );
   return {
     ...state,
-    messages: { ...state.messages, [message.id]: message },
+    messages,
     textBytes: { ...state.textBytes, [message.id]: utf8Length(message.text) },
     drafts: omit(state.drafts, message.id),
     pending: withoutPendingFor(state.pending, message),
@@ -227,6 +271,17 @@ function applyEventBody(state: ChatState, event: ChatEvent): ChatState {
       const thread = data.thread as ChatThread;
       return thread.id === state.threadId ? { ...state, thread } : state;
     }
+    case "message_revised": {
+      // 発言そのものは続く message event で置き換わる。ここでは引く側の引用の状態を直す。
+      const revised = data as unknown as ChatMessageRevisedData;
+      const messages = restateCitations(
+        state.messages,
+        state.threadId,
+        revised.message_id,
+        citedFactsOfRevision(revised),
+      );
+      return messages === state.messages ? state : { ...state, messages };
+    }
     default:
       return state;
   }
@@ -265,6 +320,7 @@ function applySnapshot(state: ChatState, detail: ChatThreadDetailResponse, list:
     queue: { message_ids: queuedIds, paused: detail.thread.queue_paused },
     cards: {},
     lastEventId: list.snapshot_event_id,
+    viewer: state.viewer,
   };
 }
 
@@ -310,8 +366,12 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     }
     case "pending_ack": {
       const next = putMessage(state, action.message);
-      return { ...next, pending: omit(next.pending, action.clientMessageId) };
+      const author = action.message.role === "user" ? action.message.author : undefined;
+      const viewer = author?.startsWith("human:") ? author : next.viewer;
+      return { ...next, pending: omit(next.pending, action.clientMessageId), viewer };
     }
+    case "message_put":
+      return action.message.thread_id === state.threadId ? putMessage(state, action.message) : state;
     case "pending_failed": {
       const pending = state.pending[action.clientMessageId];
       if (!pending) return state;

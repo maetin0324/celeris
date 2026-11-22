@@ -7,9 +7,11 @@ import { cn } from "../../../lib/utils";
 import { pendingHumanCount } from "../cards/card-model";
 import { chatPaths } from "../data/client";
 import type { DraftMessage, PendingMessage, ToolEntry } from "../data/reducer";
+import { CitationList } from "./citations";
 import { AttachmentList, chatAttachmentElementId, chatPreviewKind, ToolCallList } from "./parts";
+import { type MessageRevisionActions, RevisionControls, RevisionHistory, RevisionNote } from "./revision";
 import { MessageMeta, messageSpeaker, roleName } from "./speaker";
-import { linkWorkspacePaths, workspaceAttachmentFor } from "./workspace-links";
+import { chatMessageElementId, linkWorkspacePaths, workspaceAttachmentFor } from "./workspace-links";
 
 /** カードを差し込む slot。cards 葉の部品を home が渡す。 */
 export type RenderCards = (cards: ChatCard[], message: ChatMessage) => ReactNode;
@@ -26,14 +28,19 @@ function Bubble({
   busy,
   children,
   label,
+  id,
 }: {
   speaker: ChatMessage["role"];
   busy?: boolean;
   children: ReactNode;
   label: string;
+  /** 確定した message の要素 id（引用から移る先。focus を受けるので tabIndex -1）。 */
+  id?: string;
 }) {
   return (
     <article
+      id={id}
+      tabIndex={id ? -1 : undefined}
       aria-label={label}
       aria-busy={busy ? true : undefined}
       data-role={speaker}
@@ -98,12 +105,15 @@ export function MessageItem({
   tools = [],
   attachments = {},
   renderCards,
+  revision,
 }: {
   message: ChatMessage;
   streaming: boolean;
   tools?: ToolEntry[];
   attachments?: Record<string, ChatAttachment | undefined>;
   renderCards?: RenderCards;
+  /** 自分の発言の編集・撤回（ADR 2026-11-21-chat-discussion-mode D5）。無ければ操作を出さない。 */
+  revision?: MessageRevisionActions;
 }) {
   const note = streaming ? undefined : stateNote[message.state];
   const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
@@ -148,7 +158,7 @@ export function MessageItem({
   const systemRecord = message.role === "system" && pendingHumanCount(message.cards) === 0;
   if (!streaming && (systemRecord || noticesOnly)) {
     return (
-      <Bubble speaker={message.role} label={roleName[message.role]}>
+      <Bubble speaker={message.role} label={roleName[message.role]} id={chatMessageElementId(message.id)}>
         <details
           data-slot={systemRecord ? "chat-system-folded" : "chat-notice-folded"}
           className="w-full min-w-0 max-w-full"
@@ -172,7 +182,12 @@ export function MessageItem({
     );
   }
   return (
-    <Bubble speaker={message.role} busy={streaming} label={messageSpeaker(message).label}>
+    <Bubble
+      speaker={message.role}
+      busy={streaming}
+      label={messageSpeaker(message).label}
+      id={chatMessageElementId(message.id)}
+    >
       <MessageMeta message={message} />
       <ToolCallList tools={tools} />
       <Body
@@ -181,7 +196,11 @@ export function MessageItem({
         streaming={streaming}
         onClick={files?.length ? openFromLink : undefined}
       />
+      <RevisionNote message={message} />
       <AttachmentList ids={message.attachment_ids} attachments={attachments} open={open} onToggle={toggle} />
+      {message.role === "assistant" && !streaming ? <CitationList message={message} /> : null}
+      <RevisionHistory message={message} load={revision?.loadRevisions} />
+      {revision && !streaming ? <RevisionControls message={message} actions={revision} /> : null}
       {note ? (
         <p className={cn("text-label", message.state === "failed" ? "text-danger" : "text-muted-foreground")}>{note}</p>
       ) : null}

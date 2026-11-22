@@ -3,7 +3,15 @@
 // - 絶対 path（…/workspace/<path>）・相対 path（<path>・./<path>）を対象にし、境界は daemon（workspace_files.rs）と同じ:
 //   前後が path の文字（ASCII 英数と _-./~+@%）なら別の名前の一部とみなす。文末の「.」は外。
 // - fenced code（```）はそのまま。既存の Markdown link は workspace path 宛てだけ置き換える。inline code は中身全体が path のときだけ link にする。
-import type { ChatWorkspaceFile } from "../../../api/generated/types";
+// 案・要約の file の引用の状態（ADR 2026-11-21-chat-discussion-mode D6・D9）は fileCitations。状態は daemon が導いた値
+// （と reducer の読み直し）を表示するだけで、ここでは導かない。
+import type {
+  ChatCitation,
+  ChatCitationState,
+  ChatCitationView,
+  ChatMessage,
+  ChatWorkspaceFile,
+} from "../../../api/generated/types";
 
 const pathChar = /[A-Za-z0-9_\-./~+@%]/;
 
@@ -100,4 +108,52 @@ export function workspaceAttachmentFor(
   hrefFor: (attachmentId: string) => string,
 ): string | undefined {
   return files?.find((file) => hrefFor(file.attachment_id) === href)?.attachment_id;
+}
+
+/** D6 の引用の状態の表示名。 */
+export const CITATION_STATE_LABEL: Record<ChatCitationState, string> = {
+  current: "最新",
+  edited: "編集された",
+  retracted: "撤回された",
+  missing: "見つからない",
+};
+
+/** 案・要約の file 1 件と、その file が引く発言。1 つでも current でなければ stale（失効）。 */
+export type FileCitations = {
+  path: string;
+  /** 返事の添付（workspace_files に無ければ undefined）。 */
+  attachmentId: string | undefined;
+  citations: ChatCitationView[];
+  stale: boolean;
+};
+
+/** 返事の引用を file（path）ごとにまとめる。順は引用の列に最初に出た順。 */
+export function fileCitations(message: Pick<ChatMessage, "citations" | "workspace_files">): FileCitations[] {
+  const byPath = new Map<string, FileCitations>();
+  for (const view of message.citations ?? []) {
+    let entry = byPath.get(view.path);
+    if (!entry) {
+      entry = {
+        path: view.path,
+        attachmentId: message.workspace_files?.find((file) => file.path === view.path)?.attachment_id,
+        citations: [],
+        stale: false,
+      };
+      byPath.set(view.path, entry);
+    }
+    entry.citations.push(view);
+    if (view.state !== "current") entry.stale = true;
+  }
+  return [...byPath.values()];
+}
+
+/** 発言の吹き出しの要素 id（引用から移る先）。 */
+export function chatMessageElementId(messageId: string): string {
+  return `chat-message-${messageId}`;
+}
+
+/** 引いた発言への link。同じ thread なら画面内の吹き出し、別の thread（統括）ならその会話を開いた先の吹き出し。 */
+export function citedMessageHref(citation: Pick<ChatCitation, "thread_id" | "message_id">, threadId: string): string {
+  const anchor = `#${chatMessageElementId(citation.message_id)}`;
+  return citation.thread_id === threadId ? anchor : `/?thread=${encodeURIComponent(citation.thread_id)}${anchor}`;
 }

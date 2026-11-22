@@ -1,9 +1,8 @@
 ---
 title: 戦略層 v1 子 3 edit-retract — 人の message の編集・撤回（前の本文を chat_events に残し、要約と session を戻す）
 tasks: [01M7XQ9QE8STND208NXG90F743]
-status: done
+status: blocked
 updated: 2026-11-22
-completed: 2026-11-22
 ---
 # edit-retract（WorkUnit。子 3 の段 cite）
 
@@ -128,6 +127,28 @@ base は試験の型（`ChatMessageEditRequest` など）を持たないので�
   （`chat` の dir と `store` の dir に加えて 3 つ）。書き手は D5 の編集・撤回だけで、`chat` の行の上限のため `chat` の外に置いた（ADR の Objective の指定どおり）。
   `chat` の上限を見直すか、`chat` の本体を減らせば `chat` の dir に戻せる。
 - `cargo clippy --all-targets` は task-core の既存の試験 file（`chat/triage_tests.rs:1038`・`strategy/tests.rs:407`）で落ちる。この WU の前からあり、必須の検査の外。
+
+## Run #3（2026-11-22）: 範囲の check の計画の問題
+
+結論: 実装と試験は Run #2 のままで足りている。計画の範囲の check が、この WU に要る 2 つの path を許していないので、成果をどう直しても通らない。
+計画の問題（plan_issue）として申告し、範囲の正規表現に次の 2 つを足すよう求めた。
+
+- `agent-docs/adr/2026-10-09-cos-operations-all-mutations.md`: 新しい書き込みの route（PATCH `…/messages/{m}`・POST `…/retract`）は registry の
+  `EXCLUDED` への登録と、この ADR の除外表・surface 表への登録の両方が要る。試験 `cos::ops::tests::cos_ops_registry_matches_adr_domain_assignment_and_exclusions`
+  がこの ADR を `include_str!` で読み、registry と一致することを求める。
+  確かめ方: ADR だけを `$CELERIS_WU_BASE` の版に戻して `cargo test -p task-api --lib cos::ops::tests` → `test result: FAILED. 3 passed; 1 failed`
+  （落ちたのは上の試験。ADR に PATCH `/chat/threads/{}/messages/{}` と POST `…/retract` が無い）。確かめた後に元へ戻した。
+  登録しなければ `cos_ops_registry_classifies_every_mutation_as_allowed_or_excluded` が落ちる（Run #2 の 1 回目の test-affected）。
+- `crates/task-api/src/schema.rs`: 編集・撤回の要求の型（`ChatMessageEditRequest`・`ChatMessageRetractRequest`）を API の JSON Schema に載せる唯一の登録先（`ApiV1Schema`、1 欄 = 1 公開型）。
+  載せないと `web/api/generated/types.ts` に型が出ず、後の web-cite が要求の型を手で書くことになる（同じ仕様の二重実装）。
+
+### 検査（提出時の HEAD で実行。Run #3）
+
+- 範囲の check: exit 1。範囲の外は上の 2 path だけ。
+- `cargo fmt --all -- --check`: exit 0。
+- `bash scripts/dev/test-affected.sh`: exit 0。repo health verdict=pass（fail_grade=0、new=0、worsened=2）、web の型検査と unit 試験 101 file・705 件 pass、
+  ts-verify 20 件 pass、Rust 8618 件 pass・31 件 skip。Run #2 の「直した後の test-affected の全体は未確認」はこれで確かめた。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
 
 ## 提案
 

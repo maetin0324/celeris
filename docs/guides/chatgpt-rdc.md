@@ -16,8 +16,11 @@ celeris-chat <道具> '<JSON の引数>'
 
 - 出力は JSON です。エラーは stderr に出て exit code 1（引数の誤りは 2）。
 - DB ファイル・API の token・curl はこのユーザーには渡していません。DB と API は次の 2 つの道具で読みます。
-- 書き込み（コメント・回答・CoS への依頼）は `task_comment` / `task_answer` / `console_instruct` など、scope で
-  許された道具だけです。`db_query` と `api_get` は読むだけです。
+- 書き込み（コメント・回答・CoS への依頼・未承認の案）は `task_comment` / `task_answer` / `console_instruct` /
+  `discussion_propose` など、scope で許された道具だけです。`db_query` と `api_get` は読むだけです。
+- 人の決定への回答（`decision_answer`）・計画の承認（`task_plan_gate`）・task の承認と却下（`task_approve` /
+  `task_reject`）はこの client には渡していません（scope `tasks:decide`。`docs/guides/mcp.md` §8.2）。決定は
+  `decision_list` で読めます。答えるのは人で、Web か API で行います。ここでの発言や案は人の承認になりません。
 
 ## 2. DB を読む: `db_schema` と `db_query`（scope `db:read`）
 

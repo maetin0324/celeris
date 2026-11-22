@@ -452,6 +452,8 @@ ChatGPT との議論で人が選んだ要約 …
 | 同上 | `chat_exchange_consent_granted_by_is_caller` | 書き出し・取り込みの consent は呼んだ人 |
 | 権限昇格 | `mcp_external_scope_decision_answer_needs_tasks_decide`・`mcp_external_scope_plan_gate_needs_tasks_decide`・`mcp_external_scope_task_approve_needs_tasks_decide` | `tasks:interact` だけの client は人の決定・plan・task の承認に答えられない |
 | 同上 | `mcp_external_scope_recommended_has_no_decide` | 文書と `setup-chatgpt-rdc.sh` の推奨 scope に `tasks:decide` が無い |
+| 同上 | `mcp_external_scope_recommended_lists_no_decide_tools` | `tasks:decide` の道具は 4 つ（`task_approve`・`task_reject`・`decision_answer`・`task_plan_gate`）だけで、D6 の 2 つの推奨 scope の `tools/list` に出ない（scope-guard で足した） |
+| 同上 | `mcp_external_scope_discussion_only_cannot_read_db_api_or_instruct` | `discussion:*` だけの client は `db_query`・`api_get`・`console_instruct` を呼べない（scope-guard で足した） |
 | 二重取り込み | `external_exchange_import_idempotent_same_hash`・`external_exchange_import_conflict_different_hash` | 同じ key と本文は 1 件、違う本文は R7 |
 | 同上 | `mcp_discussion_propose_duplicate_single`・`chat_exchange_import_duplicate`・`chat_exchange_import_conflict` | MCP・REST の両方で同じ |
 | 秘密 | `external_exchange_snapshot_masks_secret`・`mcp_discussion_output_has_no_secret` | 返り値に token・cookie・webhook の形が出ない |

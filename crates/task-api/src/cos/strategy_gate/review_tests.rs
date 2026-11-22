@@ -85,7 +85,7 @@ fn set_status(w: &World, task_id: &str, status: &str) {
     rusqlite::Connection::open(w.root.join("celeris.db"))
         .expect("db")
         .execute(
-            "UPDATE tasks SET status = ?1 WHERE id = ?2",
+            "UPDATE tasks SET status = ?1, json = json_set(json, '$.status', ?1) WHERE id = ?2",
             rusqlite::params![status, task_id],
         )
         .expect("status");
@@ -102,7 +102,8 @@ fn selected_next(v1: &Value, s1: &Value, cite: &[&str]) -> Value {
     v2["candidates"][0]["selected"] = json!(true);
     v2["candidates"][1]["state"] = json!("rejected");
     v2["candidates"][1]["rejected_by"] = json!(["e-pilot-refute"]);
-    let refs = v2["evidence"][1]["references"]
+    // 反証の証拠（evidence[1]）は次の版で変えない（子 2 D2.3）ので、実験の task は支持の証拠に引く。
+    let refs = v2["evidence"][0]["references"]
         .as_array_mut()
         .expect("references");
     for t in cite {

@@ -1,12 +1,12 @@
 ---
 title: 戦略層 v1 子 3 dagbench-flake — dagbench_process の通知主導の再開の試験を scenario ごとに有界にする
 tasks: [01M7XQ9QE8STND208NXG90F743]
-status: running
+status: done
 updated: 2026-11-22
 ---
 # dagbench-flake（WorkUnit。子 3 の段 cite の統合で落ちた試験）
 
-完了日: （検査の後に書く）
+完了日: 2026-11-22
 
 cite 段の統合の check（`bash scripts/dev/test-affected.sh`、8637 試験を並走）で、`crates/campaign/tests/dagbench_process.rs` の
 `recovery_notice_continuation` だけが nextest の 600 s で TIMEOUT になった（同じ統合の別の回は全 pass、単独では 18.9 s）。
@@ -68,16 +68,31 @@ cite 段の統合の check（`bash scripts/dev/test-affected.sh`、8637 試験�
   wait 1.19 s、celeris probe 3.14 s・accept 6.17 s・wait 6.16 s）。
 - 変更後: `_baseline_probe` 0.58 s、`_baseline_after_accept` 1.21 s、`_baseline_after_wait` 1.21 s、`_celeris_probe` 3.00 s、
   `_celeris_after_accept` 6.27 s、`_celeris_after_wait` 6.37 s。
-- `cargo test -p celeris-campaign --test dagbench_process`: 変更前 9 試験 → 変更後 15 試験（-1 +6 +1）、15 passed、34.25 s。
+- `cargo test -p celeris-campaign --test dagbench_process`: 変更前 9 試験 → 変更後 15 試験（-1 +6 +1）、15 passed、34.23 s。
 
 ## LoC（`git diff --numstat`、基準は `$CELERIS_WU_BASE`）
 
 - production: 0（変更なし）。
 - test（`crates/campaign/tests/dagbench_process.rs`）: +171 −37。純増の理由: 6 個の試験関数、`Insurance`（`line`・`exit`・`stalled`）、失敗の報告の試験。
 
+## commit（件名）
+
+- `strategy-v1 3 dagbench-flake: recovery_notice_continuation を scenario ごとの 6 試験に分け、保険を 240 s の scenario 期限にして止まった段を出す`
+- `strategy-v1 3 dagbench-flake: stderr の path を試験の側で導き、campaign の src を変えない（size の増分を出さない）`
+- `strategy-v1 3 dagbench-flake: WU の進捗に検査の結果`
+
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 
-（検査の後に書く）
+- `bash scripts/dev/test-affected.sh` → exit 0。repo-health verdict=pass（fail_grade=0）。nextest 3981 tests run: 3981 passed（9 slow）、
+  11 skipped、407 s。対象 crate は celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。`dagbench_process` の試験は
+  SLOW（60 s 超）に 1 つも出なかった。最初の回は `size.responsibility-growth` で exit 1（src の変更をやめて解いた。上記）。
+- `cargo test -p celeris-campaign --test dagbench_process` → 15 passed。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo fmt --all -- --check` → exit 0。
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` → `agent-docs/progress/2026-11-21-strategy-v1-3/dagbench-flake.md` と
+  `crates/campaign/tests/dagbench_process.rs` だけ。
+- 足していないものの確認: `git diff $CELERIS_WU_BASE -- .config/` は空、差分に `#[ignore]`・`retries`・`slow-timeout`・`terminate-after`・
+  `std::env::var` の新しい呼び出しは無い。
 
 ## 未解決
 

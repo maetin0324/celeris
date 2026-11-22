@@ -1,10 +1,13 @@
 ---
 title: 戦略層 v1 子 4 mcp-tools — MCP の discussion snapshot・evidence search・propose の道具
 tasks: [01M7XQ9QK1KC34Q2A6PJ960TJB]
-status: blocked
+status: done
 updated: 2026-11-22
+completed: 2026-11-22
 ---
 # mcp-tools（WorkUnit。子 4 の段 wire）
+
+完了日: 2026-11-22（計画 v2 の再開で、公開 API の schema の生成物を再生成した）。
 
 設計は [ADR 2026-11-22-external-llm-discussion-exchange](../../adr/2026-11-22-external-llm-discussion-exchange.md) の D1・D2.4・D3・D7
 （実装の付記は D1.7）。
@@ -17,9 +20,10 @@ updated: 2026-11-22
 - 範囲と規則は書き直していない。snapshot と propose は exchange-core の `SqliteStore::chat_exchange_snapshot`・`chat_exchange_propose` を呼ぶだけで、
   主体は認証した client から `mcp:<client_id>` として作る（引数からは取らない）。
 - `McpScope` に `DiscussionRead`（`discussion:read`）・`DiscussionPropose`（`envelope::MCP_PROPOSE_SCOPE`、綴りは 1 か所）を足した。
-- **止まっている点（plan_issue）**: `McpScope` の JSON Schema の enum に 2 つを足すと、公開 API の schema（`ApiV1Schema` の `GET /mcp/clients` の
-  `scopes`）が変わる。生成物 `docs/api/v1/api-v1.schema.json`・`web/api/generated/{schema.json,types.ts}` はこの unit の書き込み範囲（ADR D7.3）に
-  無く、再生成しないと task-api の `committed_schema_matches_generated` が落ちる（下の証拠）。計画で範囲を足すまで done にしない。
+- 公開 API の schema: `McpScope` は `ApiV1Schema`（`GET /mcp/clients` の `scopes`）に載る。最初の run では生成物が範囲外だったので plan_issue で
+  止まり、計画 v2 で mcp-tools の範囲に `docs/api/v1/api-v1.schema.json`・`web/api/generated/` が足された（ADR D7.3 の行も直した）。
+  生成物は生成器で書いた（手で JSON を編集していない）: `UPDATE_SCHEMA=1 cargo nextest run -p task-api --lib -E 'test(committed_schema_matches_generated)'`
+  と `corepack pnpm@12.6.0 -C web gen:types`。差分は `McpScope` の enum に `discussion:read`・`discussion:propose` が増えた 3 file の +7 / −3 だけ。
 
 ## 実装前 brief
 
@@ -48,6 +52,9 @@ updated: 2026-11-22
   - `crates/celeris-mcp/tests/mcp_discussion.rs`（新規）: `mcp_discussion_` の 8 試験（本物の HTTP の `initialize` → `tools/list` → `tools/call`）。
   - `docs/guides/mcp.md`: §4 の scope の表と §5 の道具の説明。
   - ADR の D1.7（実装の付記）。
+- `strategy-v1 4 mcp-tools: discussion:* の scope を公開 API の schema の生成物に反映し、ADR D7.3 の範囲に足す`
+  - `docs/api/v1/api-v1.schema.json`・`web/api/generated/schema.json`・`web/api/generated/types.ts`: 生成器の出力（`McpScope` の enum に 2 つ）。
+  - ADR D7.3: mcp-tools の行に生成物の 2 path、範囲を足した理由の 1 項。
 
 ## 負の試験と、変更前に落ちること（受け入れ条件 0・1）
 
@@ -71,25 +78,27 @@ probe で示した: registry の 3 行だけを外して `cargo nextest run -p c
 増えない）と `mcp_discussion_injection_quote_no_escalation` で示した。`by=mcp:` の決定への答えが R10 を満たさないことは envelope-fix の
 `external_exchange_envelope_mcp_answer_not_approval` が示す。
 
-## 証拠（開始時の HEAD「integrate wu/exchange-core (phase core)」の上で実行）
+## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 
-- `cargo nextest run -p celeris-mcp -E 'test(/mcp_discussion_/)'` → 8 tests run: 8 passed
-- `cargo nextest run -p celeris-mcp --no-fail-fast` → 85 tests run: 85 passed
-- `cargo nextest run -p task-core --lib -E 'test(/mcp::/) | test(/external_exchange_/)'` → 32 tests run: 32 passed
-- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo clippy -p celeris-mcp --tests -- -D warnings` → exit 0
+- `bash scripts/dev/test-affected.sh` → exit 0。nextest 8676 tests run: 8676 passed（10 slow）、31 skipped。web は vitest 105 files / 745 passed、
+  test-ts-verify 20 passed / 0 failed、script bundle SKIP 0 件、`repo_health_gate: all checks passed`。
+- `cargo clippy --workspace -- -D warnings` → exit 0
 - `cargo fmt --all -- --check` → exit 0
-- `cargo nextest run -p task-api --lib -E 'test(committed_schema_matches_generated)'` → **FAIL**（`McpScope` の enum が生成物と違う）。範囲外の生成物の
-  再生成が要る（plan_issue）。
-- `bash scripts/dev/test-affected.sh` は未実行（上の 1 件が落ちることが分かっているため。範囲を足した後に実行する）。
-- `sh "$CELERIS_WU_SCOPE_PATHS"` → `agent-docs/adr/2026-11-22-external-llm-discussion-exchange.md`・`crates/celeris-mcp/src/tools/{discussion.rs,mod.rs}`・
-  `crates/celeris-mcp/tests/mcp_discussion.rs`・`crates/task-core/src/mcp.rs`・`docs/guides/mcp.md`（と、この進捗）。すべて ADR D7.3 の範囲の中。
+- `cargo nextest run -p task-api --lib -E 'test(committed_schema_matches_generated)'` → 1 passed（前回の run では生成物が古く FAIL）
+- `corepack pnpm@12.6.0 -C web gen:types` をもう一度走らせても `git diff -- web/api/generated docs/api/v1` は 0 行（生成器の出力と一致）
+- `cargo nextest run -p celeris-mcp -E 'test(/mcp_discussion_/)'` → 8 tests run: 8 passed
+- `sh scripts/dev/progress-index.sh --check` → exit 0
+- `sh "$CELERIS_WU_SCOPE_PATHS"` → `agent-docs/adr/2026-11-22-external-llm-discussion-exchange.md`・`agent-docs/progress/2026-11-22-strategy-v1-4/mcp-tools.md`・
+  `crates/celeris-mcp/src/tools/{discussion.rs,mod.rs}`・`crates/celeris-mcp/tests/mcp_discussion.rs`・`crates/task-core/src/mcp.rs`・
+  `docs/api/v1/api-v1.schema.json`・`docs/guides/mcp.md`・`web/api/generated/{schema.json,types.ts}`。すべて ADR D7.3 の mcp-tools の範囲の中。
 
 ## LoC（開始時の HEAD からの差分）
 
 - production: +453 / −1（`tools/discussion.rs` +435、`tools/mod.rs` +4、`task-core/src/mcp.rs` +14 / −1。うち試験の 2 行）。純増の理由: 3 道具と 2 scope は
   base に無い port（ADR D1.1）。範囲と規則は task-core を呼び、書き直していない。
 - test: `tests/mcp_discussion.rs` +831。
-- docs: `docs/guides/mcp.md` +26、ADR +19。
+- 生成物: `docs/api/v1/api-v1.schema.json` +3 / −1、`web/api/generated/schema.json` +3 / −1、`web/api/generated/types.ts` +1 / −1。
+- docs: `docs/guides/mcp.md` +26、ADR +22 / −1。
 
 ## 親の目的への寄与
 
@@ -101,7 +110,6 @@ probe で示した: registry の 3 行だけを外して `cargo nextest run -p c
 
 ## 未解決
 
-- 公開 API の schema の生成物の再生成（上の plan_issue）。
 - 要約・戦略の file（`ExchangeDocument`）は MCP から渡していない（`McpState` は CoS の workspace の場所を持たない。ADR D1.7）。今の MCP の
   snapshot・検索の item は `message` と `proposal` だけ。要約・戦略を外部 LLM に渡すなら、CoS の workspace の file を読む処理を 1 か所
   （task-core か task-dispatch）に置き、MCP と REST の書き出しの両方から呼ぶ形にする。
@@ -109,6 +117,5 @@ probe で示した: registry の 3 行だけを外して `cargo nextest run -p c
 
 ## 提案
 
-- 計画: mcp-tools の書き込み範囲に `docs/api/v1/api-v1.schema.json`・`web/api/generated/` を足す。再生成は
-  `UPDATE_SCHEMA=1 cargo nextest run -p task-api --lib -E 'test(committed_schema_matches_generated)'` と `pnpm -C web gen:types`。rest-import も同じ
-  生成物を変えるので、統合の merge で衝突しうる（変わる行は `McpScope` の enum と rest-import の新しい型で離れている）。
+- rest-import も同じ生成物（`docs/api/v1/api-v1.schema.json`・`web/api/generated/`）を変える。段の統合の merge で衝突したときは、どちらかの
+  JSON を手で直さず、統合した tree で上の 2 つの生成器をもう一度走らせる。

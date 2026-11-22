@@ -104,6 +104,7 @@ base は試験の型（`ChatMessageEditRequest` など）を持たないので�
   Rust 8618 件のうち 8617 件 pass・1 件 fail・31 件 skip。fail は `task-api` の `cos::ops::tests::cos_ops_registry_classifies_every_mutation_as_allowed_or_excluded`
   （新しい PATCH・retract が ALLOWED にも EXCLUDED にも無い）。
 - 直した後: `cargo test -p task-api --lib cos::ops::tests` で 4 件 pass（registry と ADR の表の一致の試験を含む）。
+  続けて `cargo test -p task-api --lib` の全体: 111 passed・0 failed・2 ignored。
 - 未確認: 直した後に test-affected の全体（15 分）は時間が足りず走らせていない。直した後の変更は `surface.rs` の `EXCLUDED` 2 行と ADR の表 4 行だけで、
   影響するのは task-api の registry の試験（上で pass）。Objective の範囲の外の path は無い。
 

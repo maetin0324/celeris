@@ -2,13 +2,12 @@
 title: 戦略層 v1 子 6 strategy-read — StrategyRef の型を task-core に 1 つ置き、cos_operations の strategy の照会を strategy_reads.rs に 1 本化
 tasks: [01M7XQ9QWK58ESMW42Q1TGT3WZ]
 wu: strategy-read
-status: done
+status: blocked
 updated: 2026-11-22
-completed: 2026-11-22
 ---
 # strategy-read（WorkUnit）
 
-完了日: 2026-11-22。
+完了日: 未完（`bash scripts/dev/test-affected.sh` の repo health が落ちる。下の「未解決」）。
 設計の正本は [ADR 2026-11-22-parent-checkpoint-evaluator](../../adr/2026-11-22-parent-checkpoint-evaluator.md) の D1.1・D11（adr-revise で改訂した版）。ADR は書いていない。
 基準はこの WU の `$CELERIS_WU_BASE`。検査は提出時の HEAD で実行した。
 
@@ -49,7 +48,7 @@ completed: 2026-11-22
 
 ## 試験
 
-守る不変条件と、既存の試験で検出できない理由は `crates/task-core/src/store/strategy_reads/tests.rs` の先頭に書いた（子 5 の gate の試験は HTTP の 422 を見るので、
+守る不変条件と、既存の試験で検出できない理由は `crates/task-core/src/store/strategy_reads_tests.rs` の先頭に書いた（子 5 の gate の試験は HTTP の 422 を見るので、
 照会が別の action・未適用の行・strategy の無い行を拾っても fixture の件数では検出できない）。
 
 - `strategy_reads_all_rows_in_order`: applied の strategy 付き 3 行を `created_at` の順で返し、拒否された `task.create`・strategy の無い `task.create`・strategy の付いた別の action（`task.update`）を返さない。
@@ -77,7 +76,7 @@ cargo nextest run -p task-core --lib -E 'test(strategy_reads_)'
 | 区分 | 追加 | 削除 | 純増 |
 |---|---:|---:|---:|
 | production Rust（strategy_gate.rs 9/57、strategy_ref.rs 20/0、strategy_reads.rs 54/0、lib.rs・mod.rs 各 1/0、protocol.rs 1/1、parent_checkpoint.rs 4/14） | 90 | 72 | +18 |
-| test Rust（strategy_reads/tests.rs 229/0、parent_checkpoint/tests.rs 3/3） | 232 | 3 | +229 |
+| test Rust（strategy_reads_tests.rs 229/0、parent_checkpoint/tests.rs 3/3） | 232 | 3 | +229 |
 | 文書（worker-protocol.md 4/2、worker-protocol.schema.json 30/30） | 34 | 32 | +2 |
 
 production の純増 +18 の理由: 照会が task-api の private 関数から task-core の公開の store の関数になり、module の doc comment（ADR の参照）と SQL の定数の説明が増えた。
@@ -87,14 +86,28 @@ production の純増 +18 の理由: 照会が task-api の private 関数から 
 
 - `cargo fmt --all -- --check` → exit 0。
 - `cargo clippy --workspace -- -D warnings` → exit 0（依存の `deno_core` の deprecated の警告 1 件だけで、workspace の警告なし）。
-- `bash scripts/dev/test-affected.sh` → 結果は下の「test-affected」に書く。
+- `bash scripts/dev/test-affected.sh` → exit 1。先頭の `scripts/dev/check-health.sh` の必須 rule `size.responsibility-growth` が fail し、試験の段に進まない:
+  - `crates/task-core/src/store::SqliteStore` の method の数 514 → 515（閾値 60、delta worsened）。
+  - `crates/task-core/src/store` の module の本体の行 16928 → 16954（閾値 8000、delta worsened）。
+  - 他の必須 rule（`deps.cycle`・`deps.violation`・`arch-map.*`・`doc.links`・`progress.index`・`human-text` ほか）は pass。
+- 計画の check 1（`cargo nextest run -p task-core -p task-api -p task-worker --no-fail-fast -E 'test(/strategy_reads_|strategy_gate_|committed_schema_matches_generated|parent_evaluation_wire_/)'`）→ 34 tests run: 34 passed（exit 0）。
+- 計画の check 2（`pub struct StrategyRef` が 1 つ・`ParentCheckpointStrategy` と gate の `FROM cos_operations`・`StrategyOperation` が無い・`strategy_reads.rs` に `FROM cos_operations`）→ exit 0。
+- 計画の check 5（migration・events・operations.rs の差分なし、store の差分は `strategy_reads(_tests)?.rs`・`mod.rs` だけ、書き込みの SQL の句なし）と範囲 check → 範囲外の path なし。
 - store の差分: `git diff --name-only $CELERIS_WU_BASE -- crates/task-core/src/store crates/task-core/migrations crates/task-core/src/model/events.rs crates/task-api/src/cos/operations.rs`
-  は `crates/task-core/src/store/mod.rs`（1 行）・`strategy_reads.rs`・`strategy_reads/tests.rs` だけ。`strategy_reads.rs` と `mod.rs` の差分に書き込みの SQL の句は無い。
+  は `crates/task-core/src/store/mod.rs`（1 行）・`strategy_reads.rs`・`strategy_reads_tests.rs` だけ。`strategy_reads.rs` と `mod.rs` の差分に書き込みの SQL の句は無い。
 
 ## 未解決
 
-- 無し。controller-checkpoint は `strategy_task_creates(Some(root))` の最初の行を root の参照に使う（ADR D1.1）。この WU は呼び口を置いただけで、controller の側の呼び出しは未実装（その WU の範囲）。
+- 計画の check 3（`bash scripts/dev/test-affected.sh`）が、ADR D1.1・D11 と計画の check 2・5 が求める置き場（`crates/task-core/src/store/strategy_reads.rs` の `SqliteStore` の method）のままでは通らない。
+  `size.responsibility-growth` は store の module の行と `SqliteStore` の method の数が 1 でも増えれば worsened（fail-grade）にし、「file を分けても減らない」。
+  check 2 は SQL が `store/strategy_reads.rs` にあることを、範囲 check は store の外の新しい file が無いことを求めるので、この WU の範囲では両立しない（規約 9。範囲の外に回避策を置いていない）。
+- 人への決定 `strategy-read-store-size` を result.json に出した（needed_before: self）。案:
+  - (a) 照会を store の外の葉でない module `crates/task-core/src/strategy_reads.rs` の自由関数 `strategy_task_creates(store: &SqliteStore, target)`（`with_read_conn`。`cos_inbox.rs` と同じ形）に移し、
+    ADR D1.1・D11 と この unit の check 2・5・範囲を直す（再計画）。store の差分は 0 になり、health は通る見込み（未確認）。推奨。
+  - (b) store に置いたまま、repo health の profile に store の例外を足す（policy の変更なので人の承認が要る）。
+- controller-checkpoint は `strategy_task_creates(Some(root))` の最初の行を root の参照に使う（ADR D1.1）。どちらの案でも関数の名前と戻り値は同じ。
 
 ## 提案
 
-- 無し。
+- (a) を採る。理由: この repo は大きさの上限に達した module の外に一方向の module を置く形（`cos_inbox`・`chat_revision`・`discussion_citation`・`chat_workspace_files`）を既に使っている。
+  `strategy_ref.rs` は葉のまま（ADR の deps.cycle の前提）にし、照会の module だけが store と `strategy_ref` に一方向に依存する。

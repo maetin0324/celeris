@@ -51,4 +51,5 @@ impl SqliteStore {
 }
 
 #[cfg(test)]
+#[path = "strategy_reads_tests.rs"]
 mod tests;

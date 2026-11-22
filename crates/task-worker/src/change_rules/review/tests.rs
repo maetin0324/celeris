@@ -1144,3 +1144,220 @@ fn strategy_critic_absent_request_json_unchanged() {
     let back: ReviewRequest = serde_json::from_str(&json).expect("round trip");
     assert_eq!(back, with);
 }
+
+// ADR 2026-11-22-parent-checkpoint-evaluator D3.1・D3.3・D9.2（prefix `parent_evaluation_absent_`）。
+// 節（`ReviewRequest.parent_checkpoint`）の無い review の prompt・`request.json`・旧い `review.json` が base と同じであること。
+
+/// 固定の id と時刻の review task（prompt と `request.json` の byte 列を比べるため、乱数と現在時刻を除く）。
+fn absent_fixed_task() -> task_core::Task {
+    let mut task = crate::protocol::tests::sample_task();
+    task.kind = TaskKind::Review;
+    task.id = "01M7XQ9QWK58ESMW42Q1TGT3WZ"
+        .parse()
+        .expect("fixed task id parses");
+    task.lease = None;
+    let at = time::OffsetDateTime::from_unix_timestamp(1_795_000_000).expect("fixed time");
+    task.created_at = at;
+    task.updated_at = at;
+    task
+}
+
+/// base にある任意の節（人の決定・回答・check・policy 違反・health・差分の設計・Critic）を全部持つ final review。
+fn absent_full_final_review() -> ReviewRequest {
+    ReviewRequest {
+        summary: "middleware の条件を直した".to_string(),
+        evidence: vec![Evidence {
+            criterion: 1,
+            command: Some("cargo nextest run -p alpha".to_string()),
+            exit: Some(0),
+            stdout_tail: Some("12 passed".to_string()),
+        }],
+        criteria: vec![0, 1],
+        decisions: vec![ReviewDecision {
+            task_id: absent_fixed_task().id,
+            key: "order".to_string(),
+            question: "どの順で入れるか".to_string(),
+            option: "rust-first".to_string(),
+            option_label: "Rust を先に入れる".to_string(),
+            note: Some("理由の注".to_string()),
+        }],
+        answers: vec![crate::protocol::Answer {
+            question: "範囲は".to_string(),
+            answer: "crates/alpha だけ".to_string(),
+        }],
+        checks: vec![crate::protocol::ReviewCheckResult {
+            criterion: Some(0),
+            kind: "command".to_string(),
+            cmd: Some("cargo fmt --all -- --check".to_string()),
+            pass: true,
+            reason: "exit 0".to_string(),
+        }],
+        policy_violations: vec![crate::protocol::ReviewPolicyViolation {
+            kind: "subagent".to_string(),
+            tool: "Task".to_string(),
+            matched: "Task".to_string(),
+            command: "Task(...)".to_string(),
+        }],
+        health: Some(HealthReviewInput {
+            repos: vec![repo("agent-platform", true)],
+            brief: None,
+        }),
+        diff_design: Some(Box::new(DesignReviewRequest {
+            owner_rows: Vec::new(),
+            brief: Some(full_brief()),
+            plan_summary: "diff: 1 file、+2 行・-1 行\n- `crates/alpha/src/plan.rs`（+2・-1）"
+                .to_string(),
+            risk: high_risk(),
+            review_policy: Some(policy()),
+        })),
+        strategy_critic: Some(Box::new(critic_request())),
+        ..ReviewRequest::default()
+    }
+}
+
+/// 節の無い review の形（名前, `context.review`）。採用前の設計 review・最小の final review・全部の節を持つ final review・
+/// review の文脈の無い run。
+fn absent_review_shapes() -> Vec<(&'static str, Option<ReviewRequest>)> {
+    vec![
+        ("none", None),
+        (
+            "final_minimal",
+            Some(ReviewRequest {
+                summary: "fixed summary".into(),
+                evidence: vec![Evidence {
+                    criterion: 0,
+                    command: Some("cargo test".into()),
+                    exit: Some(0),
+                    stdout_tail: Some("ok".into()),
+                }],
+                criteria: vec![0],
+                ..Default::default()
+            }),
+        ),
+        ("final_full", Some(absent_full_final_review())),
+        (
+            "design",
+            Some(design_request(
+                Some(full_brief()),
+                high_risk(),
+                Some(policy()),
+            )),
+        ),
+    ]
+}
+
+fn absent_sha256(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+/// 不変条件: `parent_checkpoint` の無い review の reviewer prompt は、base（節を足す前）と同じ byte 列である。
+/// 既存の `strategy_critic_absent_prompt_unchanged` は最小の final review の 1 形だけを見るので、health・差分の設計・Critic・
+/// 採用前の設計 review の prompt に節を足す変更（Result 節の例の JSON に欄が出るなど）を検出できない。sha256 は base の
+/// commit でこの関数が作った prompt のもの。
+#[test]
+fn parent_evaluation_absent_prompt_unchanged() {
+    let expected = [
+        (
+            "none",
+            "e7ba772748db83d44db790cf740941fb489d0e74ecfb38304f841e738a97799d",
+        ),
+        (
+            "final_minimal",
+            "1a07e736da6c99845e6e86bcae0dbd68cfd4e6dbec362ecb60f7f71f1d93152e",
+        ),
+        (
+            "final_full",
+            "f248cc75462f06cc9f41989af4d24cbcfdd2cc947f64b3d447b14c44706ba004",
+        ),
+        (
+            "design",
+            "b2bc752d7957e94854ffec21957eba626746f4492714c7808cd7ed59dabd33cb",
+        ),
+    ];
+    let task = absent_fixed_task();
+    let got: Vec<(&str, String)> = absent_review_shapes()
+        .into_iter()
+        .map(|(name, review)| {
+            let context = RunContext {
+                review,
+                ..RunContext::default()
+            };
+            let prompt = build_prompt(&task, &context, "run-parent-evaluation-absent", "artifacts");
+            (name, absent_sha256(prompt.as_bytes()))
+        })
+        .collect();
+    let got: Vec<(&str, &str)> = got.iter().map(|(n, s)| (*n, s.as_str())).collect();
+    assert_eq!(got, expected);
+}
+
+/// 不変条件: `parent_checkpoint` の無い review の `request.json`（`subprocess::write_run_request` と同じ
+/// `to_string_pretty` と末尾の改行）は base と同じ byte 列で、key `parent_checkpoint` が出ない。既存の
+/// `strategy_critic_absent_request_json_unchanged` は `strategy_critic` の key だけを見るので、新しい欄の既定値が
+/// serialize される変更を検出できない。sha256 は base の commit でこの関数が作った byte 列のもの。
+#[test]
+fn parent_evaluation_absent_request_json_unchanged() {
+    let expected = [
+        (
+            "none",
+            "b1fd093357635ee1f7f1e852ac266d7a822587438d54e1a974cdc26582a59a47",
+        ),
+        (
+            "final_minimal",
+            "afb133193acf2894cf6ad5f83f00b2bf3d0d39324f360c9d79730cd6660b1446",
+        ),
+        (
+            "final_full",
+            "6ff7077f915f40c57bb3e4d18bf621d2e9194229b756c389ca617bb7a057ad2c",
+        ),
+        (
+            "design",
+            "aba60853c223a4be8e9d5d1ca08caeb1a7bbedf3863c5a5235d6e473ab060c3f",
+        ),
+    ];
+    let task = absent_fixed_task();
+    let got: Vec<(&str, String)> = absent_review_shapes()
+        .into_iter()
+        .map(|(name, review)| {
+            let request = crate::protocol::RunRequest {
+                protocol: crate::protocol::PROTOCOL_VERSION,
+                task: task.clone(),
+                workspace: std::path::PathBuf::from("/ws"),
+                work_dir: None,
+                artifacts_dir: std::path::PathBuf::from("/ws/artifacts"),
+                context: RunContext {
+                    review,
+                    ..RunContext::default()
+                },
+                llm_route: None,
+                cargo_target_dir: None,
+            };
+            let pretty = serde_json::to_string_pretty(&request).expect("serializes");
+            assert!(!pretty.contains("parent_checkpoint"), "{name}: {pretty}");
+            (name, absent_sha256(format!("{pretty}\n").as_bytes()))
+        })
+        .collect();
+    let got: Vec<(&str, &str)> = got.iter().map(|(n, s)| (*n, s.as_str())).collect();
+    assert_eq!(got, expected);
+}
+
+/// 不変条件: `parent_evaluation` の無い旧い `review.json`（verdict だけ・health・設計・Critic つき）は `ReviewOutput` として
+/// 読め、書き戻しても key `parent_evaluation` が出ず、元の JSON と同じ値になる。
+#[test]
+fn parent_evaluation_absent_old_review_json_parses() {
+    let olds = [
+        r#"{"verdicts":[{"criterion":0,"pass":true,"reason":"ok"}]}"#,
+        r#"{"verdicts":[{"criterion":0,"pass":false,"reason":"r","repair":{"scope":"local","class":"test","hint":"h"}}],"health":{"findings":[]}}"#,
+        r#"{"verdicts":[],"design":{"pass":false,"findings":[{"kind":"dual_source_of_truth","severity":"blocking","path":"crates/a.rs","reason":"r"}]}}"#,
+        r#"{"verdicts":[{"criterion":0,"pass":true,"reason":"ok"}],"critic":{"subjects":[{"name":"strategy/a/v1.json","sha256":"s","candidates":[{"id":"c","defects":[],"falsification":{"ok":true,"reason":"r"},"experiment":{"ok":true,"reason":"r"}}],"comparison":{"ok":true,"reason":"r"},"revisit":{"ok":true,"reason":"r"}}]}}"#,
+    ];
+    for old in olds {
+        let out: ReviewOutput = serde_json::from_str(old)
+            .unwrap_or_else(|e| panic!("old review.json parses ({e}): {old}"));
+        let back = serde_json::to_string(&out).expect("serializes");
+        assert!(!back.contains("parent_evaluation"), "{back}");
+        let back: serde_json::Value = serde_json::from_str(&back).expect("json");
+        let old: serde_json::Value = serde_json::from_str(old).expect("json");
+        assert_eq!(back, old);
+    }
+}

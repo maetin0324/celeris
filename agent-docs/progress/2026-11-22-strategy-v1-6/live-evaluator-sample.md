@@ -86,9 +86,10 @@ verdict と next は 1 回目と 2 回目で変えていない。
 | 検査 | 結果 |
 |---|---|
 | `cargo nextest run -p task-api --test parent_checkpoint_live --run-ignored all --no-capture` | exit 0、2 件 pass（`parent_checkpoint_live_request_renders`・`parent_checkpoint_live_sample_checks`）。`sample status=Checked effective="at_risk"/"discriminating_experiment" unsupported=0 violations=0 refs_outside_slice=[] answer_key="off_track"/"discriminating_experiment" match=false` |
-| `cargo fmt --all -- --check` | 下の「提出時の検査」節 |
-| `cargo clippy --workspace -- -D warnings` | 下の「提出時の検査」節 |
-| `bash scripts/dev/test-affected.sh` | 下の「提出時の検査」節 |
+| `cargo fmt --all -- --check` | exit 0 |
+| `cargo clippy --workspace -- -D warnings` | exit 0 |
+| `bash scripts/dev/test-affected.sh` | exit 0。repo-health は全 rule pass、nextest 6,295 件 pass・29 件 skip、web の tsc -b と vitest 745 件 pass、node --test は fail 0。1 回目は progress.index が fail（sha256 を 8 桁で略したのを commit の hash と読まれた）で、全桁に直して再実行した |
+| `sh scripts/dev/progress-index.sh --check --base "$CELERIS_WU_BASE"` | exit 0 |
 
 ## metrics
 
@@ -105,3 +106,5 @@ verdict と next は 1 回目と 2 回目で変えていない。
 ## commit（件名）
 
 - `strategy-v1 6 live-evaluator-sample: E-mid の途中評価の JSON と進捗`
+- `strategy-v1 6 live-evaluator-sample: 進捗の file の sha256 を全桁で書く`
+- `strategy-v1 6 live-evaluator-sample: 進捗に提出時の検査の結果を書く`

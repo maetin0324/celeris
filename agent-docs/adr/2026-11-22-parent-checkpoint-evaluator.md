@@ -581,4 +581,10 @@ D8・D9.2・D11 の試験の置き場と分担を実装に合わせて書き足�
   worker の run の中では実 LLM の評価を断る（`CELERIS_RUN_ID`）。比較は `scripts/dev/parent-eval-blind-compare.py` だけが answer key を開く。
 - 結果: operator が人の承認の範囲で E-mid・D-done を 2 回ずつ評価した（4 run、claude-sonnet-5-5、計 0.487 USD）。記録は 4 本とも `checked`。
   評価器の verdict は 4 本とも `at_risk`、next は E-mid が continue、D-done が ask_human（D-done は `negative_result` が真、反証 1 件）。評価器は作業 tree の file を読まなかった。
-  answer key との一致・不一致は `crates/task-api/tests/fixtures/parent_checkpoint_live/blind/compare.json` と子 6 の進捗に書いた。第二ゲートの判定（未達）は子 6 の進捗にある。
+  answer key との一致・不一致は `crates/task-api/tests/fixtures/parent_checkpoint_live/blind/compare.json` と子 6 の進捗に書いた。
+- 第二ゲートの判定: WU close-gate は案 A の結果で未達と判定し、人に案を聞いた。人（2026-11-23）は**条件付き合格**を選んだ。条件は次の 3 つで、子 8 の受け入れ条件に引き継ぐ。
+  1. 評価器の質は子 8 の pilot で、C-mid・D-done・F-done の盲検の評価と人の rubric で測る。
+  2. それまで本番の controller の checkpoint の評価は mode `shadow` のままにし、`enabled` にしない。
+  3. 2 時点の answer key に合わせて prompt（`change_rules::review::parent_checkpoint_section`）を直さない（過適合を避ける）。
+  条件付きの理由（独立の評価器の評価から pivot が起きていない、評価器が file を読まず prompt だけで判定した、C-mid・F-done の盲検の評価が無い）は子 6 の進捗の「第二ゲートの判定」にある。
+  決定的な下限を足す案（評価器が continue でも人への判断にする）と、入力を直して LLM で再評価する案は採らなかった。D1〜D11 の決定の中身は変えていない。

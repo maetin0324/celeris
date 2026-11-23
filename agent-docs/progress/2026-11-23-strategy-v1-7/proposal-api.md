@@ -9,7 +9,7 @@ completed: 2026-11-23
 # proposal-api（WorkUnit）
 
 完了日: 2026-11-23。設計の正本は [ADR 2026-11-23-project-observability-publish](../../adr/2026-11-23-project-observability-publish.md) D2。
-基準はこの WU の `$CELERIS_WU_BASE`。検査は提出時の HEAD で実行した（例外は「検査」の節に書いた）。
+基準はこの WU の `$CELERIS_WU_BASE`。検査は提出時の HEAD で実行した（例外は「検査」の節に書いた）。計画 v2 の再実行の検査は「再実行（計画 v2）」の節にある。
 
 ## したこと
 
@@ -99,6 +99,28 @@ ADR の保証の表の `proposal_review_` の行を実際の名前に直した�
   落ちた（`ChatEventData::Message` に付けた doc comment が schema の説明に出た）。doc comment をふつうの comment に直した。
 - `python3 scripts/dev/repo-health/repo_health.py --repo scripts/dev --base $CELERIS_WU_BASE --head worktree --policy-version 1` → exit 0、
   `verdict=pass new=0 worsened=0`。
+- migration の差分: `git diff $CELERIS_WU_BASE HEAD -- crates/task-core/migrations | wc -l` → 0。
+
+## 再実行（計画 v2）
+
+計画 v1 の run は done を返したが、run の後の範囲 check が `agent-docs/adr/2026-10-09-cos-operations-all-mutations.md` を範囲外として落ちた（exit 1）。
+この ADR の 2 つの表の行は消せない。ADR を `$CELERIS_WU_BASE` の版に戻して
+`cargo nextest run -p task-api --lib -E 'test(/cos_ops_registry_matches_adr_domain_assignment_and_exclusions$/)'` を流すと exit 100 で落ちた
+（`left` の surface.rs の分類に `("POST", "/api/v1/chat/threads/{}/messages/{}/review")` があり、`right` の ADR の表に無い）。計画 v2 が許可 path に
+この ADR を足した。実装は前の run の commit をそのまま使い、作り直していない。この run の検査はすべて提出時の HEAD で実行した
+（この節を足した commit は進捗 file だけを変える）:
+
+- 範囲 check（計画 v2 の許可 path、`sh "$CELERIS_WU_SCOPE_PATHS"`）→ 範囲外の path は 0 件。
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `bash scripts/dev/test-affected.sh` → exit 0: `8878 tests run: 8878 passed (7 slow), 34 skipped`、web は `Test Files 105 passed (105)`・
+  `Tests 745 passed (745)`、ts-verify は `20 passed, 0 failed`。
+- `cargo nextest run -p task-core -p task-api -E 'test(/proposal_review_|cos_ops_registry_|cos_ops_exclusions_|cos_ops_every_allowed_|committed_schema_matches_generated$/)'`
+  → exit 0、`37 tests run: 37 passed`。内訳: `proposal_review_` 23 件、task-api の `cos::ops::tests` の `cos_ops_registry_classifies_every_mutation_as_allowed_or_excluded`・
+  `cos_ops_registry_matches_adr_domain_assignment_and_exclusions`・`cos_ops_exclusions_match_all_named_parameters_and_report_adr_reason`・
+  `cos_ops_every_allowed_row_is_reachable_through_match_operation`、`cos_delivery_suite_b` の `cos_ops_registry_` 3 件、schema の一致の試験 7 件。
+- `node web/scripts/gen-types.mjs` の後の `git status --short` は空。`cmp docs/api/v1/api-v1.schema.json web/api/generated/schema.json` → exit 0。
+  `web/api/generated/types.ts` の `ChatMessage` に `"external"?: ChatMessageExternal | null` と `"proposal"?: ChatMessageProposal | null` がある。
 - migration の差分: `git diff $CELERIS_WU_BASE HEAD -- crates/task-core/migrations | wc -l` → 0。
 
 ## LoC（`git diff --numstat $CELERIS_WU_BASE HEAD`）

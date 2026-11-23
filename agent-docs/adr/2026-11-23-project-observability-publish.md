@@ -304,12 +304,12 @@ link は `{kind, …}` の 7 種だけである。Web は kind ごとに既存�
 | 原目的の sha256 は Project.request と一致する | `project_overview_request_sha_matches_project_request` | 落ちる |
 | 戦略の版は decisions から引き、成果物の全走査をしない | `project_overview_strategy_versions_from_decisions_not_artifact_scan` | 落ちる |
 | 人でない回答・回答待ちの戦略を承認済みと出さない | `project_overview_unapproved_strategy_is_not_marked_approved`・`project_overview_operator_answered_strategy_is_not_approved` | 落ちる |
-| 古い戦略・矛盾した仮説・未反映の反証・失効した引用は強い警告 | `project_overview_stale_strategy_is_contradicted_with_strong_warning`・`project_overview_contradicted_hypothesis_is_strong_warning`・`project_overview_unapplied_refutation_is_strong_warning`・`project_overview_stale_citation_is_strong_warning` | 落ちる |
+| 古い戦略・矛盾した仮説・未反映の反証は強い警告（失効した引用の `citation_stale` は実装したが試験は無い。下の「未確認」） | `project_overview_stale_strategy_is_contradicted_with_strong_warning`・`project_overview_contradicted_hypothesis_is_strong_warning`・`project_overview_unapplied_refutation_is_strong_warning` | 落ちる |
 | 根拠の無い評価の主張は推定で、3 軸を分けて出す | `project_overview_unsupported_evaluation_claim_is_estimated_with_warning`・`project_overview_evaluation_axes_shown_separately` | 落ちる |
 | 外部の出典は推定 | `project_overview_external_source_is_estimated` | 落ちる |
-| 予算の超過と単価の不明は強い警告 | `project_overview_budget_spent_over_experiment_budget_is_strong_warning`・`project_overview_unknown_cost_is_needs_decision` | 落ちる |
-| 判断待ちは要判断、公開の準備度は署名の決定から導く | `project_overview_open_decisions_are_needs_decision`・`project_overview_publish_readiness_from_signoff_decisions` | 落ちる |
-| link は 7 種だけで、URL は https だけ | `project_overview_links_cover_seven_kinds`・`project_overview_url_link_is_https_only` | 落ちる |
+| 予算の超過と単価の不明は強い警告（`budget_exceeded`・`cost_unknown` は実装したが試験は無い。下の「未確認」） | 無し | — |
+| 判断待ちは要判断、公開の準備度は署名の決定から導き、未署名・失効した manifest は強い警告 | `project_overview_open_decisions_are_needs_decision`・`project_overview_publish_readiness_from_signoff_decisions`・`project_overview_unsigned_or_stale_manifest_is_strong_warning` | 落ちる |
+| link の URL は https だけ（7 種の型は wire の enum `ProjectOverviewLink` で固定。`log` の link はまだ出さない。下の「未確認」） | `project_overview_url_link_is_https_only` | 落ちる |
 | 別の案件の記録を出さず、記録の無い項目に印を付けない | `project_overview_other_project_data_excluded`・`project_overview_empty_project_items_absent` | 落ちる |
 | 人が概要で 14 項目・印・強い警告を読み、各 link で移れる | `web/e2e/work/project-overview.spec.ts` | 落ちる（画面が無い） |
 | 人が chat の案を採用・却下・コメントでき、外部の文に印が付く | `web/e2e/chat/proposal-review.spec.ts` | 落ちる |
@@ -367,3 +367,6 @@ link は `{kind, …}` の 7 種だけである。Web は kind ごとに既存�
 - `human:local`（token の無い構成）を署名に数えない規則は、戦略の承認（子 2 D2.2 は `is_human_principal` だけを見る）より厳しい。2 つを揃えるかは子 9 で人が決める。
 - 人の token の名前が `local` のとき、その人の署名も数えない。本番の token の名前は確かめていない。
 - 本番の config の変更は無い。本番への昇格・publish・外部公開は人が行う。
+- overview-api の WU（2026-11-23）: 失効した引用（`citation_stale`）・予算の超過（`budget_exceeded`）・単価の不明（`cost_unknown`）は導出を実装したが
+  試験が無い。`log` の link（run の id）はまだ出さない。O10 の `wall_secs` は返さない（`RollupMetrics` に壁時計の合計が無い）。
+  O3 の却下の候補（`contradicted`）は規則 1 の強い警告から外した（D1.3 の表の「無し」に合わせた）。

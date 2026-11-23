@@ -166,9 +166,7 @@ pub(crate) fn router(state: ApiState) -> Router {
         // ADR 2026-10-27-project-brief D3: 案件の状態の要約（全置換）。
         .route("/api/v1/projects/{id}/status", put(put_project_status))
         // ADR 2026-11-04-project-controller A1: 案件の controller（durable wake）。
-        .merge(project_controller::routes())
-        // ADR 2026-11-23-project-observability-publish D1: 案件の概要（読み取り専用）。
-        .merge(project_overview::routes())
+        .merge(project_controller::routes().merge(project_overview::routes()))
         // 付記 A5: 案件の Roadmap（版付きの途中目標。旧 milestones とは別の名詞）。
         .merge(roadmap::routes())
         .merge(authority::routes())

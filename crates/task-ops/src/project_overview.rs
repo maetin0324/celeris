@@ -489,42 +489,7 @@ pub fn overview(
     let pending_proposals = o8_discussion(store, &mut out, &threads)?;
 
     // O12 人の判断待ち。
-    for d in decisions
-        .iter()
-        .filter(|d| d.status == DecisionStatus::Open)
-    {
-        let kind = if d.key.starts_with("strategy-approve-v") {
-            "strategy-approve"
-        } else if publish::is_signoff_key(&d.key) {
-            "publish-signoff"
-        } else {
-            "other"
-        };
-        let tid = d.task_id.to_string();
-        out.push(
-            11,
-            entry(
-                d.id.clone(),
-                Mark::NeedsDecision,
-                json!({ "decision_id": d.id, "task_id": tid, "key_kind": kind }),
-                vec![task_link(&tid)],
-            ),
-        );
-    }
-    for link in pending_proposals {
-        let Link::Chat { message_id, .. } = &link else {
-            continue;
-        };
-        out.push(
-            11,
-            entry(
-                message_id.clone(),
-                Mark::NeedsDecision,
-                json!({ "message_id": message_id, "key_kind": "chat_proposal" }),
-                vec![link.clone()],
-            ),
-        );
-    }
+    o12_pending(&mut out, &decisions, pending_proposals);
 
     // O14 公開の準備度: manifest の一覧も decisions の key から引く（D1.5）。
     o14_publish(&mut out, &decisions, &scope, manifests);
@@ -561,6 +526,46 @@ pub fn overview(
         warnings: out.warnings,
         truncated,
     }))
+}
+
+/// O12 人の判断待ち: 案件の task の未回答の決定と、採否の無い chat の案。
+fn o12_pending(out: &mut Out, decisions: &[DecisionRow], pending_proposals: Vec<Link>) {
+    for d in decisions
+        .iter()
+        .filter(|d| d.status == DecisionStatus::Open)
+    {
+        let kind = if d.key.starts_with("strategy-approve-v") {
+            "strategy-approve"
+        } else if publish::is_signoff_key(&d.key) {
+            "publish-signoff"
+        } else {
+            "other"
+        };
+        let tid = d.task_id.to_string();
+        out.push(
+            11,
+            entry(
+                d.id.clone(),
+                Mark::NeedsDecision,
+                json!({ "decision_id": d.id, "task_id": tid, "key_kind": kind }),
+                vec![task_link(&tid)],
+            ),
+        );
+    }
+    for link in pending_proposals {
+        let Link::Chat { message_id, .. } = &link else {
+            continue;
+        };
+        out.push(
+            11,
+            entry(
+                message_id.clone(),
+                Mark::NeedsDecision,
+                json!({ "message_id": message_id, "key_kind": "chat_proposal" }),
+                vec![link.clone()],
+            ),
+        );
+    }
 }
 
 /// 案件の thread（`chat_threads.project_id`）。

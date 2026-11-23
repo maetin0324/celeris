@@ -112,15 +112,21 @@ mode `shadow` の案件では `evaluate` の判断は `suppressed` で記録さ�
 
   この 3 つのほか、子の失敗（`child_failed:<task>`）と、root の参照した版より新しい戦略の版の反証の証拠（`refute:…`）でも発火する。checkpoint だけを止める flag は無い（止めるのは案件の mode `off`）。
 - 状態は保存しない。`evaluate` の判断の行（id・triggers・effect_state）と、root の成果物の name `parent-evaluation/<判断 id>.json`（最終の記録）・`parent-evaluation/<判断 id>.attempt-<n>.json`（試行の記録）だけから毎回導く。root の final review の run は試行に数えない。
-- 評価の run は既存の reviewer run（task の status を変えない side review の共通の起動口）で、root に手元の run がある間と、木の run・費用の上限に当たっている間は起きない。評価の結果は Rust の決定的な検査を通り、`continue`・`replan`（`checkpoint_experiment`・`checkpoint_pivot`）・`escalate`（`checkpoint:<判断 id>`）のどれかに写る。Project.request・承認済み Roadmap・Outcome の到達は書かない。
+- 評価の run は既存の reviewer run（task の status を変えない side review の共通の起動口）で、mode `enabled` の案件の `evaluate` の判断が `applied` になった controller の tick の終わりに起きる。
+  root に手元の run がある間と、木の run・費用の上限に当たっている間は起きず、次の tick に回る。起きたら同じ tick で試行の記録を root に書く。run の `review.json` の
+  `parent_evaluation` が検査で `invalid` なら、試行の上限（`max_evaluation_attempts`）の前は最終の記録を書かず次の tick で試行し直し、上限の試行で `invalid` の最終の記録を書く。
+  上限に達して run が無い（daemon の再起動で run が消えたなど）ときも `invalid` の最終の記録を書く。評価の結果は Rust の決定的な検査を通り、`continue`・`replan`（`checkpoint_experiment`・`checkpoint_pivot`）・`escalate`（`checkpoint:<判断 id>`）のどれかに写る。Project.request・承認済み Roadmap・Outcome の到達は書かない。
 - `evaluate` は進捗に数えない。`evaluate → replan → …` が進捗なしで `max_no_progress_decisions` 続けば、既存の guard（`no_progress:<epoch>`）で止まる。
 
 ### 本番で有効にする人の手順（この依頼では実行しない）
 
 1. 対象の案件が `allowed_project_ids` にあり、まず mode `shadow` で動かす。`GET /api/v1/projects/{id}/controller/decisions` の判断に `kind = evaluate`・`effect_state = suppressed` の行が出ること、reviewer run が増えないことを確かめる。
+   shadow で `suppressed` になった trigger は発火済みに数えるので、`enabled` にした後もその trigger では評価しない（次の trigger で評価する）。
 2. 既定値を変えるときは、本番 config（`~/.config/celeris/` の daemon の設定）に上の `[project_controller.checkpoint]` を人が書き、daemon を再起動する。起動しなければ設定エラーの文を見て直す。
-3. 1 案件だけ mode `enabled` にする（「導入の checklist」の 4・4a と同じ手順）。最初の評価の後、root の成果物に `parent-evaluation/<判断 id>.json` が 1 件あり、判断が `pc/checkpoint/act` の行動に写ったことを確かめる。
-4. 戻すときは案件の mode を `shadow` か `off` にする（走っている評価の run は既存の cancel で止まる。記録は消さない）。
+3. 1 案件だけ mode `enabled` にする（「導入の checklist」の 4・4a と同じ手順）。`evaluate` の判断が `applied` になったら、root の events に `WorkerStarted`（role reviewer）と
+   成果物 `parent-evaluation/<判断 id>.attempt-1.json` が 1 件ずつあることを確かめる（無ければ daemon の log の `parent evaluation: launch failed` と、木の上限の `kind: limit` の決定の要求を見る）。
+   最初の評価の後、root の成果物に `parent-evaluation/<判断 id>.json` が 1 件あり、判断が `pc/checkpoint/act` の行動に写ったことを確かめる。
+4. 戻すときは案件の mode を `shadow` か `off` にする。新しい評価の run は起きなくなる。走っている評価の run は終わりまで走って最終の記録を書く（記録は消さない）。
 
 ## 画面と非本番の pilot（A9）
 - 案件の詳細画面の「自動運営」に、長期方針（CoS の要約の目的と人の依頼文）、途中目標の到達（P2-J）、関連する root task、

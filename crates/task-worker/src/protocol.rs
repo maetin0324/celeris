@@ -71,7 +71,7 @@ pub struct ReviewRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub health: Option<HealthReviewInput>,
     /// ADR 2026-11-07-health-review-integration D3.5: 採用前の計画の設計 review の run（dispatcher の
-    /// `Completion::DesignReview` の経路）だけ `Some`（`summary`・`evidence`・`criteria` は空）。`RunContext` の
+    /// `SideReviewKind::Design` の `Completion::SideReview` の経路）だけ `Some`（`summary`・`evidence`・`criteria` は空）。`RunContext` の
     /// 直下でなくここに置く（欄の数の上限。進捗 `2026-11-07-health-v2-g2/dispatch/risk-events.md`）。final review・
     /// WU の review では常に `None`（final review の差分の設計の節は `diff_design`）。
     /// `Box` は `RunContext` を大きくしないため（future の stack。wire の形は変わらない）。

@@ -1201,8 +1201,8 @@ impl ReviewHumanContext {
         material: FinalReviewMaterial,
     ) -> ReviewRequest {
         ReviewRequest {
-            // ADR 2026-11-07-health-review-integration D3.5: 採用前の計画の設計 review の run（`Completion::DesignReview`
-            // の経路）だけが持つ。ここは final review なので常に `None`。
+            // ADR 2026-11-07-health-review-integration D3.5: 採用前の計画の設計 review の run（`SideReviewKind::Design` の
+            // `Completion::SideReview` の経路）だけが持つ。ここは final review なので常に `None`。
             design: None,
             // ADR 2026-11-17-boundary-change-risk-review D3・付記 (i)・(iii): final review の差分の設計の節（覆われない
             // (class, path) の組があるときだけ。`health_review::input` が作る）。

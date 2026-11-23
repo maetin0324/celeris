@@ -1070,3 +1070,68 @@ fn parent_checkpoint_contract_suppressed_not_due_not_running() {
     st.fill(&mut f);
     assert!(due(&triggers(&f, &CheckpointSettings::default())).is_empty());
 }
+
+// ---- D3.1.1 子の報告の本文（`child_reports`）
+
+fn finished(outcome: &str, role: Option<crate::RunRole>) -> crate::Event {
+    crate::Event::WorkerFinished {
+        run_id: "r".to_string(),
+        outcome: outcome.to_string(),
+        usage: None,
+        role,
+        metrics: None,
+        end: None,
+    }
+}
+
+/// 守る不変条件: 評価器に渡す子の報告は checkpoint の時点以前の worker・reviewer の run の本文だけで、1 件・子ごと・合計の
+/// 上限を超えない。後ろの子の最新の報告は前の子の古い報告で落ちない。既存の試験は報告の欄を持たないので検出できない。
+#[test]
+fn parent_checkpoint_blind_child_reports_cutoff_and_caps() {
+    use crate::RunRole;
+    let long = "あ".repeat(REPORT_MAX_BYTES); // 3 byte × 2,000 字
+    let worker = finished(&long, None);
+    let reviewer = finished("合格", Some(RunRole::Reviewer));
+    let planner = finished("計画", Some(RunRole::Planner));
+    let later = finished("時点より後", None);
+    let a: Vec<(u64, &str, &crate::Event)> = (0..6)
+        .map(|i| (i, "2026-11-18T10:00:00Z", &worker))
+        .chain([
+            (6, "2026-11-18T11:00:00Z", &reviewer),
+            (7, "2026-11-18T11:30:00Z", &planner),
+            (8, "not a time", &reviewer),
+            (9, "2026-11-18T20:00:00.000000001Z", &later),
+        ])
+        .collect();
+    let b: Vec<(u64, &str, &crate::Event)> = vec![(3, "2026-11-18T09:00:00Z", &reviewer)];
+    let cutoff = "2026-11-18T20:00:00Z";
+    let out = child_reports(&[a.clone(), b.clone()], cutoff);
+    // 時点より後・時刻の読めない・planner は入らない。子ごとに新しい順に 4 件（seq の昇順で返す）。
+    let seqs: Vec<u64> = out[0].iter().map(|r| r.seq).collect();
+    assert!(!seqs.contains(&9) && !seqs.contains(&8) && !seqs.contains(&7));
+    assert!(out[0].len() <= REPORTS_PER_CHILD_MAX);
+    assert_eq!(
+        out[0].last().map(|r| (r.seq, r.role)),
+        Some((6, ReportRole::Reviewer))
+    );
+    // 1 件の上限: char の境で切り、truncated を立てる。
+    for r in out[0].iter().filter(|r| r.role == ReportRole::Worker) {
+        assert!(
+            r.truncated && r.text.len() <= REPORT_MAX_BYTES && r.text.len() > REPORT_MAX_BYTES - 3
+        );
+    }
+    // 合計の上限と、後ろの子の最新の報告が残ること。
+    let total: usize = out.iter().flatten().map(|r| r.text.len()).sum();
+    assert!(total <= REPORTS_MAX_BYTES, "{total}");
+    assert_eq!(out[1].iter().map(|r| r.seq).collect::<Vec<_>>(), vec![3]);
+    let many: Vec<Vec<(u64, &str, &crate::Event)>> = vec![a; 12];
+    let capped = child_reports(&many, cutoff);
+    let total: usize = capped.iter().flatten().map(|r| r.text.len()).sum();
+    assert!(total <= REPORTS_MAX_BYTES, "{total}");
+    assert!(
+        capped.iter().all(|c| !c.is_empty()),
+        "全部の子の最新の 1 件が先に入る"
+    );
+    // 時点の読めない判断は報告を入れない。
+    assert!(child_reports(&[b], "yesterday").iter().all(Vec::is_empty));
+}

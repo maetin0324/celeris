@@ -3541,6 +3541,13 @@
           },
           "type": "array"
         },
+        "reports": {
+          "description": "checkpoint の時点以前の子の報告の本文（seq の昇順。無ければ省略）。",
+          "items": {
+            "$ref": "#/$defs/ParentCheckpointReport"
+          },
+          "type": "array"
+        },
         "reviewer_passed": {
           "description": "子の reviewer の判定が合格か（子の done は親の進捗ではない）。",
           "type": "boolean"
@@ -3684,6 +3691,46 @@
         "sha256"
       ],
       "type": "object"
+    },
+    "ParentCheckpointReport": {
+      "description": "D3.1: 子の報告 1 件（子の `WorkerFinished` の `outcome`）。子の主張で、達成の根拠には数えない（D4 R2・E6）。",
+      "properties": {
+        "at": {
+          "description": "event の時刻（RFC 3339）。checkpoint の時点以前だけが入る。",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/ParentCheckpointReportRole"
+        },
+        "seq": {
+          "description": "子の task の event の seq。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "text": {
+          "type": "string"
+        },
+        "truncated": {
+          "description": "`REPORT_MAX_BYTES` で切ったとき true。",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "seq",
+        "at",
+        "role",
+        "text"
+      ],
+      "type": "object"
+    },
+    "ParentCheckpointReportRole": {
+      "description": "報告を書いた run の種類（worker の結果の summary か、final review の報告か）。",
+      "enum": [
+        "worker",
+        "reviewer"
+      ],
+      "type": "string"
     },
     "ParentCheckpointRequest": {
       "description": "D3.1: 親の途中評価の入力。`Some` のとき `ReviewRequest.criteria` は空で、reviewer は task の受け入れ条件を判定しない\n（`verdicts` は空）。",

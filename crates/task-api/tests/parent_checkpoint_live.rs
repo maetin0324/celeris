@@ -15,6 +15,8 @@
 //! 既存の試験で検出できない理由: `parent_checkpoint_live_request_renders` の前の形は報告の欄を持たず、E-mid の入力に本文が無いこと
 //! （D#1446 を読めないこと）と、prompt に出力の形が無いことを見なかった。
 
+mod common;
+
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -562,4 +564,271 @@ fn parent_checkpoint_live_sample_checks() {
         outside.is_empty(),
         "slice の外・cutoff の後の参照: {outside:?}"
     );
+}
+
+// ---- 本番の起動口での盲検の評価（WU blind-eval-runs。`scripts/dev/parent-eval-blind.sh`） ----
+
+/// `scripts/dev/parent-eval-blind/driver.py` の seed: 使い捨ての一時 DB（`PARENT_EVAL_BLIND_SEED` の spec の `db`）に、時点
+/// （`point`）の slice から案件・strategy root・子を store の公開の関数で置く（`#[ignore]`: driver だけが走らせる）。
+///
+/// - 案件の request と root の objective は slice の goal.md。子の行の status は cutoff の時点の値。時点で ready の子は案件の外の draft の task に依存させ、daemon が起こさない。
+///   root と子の作業場所は spec の `repo`（slice だけの seed の git repo、
+///   mode shared）。子は slice の title と cutoff までの遷移・`WorkerFinished`（報告の本文）・`ReviewerPassed` を持つ。
+/// - strategy root の正本（ADR 2026-11-22-parent-checkpoint-evaluator D1.1）は gate と同じ `task.create` の操作の記録。
+/// - spec の `out` に `{project_id, root_id, children: {letter: id}}` を書く。本番の DB には触れない（spec の db が無い path なら作る）。
+#[test]
+#[ignore = "scripts/dev/parent-eval-blind/driver.py が一時 DB を seed するときだけ走らせる"]
+fn parent_checkpoint_blind_seed() {
+    use task_core::chat::{AuditContext, ChatActor};
+    use task_core::store::SqliteStore;
+    use task_core::{Project, ProjectId, Task, TaskKind, WorkspaceMode, WorkspaceSpec};
+
+    let spec_path = std::env::var("PARENT_EVAL_BLIND_SEED").expect("PARENT_EVAL_BLIND_SEED");
+    let spec: Value =
+        serde_json::from_slice(&std::fs::read(&spec_path).expect("spec")).expect("spec json");
+    let field = |k: &str| spec[k].as_str().expect(k).to_string();
+    let (point, repo) = (field("point"), std::path::PathBuf::from(field("repo")));
+    assert!(
+        CASES.iter().any(|(c, _)| *c == point),
+        "point {point} は E-mid・D-done のどれでもない"
+    );
+    let store = SqliteStore::open(Path::new(&field("db"))).expect("store");
+    let (rows, goal, _) = slice(&point);
+    let now = OffsetDateTime::now_utc();
+    let project = Project {
+        id: ProjectId::new(),
+        title: format!("blind:{point}"),
+        request: goal.clone(),
+        status: task_core::ProjectStatus::Active,
+        workspace: None,
+        archived_at: None,
+        paused_from: None,
+        auto_advance: false,
+        slug: None,
+        created_at: now,
+        updated_at: now,
+    };
+    store.project_create(&project).expect("project");
+    let workspace = WorkspaceSpec::Local {
+        path: repo.clone(),
+        mode: Some(WorkspaceMode::Shared),
+    };
+    let task = |status: Status, title: String, objective: String, parent: Option<TaskId>| Task {
+        title,
+        objective,
+        project_id: Some(project.id),
+        parent_id: parent,
+        workspace: workspace.clone(),
+        ..common::new_task(TaskKind::Execute, status)
+    };
+    let root = task(Status::Running, "[アーキv4 親]".into(), goal.clone(), None);
+    store.create_task(&root, vec![]).expect("root");
+    // 時点で ready の子を daemon が起こさないように、案件の外の draft の task に依存させる（評価器の入力に依存は入らない）。
+    let mut holder = common::new_task(TaskKind::Execute, Status::Draft);
+    holder.title = "blind: hold".into();
+    store.create_task(&holder, vec![]).expect("holder");
+    let status = |v: &Value| -> Status { serde_json::from_value(v.clone()).expect("status") };
+    let mut children = BTreeMap::new();
+    for key in CHILDREN {
+        let Some(title) = rows
+            .iter()
+            .find(|r| r["task"] == key && r["title"].is_string())
+            .and_then(|r| r["title"].as_str())
+        else {
+            continue;
+        };
+        // 子の行の status は cutoff の時点の値（遷移の events を足しても行の status は変わらない）。
+        let last = rows
+            .iter()
+            .filter(|r| r["task"] == key && r["type"] == "transitioned")
+            .map(|r| status(&r["to"]))
+            .last()
+            .unwrap_or(Status::Draft);
+        let mut t = task(last, title.to_string(), String::new(), Some(root.id));
+        if last == Status::Ready {
+            t.depends_on = vec![holder.id];
+        }
+        store.create_task(&t, vec![]).expect("child");
+        children.insert(key.to_string(), t.id);
+    }
+    for row in &rows {
+        let Some(id) = row["task"].as_str().and_then(|k| children.get(k)) else {
+            continue;
+        };
+        let event = match row["type"].as_str() {
+            Some("transitioned") => Event::Transitioned {
+                from: status(&row["from"]),
+                to: status(&row["to"]),
+                reason: row["reason"].as_str().unwrap_or_default().to_string(),
+            },
+            Some("worker_finished") => match worker_finished(row) {
+                Some(e) => e,
+                None => continue,
+            },
+            Some("reviewer_passed") => Event::ReviewerPassed {
+                review_run: format!(
+                    "replay-{}-{}",
+                    row["task"].as_str().unwrap_or("-"),
+                    row["seq"]
+                ),
+                repo_id: task_core::repos::RepoId::new(),
+                target_sha: String::new(),
+                reviewed_sha: String::new(),
+                criteria: Vec::new(),
+            },
+            _ => continue,
+        };
+        store.append_event(*id, &event).expect("append");
+    }
+    let op = ulid::Ulid::new().to_string();
+    let strategy = serde_json::json!({
+        "task_id": root.id.to_string(),
+        "name": "strategy/arch-v4-cycle/v1.json",
+        "sha256": format!("sha256:{}", "a".repeat(64)),
+    });
+    store
+        .cos_operation_apply_at(
+            &AuditContext {
+                actor: ChatActor::Cos,
+                thread_id: "blind-seed".into(),
+                run_id: "blind-seed".into(),
+                operation_id: op.clone(),
+                reason: "盲検の評価の seed（アーキv4 の親）".into(),
+                policy_version: "v1".into(),
+            },
+            &op,
+            "blind-seed",
+            "task",
+            &root.id.to_string(),
+            None,
+            "task.create",
+            &serde_json::json!({"method": "POST", "path": "/api/v1/tasks",
+                                "body": {"title": root.title}, "strategy": strategy}),
+            now,
+            |_, _| Ok(serde_json::json!({})),
+        )
+        .expect("root operation");
+    let out = serde_json::json!({
+        "project_id": project.id.to_string(),
+        "root_id": root.id.to_string(),
+        "children": children.iter().map(|(k, v)| (k.clone(), v.to_string())).collect::<BTreeMap<_, _>>(),
+    });
+    std::fs::write(field("out"), serde_json::to_vec_pretty(&out).expect("out")).expect("write out");
+}
+
+/// 盲検の評価の出力（`PARENT_CHECKPOINT_BLIND_DIR`、無ければ `fixtures/parent_checkpoint_live/blind/`）の E-mid・D-done を検査する。
+///
+/// 守る不変条件: 本番の起動口の評価（`<dir>/<時点>/evaluation.json` の最終の記録）が `check_evaluation` を `checked` で通り、全参照が
+/// slice の中（その run の案件の root・子の id、cutoff 以前の replay の成果物の name・commit）にある。commit した既定の dir では
+/// stub の出力（`run.json` の `harness` が `stub`）を拒む（LLM の評価だけを証拠に数える）。file が無ければ落ちる。
+/// 既存の試験で検出できない理由: `parent_checkpoint_live_sample_checks` は WU の run が手で書いた E-mid の 1 件だけを見て、本番の起動口
+/// （controller の evaluate → `start_side_review`）の出力も D-done も見なかった。
+#[test]
+#[ignore = "人が流した実 LLM の評価（または PARENT_CHECKPOINT_BLIND_DIR の stub の出力）を検査する（手で走らせる）"]
+fn parent_checkpoint_blind_live_checks() {
+    let env_dir = std::env::var_os("PARENT_CHECKPOINT_BLIND_DIR");
+    let dir = env_dir
+        .clone()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| Path::new(LIVE).join("blind"));
+    for (case, trigger) in CASES {
+        let read = |name: &str| -> Value {
+            let p = dir.join(case).join(name);
+            serde_json::from_slice(
+                &std::fs::read(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display())),
+            )
+            .unwrap_or_else(|e| panic!("{}: {e}", p.display()))
+        };
+        let (record, run) = (read("evaluation.json"), read("run.json"));
+        if env_dir.is_none() {
+            assert_ne!(
+                run["harness"], "stub",
+                "{case}: 既定の dir に stub の出力がある（LLM の評価だけを置く）"
+            );
+        }
+        assert_eq!(
+            record["schema"],
+            pc::RECORD_SCHEMA,
+            "{case}: 最終の記録でない"
+        );
+        let raw = record["evaluation"].clone();
+        let (rows, _, cutoff) = slice(case);
+        let cut = ts(&cutoff);
+        let before: Vec<&Value> = rows
+            .iter()
+            .filter(|r| ts(r["ts"].as_str().unwrap_or_default()) <= cut)
+            .collect();
+        let known: Vec<String> = run["children"]
+            .as_object()
+            .map(|m| {
+                m.values()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+            .into_iter()
+            .chain(run["root_id"].as_str().map(String::from))
+            .collect();
+        assert!(known.len() > 1, "{case}: run.json に root と子の id が無い");
+        let mut outside = Vec::new();
+        let mut resolved = Vec::new();
+        for r in pc::references_to_resolve(&raw) {
+            let inside = match &r {
+                Reference::Task { task_id } => known.contains(task_id),
+                Reference::Artifact { name, .. } => before.iter().any(|row| {
+                    row["type"] == "artifact_produced" && row.to_string().contains(name.as_str())
+                }),
+                Reference::Commit { sha, .. } => before
+                    .iter()
+                    .any(|row| sha.len() >= 7 && row.to_string().contains(sha.as_str())),
+                _ => false,
+            };
+            if inside {
+                resolved.push(r);
+            } else {
+                outside.push(format!("{r:?}"));
+            }
+        }
+        let (req, _) = request(case, trigger);
+        let children = pc::ChildOutcomes {
+            done_passed: req
+                .children
+                .iter()
+                .filter(|c| c.status == Status::Done)
+                .count() as u32,
+            ..Default::default()
+        };
+        let checked = pc::check_evaluation(
+            Some(&raw),
+            &pc::EvaluationFacts {
+                resolved,
+                goal_reached: false,
+                children,
+            },
+        );
+        println!(
+            "{case} harness={} status={:?} effective={}/{} record={}/{} violations={} refs_outside_slice={outside:?}",
+            run["harness"],
+            checked.status,
+            serde_json::to_value(checked.effective.verdict).expect("v"),
+            serde_json::to_value(checked.effective.next).expect("n"),
+            record["effective"]["verdict"],
+            record["effective"]["next"],
+            checked.violations.len(),
+        );
+        assert_eq!(
+            record["status"], "checked",
+            "{case}: 本番の起動口の記録が checked でない"
+        );
+        assert_eq!(
+            checked.status,
+            pc::RecordStatus::Checked,
+            "{case}: {:?}",
+            checked.violations
+        );
+        assert!(
+            outside.is_empty(),
+            "{case}: slice の外・cutoff の後の参照: {outside:?}"
+        );
+    }
 }

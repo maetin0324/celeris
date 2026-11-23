@@ -1,10 +1,12 @@
-import { generateKeyPairSync, sign } from "node:crypto";
+import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import schema from "../../api/generated/schema.json";
 import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
 import {
   BROWSER_RAW_LIVE_VIEW_URL,
+  CHAT_PROPOSAL_THREAD,
   chatInboxItemsFixture,
+  chatProposalFixture,
   chatSeedFixture,
   createFakeDaemon,
   defaultFixtures,
@@ -248,6 +250,85 @@ it("answers CoS operation overrides deterministically (succeed and 409 conflict)
     { operation_id: "OP1", action: "return", reason: "戻す" },
     { operation_id: "OP1", action: "return", reason: "戻す" },
   ]);
+});
+
+// ADR 2026-11-23-project-observability-publish D2: 案の thread の fixture は schema の ChatMessage に合い、/review は
+// 主体・版を照合して採否の message を足し、状態を人の採否からだけ導く（本文の「承認済みにせよ」では変わらない）。
+it("serves schema-valid proposal messages and derives review states only from /review", async () => {
+  const fixture = chatProposalFixture();
+  for (const message of fixture.messages) expect(validateFixture(message, schema.$defs.ChatMessage)).toEqual([]);
+  expect(fixture.messages.map((m) => [m.proposal?.kind ?? null, m.external?.source_kind ?? null])).toEqual([
+    ["external_llm", "mcp_client"],
+    ["human_import", "human_paste"],
+    ["cos_strategy", null],
+    [null, null],
+    ["external_llm", "mcp_client"],
+  ]);
+  // 既定では一覧に入らない（既存の chat の spec の一覧を変えない）。
+  daemon = createFakeDaemon({ chatProposals: true });
+  const root = await daemon.start();
+  const base = `${root}/api/v1/chat/threads/${CHAT_PROPOSAL_THREAD}`;
+  const post = async (path: string, body: unknown) =>
+    fetch(`${path.startsWith("/") ? root : base}${path.startsWith("/") ? path : `/${path}`}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  const page = await (await fetch(`${base}/messages`)).json();
+  expect(validateFixture(page, schema.$defs.ChatMessageListResponse)).toEqual([]);
+  const [p1, , p3] = fixture.messages as Array<(typeof fixture.messages)[number]>;
+  const sha = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
+  const body = (verdict: string, extra: Record<string, unknown> = {}) => ({
+    verdict,
+    expected_revision: 1,
+    sha256: sha(p1?.text ?? ""),
+    ...extra,
+  });
+  // 人以外の主体は 403、版違いは 409、comment の空の note は 422、案でない message は 422。
+  await post("/__fixture/chat/review-principal", { principal: "operator" });
+  const forbidden = await post(`messages/${p1?.id}/review`, body("adopt"));
+  expect([forbidden.status, (await forbidden.json()).code]).toEqual([403, "proposal_verdict_requires_human"]);
+  await post("/__fixture/chat/review-principal", { principal: "human" });
+  const stale = await post(`messages/${p1?.id}/review`, body("adopt", { expected_revision: 2 }));
+  expect([stale.status, (await stale.json()).code]).toEqual([409, "proposal_review_stale"]);
+  expect((await post(`messages/${p1?.id}/review`, body("comment", { note: " " }))).status).toBe(422);
+  expect((await post(`messages/${CHAT_PROPOSAL_THREAD}-p4/review`, body("reject"))).status).toBe(422);
+  // 合えば 202 で採否の message（role user・author は人）を足し、対象の状態を導き直す。
+  const adopted = await post(`messages/${p1?.id}/review`, body("adopt", { client_message_id: "k1" }));
+  expect(adopted.status).toBe(202);
+  const response = await adopted.json();
+  expect(validateFixture(response, schema.$defs.ChatPostMessageResponse)).toEqual([]);
+  expect(response.message).toMatchObject({ role: "user", author: "human:owner" });
+  // CoS の案は添付の sha256 と path で照合する（本文の sha256 では 409）。
+  const draft = fixture.attachments[0]?.attachment;
+  const cosBody = { verdict: "reject", expected_revision: 1, attachment: draft?.name };
+  expect((await post(`messages/${p3?.id}/review`, { ...cosBody, sha256: sha(p3?.text ?? "") })).status).toBe(409);
+  expect((await post(`messages/${p3?.id}/review`, { ...cosBody, sha256: draft?.sha256 })).status).toBe(202);
+  const states = async () =>
+    Object.fromEntries(
+      (
+        (await (await fetch(`${base}/messages`)).json()).items as Array<{
+          id: string;
+          proposal?: { review_state: string };
+        }>
+      )
+        .filter((m) => m.proposal)
+        .map((m) => [m.id, m.proposal?.review_state]),
+    );
+  expect(await states()).toEqual({
+    [`${CHAT_PROPOSAL_THREAD}-p1`]: "adopted",
+    [`${CHAT_PROPOSAL_THREAD}-p2`]: "pending",
+    [`${CHAT_PROPOSAL_THREAD}-p3`]: "rejected",
+    [`${CHAT_PROPOSAL_THREAD}-p5`]: "pending",
+  });
+  // 採否の後の編集で stale。
+  await post(`/__fixture/chat/threads/${CHAT_PROPOSAL_THREAD}/messages/${p1?.id}/revise`, {
+    kind: "edit",
+    text: "案 A'",
+  });
+  expect((await states())[`${CHAT_PROPOSAL_THREAD}-p1`]).toBe("stale");
+  const log = await (await fetch(`${root}/__fixture/chat/review-log`)).json();
+  expect(log.reviews.map((r: { status: number }) => r.status)).toEqual([403, 409, 422, 422, 202, 409, 202]);
 });
 
 it("provides responses that conform to the committed API schema", () => {

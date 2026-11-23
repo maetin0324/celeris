@@ -357,7 +357,10 @@ impl Cp {
                 _ => None,
             })
             .expect("final record");
-        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+        // 記録の path は root の足回りからの相対（API・子 5 の gate・snapshot が同じ基準で引く）。
+        assert!(std::path::Path::new(&path).is_relative(), "{path}");
+        let dir = self.d.task_dir(&self.root).expect("root dir");
+        serde_json::from_slice(&std::fs::read(dir.join(path)).unwrap()).unwrap()
     }
 
     fn last_checkpoint(&self) -> Option<task_core::project_proposal::SnapshotCheckpoint> {

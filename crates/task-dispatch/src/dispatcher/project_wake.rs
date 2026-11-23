@@ -82,7 +82,7 @@ impl Dispatcher {
         let Some(launch) = self.orchestration.launch_mut() else {
             return false;
         };
-        decider.configure(&settings, tree_tokens_used);
+        decider.configure(&settings, tree_tokens_used, &self.config.workspace_roots);
         launch.project_controller = Some(ProjectControllerRuntime {
             settings,
             decider,

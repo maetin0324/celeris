@@ -22,6 +22,7 @@ use serde_json::{Value, json};
 use task_core::authority::{
     ActionClass, AuthorityVerdict, GrantScope, NewAuthorityAudit, ScopeKind,
 };
+use task_core::local_machine::WorkspaceRoots;
 use task_core::parent_checkpoint::CheckpointSettings;
 use task_core::project_proposal::{
     self as pp, ProjectAction, ProjectProposal, ProjectSnapshot, ProposalViolation,
@@ -116,10 +117,10 @@ pub struct TsProjectDecider {
     /// 試験: 領域の mode を読まずに常に呼ぶ口（`ts` と同じ扱い）。
     fixed: Option<Arc<dyn PolicyScript>>,
     record: Option<String>,
-    /// ADR 2026-11-22-parent-checkpoint-evaluator D1: `[project_controller.checkpoint]` と木の使った token の読み口
-    /// （[`ProjectDecider::configure`] で入る）。入っていない判定（controller の runtime を通らない試験・pilot）は
-    /// snapshot に `checkpoints` を入れない。
-    checkpoint: Option<(CheckpointSettings, TreeTokens)>,
+    /// ADR 2026-11-22-parent-checkpoint-evaluator D1: `[project_controller.checkpoint]` と木の使った token の読み口と
+    /// 成果物の path を解く足回りの root（[`ProjectDecider::configure`] で入る）。入っていない判定（controller の runtime を
+    /// 通らない試験・pilot）は snapshot に `checkpoints` を入れない。
+    checkpoint: Option<(CheckpointSettings, TreeTokens, WorkspaceRoots)>,
 }
 
 impl TsProjectDecider {
@@ -194,8 +195,17 @@ impl ProjectDecider for TsProjectDecider {
         self.record.take()
     }
 
-    fn configure(&mut self, settings: &ProjectControllerSettings, tree_tokens: TreeTokens) {
-        self.checkpoint = Some((settings.checkpoint.clone(), tree_tokens));
+    fn configure(
+        &mut self,
+        settings: &ProjectControllerSettings,
+        tree_tokens: TreeTokens,
+        workspace_roots: &WorkspaceRoots,
+    ) {
+        self.checkpoint = Some((
+            settings.checkpoint.clone(),
+            tree_tokens,
+            workspace_roots.clone(),
+        ));
     }
 
     fn decide(&mut self, input: &ProjectDecideInput) -> Result<ProjectDecision, String> {
@@ -206,9 +216,15 @@ impl ProjectDecider for TsProjectDecider {
             .ok_or_else(|| "project controller decider has no store".to_string())?;
         let now = OffsetDateTime::parse(&input.now, &Rfc3339).map_err(|e| e.to_string())?;
         let mut snapshot = build_snapshot(&store, input, &self.limits, now)?;
-        if let Some((settings, tree_tokens)) = &self.checkpoint {
-            snapshot.checkpoints =
-                checkpoint_section(&store, input, &snapshot, settings, *tree_tokens)?;
+        if let Some((settings, tree_tokens, workspace_roots)) = &self.checkpoint {
+            snapshot.checkpoints = checkpoint_section(
+                &store,
+                input,
+                &snapshot,
+                settings,
+                *tree_tokens,
+                workspace_roots,
+            )?;
         }
         let snapshot_sha256 = pp::sha256_hex(&serde_json::to_string(&snapshot).unwrap_or_default());
         let mut rec = json!({
@@ -623,6 +639,7 @@ fn checkpoint_section(
     snapshot: &ProjectSnapshot,
     settings: &CheckpointSettings,
     tree_tokens: TreeTokens,
+    workspace_roots: &WorkspaceRoots,
 ) -> Result<Vec<pp::SnapshotCheckpoint>, String> {
     let rows = store
         .project_controller_decisions(&input.project_id, None, usize::MAX)
@@ -639,9 +656,14 @@ fn checkpoint_section(
             proposal: p,
         })
         .collect();
-    ps::checkpoints(store, &snapshot.roots, &rows, settings, &mut |root| {
-        tree_tokens(store, root, None).map_err(task_ops::OpsError::from)
-    })
+    ps::checkpoints(
+        store,
+        workspace_roots,
+        &snapshot.roots,
+        &rows,
+        settings,
+        &mut |root| tree_tokens(store, root, None).map_err(task_ops::OpsError::from),
+    )
     .map_err(|e| e.to_string())
 }
 

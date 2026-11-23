@@ -224,6 +224,8 @@ link は `{kind, …}` の 7 種だけである。Web は kind ごとに既存�
 - 署名の前の内容の検査: 人の HTTP の回答で `option = sign` のとき、task-api の decisions の handler が `task_api::publish::manifest_status` で manifest を
   検査し、違反があれば 422 `publish_manifest_invalid`、file の今の byte 列の sha256 が question と違えば 409 `publish_manifest_stale` にする。
   この検査を HTTP の handler に置くのは、署名できる経路が人の HTTP だけだからである（CoS と MCP は上の主体の拒否で先に止まる）。
+  回答の改め（`POST /decisions/{id}/revise`）で `sign` に変えるときも同じ検査を通す。token の無い構成の要求は管理系の入口（`require_admin`）で 401 になり、
+  共有の owner も `human:local` を拒む。manifest の GET は `?version=` で版を選べる（省けば最新の版）。
   概要（O14）と manifest の画面は同じ `manifest_status` を使う。
 
 #### D3.4 失効と状態（保存しない）
@@ -260,9 +262,13 @@ link は `{kind, …}` の 7 種だけである。Web は kind ごとに既存�
 
 | 守る不変条件 | 予定の試験（正式名） | 変更前に落ちるか |
 |---|---|---|
-| 非人の主体は publish manifest に署名できない（operator・CoS・MCP・token の無い構成） | `publish_signoff_operator_answer_is_403_and_records_nothing`・`publish_signoff_cos_operation_decision_answer_is_403_and_audited`・`publish_signoff_mcp_decision_answer_is_refused`・`publish_signoff_unauthenticated_local_is_403` | 落ちる（base はどの主体の回答も受ける） |
+| 非人の主体は publish manifest に署名できない（operator・CoS・MCP・token の無い構成） | `publish_signoff_operator_answer_is_403_and_records_nothing`・`publish_signoff_cos_operation_decision_answer_is_403_and_audited`・`publish_signoff_mcp_decision_answer_is_refused`（celeris-mcp）・`publish_signoff_unauthenticated_local_is_refused`（HTTP は管理系の入口で 401、共有の owner も `human:local` を拒む） | 落ちる（base はどの主体の回答も受ける） |
 | 人の発言の引用でも CoS は署名できない | `publish_signoff_cos_instructed_by_human_message_cannot_sign` | 落ちる |
 | 回答の改めでも非人は署名できない | `publish_signoff_revise_by_non_human_is_403` | 落ちる |
+| worker の run（API の主体を持たない。run の id・`worker:` を名乗る回答）も署名できない | `publish_signoff_worker_run_cannot_sign` | 落ちる |
+| 外部 LLM・会話の文（「承認する」「publish して」）は署名にならない | `publish_signoff_external_llm_text_cannot_sign` | 落ちる |
+| 別の案件の参照を持つ manifest には署名できない | `publish_signoff_other_project_reference_is_422` | 落ちる |
+| 署名の状態は sha256・版・最後の回答から導く | `publish_signoff_state_follows_sha_version_and_answer` | 落ちる（関数が無い） |
 | 人の HTTP の回答だけが今の sha256 に署名する | `publish_signoff_human_answer_signs_current_sha` | 落ちる（署名の状態の導出が無い） |
 | 本文が変われば署名は失効し、新しい版は署名し直す | `publish_signoff_after_file_change_is_stale`・`publish_signoff_newer_version_marks_previous_signoff_superseded` | 落ちる |
 | 検査に通らない manifest には署名できない | `publish_signoff_invalid_manifest_is_422` | 落ちる |
@@ -271,6 +277,7 @@ link は `{kind, …}` の 7 種だけである。Web は kind ごとに既存�
 | 他の決定の回答は今と同じ | `publish_signoff_other_decision_keys_unchanged` | 通る（回帰） |
 | manifest は claims → evidence → 再現条件 → limitations・未解決 → 署名 の順で読める | `publish_manifest_view_orders_claims_evidence_reproduction_limitations_signoff` | 落ちる |
 | 基準の manifest は違反が無い | `publish_manifest_valid_baseline_has_no_violations` | 落ちる（検査の関数が無い） |
+| 再現条件の command の長さと commit の形、文書の大きさの上限 | `publish_manifest_limits_reject_long_commands_and_bad_commit` | 落ちる（検査の関数が無い） |
 | 証拠の無い claim・内部の参照の無い確認済みの claim・再現条件の無い確認済みの claim を拒む | `publish_manifest_claim_without_evidence_is_invalid`・`publish_manifest_confirmed_claim_needs_internal_reference`・`publish_manifest_confirmed_claim_needs_reproduction` | 落ちる |
 | 支持と反証の両方を持つ claim は確認済みにできず、未確認の claim は limitations か未解決に載る | `publish_manifest_supported_and_refuted_claim_cannot_be_confirmed`・`publish_manifest_unconfirmed_claim_must_be_listed_in_limitations` | 落ちる |
 | 反証は版を進めても消えない | `publish_manifest_refute_evidence_cannot_be_removed_in_next_version` | 落ちる |

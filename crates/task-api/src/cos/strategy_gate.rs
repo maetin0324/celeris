@@ -121,12 +121,7 @@ fn violations(
             "作る task に案件が無い（戦略の文書の案件と一致しない）",
         )]);
     };
-    let mut reader = Reader {
-        store,
-        env,
-        target: project.id.to_string(),
-        projects: BTreeMap::new(),
-    };
+    let mut reader = Reader::new(store, env, project.id.to_string());
     let mut out = Vec::new();
     let Some(source) = reader.task(&strategy.task_id)? else {
         return Ok(vec![violation(
@@ -321,8 +316,9 @@ fn approval(
     }))
 }
 
-/// store と workspace を読むだけの照会（task の案件は 1 回だけ引く）。
-struct Reader<'a> {
+/// store と workspace を読むだけの照会（task の案件は 1 回だけ引く）。publish manifest の検査
+/// （`crate::publish`、ADR 2026-11-23-project-observability-publish D3.2）も [`Reader::lookup`] で参照を引く。
+pub(crate) struct Reader<'a> {
     store: &'a SqliteStore,
     env: &'a DispatchEnv,
     /// 作る task の案件。
@@ -330,7 +326,16 @@ struct Reader<'a> {
     projects: BTreeMap<TaskId, Option<String>>,
 }
 
-impl Reader<'_> {
+impl<'a> Reader<'a> {
+    pub(crate) fn new(store: &'a SqliteStore, env: &'a DispatchEnv, target: String) -> Self {
+        Self {
+            store,
+            env,
+            target,
+            projects: BTreeMap::new(),
+        }
+    }
+
     fn task(&self, raw: &str) -> Result<Option<Task>, ApiProblem> {
         let Ok(id) = raw.parse::<TaskId>() else {
             return Ok(None);
@@ -352,25 +357,17 @@ impl Reader<'_> {
     }
 
     fn produced(&self, task: TaskId) -> Result<Vec<(String, ArtifactRef)>, ApiProblem> {
-        Ok(self
-            .store
-            .events_for(task)
-            .map_err(store_problem)?
-            .into_iter()
-            .filter_map(|(_, e)| match e {
-                Event::ArtifactProduced { run_id, artifact } => Some((run_id, artifact)),
-                _ => None,
-            })
-            .collect())
+        crate::files::produced_artifacts(self.store, task)
     }
 
     /// 記録された成果物の file の byte 列（workspace の外・無い file は `None`）。
     fn file(&self, task: &Task, recorded: &str) -> Option<Vec<u8>> {
-        let roots = &self.env.api.inner.view.workspace_roots;
-        let dir = crate::files::task_local_dir(self.store, roots, task).ok()?;
-        let ws = crate::files::canonical_workspace(&dir).ok()?;
-        let path = crate::files::resolve_artifact(&ws, recorded).ok()?;
-        std::fs::read(path).ok()
+        crate::files::artifact_bytes(
+            self.store,
+            &self.env.api.inner.view.workspace_roots,
+            task,
+            recorded,
+        )
     }
 
     /// task の、name と sha256 が一致し、file の今の byte 列もその sha256 の成果物。
@@ -470,7 +467,11 @@ impl Reader<'_> {
         Ok(out)
     }
 
-    fn lookup(&mut self, project: &Project, r: &Reference) -> Result<RefStatus, ApiProblem> {
+    pub(crate) fn lookup(
+        &mut self,
+        project: &Project,
+        r: &Reference,
+    ) -> Result<RefStatus, ApiProblem> {
         let found = |project_id: Option<String>| RefStatus::Found { project_id };
         Ok(match r {
             Reference::Url { .. } => found(None),

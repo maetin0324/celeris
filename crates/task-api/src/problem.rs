@@ -590,9 +590,16 @@ pub(crate) fn ops_problem(store: &SqliteStore, err: OpsError, trigger: Option<&s
             code,
             detail,
         ),
+        // ADR 2026-11-23-project-observability-publish D3.3: 署名の決定は人だけ。
+        OpsError::PublicationRequiresHuman { .. } => {
+            ApiProblem::new(StatusCode::FORBIDDEN, PUBLICATION_REQUIRES_HUMAN, detail)
+        }
         OpsError::Store(err) => store_problem(err),
     }
 }
+
+/// ADR 2026-11-23-project-observability-publish D3.3: 人でない主体の署名の拒否の code。
+pub(crate) const PUBLICATION_REQUIRES_HUMAN: &str = "publication_requires_human";
 
 /// Outcome of an external effect (C): `Ok(Ok(v))` done, `Ok(Err(problem))` refused before any
 /// change (settled `rejected`), `Err(problem)` outcome unknown (left pending for remediation).

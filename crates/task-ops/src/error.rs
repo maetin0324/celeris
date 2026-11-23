@@ -96,6 +96,17 @@ pub enum OpsError {
         detail: String,
     },
 
+    /// ADR 2026-11-23-project-observability-publish D3.3: publish の署名の決定（key `publish-signoff-v<n>`）への
+    /// 回答・回答の改めは人（`task_core::publish::is_signoff_actor`）だけ（API は 403 `publication_requires_human`）。
+    #[error(
+        "publication_requires_human: decision {decision_id} ({key}) can be answered only by a human principal, not {by}"
+    )]
+    PublicationRequiresHuman {
+        decision_id: String,
+        key: String,
+        by: String,
+    },
+
     #[error(transparent)]
     Store(#[from] StoreError),
 }

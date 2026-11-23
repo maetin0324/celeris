@@ -196,6 +196,19 @@ fn not_open(row: &DecisionRow, action: &str) -> OpsError {
     }
 }
 
+/// ADR 2026-11-23-project-observability-publish D3.3: publish の署名の決定には人だけが答える。HTTP・CoS の
+/// operation・MCP の 3 経路が共有するこの owner で拒み、決定の行も event も書かない。
+fn signoff_actor(row: &DecisionRow, by: &str) -> Result<(), OpsError> {
+    if task_core::publish::is_signoff_key(&row.key) && !task_core::publish::is_signoff_actor(by) {
+        return Err(OpsError::PublicationRequiresHuman {
+            decision_id: row.id.clone(),
+            key: row.key.clone(),
+            by: by.to_string(),
+        });
+    }
+    Ok(())
+}
+
 fn get_row(store: &SqliteStore, id: &str) -> Result<DecisionRow, OpsError> {
     store
         .decision_get(id)?
@@ -697,6 +710,7 @@ pub fn plan_answer(
     now: OffsetDateTime,
 ) -> Result<AnswerPlan, OpsError> {
     let row = get_row(store, id)?;
+    signoff_actor(&row, by)?;
     if row.status != DecisionStatus::Open {
         return Err(not_open(
             &row,
@@ -878,6 +892,7 @@ pub fn plan_revise(
     now: OffsetDateTime,
 ) -> Result<AnswerPlan, OpsError> {
     let row = get_row(store, id)?;
+    signoff_actor(&row, by)?;
     if row.status != DecisionStatus::Answered {
         return Err(not_open(
             &row,

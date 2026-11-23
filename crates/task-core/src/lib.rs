@@ -249,6 +249,8 @@ pub use notify::{
 pub use script_inbox::ScriptInboxItem;
 pub mod project_brief;
 pub mod project_proposal;
+/// ADR 2026-11-23-project-observability-publish D3: publish manifest `celeris.publish-manifest/1` の検査と人だけの署名の状態。
+pub mod publish;
 pub mod roadmap;
 /// ADR 2026-11-21-strategy-evidence-contract: 戦略・仮説・証拠の文書 `celeris.strategy/1` と検証の純関数。
 pub mod strategy;

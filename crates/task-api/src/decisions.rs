@@ -10,6 +10,11 @@
 //!   `needed_before: [self]` なら節点を中止）。
 //! - `POST /decisions/{id}/revise` `{option?, note?}` — 回答済みの `choice` の答えを変える（**管理系**）。
 //!
+//! - `GET /tasks/{id}/publish/{manifest_id}` — publish manifest の状態（ADR 2026-11-23-project-observability-publish D3。
+//!   実装は `crate::publish`）。署名の決定（`publish-signoff-v<n>`）に人が `sign` で答える・改める前に、manifest を検査する
+//!   （422 `publish_manifest_invalid`・409 `publish_manifest_stale`）。人でない主体は `task_ops::decision` が 403
+//!   `publication_requires_human` にする（CoS の operation・MCP も同じ owner を通る）。
+//!
 //! ハンドラは HTTP への写像だけで、判断と効き目は `task_ops::decision`（決定的、LLM なし）。
 //! `[execution.tree] enabled = false`（既定）では決定は作られないので、一覧は空、回答は 404 になる。
 
@@ -35,6 +40,51 @@ pub(crate) fn routes() -> axum::Router<ApiState> {
         .route("/api/v1/decisions/{id}/withdraw", post(withdraw))
         .route("/api/v1/decisions/{id}/revise", post(revise))
         .route("/api/v1/tasks/{id}/decisions", get(task_decisions))
+        .route(
+            "/api/v1/tasks/{id}/publish/{manifest_id}",
+            get(get_manifest),
+        )
+}
+
+/// `GET /tasks/{id}/publish/{manifest_id}?version=`（`version` を省けば最新の版。ADR 2026-11-23-project-observability-publish
+/// D3）。状態の導出は `crate::publish::manifest_status`。
+async fn get_manifest(
+    State(state): State<ApiState>,
+    Params((id, manifest_id)): Params<(String, String)>,
+    RawQuery(raw): RawQuery,
+) -> ApiResult {
+    let query = QueryParams::parse(raw.as_deref(), &["version"])?;
+    let version = match query.single("version")? {
+        Some(raw) => Some(raw.parse::<u32>().map_err(|_| {
+            ApiProblem::bad_request("query parameter `version` must be a positive integer")
+        })?),
+        None => None,
+    };
+    let task_id = parse_task_id(&id)?;
+    let env = crate::cos::operations::DispatchEnv::of(&state);
+    let view = state
+        .blocking(move |store| {
+            crate::publish::manifest_status(
+                store,
+                &env.api.inner.view.workspace_roots,
+                task_id,
+                &manifest_id,
+                version,
+                &mut |project, r| reference_status(store, &env, project, r),
+            )
+        })
+        .await?;
+    Ok(json_response(StatusCode::OK, &view))
+}
+
+/// manifest の参照を戦略の文書と同じ解決の関数（`cos::strategy_gate::Reader::lookup`）で引く。
+fn reference_status(
+    store: &task_core::store::SqliteStore,
+    env: &crate::cos::operations::DispatchEnv,
+    project: &task_core::Project,
+    r: &task_core::strategy::Reference,
+) -> Result<task_core::strategy::RefStatus, ApiProblem> {
+    crate::cos::strategy_gate::Reader::new(store, env, project.id.to_string()).lookup(project, r)
 }
 
 async fn list_decisions(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> ApiResult {
@@ -86,8 +136,19 @@ async fn answer(
     let decision_id = id.clone();
     let by = caller.actor();
     let human = HumanEpoch::of(&caller);
+    let env = crate::cos::operations::DispatchEnv::of(&state);
     let outcome = state
-        .blocking(move |store| answer_op(store, &decision_id, payload, &by, human, None)?.direct())
+        .blocking(move |store| {
+            crate::publish::check_before_sign(
+                store,
+                &env.api.inner.view.workspace_roots,
+                &decision_id,
+                payload.option.as_deref(),
+                &by,
+                &mut |project, r| reference_status(store, &env, project, r),
+            )?;
+            answer_op(store, &decision_id, payload, &by, human, None)?.direct()
+        })
         .await?;
     tracing::info!(who = "admin", op = "decision_answer", decision_id = %id, effect = outcome.effect.as_str(), resumed = outcome.resumed.len(), cancelled = outcome.cancelled.len(), "admin: decision answered");
     Ok(json_response(StatusCode::OK, &outcome))
@@ -283,8 +344,19 @@ async fn revise(
     let decision_id = id.clone();
     let by = caller.actor();
     let human = HumanEpoch::of(&caller);
+    let env = crate::cos::operations::DispatchEnv::of(&state);
     let outcome = state
-        .blocking(move |store| revise_op(store, &decision_id, payload, &by, human, None)?.direct())
+        .blocking(move |store| {
+            crate::publish::check_before_sign(
+                store,
+                &env.api.inner.view.workspace_roots,
+                &decision_id,
+                payload.option.as_deref(),
+                &by,
+                &mut |project, r| reference_status(store, &env, project, r),
+            )?;
+            revise_op(store, &decision_id, payload, &by, human, None)?.direct()
+        })
         .await?;
     tracing::info!(who = "admin", op = "decision_revise", decision_id = %id, notified = outcome.notified_children.len(), "admin: decision revised");
     Ok(json_response(StatusCode::OK, &outcome))

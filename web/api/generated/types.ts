@@ -3970,6 +3970,46 @@ export type LocalSettingsPutBody = {
   "workspace_root"?: string | null;
 };
 
+export type ManifestRule = "shape" | "unsupported_claim" | "unresolved_reference" | "contradicted" | "hidden_uncertainty" | "refute_removed" | "secret" | "other_project" | "idempotency" | "id_conflict";
+
+export type ManifestSignoffView = {
+  "answered_at"?: string | null;
+  "answered_by"?: string | null;
+  "decision_id"?: string | null;
+  "decision_status"?: DecisionStatus | null;
+  "key": string;
+  "state": SignoffState;
+};
+
+export type ManifestView = {
+  "claims": Array<unknown>;
+  "current_sha256"?: string | null;
+  "evidence": Array<unknown>;
+  "file_matches_record": boolean;
+  "limitations": Array<unknown>;
+  "manifest_id": string;
+  "name": string;
+  "open_questions": Array<unknown>;
+  "project_id"?: string | null;
+  "recorded_sha256": string;
+  "reproduction": Array<unknown>;
+  "signoff": ManifestSignoffView;
+  "strong_warnings": Array<string>;
+  "target"?: unknown;
+  "task_id": string;
+  "unsupported_claims": Array<string>;
+  "version": number;
+  "versions": Array<number>;
+  "violations": Array<ManifestViolationView>;
+};
+
+export type ManifestViolationView = {
+  "code": string;
+  "detail": string;
+  "path": string;
+  "rule": ManifestRule;
+};
+
 export type McpCall = {
   "at": string;
   "client_id": string;
@@ -6006,6 +6046,8 @@ export type SideIntent = {
   "path": string;
   "unavailable"?: string | null;
 };
+
+export type SignoffState = "unsigned" | "signed" | "rejected" | "stale" | "superseded";
 
 export type SitePolicyList = {
   "items": Array<BrowserSitePolicyRecord>;

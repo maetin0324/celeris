@@ -311,6 +311,8 @@ pub struct ApiV1Schema {
     pub decision_answer: task_ops::decision::DecisionAnswerBody,
     pub decision_withdraw: task_ops::decision::DecisionWithdrawBody,
     pub decision_outcome: task_ops::decision::DecisionOutcome,
+    /// ADR 2026-11-23-project-observability-publish D3: `GET /tasks/{id}/publish/{manifest_id}`。
+    pub publish_manifest: crate::publish::ManifestView,
     /// ADR-0079 D11（Phase R4a）: `GET /tasks/{id}/task-tree`（木と roll-up）。
     pub task_tree: task_ops::tree_view::TaskTreeView,
     /// ADR-0131 D5: 定期実行（cron job）。作成・更新の本文、job（一覧・詳細）、履歴、手動実行の応答。
@@ -325,7 +327,8 @@ pub struct ApiV1Schema {
     /// `check_cmd` と `objective` は応答の型に無い（採点専用・worker 専用）。
     pub eval_trials_create: crate::routing_eval::EvalTrialsCreateBody,
     pub eval_trials_created: crate::routing_eval::EvalTrialsCreated,
-    pub eval_trial: crate::routing_eval::EvalTrialView,
+    // `EvalTrialView` is not listed: it stays in `$defs` through `EvalTrialList.trials` (the root's field count
+    // is repo health `size.responsibility-growth`; ADR 2026-11-23-project-observability-publish adds `publish_manifest`).
     pub eval_trial_list: crate::routing_eval::EvalTrialList,
     // ---- ADR 2026-10-05-cos-chat-home D2: CoS チャット（スレッド・メッセージ・run・添付・SSE） ----
     // `ChatThread`・`ChatMessage`・`ChatAttachment`・`ChatEvent` are not listed: they stay in `$defs` through

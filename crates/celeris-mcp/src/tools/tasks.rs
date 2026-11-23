@@ -54,6 +54,9 @@ pub(crate) fn map_ops_err(e: OpsError) -> ToolError {
         | OpsError::Conflict { .. }
         | OpsError::InvalidLifecycle { .. }
         | OpsError::TreeAdopt { .. } => ToolError::invalid_params(e.to_string()),
+        // ADR 2026-11-23-project-observability-publish D3.3: 署名の決定は人だけ。message は
+        // `publication_requires_human` で始まる（`OpsError` の文言）。
+        OpsError::PublicationRequiresHuman { .. } => ToolError::rejected(e.to_string()),
         OpsError::Store(_) => ToolError::internal(e.to_string()),
     }
 }

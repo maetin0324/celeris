@@ -29,11 +29,20 @@ use crate::dispatcher::{DispatchError, Dispatcher};
 use crate::project_controller::TreeTokens;
 use crate::project_decider_ts::decision_proposal;
 
+/// 木の run・費用の上限の判定（`dispatcher/tree_units.rs` の `tree_limit_hold_for` を `NextRun::Worker` で呼ぶ関数）。
+/// その method は `dispatcher` module の中だけで見えるので、呼び出し側（`dispatcher/project_wake.rs`）が渡す。
+pub(crate) type TreeHold = fn(&Dispatcher, &Task) -> Result<bool, DispatchError>;
+
 /// tick の段（`tick_project_controller` の判断の後）: `enabled` の案件の実行中の `evaluate` の判断ごとに、root の run を
 /// 手元に持っていない・木の上限が止めない・試行 < 上限のときだけ評価の run を起こし、試行の記録を書く。上限に達して
 /// run を持っていなければ `invalid` の最終の記録を書く（D2.3）。失敗は log に残して次の tick に回す。
-pub(crate) fn launch(d: &mut Dispatcher, settings: &pc::CheckpointSettings, tokens: TreeTokens) {
-    if let Err(error) = launch_all(d, settings, tokens) {
+pub(crate) fn launch(
+    d: &mut Dispatcher,
+    settings: &pc::CheckpointSettings,
+    tokens: TreeTokens,
+    hold: TreeHold,
+) {
+    if let Err(error) = launch_all(d, settings, tokens, hold) {
         tracing::warn!(%error, "parent evaluation: launch failed; retrying on the next tick");
     }
 }
@@ -56,6 +65,7 @@ fn launch_all(
     d: &mut Dispatcher,
     settings: &pc::CheckpointSettings,
     tokens: TreeTokens,
+    hold: TreeHold,
 ) -> Result<(), DispatchError> {
     let store = d.store();
     let max = settings.max_evaluation_attempts();
@@ -78,7 +88,7 @@ fn launch_all(
                     continue;
                 }
                 // 条件 2: 木の run・費用の上限（設計 review と同じ扱い。`kind: limit` の決定の要求に任せる）。
-                if d.tree_limit_hold_for(root, task_core::NextRun::Worker)? {
+                if hold(d, root)? {
                     break;
                 }
                 let Some(request) = request(&store, root, id, triggers, request_sha256, tokens)?

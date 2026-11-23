@@ -180,7 +180,9 @@ impl Dispatcher {
             pass.stats.pass_micros = started.elapsed().as_micros() as u64;
             rt.last = pass.stats;
             // ADR 2026-11-22-parent-checkpoint-evaluator D2.3: 実行中の `evaluate` の判断の評価の run を起こす。
-            parent_evaluation::launch(self, &rt.settings.checkpoint, tree_tokens_used);
+            parent_evaluation::launch(self, &rt.settings.checkpoint, tree_tokens_used, |d, t| {
+                d.tree_limit_hold_for(t, task_core::NextRun::Worker)
+            });
         }
         if let Some(launch) = self.orchestration.launch_mut() {
             launch.project_controller = Some(rt);

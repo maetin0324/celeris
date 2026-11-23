@@ -796,7 +796,7 @@ impl Dispatcher {
     /// ADR 2026-11-07-health-review-integration の付記（二度目の final review の差し戻しへの方針）C1: 設計 review の
     /// run（`design_review_hold`）も `NextRun::Worker` でここを通る。その run は runs 索引の Reviewer の行で、木の
     /// 集計では run 数でなく `reviewer_runs` に数え、費用には数える。
-    pub(crate) fn tree_limit_hold_for(
+    pub(super) fn tree_limit_hold_for(
         &self,
         task: &Task,
         next: task_core::NextRun,

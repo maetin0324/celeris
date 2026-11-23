@@ -29,7 +29,9 @@ import {
 } from "./logic";
 import { DraftItem, MessageItem, PendingItem, type RenderCards } from "./message-item";
 import { JumpToLatest, StatusLine, ToolCallList } from "./parts";
+import type { ProposalReviewActions } from "./proposal";
 import type { MessageRevisionActions } from "./revision";
+import { chatMessageElementId } from "./workspace-links";
 
 /** 上端からこの px 以内に来たら古い頁を読む。 */
 const TOP_LOAD_PX = 64;
@@ -46,6 +48,10 @@ export type MessageListProps = {
   onDiscardPending?: (pending: PendingMessage) => void;
   /** 自分の発言の編集・撤回（viewer は state から渡す）。無ければ操作を出さない。 */
   revision?: Omit<MessageRevisionActions, "viewer">;
+  /** 案の採用・却下・コメント（ADR 2026-11-23-project-observability-publish D2）。無ければ状態だけを出す。 */
+  proposalReview?: ProposalReviewActions;
+  /** `/?thread=&message=` の message。読み込み済みならそこへ移って強調する。 */
+  focusMessageId?: string;
   /** 空の会話に出す内容。 */
   empty?: ReactNode;
   className?: string;
@@ -65,6 +71,8 @@ export function MessageList({
   onRetryPending,
   onDiscardPending,
   revision,
+  proposalReview,
+  focusMessageId,
   empty,
   className,
 }: MessageListProps) {
@@ -112,6 +120,17 @@ export function MessageList({
     if (next !== announce.current && next.text !== "") setAnnouncement(next.text);
     announce.current = next;
   }, [items]);
+
+  // D4: `/?thread=&message=` の発言へ 1 度だけ移る（引用の link と同じ scrollIntoView と focus）。
+  const focused = useRef<string | null>(null);
+  useEffect(() => {
+    if (!focusMessageId || focused.current === focusMessageId || !state.messages[focusMessageId]) return;
+    const target = document.getElementById(chatMessageElementId(focusMessageId));
+    if (!target) return;
+    focused.current = focusMessageId;
+    target.scrollIntoView({ block: "center", behavior: "smooth" });
+    target.focus({ preventScroll: true });
+  }, [focusMessageId, state.messages]);
 
   const loadOlder = useCallback(() => {
     const element = scroller.current;
@@ -162,6 +181,8 @@ export function MessageList({
                 onRetryPending,
                 onDiscardPending,
                 revision: revisionActions,
+                proposalReview,
+                focusMessageId,
               })}
             </li>
           ))}
@@ -196,6 +217,8 @@ function renderItem(
     onRetryPending?: (pending: PendingMessage) => void;
     onDiscardPending?: (pending: PendingMessage) => void;
     revision?: MessageRevisionActions;
+    proposalReview?: ProposalReviewActions;
+    focusMessageId?: string;
   },
 ): ReactNode {
   switch (item.kind) {
@@ -208,6 +231,8 @@ function renderItem(
           attachments={context.attachments}
           renderCards={context.renderCards}
           revision={context.revision}
+          proposalReview={context.proposalReview}
+          highlighted={context.focusMessageId === item.message.id}
         />
       );
     case "draft":

@@ -17,6 +17,20 @@ export function chatSeedFixture(): Array<{
   thread: import("../../api/generated/types").ChatThread;
   messages: import("../../api/generated/types").ChatMessage[];
 }>;
+// 案の採否の thread（createFakeDaemon({ chatProposals: true }) のときだけ一覧に入る。ADR 2026-11-23-project-observability-publish D2）。
+export const CHAT_PROPOSAL_THREAD: "chat-proposals";
+export function chatProposalFixture(): {
+  thread: import("../../api/generated/types").ChatThread;
+  messages: import("../../api/generated/types").ChatMessage[];
+  attachments: Array<{ attachment: import("../../api/generated/types").ChatAttachment; bytes: Uint8Array }>;
+};
+// POST /api/v1/chat/threads/{t}/messages/{m}/review: 403 proposal_verdict_requires_human while the review principal is
+// not human, 409 proposal_review_stale when expected_revision/sha256 differ from the proposal, else 202 with the review
+// message; the target's proposal.review_state is derived again and both messages are streamed.
+// POST /__fixture/chat/review-principal {principal: "human" | "operator" | "mcp" | "cos"} sets the caller of /review.
+// GET /__fixture/chat/review-log lists {thread_id, message_id, principal, body, status, code?} of every /review request.
+// POST /__fixture/chat/threads/{t}/messages/{m}/revise {kind: "edit" | "retract", text?, reason?, silent?} edits or
+// retracts a message (revision + 1); silent does not stream it (the page keeps the old version).
 // Deterministic chat controls (direct daemon URL, with the fixture token when configured):
 // POST /__fixture/chat/hold {thread_id, hold?: boolean} creates a held active run.
 // POST /__fixture/chat/threads/{t}/emit accepts {type, data, run_id?, message_id?}
@@ -130,6 +144,7 @@ export type FakeDaemonOptions = {
   inboxItems?: import("../../api/generated/types").InboxItem[] | null;
   notices?: import("../../api/generated/types").Notice[] | null;
   browser?: boolean | BrowserBackendOptions | null;
+  chatProposals?: boolean;
 };
 /** `GET /api/v1/tasks` の 1 頁を本物の daemon と同じ意味（status・order・limit・cursor）で作る。 */
 export function taskListPage(

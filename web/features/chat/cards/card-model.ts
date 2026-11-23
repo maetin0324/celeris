@@ -5,6 +5,7 @@ import { ApiError } from "../../../api/client";
 import type { ChatActor, ChatCard, ChatCardKind, OverrideMode, OverrideResponse } from "../../../api/generated/types";
 import type { BadgeTone } from "../../../components/ui/badge";
 import { statusView } from "../../../components/ui/status-badge";
+import { problemCode, problemDetail } from "../data/problem";
 
 export const CARD_KIND_LABELS: Record<ChatCardKind, string> = {
   task: "タスク",
@@ -94,18 +95,6 @@ export function cardStateView(state: string): { tone: BadgeTone; label: string }
 }
 
 export const OVERRIDE_LABELS: Record<OverrideMode, string> = { revoke: "取消", return: "差し戻し" };
-
-function problemCode(body: unknown): string | undefined {
-  if (!body || typeof body !== "object") return undefined;
-  const code = (body as Record<string, unknown>).code ?? (body as Record<string, unknown>).error;
-  return typeof code === "string" ? code : undefined;
-}
-
-function problemDetail(body: unknown): string | undefined {
-  if (!body || typeof body !== "object") return undefined;
-  const detail = (body as Record<string, unknown>).detail;
-  return typeof detail === "string" ? detail : undefined;
-}
 
 export type OverrideOutcome =
   | { ok: true; mode: OverrideMode; state: string; remediationTaskId: string | null; pausedTaskIds: string[] }

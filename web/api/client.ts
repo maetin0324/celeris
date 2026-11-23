@@ -46,22 +46,6 @@ export function isApiError(error: unknown): error is ApiError {
   return error instanceof ApiError;
 }
 
-/** problem の本文（`ApiError.body`）の code（古い形の `error` も読む）。無ければ undefined。 */
-export function problemCode(body: unknown): string | undefined {
-  if (!body || typeof body !== "object") return undefined;
-  const record = body as Record<string, unknown>;
-  const code = record.code ?? record.error;
-  return typeof code === "string" ? code : undefined;
-}
-
-/** problem の本文の detail（本文が文字列ならそのまま）。無ければ undefined。 */
-export function problemDetail(body: unknown): string | undefined {
-  if (typeof body === "string") return body;
-  if (!body || typeof body !== "object") return undefined;
-  const detail = (body as Record<string, unknown>).detail;
-  return typeof detail === "string" ? detail : undefined;
-}
-
 export function kindForStatus(status: number): ApiErrorKind {
   if (status === 401) return "unauthorized";
   if (status === 403) return "forbidden";

@@ -1,10 +1,11 @@
 // チャット内カード（ADR 2026-10-05-cos-chat-home D5 の 6 項目目・D3「代答・取り消し・差し戻し」）の画面側の規則。
 // 表示名・その場で答えられるか・代答を取り消せるか・失敗の読み方をここに集め、部品は表示だけにする。
 
-import { ApiError, problemCode, problemDetail } from "../../../api/client";
+import { ApiError } from "../../../api/client";
 import type { ChatActor, ChatCard, ChatCardKind, OverrideMode, OverrideResponse } from "../../../api/generated/types";
 import type { BadgeTone } from "../../../components/ui/badge";
 import { statusView } from "../../../components/ui/status-badge";
+import { problemCode, problemDetail } from "../data/problem";
 
 export const CARD_KIND_LABELS: Record<ChatCardKind, string> = {
   task: "タスク",

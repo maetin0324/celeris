@@ -36,8 +36,9 @@ completed: 2026-11-23
 - `web/features/chat/messages/message-list.tsx`: `proposalReview` と `focusMessageId` を渡し、deep link の scroll と focus。
 - `web/features/chat/home/chat-home.tsx`: search の `message` を読み、`reviewProposal` と `session.refresh` で口を組む。
 - `web/routes/index.tsx`: search に `message`。
-- `web/api/client.ts`・`web/features/chat/cards/card-model.ts`・`web/features/inbox/inbox-model.ts`: 2 か所に同じ実装があった `problemCode`・`problemDetail` を
-  `api/client.ts`（`ApiError.body` の owner）に 1 つにまとめ、3 か所目を足さずに使った（規約 2）。card-model は文字列の本文を detail として読むようになった（inbox と同じ規則）。
+- `web/features/chat/data/problem.ts`（新規）・`web/features/chat/cards/card-model.ts`: card-model の中にあった `problemCode`・`problemDetail` を
+  chat の data 層に移し、card-model と `data/proposal.ts` の両方がそこから使う（chat の中で 2 つ目の写しを作らない。規約 2）。card-model の挙動は変えていない。
+  `web/features/inbox/inbox-model.ts` には base から同じ形の写しがあるが、許可 path の外なので変えていない（統合は別の task の候補）。
 - e2e の hook（WU proposal-e2e 向け）: `data-slot` の `chat-proposal`（`data-review-state`・`data-proposal-kind`）・`chat-proposal-state`・`chat-proposal-reviewed`・
   `chat-proposal-note`・`chat-proposal-adopt`・`chat-proposal-reject`・`chat-proposal-comment`・`chat-proposal-adopt-notice`・`chat-proposal-confirm`（button「採用を送る」「やめる」）・
   `chat-proposal-error`・`chat-proposal-sent`・`chat-proposal-retracted`・`chat-external-mark`（`data-untrusted="true"`）・`chat-external-source`・`chat-message-linked`、
@@ -59,26 +60,30 @@ completed: 2026-11-23
   click を試せない。WU proposal-e2e の `web/e2e/chat/proposal-review.spec.ts` が確かめる。
 
 ## 検査（提出時の HEAD で実行）
-- `corepack pnpm@12.6.0 -C web exec vitest run features/chat/messages/proposal.test.tsx` → 10 passed。
-- `corepack pnpm@12.6.0 -C web install --frozen-lockfile --offline && bash scripts/dev/test-affected.sh` → exit 0（対象は web の typecheck+unit。tsc -b 通過、
-  vitest 107 files・761 passed、server の node --test pass、repo-health verdict=pass。new 5・worsened 2 の指摘はどれも前の backend の WU の crates
-  （`task-core/src/publish.rs`・`task-api/src/publish.rs` など）で、この WU の file は無い）。
-- 回帰の確認で既存の chat の spec を名指しで実行: `e2e/chat/threads.spec.ts`・`e2e/chat/content.spec.ts`・`e2e/chat/cards.spec.ts`・
-  `e2e/chat/workspace-files.spec.ts` → 13 passed、exit 0。
-- `corepack pnpm@12.6.0 -C web exec biome check features/chat lib api features/inbox routes` → 指摘 0。
-- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
-- `git diff --quiet "$CELERIS_WU_BASE" -- crates/` → exit 0（差分 0 行）。`sh "$CELERIS_WU_SCOPE_PATHS"` → web/ の上の 12 file と、この進捗の file。
+- 前回の run の範囲 check の不合格（`web/api/client.ts`・`web/features/inbox/inbox-model.ts` が許可 path の外）を直した: 2 file を `$CELERIS_WU_BASE` の
+  内容に戻し、helper を `web/features/chat/data/problem.ts` に置いた。同じ範囲 check（`sh "$CELERIS_WU_SCOPE_PATHS"` の path から許可 path を除く）→ 出力 0 行、exit 0。
+- `corepack pnpm@12.6.0 -C web exec vitest run features/chat/messages/proposal.test.tsx` → `proposal_review_ui_` 10 passed。
+- `corepack pnpm@12.6.0 -C web exec vitest run features/chat features/inbox lib` → 190 passed。
+- `corepack pnpm@12.6.0 -C web exec tsc -b` → exit 0。
+- `corepack pnpm@12.6.0 -C web install --frozen-lockfile --offline && bash scripts/dev/test-affected.sh` → TEST_AFFECTED_RESULT
+- `corepack pnpm@12.6.0 -C web exec biome check features/chat lib/sha256.ts routes/index.tsx api/client.ts features/inbox/inbox-model.ts` → 指摘 0。
+- `cargo clippy --workspace -- -D warnings` → CLIPPY_RESULT。`cargo fmt --all -- --check` → FMT_RESULT。
+- `git diff --quiet "$CELERIS_WU_BASE" -- crates/` → exit 0（差分 0 行）。`sh "$CELERIS_WU_SCOPE_PATHS"` → web/features/chat の 10 file・web/lib/sha256.ts・
+  web/routes/index.tsx と、この進捗の file。
+- 前回の run で既存の chat の spec（`e2e/chat/threads.spec.ts`・`content.spec.ts`・`cards.spec.ts`・`workspace-files.spec.ts`）を名指しで実行して 13 passed。
+  今回の変更は helper の置き場所だけなので、今回は再実行していない。
 - `web/e2e/chat/proposal-review.spec.ts` はこの WU の担当ではない（WU proposal-e2e）。この WU の時点では spec が無いので結果は未確認。
 
 ## 測定（LoC、基準 `$CELERIS_WU_BASE`、`git diff --numstat`）
-- production（web）: +461 / −31（sha256 +74、data/proposal +129、messages/proposal +233、client +11、message-item +20、message-list +25、chat-home +23/−2、
-  routes +3/−1、api/client +16、card-model +1/−13、inbox-model +1/−15）。
+- production（web）: +536 / −15（sha256 +74、data/proposal +130、data/problem +16（新規）、messages/proposal +233、client +11、message-item +20、message-list +25、
+  chat-home +23/−2、routes +3/−1、card-model +1/−12）。
 - test: +345（vitest 1 file）。
-- 純増の理由: 新しい操作の欄と SHA-256 の実装で、置き換える旧い仕組みが無い（ADR D4）。problem の helper の重複 2 か所は 1 つにまとめた（−26 行）。
+- 純増の理由: 新しい操作の欄と SHA-256 の実装で、置き換える旧い仕組みが無い（ADR D4）。problem の helper は card-model から chat の data 層へ移しただけで、写しは増やしていない。
 
 ## commit（件名）
 - strategy-v1 7 web-proposals: chat の案に採用・却下・コメントの操作・状態 5 語・採用の注意、外部の文の印、/?thread=&message= の強調、SHA-256 の純 TS 実装と proposal_review_ui_ の試験
 - strategy-v1 7 web-proposals: 進捗を書く
+- strategy-v1 7 web-proposals: problem の helper を chat の data 層に移し、範囲の外の api/client.ts・inbox-model.ts を base に戻す
 
 ## 未確認・引き継ぎ
 - `cos_strategy` の案が `strategy/<id>/v<n>.json` を 2 つ以上添えたときは、`workspace_files` の最初の 1 件で採否する。daemon の状態の導出が

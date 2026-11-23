@@ -5,7 +5,7 @@
 //   `strategy/<id>/v<n>.json` の sha256、それ以外は本文の UTF-8 の SHA-256（`task_core::chat_citation::body_sha256`）。
 // - 採用は承認ではない。CoS に戦略の版と人の承認（決定 `strategy-approve-v<n>`）へ進めるよう指示するだけ（D2.3）。
 
-import { isApiError, problemCode, problemDetail } from "../../../api/client";
+import { isApiError } from "../../../api/client";
 import type {
   ChatAttachment,
   ChatMessage,
@@ -16,6 +16,7 @@ import type {
   ProposalVerdict,
 } from "../../../api/generated/types";
 import { sha256Hex } from "../../../lib/sha256";
+import { problemCode, problemDetail } from "./problem";
 import { messageRevision } from "./revision";
 
 export const PROPOSAL_STATE_LABEL: Record<ProposalReviewState, string> = {

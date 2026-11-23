@@ -13,6 +13,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
+use task_core::local_machine::WorkspaceRoots;
 use task_core::parent_checkpoint as pc;
 use task_core::project_proposal::{
     self as pp, CONTROLLER_LABEL, LAUNCH_ROOT_OPERATION, Outcome, ProjectSnapshot, RootCheck,
@@ -457,8 +458,11 @@ fn event_order(id: u64) -> String {
 /// `parent_checkpoint::checkpoint_states` で導き（D1.3）、due は `parent_checkpoint::triggers`、写していない評価の行動は
 /// `allowed_actions` の表（D5.2）。`decisions` は案件の判断の全件（`evaluate` と `pc/checkpoint/act` を最後まで読む）。
 /// `tokens_used` は root の木の使った token（呼び出し側の `token_budget::tree_tokens_used`）。strategy root が無ければ空。
+/// 戦略の文書と評価の記録の bytes は、成果物を記録した task の足回り（`workspace_roots` で解く
+/// [`crate::workspace::local_dir`]）を基準に `ArtifactRef.path`（workspace 相対）を引いて読む（API・子 5 の gate と同じ基準）。
 pub fn checkpoints(
     store: &SqliteStore,
+    workspace_roots: &WorkspaceRoots,
     roots: &[pp::SnapshotRoot],
     decisions: &[CheckpointDecisionRow<'_>],
     settings: &pc::CheckpointSettings,
@@ -486,7 +490,7 @@ pub fn checkpoints(
         let root_events = store.events_for_with_global_ids(tid)?;
         let mut documents = Vec::new();
         let mut children = Vec::new();
-        let mut collect_documents = |events: &[(u64, Event)]| {
+        let mut collect_documents = |owner: &Task, events: &[(u64, Event)]| {
             for (gid, e) in events {
                 if let Event::ArtifactProduced { artifact, .. } = e
                     && task_core::strategy_critic::strategy_artifact(&artifact.name)
@@ -494,14 +498,14 @@ pub fn checkpoints(
                 {
                     documents.push(pc::StrategyDocumentFacts {
                         name: artifact.name.clone(),
-                        bytes: std::fs::read(&artifact.path).ok(),
+                        bytes: artifact_bytes(store, workspace_roots, owner, artifact),
                         at: event_order(*gid),
                     });
                 }
             }
         };
         // root の subtree（root と子孫）。直下の子は遷移も集める。
-        collect_documents(&root_events);
+        collect_documents(&task, &root_events);
         let mut seen = BTreeSet::from([tid]);
         let mut stack = vec![tid];
         while let Some(id) = stack.pop() {
@@ -510,7 +514,7 @@ pub fn checkpoints(
                     continue;
                 }
                 let events = store.events_for_with_global_ids(child.id)?;
-                collect_documents(&events);
+                collect_documents(&child, &events);
                 if id == tid {
                     children.push(pc::ChildFacts {
                         task_id: child.id.to_string(),
@@ -532,8 +536,9 @@ pub fn checkpoints(
         // root が参照する文書の task（subtree の外なら、その task の成果物だけ）。
         if let Ok(doc_task) = sref.task_id.parse::<TaskId>()
             && !seen.contains(&doc_task)
+            && let Some(owner) = store.get(doc_task)?
         {
-            collect_documents(&store.events_for_with_global_ids(doc_task)?);
+            collect_documents(&owner, &store.events_for_with_global_ids(doc_task)?);
         }
         let artifacts: Vec<&task_core::ArtifactRef> = root_events
             .iter()
@@ -599,7 +604,11 @@ pub fn checkpoints(
             .evaluated_decisions
             .iter()
             .filter(|id| !mapped(id))
-            .map(|id| unmapped_evaluation(&root.id, id, &artifacts))
+            .map(|id| {
+                let read =
+                    |a: &task_core::ArtifactRef| artifact_bytes(store, workspace_roots, &task, a);
+                unmapped_evaluation(&root.id, id, &artifacts, &read)
+            })
             .collect();
         out.push(pp::SnapshotCheckpoint {
             root_id: root.id.clone(),
@@ -612,18 +621,31 @@ pub fn checkpoints(
     Ok(out)
 }
 
+/// `owner` が記録した成果物の file の bytes。`ArtifactRef.path` は `owner` の足回りからの相対（worker の成果物・
+/// dispatcher の評価の記録とも）。足回りを解けない・file が無ければ `None`。
+fn artifact_bytes(
+    store: &SqliteStore,
+    workspace_roots: &WorkspaceRoots,
+    owner: &Task,
+    artifact: &task_core::ArtifactRef,
+) -> Option<Vec<u8>> {
+    let dir = crate::workspace::local_dir(store, workspace_roots, owner).ok()?;
+    std::fs::read(dir.join(&artifact.path)).ok()
+}
+
 /// 写していない評価 1 件。最終の記録が読めなければ `invalid`（表は `escalate` だけ。D5.2 の `invalid` の行）。
 fn unmapped_evaluation(
     root_id: &str,
     decision_id: &str,
     artifacts: &[&task_core::ArtifactRef],
+    read: &dyn Fn(&task_core::ArtifactRef) -> Option<Vec<u8>>,
 ) -> pp::SnapshotEvaluation {
     let name = pc::evaluation_artifact_name(decision_id);
     let record: Option<pc::ParentEvaluationRecord> = artifacts
         .iter()
         .rev()
         .find(|a| a.name == name)
-        .and_then(|a| std::fs::read(&a.path).ok())
+        .and_then(|a| read(a))
         .and_then(|b| serde_json::from_slice(&b).ok());
     let (status, effective, allowed) = match &record {
         Some(r) => (
@@ -1111,8 +1133,11 @@ mod checkpoint_tests {
             violations: vec![],
         };
         let record = pc::ParentEvaluationRecord::new("D1", &task.id.to_string(), None, &checked);
-        let path = dir.join("D1.json");
-        std::fs::write(&path, serde_json::to_vec(&record).expect("record")).expect("write");
+        // 記録は root の足回りからの相対 path（dispatcher の `write_record` と同じ形）。
+        let ws = crate::workspace::local_dir(&store, &roots(dir), &task).expect("workspace");
+        let rel = format!("artifacts/{}", pc::evaluation_artifact_name("D1"));
+        std::fs::create_dir_all(ws.join(&rel).parent().expect("parent")).expect("dir");
+        std::fs::write(ws.join(&rel), serde_json::to_vec(&record).expect("record")).expect("write");
         store
             .append_event(
                 task.id,
@@ -1120,7 +1145,7 @@ mod checkpoint_tests {
                     run_id: "r".into(),
                     artifact: task_core::ArtifactRef {
                         name: pc::evaluation_artifact_name("D1"),
-                        path: path.display().to_string(),
+                        path: rel,
                         sha256: "0".repeat(64),
                         kind: "file".into(),
                         declared: true,
@@ -1132,7 +1157,12 @@ mod checkpoint_tests {
         (store, row)
     }
 
+    fn roots(dir: &std::path::Path) -> WorkspaceRoots {
+        WorkspaceRoots::new(dir.to_path_buf(), None)
+    }
+
     fn unmapped(
+        dir: &std::path::Path,
         store: &SqliteStore,
         root: &pp::SnapshotRoot,
         rows: &[(&str, &str, &pp::ProjectProposal)],
@@ -1147,6 +1177,7 @@ mod checkpoint_tests {
             .collect();
         checkpoints(
             store,
+            &roots(dir),
             std::slice::from_ref(root),
             &rows,
             &pc::CheckpointSettings::default(),
@@ -1185,7 +1216,7 @@ mod checkpoint_tests {
             Some("D1"),
         );
         // 写す前: 評価 D1 は写していない評価で、表は continue・wait。
-        let before = unmapped(&store, &root, &[("D1", "applied", &evaluate)]);
+        let before = unmapped(dir.path(), &store, &root, &[("D1", "applied", &evaluate)]);
         assert_eq!(before.len(), 1);
         let ids: Vec<&str> = before[0]
             .unmapped
@@ -1202,6 +1233,7 @@ mod checkpoint_tests {
         // 効果 none の continue・wait で写した後は写し済み。
         for mapping in [&watch, &wait] {
             let after = unmapped(
+                dir.path(),
                 &store,
                 &root,
                 &[("D2", "none", mapping), ("D1", "applied", &evaluate)],
@@ -1231,6 +1263,7 @@ mod checkpoint_tests {
         }
         // 効果が failed の写しは写し済みに数えない（次の判断で写し直す）。
         let failed = unmapped(
+            dir.path(),
             &store,
             &root,
             &[("D2", "failed", &watch), ("D1", "applied", &evaluate)],

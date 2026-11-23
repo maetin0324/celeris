@@ -58,6 +58,8 @@ const FIXED: &str = "fixed-plan-a-to-h";
 const CUT: &str = "cut-boundary-edges";
 const H_FIXED: &str = "h-fixed-plan";
 const H_CUT: &str = "h-boundary-edges";
+const RECOUNT: &str = "recount-baseline";
+const H_RECOUNT: &str = "h-measure-first";
 const CUT_HOURS: f64 = 4.0;
 const APPROVER: &str = "human:shadow";
 
@@ -130,8 +132,8 @@ fn tasks(env: &TestEnv) -> i64 {
     count(env, "SELECT COUNT(*) FROM tasks")
 }
 
-/// 文書の task の決定 `strategy-approve-v<n>` に `by` が `option` と答えた（子 2 D2.2）。
-fn answer(env: &TestEnv, source: &Task, version: u32, sha256: &str, by: &str) {
+/// 文書の task に決定 `strategy-approve-v<n>` を出し、`by` が approve と答えた（子 2 D2.2）。決定の id を返す。
+fn answer(env: &TestEnv, source: &Task, version: u32, sha256: &str, by: &str) -> String {
     let id = format!("d-{}", TaskId::new());
     let opt = |key: &str| DecisionOption {
         key: key.into(),
@@ -175,7 +177,23 @@ fn answer(env: &TestEnv, source: &Task, version: u32, sha256: &str, by: &str) {
         .append_event(
             source.id,
             &Event::DecisionAnswered {
-                id,
+                id: id.clone(),
+                option: strategy::APPROVE_OPTION.into(),
+                note: None,
+                by: by.into(),
+            },
+        )
+        .expect("answer");
+    id
+}
+
+/// 同じ決定 `id` に `by` が approve と答え直した（gate は決定の最後の答えを読む）。
+fn answer_again(env: &TestEnv, source: &Task, id: &str, by: &str) {
+    env.store
+        .append_event(
+            source.id,
+            &Event::DecisionAnswered {
+                id: id.into(),
                 option: strategy::APPROVE_OPTION.into(),
                 note: None,
                 by: by.into(),
@@ -347,6 +365,7 @@ impl Chain {
             .collect();
         s.checkpoints = ps::checkpoints(
             &self.env.store,
+            &self.env.view_context().workspace_roots,
             &s.roots,
             &rows,
             &self.settings,
@@ -561,7 +580,7 @@ fn candidate(id: &str, title: &str, hypothesis: &str, hours: f64, selected: bool
     })
 }
 
-/// v1: 史実の親が採った固定計画（selected）と、境界の辺を切る別案。
+/// v1: 史実の親が採った固定計画（selected）と、境界の辺を切る案・数え直す案。
 fn document_v1(c: &Chain, run: &str) -> Value {
     let a = json!({"kind": "task", "task_id": c.children["A"].id.to_string()});
     json!({
@@ -581,6 +600,7 @@ fn document_v1(c: &Chain, run: &str) -> Value {
         "candidates": [
             candidate(FIXED, "子 A〜H の固定の計画を続ける", H_FIXED, 2.0, true),
             candidate(CUT, "handlers ⇄ cos の境界の辺を先に切る", H_CUT, CUT_HOURS, false),
+            candidate(RECOUNT, "A の command で循環を数え直してから決める", H_RECOUNT, 3.0, false),
         ],
         "held_assumptions": [{"id": "a-count-rule", "statement": "循環の数え方は A の command のまま",
                               "revisit_when": "数え方が変わった"}],
@@ -589,10 +609,13 @@ fn document_v1(c: &Chain, run: &str) -> Value {
              "falsified_by": "子が done でも循環の数が 17 のまま", "evidence": ["e-plan"]},
             {"id": H_CUT, "statement": "少数の境界の辺が循環の大半を作る", "confidence": "estimated",
              "falsified_by": "境界の辺を切っても循環の単位が減らない", "evidence": ["e-boundary"]},
+            {"id": H_RECOUNT, "statement": "子ごとに循環の数え方が違い、改善が見えていない", "confidence": "estimated",
+             "falsified_by": "A の command で数え直しても値が同じ", "evidence": ["e-count"]},
         ],
         "evidence": [
             evidence("e-plan", "unknown", H_FIXED, "親は子 A〜H を作成の直後に全部起票した", vec![a.clone()]),
-            evidence("e-boundary", "unknown", H_CUT, "A の対象は境界の循環", vec![a]),
+            evidence("e-boundary", "unknown", H_CUT, "A の対象は境界の循環", vec![a.clone()]),
+            evidence("e-count", "unknown", H_RECOUNT, "B〜H は A の計測の command を使う", vec![a]),
         ],
     })
 }
@@ -607,7 +630,18 @@ fn document_v2(
     record: &Value,
     decision_id: &str,
 ) -> Value {
-    let refuted = &record["effective"]["refuted"][0];
+    // 根拠に数えるのは task・artifact・commit の参照を持つ `refuted` の項目だけ（skill の手順 1、ADR D4 の R2）。
+    let refuted = record["evaluation"]["refuted"]
+        .as_array()
+        .expect("refuted")
+        .iter()
+        .find(|r| {
+            r["references"].as_array().is_some_and(|refs| {
+                refs.iter()
+                    .any(|x| matches!(x["kind"].as_str(), Some("task" | "artifact" | "commit")))
+            })
+        })
+        .expect("根拠のある refuted");
     let hypothesis_text = refuted["hypothesis"].as_str().expect("refuted hypothesis");
     let hypothesis = v1["hypotheses"]
         .as_array()
@@ -843,7 +877,7 @@ async fn parent_checkpoint_pivot_chain_d_done_pivot_to_gated_v2() {
         "strategy_unapproved",
     )
     .await;
-    answer(&c.env, &v2_source, 2, &sha2, "cos");
+    let d2 = answer(&c.env, &v2_source, 2, &sha2, "cos");
     c.refused(
         "v2-cos-answer",
         experiment(&c),
@@ -853,7 +887,7 @@ async fn parent_checkpoint_pivot_chain_d_done_pivot_to_gated_v2() {
     .await;
 
     // (3) 人が v2 を承認した後、子 5 の gate が v2 の識別実験の起票を通す。
-    answer(&c.env, &v2_source, 2, &sha2, APPROVER);
+    answer_again(&c.env, &v2_source, &d2, APPROVER);
     let x = c
         .passes("v2-experiment", experiment(&c), Some(&with(&p2, CUT)))
         .await;

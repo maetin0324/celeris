@@ -419,9 +419,13 @@ fn write_record(
         .map_err(|e| task_core::store::StoreError::Invalid(e.to_string()))?;
     let path = task_core::artifacts::artifacts_dir_for(root, &dir).join(name);
     write_file(&path, &text)?;
+    // `ArtifactRef.path` は足回りからの相対（worker の成果物と同じ契約。API・子 5 の gate・snapshot が同じ基準で引く）。
+    let relative = path.strip_prefix(&dir).map_err(|e| {
+        task_core::store::StoreError::Invalid(format!("parent evaluation record path: {e}"))
+    })?;
     let artifact = ArtifactRef {
         name: name.to_string(),
-        path: path.display().to_string(),
+        path: relative.display().to_string(),
         sha256: sha256_hex(&text),
         kind: kind.to_string(),
         declared: false,

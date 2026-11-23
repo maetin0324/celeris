@@ -272,6 +272,7 @@ impl Shadow {
             .collect();
         s.checkpoints = ps::checkpoints(
             &self.env.store,
+            &self.env.view_context().workspace_roots,
             &s.roots,
             &rows,
             &self.settings,

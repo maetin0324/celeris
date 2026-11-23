@@ -149,9 +149,16 @@ pub trait ProjectDecider: Send {
     ) {
     }
 
-    /// controller を入れる時（`set_project_controller`）に 1 回、実効の設定と木の使った token の読み口を渡す。既定は何も
-    /// しない（TS の判定は `checkpoint` の設定と読み口で snapshot の checkpoint を導く）。
-    fn configure(&mut self, _settings: &ProjectControllerSettings, _tree_tokens: TreeTokens) {}
+    /// controller を入れる時（`set_project_controller`）に 1 回、実効の設定と木の使った token の読み口と、成果物の
+    /// path（workspace 相対）を解く足回りの root を渡す。既定は何もしない（TS の判定は `checkpoint` の設定と読み口で
+    /// snapshot の checkpoint を導く）。
+    fn configure(
+        &mut self,
+        _settings: &ProjectControllerSettings,
+        _tree_tokens: TreeTokens,
+        _workspace_roots: &task_core::local_machine::WorkspaceRoots,
+    ) {
+    }
     /// 直前の `decide` の判断の記録（`proposal_json` に残す JSON）。既定は無し（入力をそのまま残す）。
     fn take_record(&mut self) -> Option<String> {
         None

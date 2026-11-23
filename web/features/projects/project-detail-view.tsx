@@ -13,6 +13,7 @@ import { TaskArtifactsPanel } from "../artifacts/task-artifacts-view";
 import { ProjectCosLink } from "../chat/threads/project-cos-link";
 import { ProjectControllerSection } from "./project-controller-panel";
 import { ProjectStatusBadge } from "./project-list-screen";
+import { ProjectOverviewSection } from "./project-overview-panel";
 import { projectDetailQuery } from "./project-queries";
 import { dagLayers, flattenTree, milestoneGroups, pendingByTask } from "./project-structure";
 
@@ -338,6 +339,13 @@ export function ProjectDetailScreen({
               </Link>
             </nav>
             <Overview detail={detail.data} />
+            <ProjectSection
+              title="案件の概要（14 項目）"
+              testId="project-observability"
+              description="原目的・戦略・仮説と検証・反証・知見・議論の出典・実験・予算・判断待ち・危険・公開の準備度。印は確認済み・推定・要判断・矛盾の 4 つ。"
+            >
+              <ProjectOverviewSection detail={detail.data} />
+            </ProjectSection>
             <ProjectSection
               title="自動運営"
               testId="project-controller-section"

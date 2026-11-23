@@ -816,6 +816,7 @@ export function richFixtures() {
     }),
     "/api/v1/tasks/T1/artifacts": { task_id: "T1", items: Array.from({ length: 12 }, (_, i) => artifact(i)) },
     "/api/v1/projects": { items: [project] },
+    "/api/v1/projects/P1/overview": projectOverviewFixture(),
     "/api/v1/projects/P1": {
       project,
       milestones: [milestone],
@@ -832,6 +833,188 @@ export function richFixtures() {
       ],
     },
   };
+}
+
+// ADR 2026-11-23-project-observability-publish D1: 案件 P1 の概要（14 項目）。印 4 種・記録無し・強い警告と通常の警告・
+// drill-down の 7 種の link（task・成果物・Notebook・log・Git・文献・chat）を rich の T1・R1・chat-history に向ける。
+export function projectOverviewFixture() {
+  const sha = (c) => c.repeat(64);
+  const task = { kind: "task", task_id: "T1" };
+  const artifact = { kind: "artifact", task_id: "T1", name: "report-0.md", sha256: sha("0") };
+  const notebook = { kind: "notebook", task_id: "T1", name: "experiments/io-sweep.ipynb" };
+  const log = { kind: "log", task_id: "T1", run_id: "R1" };
+  const git = { kind: "git", repo: "web", sha: "a".repeat(40), task_id: "T1" };
+  const gitBare = { kind: "git", repo: "benchfs", sha: "b".repeat(40), task_id: null };
+  const paper = { kind: "literature", url: "https://example.org/papers/io-sweep", path: null, sha256: null };
+  const kb = { kind: "literature", url: null, path: "projects/demo.md", sha256: sha("c") };
+  const chat = (state) => ({
+    kind: "chat",
+    thread_id: "chat-history",
+    message_id: "chat-history-2",
+    revision: 1,
+    sha256: sha("d"),
+    state,
+  });
+  const e = (id, mark, detail, links = []) => ({ id, mark, detail, links });
+  const item = (key, mark, entries) => ({ key, recorded: entries.length > 0, mark, entries });
+  const value = {
+    schema: "celeris.project-overview/1",
+    project_id: "P1",
+    generated_at: richNow,
+    request_sha256: sha("e"),
+    items: [
+      item("original_goal", "confirmed", [e("goal", "confirmed", { request_sha256: sha("e") })]),
+      item("approved_strategy", "contradicted", [
+        e(
+          "T1/io",
+          "contradicted",
+          {
+            task_id: "T1",
+            strategy_id: "io",
+            approved: {
+              version: 2,
+              decision_id: "D1",
+              approved_by: "human:rmaeda",
+              approved_at: richNow,
+              sha256: sha("1"),
+            },
+            pending_versions: [3],
+            stale: ["roadmap_version"],
+          },
+          [artifact, task],
+        ),
+      ]),
+      item("candidates", "estimated", [
+        e(
+          "T1/io/v2/c1",
+          "confirmed",
+          { title: "io_uring を 1 core で使う", state: "open", selected: true, experiment_tasks: ["T1"] },
+          [task],
+        ),
+        e("T1/io/v2/c2", "estimated", {
+          title: "worker thread に逃がす",
+          state: "open",
+          selected: false,
+          experiment_tasks: [],
+        }),
+      ]),
+      item("hypotheses", "contradicted", [
+        e(
+          "T1/io/v2/h1",
+          "confirmed",
+          { id: "h1", statement: "小さい I/O は提出の回数で律速する", confidence: "confirmed" },
+          [artifact],
+        ),
+        e(
+          "T1/io/v2/h2",
+          "contradicted",
+          { id: "h2", statement: "page cache が効いている", confidence: "contradicted" },
+          [artifact],
+        ),
+      ]),
+      item("verification", "estimated", [
+        e(
+          "T1/io/v2/h1",
+          "estimated",
+          { hypothesis: "h1", experiment_tasks: ["T1"], support: 2, refute: 0, unknown: 1 },
+          [notebook, log],
+        ),
+      ]),
+      item("refutations", "estimated", [
+        e(
+          "ev-7",
+          "estimated",
+          { evidence_id: "ev-7", hypothesis: "h2", statement: "drop_caches の後も同じ値", references: 2 },
+          [git, paper],
+        ),
+      ]),
+      item("latest_findings", "estimated", [
+        e("CD1/verdict", "estimated", { verdict: "on_track", next: "continue", status: "valid", unsupported: [] }, [
+          artifact,
+        ]),
+        e("CD1/axis/execution", "estimated", { axis: "execution", value: "progressing" }),
+        e("CD1/learned/0", "estimated", { kind: "learned", statement: "提出の束ねで 2 倍", supported: false }, [log]),
+      ]),
+      item("discussion_sources", "contradicted", [
+        e(
+          "chat-history-2",
+          "estimated",
+          {
+            message_id: "chat-history-2",
+            source_kind: "chatgpt",
+            source_label: "ChatGPT の要約",
+            author: "human",
+            review_state: "pending",
+            untrusted: true,
+          },
+          [chat("current")],
+        ),
+        e(
+          "chat-history-2/citations/0",
+          "contradicted",
+          { cited_message_id: "chat-history-1", revision: 1, state: "edited" },
+          [chat("edited")],
+        ),
+      ]),
+      item("experiments_and_tasks", "confirmed", [
+        e("T1", "confirmed", { task_id: "T1", strategy_name: "strategy/io/v2.json", candidate: "c1" }, [
+          task,
+          log,
+          gitBare,
+        ]),
+      ]),
+      item("budget_spent", "estimated", [
+        e(
+          "T1/io/v2",
+          "estimated",
+          { budget: { usd_max: 5, wall_hours_max: 2 }, spent: { tokens: 120000, list_price_usd: 1.2, runs: 3 } },
+          [task],
+        ),
+      ]),
+      item("next_verification", "estimated", [
+        e(
+          "T1/io/v2/c2",
+          "estimated",
+          { source: "candidate_experiment", statement: "worker thread の比較を 1 回だけ測る" },
+          [kb],
+        ),
+      ]),
+      item("pending_human_decisions", "needs_decision", [
+        e("D3", "needs_decision", { decision_id: "D3", task_id: "T1", key_kind: "strategy-approve" }, [task]),
+      ]),
+      item("risks", "contradicted", [
+        e("warnings", "contradicted", {
+          by_code: [
+            { code: "citation_stale", strong: true, count: 1 },
+            { code: "contradicted", strong: true, count: 1 },
+            { code: "cost_unknown", strong: false, count: 1 },
+            { code: "evaluation_unsupported", strong: true, count: 1 },
+            { code: "needs_decision", strong: true, count: 1 },
+            { code: "strategy_stale", strong: true, count: 1 },
+          ],
+        }),
+      ]),
+      item("publish_readiness", null, []),
+    ],
+    warnings: [
+      { code: "strategy_stale", item: "approved_strategy", strong: true, entry: "T1/io", links: [artifact, task] },
+      { code: "contradicted", item: "hypotheses", strong: true, entry: "T1/io/v2/h2", links: [artifact] },
+      { code: "evaluation_unsupported", item: "latest_findings", strong: true, entry: "CD1/learned/0", links: [log] },
+      {
+        code: "citation_stale",
+        item: "discussion_sources",
+        strong: true,
+        entry: "chat-history-2/citations/0",
+        links: [chat("edited")],
+      },
+      { code: "needs_decision", item: "pending_human_decisions", strong: true, entry: "D3", links: [task] },
+      { code: "cost_unknown", item: "budget_spent", strong: false, entry: null, links: [] },
+    ],
+    truncated: [],
+  };
+  const errors = validateFixture(value, schema.$defs.ProjectOverview);
+  if (errors.length) throw new Error(`project overview fixture: ${errors.join(", ")}`);
+  return value;
 }
 
 export function richFiles() {
@@ -2446,8 +2629,7 @@ export function taskListPage(list, url) {
   const total = items.length;
   items = items.slice(offset, offset + limit);
   const counts =
-    list?.counts_by_status ??
-    all.reduce((acc, item) => ({ ...acc, [item.status]: (acc[item.status] ?? 0) + 1 }), {});
+    list?.counts_by_status ?? all.reduce((acc, item) => ({ ...acc, [item.status]: (acc[item.status] ?? 0) + 1 }), {});
   return {
     status: 200,
     body: {

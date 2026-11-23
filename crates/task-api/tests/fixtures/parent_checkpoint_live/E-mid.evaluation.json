@@ -1,0 +1,117 @@
+{
+  "schema": "celeris.parent-evaluation/1",
+  "verdict": "at_risk",
+  "next": "discriminating_experiment",
+  "axes": {
+    "execution": "succeeded",
+    "epistemic": "unknown",
+    "goal": "not_met"
+  },
+  "measured": [
+    {
+      "claim": "指標 (1) の module 循環と SCC の内辺は、before の値（root の目的にある main bc665168 の監査）だけがあり、E-mid の時点で after の値を持つ子は無い。改善は未計測。",
+      "metric": "(1) module 循環の数・task-core と task-api の SCC の単位数と内辺",
+      "before": "循環 17 件、task-core SCC 55 単位・内辺 210、task-api SCC 49 単位・内辺 261（bc665168）",
+      "after": "未計測（終端の子 A・B・C は循環を減らす変更を目的にしない）",
+      "references": [
+        {
+          "kind": "task",
+          "task_id": "01M7MZT8KX547464YYS76QNP4G"
+        },
+        {
+          "kind": "task",
+          "task_id": "01M7MZT8KX5474640000000001"
+        },
+        {
+          "kind": "task",
+          "task_id": "01M7MZT8KX5474640000000002"
+        }
+      ]
+    },
+    {
+      "claim": "指標 (2) の dispatcher の共有状態の参照は before の値だけがあり、これを下げる子 E は ready で未着手。改善は未計測。",
+      "metric": "(2) dispatcher の非試験 file のうち self.store・self.config を使う file の数",
+      "before": "非試験 69 file 中 self.store 44 file（633 出現）、self.config 35 file（218 出現）（bc665168）",
+      "after": "未計測（子 E は status=ready）",
+      "references": [
+        {
+          "kind": "task",
+          "task_id": "01M7MZT8KX547464YYS76QNP4G"
+        },
+        {
+          "kind": "task",
+          "task_id": "01M7MZT8KX5474640000000005"
+        }
+      ]
+    },
+    {
+      "claim": "指標 (3) の HTTP と CoS の相互 import（handlers/org.rs と cos/ops/admin.rs の循環）は before の記述だけがあり、これを解く子 D は reviewing で reviewer の合格が無い。改善は未計測。",
+      "metric": "(3) handlers と cos の双方向の依存",
+      "before": "handlers が cos::operations を参照し、CoS ops が handlers::org を逆参照する循環あり（bc665168）",
+      "after": "未計測（子 D は status=reviewing、reviewer_passed=false）",
+      "references": [
+        {
+          "kind": "task",
+          "task_id": "01M7MZT8KX547464YYS76QNP4G"
+        },
+        {
+          "kind": "task",
+          "task_id": "01M7MZT8KX5474640000000004"
+        }
+      ]
+    },
+    {
+      "claim": "親の費用は起票から E-mid までに 171.06 USD で、そのあいだ終端に達した子は 3/8。Outcome の指標を動かす子は 0 件が終端。",
+      "metric": "親の費用（USD）と終端の子の数",
+      "before": "0 USD・終端 0/8（2026-11-17 起票）",
+      "after": "171.06 USD・終端 3/8（2026-11-18T20:36:35Z）",
+      "references": [
+        {
+          "kind": "task",
+          "task_id": "01M7MZT8KX547464YYS76QNP4G"
+        },
+        {
+          "kind": "task",
+          "task_id": "01M7MZT8KX5474640000000001"
+        },
+        {
+          "kind": "task",
+          "task_id": "01M7MZT8KX5474640000000002"
+        },
+        {
+          "kind": "task",
+          "task_id": "01M7MZT8KX5474640000000003"
+        }
+      ]
+    }
+  ],
+  "learned": [],
+  "refuted": [],
+  "uncertainty": [
+    {
+      "statement": "D〜F の pilot が指標 (1)〜(4) をどれだけ動かすか。E-mid の slice には A の baseline の成果物（計測コマンドと値）も、子の after の値も無い。（推定）pilot の対象は監査の値より小さい: D は循環 17 件のうち handlers/org.rs と cos/ops/admin.rs の 1 組、E の目安は self.store 44 file 中 5 file 以上・self.config 35 file 中 3 file 以上の純減、F は knowledge.rs と lifecycle.rs の 2 file。すべて目安どおりでも、循環と SCC の大半、self.store の 39/44・self.config の 32/35 は残る。計画は G・H で初めて Outcome の全体を測る。",
+      "resolve_by": "E・F・G を起こす前に、reviewing の子 D の branch に A の基準の計測コマンドを当て、(1)(3)(4) の before/after を出す（計測の 1 run）。"
+    },
+    {
+      "statement": "終端の子 A・B・C（基準の計測と、B の deps.cycle 等・C の design risk の検査の強化）が親の知識として何を残したか。slice には子の成果物が無く、A の before の値の確認も、仮説の支持・反証も判定できない。epistemic を unknown、learned を空にした理由。",
+      "resolve_by": "A の baseline.md と B・C の成果物（検査の出力）を評価の入力に含め、before の値が root の監査と一致するかを確かめる。"
+    },
+    {
+      "statement": "A が固定した 2 つのシナリオの変更波及（指標 (4)）が、D・E の pilot の対象 file と重なるか。重ならなければ pilot が目安どおりでも (4) は動かない。",
+      "resolve_by": "A の baseline.md のシナリオの file の一覧と、D・E の対象 file の重なりを数える（読み取りだけ）。"
+    },
+    {
+      "statement": "B・C の検査の強化が、実際の差分で悪化を止め、通常の変更を通すか（Outcome の『維持』の側）。",
+      "resolve_by": "子 D の差分に対する repo-health（deps.cycle）と design risk の判定の出力を読む。"
+    },
+    {
+      "statement": "戦略 v1（strategy/arch-v4-cycle/v1.json）の仮説と反証条件が slice に無く、どの仮説が支持・反証されたかを判定できない。反証は 0 件と書いたが、反証が無いことの確認ではない。",
+      "resolve_by": "評価の入力に戦略の版の文書を含める。含められなければ CoS が v1 の仮説と反証条件を案件 thread に引用する。"
+    },
+    {
+      "statement": "費用の見込み。3/8 で 171.06 USD、親に予算の上限が無く、G は各 3 回の計測を含む。残り 5 子の費用を上限で止める仕組みが働かない。",
+      "resolve_by": "人が親の予算の上限を決める（判断）。"
+    }
+  ],
+  "reason": "E-mid（2026-11-18T20:36:35Z）では子 8 件のうち A・B・C の 3 件が done・reviewer 合格、D が reviewing、E が ready、F〜H が draft で、費用は 171.06 USD。子の done は親の進捗ではない。Outcome は指標 (1)〜(6) の before/after の実測での改善を求めるが、終端の 3 件（execution は終端の子がすべて done・合格なので succeeded）は計測と検査の強化で、指標を下げる変更を持たず、after の値はどの指標にも無い。slice に子の成果物が無いので、得た知識と反証は判定できない（epistemic は unknown）。指標を動かす D・E・F は対象が 1〜2 か所の pilot で、目安どおりでも監査の値の大半が残る（推定）。計画は Outcome の全体を G・H で初めて測る形なので、このまま進めると未達を終盤で知る危険がある。反証の証拠は slice に無いため off_track とは判定せず at_risk とした。次の手は識別実験: E・F・G を起こす前に、D の branch に A の計測コマンドを当てて (1)(3)(4) の変化を測り、A のシナリオの file と pilot の対象の重なりを数える。変化が小さければ、シナリオの owner を直接狙う別の戦略の版を CoS が作り、人の承認を得る。実験は戦略の新しい版（人の承認）でしか行えない。Outcome の到達は Rust の判定に任せ、ここでは書かない。"
+}

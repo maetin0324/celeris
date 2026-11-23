@@ -70,7 +70,14 @@ updated: 2026-11-23
 
 ## 証拠（提出時の HEAD で実行）
 
-（検査の結果は下の「検査」に書く）
+- 計画の check 1 の前半（`cargo nextest run -p task-api --test parent_checkpoint_shadow --test parent_checkpoint_regression --test parent_checkpoint_live ... -E 'test(/parent_checkpoint_shadow_|parent_checkpoint_regression_|parent_checkpoint_live_request_/)'`）→ exit 0（16 passed、1 skipped = `#[ignore]` の sample）
+- 計画の check 1 の後半（`CELERIS_SCRIPT_REQUIRE_BUNDLE=1 cargo nextest run -p celeris -E 'binary(project_controller_e2e) | binary(project_cos_shadow) | binary(project_controller_replay)'`、TS の bundle を通す e2e）→ exit 0（19 passed）。
+  初回は worktree に `control-ts/node_modules` が無く bundle を作れず 17 件 fail（試験の中身でなく環境）。`pnpm install --offline --frozen-lockfile` の後に再実行して pass（node_modules は追跡しない）。
+- 計画の check 2（live の 2 file に answer key の印が無い・shadow の fixture に answer_key・sentinels の file が無い）→ exit 0
+- `bash scripts/dev/test-affected.sh` → exit 0（6295 passed・29 skipped）
+- `cargo clippy --workspace -- -D warnings` と `cargo fmt --all -- --check` → exit 0
+- 計画の check 5（store・migration・events・`cos/operations.rs` の差分 0、書き込みの SQL・LLM の client の語なし）→ exit 0
+- 範囲 check（`sh "$CELERIS_WU_SCOPE_PATHS"`）→ 範囲外の path 0
 
 ## 未解決事項
 

@@ -8,6 +8,11 @@ completed: 2026-11-23
 
 人の判断（2026-11-23、案 A）による再計画の WU。基準は `$CELERIS_WU_BASE`（WU の base）。検査は提出時の HEAD で実行した。
 
+経緯: 1 回目の run は実装・試験・進捗を済ませたが、計画の範囲 check が落ちた（範囲外 `crates/task-worker/src/change_rules/review.rs`）。
+評価器の prompt を組むのは `change_rules::review`（`parent_checkpoint_section`・`result_section`、呼び出しは `claude_code/prompt.rs`）で、
+`protocol/parent_checkpoint.rs` は wire の型だけを持つ。run は plan_issue を返し、人が承認した計画 v6 が範囲に `change_rules/review` を足した。
+2 回目の run（範囲の訂正）は branch の commit をそのまま使い、コードを変えずに検査を提出時の HEAD でやり直した。
+
 ## 結論
 
 - 本番の request の組み立て（`task_dispatch::review::parent_evaluation::request`）が、子ごとに checkpoint の時点（判断の行の `created_at`）以前の
@@ -22,18 +27,22 @@ completed: 2026-11-23
 - E-mid・D-done の request・prompt を本番の選択関数で作り、`crates/task-api/tests/fixtures/parent_checkpoint_live/` に置いた。選んだ報告は
   `fixtures/parent_checkpoint_shadow/E-mid/reports.json`・`D-done/reports.json` に置いた（`slice.json` は子 0 の manifest と byte で一致させるため変えない）。
 
-## 受け入れ条件と証拠（提出時の HEAD で実行）
+## 受け入れ条件と証拠（提出時の HEAD で実行。2 回目の run で再実行）
 
 - 条件 0（E-mid・D-done の request に子の報告の本文、`parent_checkpoint_blind_` が pass、変更前に落ちた試験）:
-  - `cargo test -p task-api --test parent_checkpoint_live -- --include-ignored` → 6 passed（`parent_checkpoint_blind_` 4 件、`parent_checkpoint_live_request_renders`、`#[ignore]` の sample の検査）。
-  - `cargo test -p task-core --lib parent_checkpoint_blind` → 1 passed（`parent_checkpoint_blind_child_reports_cutoff_and_caps`）。
+  - `cargo nextest run -p task-api -p task-core -p task-worker -p task-dispatch --run-ignored all -E 'test(/parent_checkpoint_|project_controller_checkpoint_|parent_evaluation_/)'`
+    → 73 tests run: 73 passed。内訳は `parent_checkpoint_blind_` 5 件（task-api 4 件・task-core の `parent_checkpoint_blind_child_reports_cutoff_and_caps` 1 件）、
+    `parent_checkpoint_live_` 2 件（`#[ignore]` の sample の検査を含む）、その他の `parent_checkpoint_` 43 件、`parent_evaluation_` 8 件、`project_controller_checkpoint_` 15 件。
   - 入力の大きさ: E-mid は報告 17 件・5,490 byte、request 12,548 byte、prompt 15,326 byte。D-done は報告 17 件・5,600 byte、request 12,655 byte、prompt 15,431 byte。
     D の報告に D#1446（worker の結果、19:55:39Z）が入り、D-done には D#1566（review の報告、20:39:25Z、cutoff 20:39:40Z の前）も入る。
 - 条件 1（request・prompt・slice・ADR に answer key の印と期待の値が無い）: `parent_checkpoint_blind_no_answer_key_or_future` が、request・prompt・reports.json・slice.json に
   answer key の印 3 種・全時点の理由の文・verdict と next の中黒の組 16 通りが無いこと、ADR とこの進捗に answer key の列名と中黒の組が無いこと、request・prompt・reports に
   cutoff より後の event の時刻と本文（40 byte 超）が無いことを確かめる。
 - 条件 2（prompt に出力の欄と axes の定義、既存の試験）: `parent_checkpoint_blind_prompt_has_output_fields_and_axes` が欄 18 個と axes の値・定義の文を確かめ、prompt の例の JSON を
-  `check_evaluation` に通して `Checked` を確かめる。既存の試験は `cargo test -p task-worker --lib parent`（16 passed）と下の test-affected で走らせた。
+  `check_evaluation` に通して `Checked` を確かめる。既存の `parent_checkpoint_`・`project_controller_checkpoint_` の試験は上の nextest と下の test-affected で pass した。
+- 条件 3（範囲 check、`change_rules/review` を足した版）: 計画の範囲 check の正規表現に `crates/task-worker/src/change_rules/review(\.rs$|/)` を足した command を
+  `sh "$CELERIS_WU_SCOPE_PATHS"` の path に当てた → exit 0（範囲外の path 0 件）。`review/parent_evaluation.rs` の差分は request の組み立て
+  （`Subject`・`Running`・`launch_all`・`running_by_root`・`request`）の hunk だけで、`write_record` に触れていない。
 
 ### 変更前に落ちた試験
 
@@ -50,10 +59,10 @@ base の E-mid の fixture（`E-mid.request.json`・`E-mid.prompt.md`）と base
 `parent_checkpoint_live_sample_checks`（`#[ignore]`）は新しい request でも pass した（status Checked、違反 0、slice の外の参照 0）。目的の規則（通らなければ消す）に従い、
 sample と試験は残した。sample は報告の本文の無い入力で書かれたもので、盲検の評価（WU blind-eval-runs）が置き換える。
 
-### repo の検査（提出時の HEAD で実行）
+### repo の検査（提出時の HEAD で実行。2 回目の run で再実行）
 
 - `bash scripts/dev/test-affected.sh` → exit 0。nextest 8,764 passed・32 skipped、web の unit 745 passed（105 file）、test-ts-verify 20 passed、repo_health_gate all checks passed。
-- `cargo clippy --workspace -- -D warnings` → 成功（vendor の deno_core の既存の warning 1 件だけ）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（vendor の deno_core の既存の warning 1 件だけ）。
 - `cargo fmt --all -- --check` → exit 0。
 
 ## 試験の追加の理由（守る不変条件と、既存の試験で検出できない理由）

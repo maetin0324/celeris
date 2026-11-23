@@ -27,6 +27,7 @@ updated: 2026-11-23
 ## commit（件名）
 
 1. `strategy-v1 6 cos-skill-checkpoint: strategy-review.md に checkpoint の replan を受けたときの手順を足し、cos-operator の version を 9 に上げる`
+2. `strategy-v1 6 cos-skill-checkpoint: 検査の結果を進捗に書く`
 
 ## 実装前 brief
 
@@ -40,7 +41,7 @@ updated: 2026-11-23
 
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 
-- 受け入れ 0: `grep -c "checkpoint_experiment\|checkpoint_pivot" config/skills/cos-operator/strategy-review.md` → 下の「検査」の値。
+- 受け入れ 0: `grep -c "checkpoint_experiment\|checkpoint_pivot" config/skills/cos-operator/strategy-review.md` → 4。
 - 受け入れ 1: `git show "$CELERIS_WU_BASE":config/skills/cos-operator/SKILL.md | grep version` → `"8"`、HEAD → `"9"`。
 - 受け入れ 2: `cargo nextest run -p celerisctl` → exit 0（199 passed）。`cargo nextest run -p task-api -p task-worker -E 'test(/cos_operator_skill_/)'` → exit 0（2 passed）。
   関連: `cargo nextest run -p celeris -p task-ops -E 'test(/skill/)'` → exit 0（20 passed。skill の gate と config の試験）。
@@ -48,7 +49,18 @@ updated: 2026-11-23
 
 ## 検査
 
-（commit の後に記入）
+提出時の HEAD で実行した。
+
+- `grep -c "checkpoint_experiment\|checkpoint_pivot" config/skills/cos-operator/strategy-review.md` → 4。
+- SKILL.md の `metadata.version`: base `"8"` → HEAD `"9"`。
+- `cargo nextest run -p celerisctl` → exit 0（199 tests run: 199 passed）。
+- `cargo nextest run -p task-api -p task-worker -E 'test(/cos_operator_skill_/)'` → exit 0（2 passed: `cos_operator_skill_table_matches_allowed`・`cos_operator_skill_documents_the_registered_project_deploy_scope`）。
+- `cargo nextest run -p celeris -p task-ops -E 'test(/skill/)'` → exit 0（20 passed）。
+- `bash scripts/dev/test-affected.sh` → exit 0（「試験対象の変更なし（docs のみ等）」。repo_health_gate: all checks passed）。`--list` は空（crate の変更なし）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo fmt --all -- --check` → exit 0。
+- `sh scripts/dev/progress-index.sh --check` → ok。
+- `sh "$CELERIS_WU_SCOPE_PATHS"` → 変更 path は strategy-review.md・SKILL.md・SOURCE.md・この進捗の 4 件で、D11 の write set の中。
 
 ## LoC
 

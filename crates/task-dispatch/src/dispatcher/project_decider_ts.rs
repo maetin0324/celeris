@@ -640,7 +640,7 @@ fn checkpoint_section(
         })
         .collect();
     ps::checkpoints(store, &snapshot.roots, &rows, settings, &mut |root| {
-        tree_tokens(store, root).map_err(task_ops::OpsError::from)
+        tree_tokens(store, root, None).map_err(task_ops::OpsError::from)
     })
     .map_err(|e| e.to_string())
 }

@@ -507,3 +507,20 @@ D5.1 の 2（act）の置き場を書き足した。1（evaluate）の置き場�
      no-progress の guard が人に知らせないまま止まる。
   2. D5.3 の「写し済み」は `effect_state` の `none` を数えない。continue の行を continue・wait で写した判断は効果が無く `none` になるので、その評価は写していないまま残る
      （コードを読んで導いた結論。試験での再現は未確認）。
+
+## 付記（2026-11-23、第二ゲートの shadow と live の行の分担。WU second-gate-shadow）
+
+D8・D9.2・D11 の試験の置き場と分担を実装に合わせて書き足した。決定の中身は変えていない。
+
+- D11 の live の行の分担: 試験 file `crates/task-api/tests/parent_checkpoint_live.rs`（`parent_checkpoint_live_request_renders` と `#[ignore]` の
+  `parent_checkpoint_live_sample_checks`）と `fixtures/parent_checkpoint_live/` の `E-mid.prompt.md`・`E-mid.request.json` は WU second-gate-shadow が書いた。
+  評価の JSON `fixtures/parent_checkpoint_live/E-mid.evaluation.json` だけを WU live-evaluator-sample が書く（その WU は試験 file を変えない）。
+- task-api は task-dispatch と TS の host（deno_core）に依存しない（Cargo の依存はこの WU の範囲の外）。そのため task-api の試験の「本物の流れ」は、
+  本物の snapshot（`task_ops::project_snapshot::build`・`checkpoints`）→ D5.1 の規則を写した試験の中の規則 → 本物の Rust の検証（`project_proposal::parse_and_validate`）
+  → harness の効果（shadow は `suppressed`、enabled はスクリプトの評価を `check_evaluation` に通して最終の記録を root の `ArtifactProduced` に書く）である。
+  TS の規則そのものは control-ts の `project_controller_checkpoint_` と celeris の e2e（`project_controller_e2e`・`project_cos_shadow`・`project_controller_replay`）、
+  評価の run の起動口と決着は task-dispatch の `project_controller_checkpoint_` が確かめる。
+- live の request は dispatcher の `review::parent_evaluation::request`（task-api から呼べない private の関数）と同じ出どころの欄を、E-mid の slice から試験が組み立て、
+  task-worker の本物の型（`ReviewRequest`・`ParentCheckpointRequest`）と prompt の節（`change_rules::review::parent_checkpoint_section`）で出す。id は固定の値。
+- 反証の trigger の合成（`parent_checkpoint_shadow_refute_in_subtree`）は、root が参照する v1 の文書を文書の task（root）の成果物として置く。v1 の文書が無いと、
+  v1 に既にある反証（`e-pilot-refute`）も新しい反証に数えられる（試験を書く中で確かめた挙動。参照した版の文書が読めないときの扱いは「未確認」の運用の範囲）。

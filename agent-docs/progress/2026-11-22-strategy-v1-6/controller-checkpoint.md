@@ -34,6 +34,7 @@ updated: 2026-11-23
 - `project_decider_ts`: `configure`・`checkpoint_section`（判断を最後まで読む）、`runaway_guard` が `evaluate` を数える、`Evaluate` → `RequestEvaluation`。
 - `project_wake`: `RequestEvaluation` は門を通った後に何も書かず `applied`（`effect_ref` = root）。shadow は既存の門で `suppressed`。
 - `[project_controller.checkpoint]`（3 欄、`deny_unknown_fields`、範囲外は設定エラー）。
+- `docs/ops/project-controller.md` に節「親の途中評価の checkpoint」（設定・状態の導き方・本番で有効にする人の手順）を足した。手順の `PUT …/controller` の確認は run 2 の実装の後に見直す。
 - `crates/celeris/tests/project_controller_e2e.rs` の `ProjectAction` の網羅の match に `Evaluate` の腕を 1 つ足した（variant を足すと compile が落ちるため。write set の表の外）。
 
 ## 検査（run 1 の終わりの HEAD）
@@ -49,7 +50,6 @@ updated: 2026-11-23
 - `design_gate.rs`: `SideReviewKind::ParentEvaluation { decision_id }`・終わりの腕・`holds_side_review` の評価の半分。
 - `review/parent_evaluation.rs`（新）: `review.json` を読み `check_evaluation`、最終の記録を書く。
 - `dispatcher/tests/project_checkpoint.rs`（新）: `project_controller_checkpoint_` の dispatcher の試験（発火・効果 1 回の冪等・crash の境界・strategy の無い root と無効な案件で reviewer run 0・no-progress の escalate・suppressed の後の due・final review の run を試行に数えない・root に手元の run がある間は起こさない）。
-- `docs/ops/project-controller.md` の checkpoint の節と本番で有効にする人の手順。
 - `bash scripts/dev/test-affected.sh`、範囲 check、run_index_start を持つ file の数の確認。
 
 ## 未解決事項

@@ -96,6 +96,32 @@ controller は event（root の終了・失敗・人の操作など）で起き�
 - 測った値（`agent-docs/progress/2026-11-04-long-horizon/a6/resource.jsonl`）: 本物の TS の判定 1 回の p50 は約 1.5 ms、100 案件を 1 周する時間は約
   0.19 秒で、isolate は 1 個のまま増えない。複数日の実稼働の確認は A9 の pilot で行う。
 
+## 親の途中評価の checkpoint（ADR 2026-11-22-parent-checkpoint-evaluator）
+
+controller は、CoS が `strategy` を付けて起票した root（strategy root）だけに checkpoint を導く。strategy の無い root・controller の行が無い案件・mode `off` の案件では何も起きない。
+mode `shadow` の案件では `evaluate` の判断は `suppressed` で記録され、reviewer run は起きない（同じ trigger の 2 回目の判断も作らない）。
+
+- 発火の条件（`[project_controller.checkpoint]`。節が無ければ既定値、未知の欄・範囲外の値は設定エラーで daemon が起きない）:
+
+  ```toml
+  [project_controller.checkpoint]
+  children_per_checkpoint = 2      # 1〜8。root の直下の子の終端（done・failed・cancelled）が N 件ごと
+  budget_thresholds_pct = [50, 80] # 1〜99 の狭義の昇順・4 件まで。root の max_tokens に対する木の使った token の割合
+  max_evaluation_attempts = 2      # 1〜3。1 回の評価の reviewer run の試行の上限
+  ```
+
+  この 3 つのほか、子の失敗（`child_failed:<task>`）と、root の参照した版より新しい戦略の版の反証の証拠（`refute:…`）でも発火する。checkpoint だけを止める flag は無い（止めるのは案件の mode `off`）。
+- 状態は保存しない。`evaluate` の判断の行（id・triggers・effect_state）と、root の成果物の name `parent-evaluation/<判断 id>.json`（最終の記録）・`parent-evaluation/<判断 id>.attempt-<n>.json`（試行の記録）だけから毎回導く。root の final review の run は試行に数えない。
+- 評価の run は既存の reviewer run（task の status を変えない side review の共通の起動口）で、root に手元の run がある間と、木の run・費用の上限に当たっている間は起きない。評価の結果は Rust の決定的な検査を通り、`continue`・`replan`（`checkpoint_experiment`・`checkpoint_pivot`）・`escalate`（`checkpoint:<判断 id>`）のどれかに写る。Project.request・承認済み Roadmap・Outcome の到達は書かない。
+- `evaluate` は進捗に数えない。`evaluate → replan → …` が進捗なしで `max_no_progress_decisions` 続けば、既存の guard（`no_progress:<epoch>`）で止まる。
+
+### 本番で有効にする人の手順（この依頼では実行しない）
+
+1. 対象の案件が `allowed_project_ids` にあり、まず mode `shadow` で動かす。`GET /api/v1/projects/{id}/controller/decisions` の判断に `kind = evaluate`・`effect_state = suppressed` の行が出ること、reviewer run が増えないことを確かめる。
+2. 既定値を変えるときは、本番 config（`~/.config/celeris/` の daemon の設定）に上の `[project_controller.checkpoint]` を人が書き、daemon を再起動する。起動しなければ設定エラーの文を見て直す。
+3. 1 案件だけ mode `enabled` にする（「導入の checklist」の 4・4a と同じ手順）。最初の評価の後、root の成果物に `parent-evaluation/<判断 id>.json` が 1 件あり、判断が `pc/checkpoint/act` の行動に写ったことを確かめる。
+4. 戻すときは案件の mode を `shadow` か `off` にする（走っている評価の run は既存の cancel で止まる。記録は消さない）。
+
 ## 画面と非本番の pilot（A9）
 - 案件の詳細画面の「自動運営」に、長期方針（CoS の要約の目的と人の依頼文）、途中目標の到達（P2-J）、関連する root task、
   今後の作業（要約の next_actions、次の再評価の時刻、今日の使用量と上限、guard の上限）、待機と人の要件（待機の理由・

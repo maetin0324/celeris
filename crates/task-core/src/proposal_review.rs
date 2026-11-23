@@ -165,10 +165,9 @@ fn check_target(
                     "{path} is not a strategy draft attached to message {message_id}"
                 )));
             };
-            let sha = attachment_sha256(tx, &id)?.ok_or_else(|| {
+            attachment_sha256(tx, &id)?.ok_or_else(|| {
                 ProposalReviewError::Stale(format!("the attachment {path} was deleted"))
-            })?;
-            sha
+            })?
         }
         (ProposalKind::CosStrategy, None) => {
             return Err(ProposalReviewError::Invalid(

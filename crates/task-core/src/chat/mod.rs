@@ -450,11 +450,13 @@ pub struct ChatEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum ChatEventData {
-    Message(ChatMessageData),
+    /// `Message` and `Run` are boxed to keep the variants within clippy `large_enum_variant` once `ChatMessage`
+    /// carries the derived wire marks (ADR 2026-11-23-project-observability-publish D2.4).
+    Message(Box<ChatMessageData>),
     TextDelta(ChatTextDeltaData),
     Status(ChatStatusData),
     Tool(ChatToolData),
-    Run(ChatRunData),
+    Run(Box<ChatRunData>),
     Queue(ChatQueueData),
     Card(ChatCardData),
     Thread(ChatThreadData),

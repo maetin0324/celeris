@@ -94,10 +94,9 @@ ADR の保証の表の `proposal_review_` の行を実際の名前に直した�
   `git status --short` は空（`web/api/generated` は schema と一致）。`docs/api/v1/api-v1.schema.json` と `web/api/generated/schema.json` は `cmp` で同一。
 - `cargo fmt --all -- --check` → exit 0。
 - `cargo clippy --workspace -- -D warnings` → exit 0。
-- `bash scripts/dev/test-affected.sh` → 1 回目は exit 100: `8878 tests run: 8877 passed, 1 failed, 34 skipped`。落ちたのは
-  `schema::tests::committed_schema_matches_generated`（`ChatEventData::Message` に付けた doc comment が schema の説明に出た）。web は
-  `Test Files 105 passed`・`Tests 745 passed`、ts-verify は `20 passed, 0 failed`。doc comment をふつうの comment に直し（commit
-  「ChatEventData の Box の説明を schema に出さない」）、落ちた試験だけを再実行して pass した。全体の再実行は提出時の結果を「未確認・引き継ぎ」に書く。
+- `bash scripts/dev/test-affected.sh` → exit 0: `8878 tests run: 8878 passed, 34 skipped`、web は `Test Files 105 passed`・`Tests 745 passed`、
+  ts-verify は `20 passed, 0 failed`。その前の 1 回目（comment の直しの前）は `schema::tests::committed_schema_matches_generated` の 1 件だけが
+  落ちた（`ChatEventData::Message` に付けた doc comment が schema の説明に出た）。doc comment をふつうの comment に直した。
 - `python3 scripts/dev/repo-health/repo_health.py --repo scripts/dev --base $CELERIS_WU_BASE --head worktree --policy-version 1` → exit 0、
   `verdict=pass new=0 worsened=0`。
 - migration の差分: `git diff $CELERIS_WU_BASE HEAD -- crates/task-core/migrations | wc -l` → 0。
@@ -115,7 +114,6 @@ ADR の保証の表の `proposal_review_` の行を実際の名前に直した�
 
 ## 未確認・引き継ぎ
 
-- `test-affected.sh` の全体は、最後の comment だけの直しの前の HEAD で実行した（上の 1 件の失敗）。直した後は落ちた試験だけを再実行した。
 - adopt を受けた CoS の execute の run が外部の案の本文を thread で読むので、本文の中の指示が CoS の行動を誘う余地は prompt の段に残る（ADR の未確認と同じ）。
   backend の保証は、どの operation も goal_guard・strategy_gate・authority_gate を通ることまで。
 - 採否の状態の導出は、案の message ごとに採否の message を 1 回照会する（使う索引は確かめていない）。本番の大きさ（thread の message 数千件）での

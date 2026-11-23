@@ -2,17 +2,20 @@
 title: 戦略層 v1 子 6 ts-checkpoint-rule — control-ts の規則 pc/checkpoint と評価の結果の写し
 tasks: [01M7XQ9QWK58ESMW42Q1TGT3WZ]
 wu: ts-checkpoint-rule
-status: blocked
+status: done
 updated: 2026-11-23
 ---
 # ts-checkpoint-rule（WorkUnit）
 
-状態: 計画の問題で止まった（run 2 で plan_issue を申告したが受け付けられず、run 3 で申告し直した。下の「run 2」「run 3」の節）。TS の実装と試験は run 1 で済んだ。
+完了日: 2026-11-23
+
+状態: 完了（計画 v4 の check 0〜5 が提出時の HEAD で通った。下の「run 4」の節）。TS の実装と試験は run 1 で済み、run 4 でも作り直していない。
+run 2・3 では、計画 v3 の check（task-dispatch の `project_controller_checkpoint_`）がこの範囲で通らず、plan_issue を申告した（下の「run 2」「run 3」の節）。計画 v4 でその check は task-core・celeris の同じ prefix の試験に替わった。
 `control-ts/src/domains/project_controller.ts` に、snapshot の `checkpoints` を読む規則 `pc/checkpoint/evaluate` と `pc/checkpoint/act` を足した。
 設計の正本は [ADR 2026-11-22-parent-checkpoint-evaluator](../../adr/2026-11-22-parent-checkpoint-evaluator.md) の D5.1〜D5.3・D6。
 基準はこの WU の `$CELERIS_WU_BASE`。検査は提出時の HEAD で実行した。
 
-Rust 側の 2 つの穴（写していない評価がある間、guard の提案を Rust が落とす／continue の写しが写し済みにならない）を見つけた。どちらもこの WU の write set の外にあるので、「未解決事項」と「提案」に書いた。
+Rust 側の 2 つの穴（写していない評価がある間、guard の提案を Rust が落とす／continue の写しが写し済みにならない）を見つけた。どちらもこの WU の write set の外にあり、計画 v4 では WU checkpoint-act-fix が直す（「未解決事項」）。
 
 ## 実装前 brief
 
@@ -49,7 +52,7 @@ Rust 側の 2 つの穴（写していない評価がある間、guard の提案
 
 既存の試験でこれらを検出できなかった理由: base の TS の試験は `checkpoints` を持つ snapshot を 1 件も作らない。
 
-## 検査（提出時の HEAD で実行）
+## run 1 の検査（run 1 の HEAD で実行。突き合わせの記録として残す。今の結果は「run 4」の節）
 
 - `cd control-ts && pnpm run typecheck`: exit 0。
 - `cd control-ts && pnpm test`: exit 0。vitest 143 件 pass（6 file）、node --test 47 件 pass。
@@ -89,6 +92,24 @@ Rust 側の 2 つの穴（写していない評価がある間、guard の提案
   `cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0、`cargo nextest run -p task-core -p celeris -E 'test(/project_controller_checkpoint_/)'` 4 件 pass、
   範囲 check（計画の正規表現）は範囲外 0、`sh scripts/dev/progress-index.sh --check` ok。
 
+## run 4: 計画 v4 の check（提出時の HEAD で実行）
+
+計画 v4 は、この WU の check 2 を `cargo nextest run -p task-core -p celeris --no-fail-fast -E 'test(/project_controller_checkpoint_/)'` に替えた。
+TS の規則と試験は run 1 のまま使い、規則の順（act は paused・no-progress の直後、evaluate は人の待ちの後・root の見守りの前）は変えていない。ADR もこの run では変えていない（run 3 の D5.1 の 2 の置き場と末尾の付記は残す）。
+
+- check 0 `corepack pnpm@12.6.0 -C control-ts typecheck && corepack pnpm@12.6.0 -C control-ts test`: exit 0。vitest 143 件 pass（6 file。うち `project_controller.test.ts` は 30 件で、`project_controller_checkpoint_` は 9 件）、node --test 47 件 pass。
+- check 1（`pc/checkpoint` と `checkpoint` の grep）: exit 0。
+- check 2 `cargo nextest run -p task-core -p celeris --no-fail-fast -E 'test(/project_controller_checkpoint_/)'`: exit 0。4 件 pass（task-core の `project_controller_checkpoint_evaluate_validation`・`…_act_must_map_unmapped`・`…_snapshot_without_strategy_roots_unchanged`、celeris の `project_controller_checkpoint_config_section`）。
+- check 3 `bash scripts/dev/test-affected.sh`: exit 0（ts-verify、cargo 0 回。golden は lane_rules 19683・route_priority 2026・execution_gate 2337・project_controller 15・cos_digest 22 と 2114 がすべて matched）。
+- check 4 `cargo clippy --workspace -- -D warnings && cargo fmt --all -- --check`: exit 0。
+- check 5（範囲）: 範囲外 0。`sh "$CELERIS_WU_SCOPE_PATHS"` の出力は 4 file（`project_controller.ts`・`project_controller.test.ts`・この進捗・ADR）。
+- `sh scripts/dev/progress-index.sh --check`: ok。
+
+受け入れ条件との対応:
+- 条件 0: check 0 と、`project_controller.test.ts` の `project_controller_checkpoint_` の 9 件。
+- 条件 1: `project_controller_checkpoint_comes_after_paused_no_progress_and_the_daily_cos_limit`（paused・no-progress〈evaluate を数える〉・CoS 入力の日の上限が checkpoint より先）。
+- 条件 2: check 2 の 4 件と、この進捗の status（done）・未解決事項の担当（下の「未解決事項」）。
+
 ## 行数（`git diff --numstat $CELERIS_WU_BASE`）
 
 - production（TS）: `project_controller.ts` +137 −10（純増 127）。型 4 つ（Rust の `SnapshotCheckpoint`・`SnapshotEvaluation` と同じ形）と、規則 2 つ。純増の理由は、新しい行動 `evaluate` と、写していない評価の act の規則を足したこと。
@@ -98,18 +119,20 @@ Rust 側の 2 つの穴（写していない評価がある間、guard の提案
 ## 親の目的への寄与
 
 - 確認済み: Rust が snapshot に出す checkpoint の信号から、TS が evaluate を選び、評価の結果を Rust の表どおりの行動（continue・replan の `checkpoint_experiment`／`checkpoint_pivot`・escalate）に写す。Rust の検証も通る（上の突き合わせ）。改善 C（途中で独立評価して pivot・再計画する）の controller の判断の段がつながった。
-- 未確認: 評価の reviewer run の起動・決着（controller-checkpoint の残り）を含む端から端までの shadow ケース（second-gate-shadow の WU）。
+- 未確認: 評価の reviewer run の起動・決着（WU controller-launch）を含む端から端までの shadow ケース（WU second-gate-shadow）。task-dispatch の `project_controller_checkpoint_` の試験は controller-launch が書き、段の統合（integrate-controller）で走る。
 
 ## 未解決事項
 
-1. 写していない評価がある間、Rust の `validate_checkpoint_act` が guard の提案を `checkpoint_action_mismatch` で落とす。落ちるのは paused の wait、`pc/no-progress` の escalate、CoS 入力の日の上限の wait で、上の突き合わせで再現した。結果は `invalid_output`（判断は none・phase waiting）になる。paused と日の上限では実質は待ちと同じだが、判断の記録は invalid になる。no-progress では人への escalate が出ず、guard が人に知らせないまま止まる。TS 側では直せない（表に無い行動は全部落ちる）。owner は `crates/task-core/src/project_proposal.rs`（controller-checkpoint の write set）。
-2. continue の行（`on_track`・`at_risk` で `continue`）を continue・wait で写した判断は効果が無く、`effect_state` が `none` になる。D5.3 と `task_ops::project_snapshot::checkpoints` の「写し済み」は `pending`・`applied`・`suppressed` だけを数えるので、その評価はいつまでも写していない評価のまま残る。すると Rust は act 以外の行動をすべて落とし、TS は act の continue を出し続ける。root が終わっても次の Outcome の起票・milestone の記録に進めない。コードを読んで導いた結論で、試験での再現はしていない（未確認）。owner は `crates/task-ops/src/project_snapshot.rs` と ADR D5.3。
+1. 写していない評価がある間、Rust の `validate_checkpoint_act` が guard の提案を `checkpoint_action_mismatch` で落とす。落ちるのは paused の wait、`pc/no-progress` の escalate、CoS 入力の日の上限の wait で、上の突き合わせで再現した。結果は `invalid_output`（判断は none・phase waiting）になる。paused と日の上限では実質は待ちと同じだが、判断の記録は invalid になる。no-progress では人への escalate が出ず、guard が人に知らせないまま止まる。TS 側では直せない（表に無い行動は全部落ちる）。owner は `crates/task-core/src/project_proposal.rs`。担当: 計画 v4 の WU checkpoint-act-fix（試験 `project_controller_checkpoint_guard_while_unmapped_`）。
+2. continue の行（`on_track`・`at_risk` で `continue`）を continue・wait で写した判断は効果が無く、`effect_state` が `none` になる。D5.3 と `task_ops::project_snapshot::checkpoints` の「写し済み」は `pending`・`applied`・`suppressed` だけを数えるので、その評価はいつまでも写していない評価のまま残る。すると Rust は act 以外の行動をすべて落とし、TS は act の continue を出し続ける。root が終わっても次の Outcome の起票・milestone の記録に進めない。コードを読んで導いた結論で、試験での再現はしていない（未確認）。owner は `crates/task-ops/src/project_snapshot.rs` と ADR D5.3。担当: 計画 v4 の WU checkpoint-act-fix（試験 `project_controller_checkpoint_continue_maps_`。ADR D5.2・D5.3 は本文をその場で直す）。
+3. task-dispatch の `project_controller_checkpoint_` の試験と、評価の reviewer run の起動・決着（controller-checkpoint の残り）は未実装。担当: 計画 v4 の WU controller-launch。
+4. ADR の末尾の付記（WU ts-checkpoint-rule）の未解決 2 件は、直った後に書き直す必要がある。担当: 計画 v4 の WU close-gate（末尾に 1 つの付記で書く）。
 
 ## 提案
 
 - 未解決事項 2: 「写し済み」を、rule `pc/checkpoint/act`・signal `checkpoint` = 判断 id の判断のうち `effect_state` が `failed` でないもの（`none` を含む）に変える。変える場所は ADR D5.3 と `project_snapshot::checkpoints` の `mapped`。
 - 未解決事項 1: `validate_checkpoint_act` で、rule が act でない `wait` と `escalate` は通す。どちらも計画を進めない（起票・CoS 入力・到達の記録を書かない）ので、D5.2 の不変条件「off_track・unknown から continue は出ない」は保たれる。写していない評価は残り、guard が外れた後の判断で act が写す。Rust に TS の rule id を書き込まずに済む。
 - ADR D5.1 の付記: act（2）は paused・no-progress の直後に置く（Rust が act 以外を落とすため）。evaluate（1）は D5.1 の位置のままにする。この順を ADR に書く（run 3 で済ませた）。
-- 上の未解決の 2 件は integrate-controller か second-gate-shadow の再計画で、controller-checkpoint の write set の WU に回す。
+- 上の未解決の 2 件は、計画 v4 で WU checkpoint-act-fix に回った。
 - worker の結果の読み方（この WU の範囲の外。owner は `crates/task-worker/src/result_report.rs`）: `summary` と `yield` を両方持つ `result.json` は、今は黙って done と読まれる。
-  yield を捨てるのでなく、両方あるときは yield を優先するか、形の誤りとして run を落とす（retryable）ように直すことを提案する。今回、2 つの WU（controller-checkpoint・この WU）が未完のまま done と読まれた。
+  yield を捨てるのでなく、両方あるときは yield を優先するか、形の誤りとして run を落とす（retryable）ように直すことを提案する。今回、2 つの WU（controller-checkpoint・この WU）が未完のまま done と読まれた。計画 v4 では WU close-gate が子 6 の進捗の提案に書く。

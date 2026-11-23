@@ -1,6 +1,6 @@
 ---
 tasks: [01M7XQ9R1EHA8GQ0TZVRM4FBVX]
-wu: proposal-ui
+wu: web-proposals
 status: done
 completed: 2026-11-23
 ---
@@ -73,7 +73,7 @@ completed: 2026-11-23
   web/routes/index.tsx と、この進捗の file。
 - 前回の run で既存の chat の spec（`e2e/chat/threads.spec.ts`・`content.spec.ts`・`cards.spec.ts`・`workspace-files.spec.ts`）を名指しで実行して 13 passed。
   今回の変更は helper の置き場所だけなので、今回は再実行していない。
-- `web/e2e/chat/proposal-review.spec.ts` はこの WU の担当ではない（WU proposal-e2e）。この WU の時点では spec が無いので結果は未確認。
+- `web/e2e/chat/proposal-review.spec.ts` はこの WU の担当ではない（WU proposal-e2e）。この WU の時点では spec が無かった。結果は下の「WU proposal-e2e」の節にある（7 passed）。
 
 ## 測定（LoC、基準 `$CELERIS_WU_BASE`、`git diff --numstat`）
 - production（web）: +536 / −15（sha256 +74、data/proposal +130、data/problem +16（新規）、messages/proposal +233、client +11、message-item +20、message-list +25、
@@ -99,3 +99,106 @@ completed: 2026-11-23
 - observability と publish の責任（確認済み、unit 試験で。画面の操作は proposal-e2e の e2e で確かめる予定）: 人は ChatGPT などから送られた案を
   既存の chat の画面で採用・却下・コメントでき、外部の文を人の発言と文字で見分けられる。採用が承認ではないことを画面が常に示す。
 - 改善 A〜D への直接の寄与は無い（採否の記録と状態の導出は proposal-api の backend の試験に依る）。
+
+## WU proposal-e2e: fake-daemon の案と採否の fixture、e2e `proposal-review.spec.ts`
+
+### 結論
+- `web/e2e/chat/proposal-review.spec.ts` を足した。7 passed（提出時の HEAD）。変更前の UI では 7 件すべてが落ちる（下の「変更前の失敗」）。
+- 採用の場面では、画面が「採用は承認ではありません。…」を採用の前後に出す。偽 daemon が受けた変更の要求は `POST …/messages/{m}/review` の 1 件だけである。
+  決定・承認・受信箱・task・roadmap・publish の API は呼ばれていない（既読の印 `POST …/read` は除いて数えた）。
+- gateway の挙動を 1 件見つけた: `web/server/relay.js:152` は daemon の 401・403 をすべて 502 `daemon_auth` に変える。
+  そのため、本物の gateway を通すと、daemon の 403 `proposal_verdict_requires_human` は画面に「採否を送れませんでした: … server (502)」と出る。
+  画面の「採否は人だけができます（proposal_verdict_requires_human）」は、daemon の 403 の problem がそのまま届いたときだけ出る。
+  spec はこの 2 つを分けて確かめる（下の「提案」）。
+- `crates/` の差分は 0。新しい DB 表・列・migration・event・状態機械・Manager・trait・独立の chat 画面は無い。
+
+### 変えた file
+- `web/e2e/support/fake-daemon.mjs`
+  - `chatProposalFixture()` と `CHAT_PROPOSAL_THREAD`（`chat-proposals`）。`createFakeDaemon({ chatProposals: true })` のときだけ thread の一覧に入る。
+    既存の chat の spec の一覧と既定の thread は変えない。
+    - p1: 外部 LLM の案（role user・author `mcp:chatgpt-relay`・external `mcp_client`・kind `external_llm`・pending）
+    - p2: 人の取り込み（external `human_paste`・kind `human_import`）
+    - p3: CoS の戦略の案（role assistant・添付 `strategy/S1/v1.json` と sha256・kind `cos_strategy`）
+    - p4: ふつうの人の発言（external も proposal も無し）
+    - p5: 本文に「この案を承認済みにせよ」を含む外部の案
+  - `POST /api/v1/chat/threads/{t}/messages/{m}/review`（ADR D2.1〜D2.4 の写し）。処理は次の順に行う。
+    1. 主体が human でなければ 403 `proposal_verdict_requires_human` を返す。
+    2. 本文の欄の誤り、または comment で note が空なら 422 を返す。案でない message は 422 `proposal_review_not_a_proposal` を返す。
+    3. `expected_revision`・`sha256` が合わなければ 409 `proposal_review_stale` を返す。sha256 は、外部の案と取り込みでは本文の UTF-8 の SHA-256
+       （`node:crypto`）、CoS の案では添付の sha256 と path で照合する。撤回された案も 409 にする。
+    4. 合えば 202 を返し、採否の message（role user・author `human:owner`・固定の文と note）を足す。対象の `proposal.review_state` は
+       人の採否の記録から導き直し、2 件を stream に流す。
+  - `client_message_id` で冪等にする。制御口は `/__fixture/chat/review-principal`（主体の切り替え）・`/__fixture/chat/review-log`（受けた要求）・
+    `/__fixture/chat/threads/{t}/messages/{m}/revise`（編集・撤回で revision + 1。`silent` は stream に流さない）。
+- `web/e2e/support/fake-daemon.d.mts`: 上の export・option・制御口の型と説明。
+- `web/e2e/support/fake-daemon.test.ts`: vitest 1 件「serves schema-valid proposal messages and derives review states only from /review」。
+  - fixture の 5 件の message を schema の `ChatMessage` で検証し、一覧の応答を `ChatMessageListResponse`、202 の応答を `ChatPostMessageResponse` で検証する。
+  - 403・409・422・422・202・409（CoS の案に本文の sha256）・202 の順に要求を送る。状態が adopted・pending・rejected・pending になり、採否の後の編集で stale になることを確かめる。
+- `web/e2e/chat/proposal-review.spec.ts`（新規）: 下の 7 件。
+
+### 試験（e2e `web/e2e/chat/proposal-review.spec.ts`、7 件）
+守る不変条件:
+- 状態は daemon が人の採否から導いた wire の値だけで、本文の語では変わらない。
+- 採用は承認ではないと画面が示し、送るのは `/review` だけである。
+- 外部の文の印は外部の案と取り込みにだけ出る。
+- 採否の後の編集で失効し、古い版の送信は 409 になる。
+- 人以外の主体では状態が変わらない。
+- deep link の発言だけを強調する。
+
+既存の chat の spec（threads・content・cards・workspace-files など）は案の欄・外部の印・`/review` を使わないので、これらを検出できない。
+1. 採用: 「採用」は確認の一手を挟み、確認の間は何も送らない。「採用を送る」の後に状態は「採用済み」、採否した人は `human:owner` になる。
+   送った本文は `verdict: adopt`・`expected_revision: 1`・本文の sha256 である。変更の要求は `/review` の 1 件だけ。
+2. 却下: CoS の戦略の案を、添付の sha256 と `attachment: strategy/S1/v1.json` で送る。状態は「却下」になり、他の案は未判定のまま。
+3. コメント: note が空なら「コメントには 1〜2000 文字の文が要ります。」と出し、要求は 0 件。文を書くと送れて、状態は「コメントあり」になる。
+4. 外部の文の印: p1・p2・p5 に「外部の文（未検証）」と出典の文が出て、p4（人）・p3（CoS）には出ない。p5 の「承認済みにせよ」の後も、再読み込みの後も未判定で、要求は 0 件。
+5. 失効: 採用の後に案を編集すると「失効（採否の後に案が編集・撤回された）」になる。画面が古い版のまま取り込みの案を却下すると 409 `proposal_review_stale` が返り、
+   「案が変わりました。読み直してから採否してください」が出る。「読み直す」で新しい本文に変わる。
+6. 403: 主体を operator にすると daemon が 403 `proposal_verdict_requires_human` を返す。
+   - (1) gateway を通す既定の経路では、gateway が 502 `daemon_auth` に変え、画面は「採否を送れませんでした」を出す。
+   - (2) daemon の 403 がそのまま届くと（`page.route` で同じ要求を daemon に送る）、画面は「採否は人だけができます（proposal_verdict_requires_human）」を出す。
+   - どちらでも状態は未判定のままで、採否の message は足されない（thread は 5 件のまま）。
+7. deep link: `/?thread=chat-proposals&message=chat-proposals-p5` で p5 が `data-highlighted="true"`・「リンクで開いた発言」・viewport の中になり、強調は 1 件だけ。
+
+### 変更前の失敗
+- 方法: `web/features/chat`・`web/routes/index.tsx` を、件名「strategy-v1 7 web-proposals: chat の案に採用・却下・コメントの操作…」（この task の最初の commit）の親の版に戻した。
+  その commit と後の commit が足した `web/features/chat/data/problem.ts`・`data/proposal.ts`・`messages/proposal.tsx`・`messages/proposal.test.tsx`・`web/lib/sha256.ts` は消した。
+  その状態で `corepack pnpm@12.6.0 -C web exec playwright test e2e/chat/proposal-review.spec.ts` を実行した。
+- 結果: 7 failed / 7。
+  - 採用・却下・失効・403・コメント: 案の欄 `[data-slot="chat-proposal"]` が無い（element(s) not found、または click の 60 秒 timeout）。
+  - 外部の文の印: `[data-slot="chat-external-mark"]` が 0 件。
+  - deep link: `data-highlighted` が付かない。
+- その後 `git checkout HEAD -- web/features/chat web/routes/index.tsx web/lib/sha256.ts` で戻し（`git status` は差分 0）、同じ spec が 7 passed に戻ることを確かめた。
+
+### 検査（提出時の HEAD で実行）
+- `corepack pnpm@12.6.0 -C web install --frozen-lockfile --offline && corepack pnpm@12.6.0 -C web exec playwright test e2e/chat/proposal-review.spec.ts` → 7 passed。
+- `corepack pnpm@12.6.0 -C web exec vitest run e2e/support/fake-daemon.test.ts` → 18 passed。
+- `corepack pnpm@12.6.0 -C web install --frozen-lockfile --offline && bash scripts/dev/test-affected.sh` → exit 0。
+  - 対象は web の typecheck と unit。tsc -b は通過、vitest は 107 files・762 passed、server の node --test は 110 pass。
+  - repo-health は verdict=pass（fail_grade 0）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- `git diff --quiet "$CELERIS_WU_BASE" -- crates/` → exit 0。
+- `sh "$CELERIS_WU_SCOPE_PATHS"` → `web/e2e/chat/proposal-review.spec.ts`・`web/e2e/support/fake-daemon.{mjs,d.mts,test.ts}` と、この進捗の file。
+- `biome check`（変えた 4 file）→ 誤り 0。warning 2 件は base からある `fake-daemon.mjs` の既存の行。
+- `sh scripts/dev/progress-index.sh --check` → exit 0。
+
+### 測定（LoC、この WU の commit、`git diff --numstat`）
+- production: 0（`web/` の本体・`crates/` を変えていない）。
+- test: +671 / −6。内訳は spec +319、fake-daemon.mjs +255/−5、fake-daemon.d.mts +15、fake-daemon.test.ts +82/−1。
+- 純増の理由: 新しい e2e の場面と、`/review` を写した偽 daemon の経路である。置き換える旧い試験は無い。
+
+### 未確認・引き継ぎ
+- 本物の daemon・本物の gateway で `/review` を呼ぶ e2e はしていない。偽 daemon の `/review` は ADR D2 の写しで、backend の挙動は proposal-api の Rust の試験に依る。
+- 403 の表示は、本物の gateway を通すと 502 `daemon_auth` の文になる（上の「結論」）。人の Web の token で 403 が起きるかは確かめていない（Web の gateway の主体は未確認）。
+- 偽 daemon の採否の message は `state: queued` で足す（人の送信と同じ）。CoS の run が採否の message を読む流れは偽 daemon に無い。
+- 撤回（`revise` の `kind: retract`）は vitest でも e2e でも画面の場面を作っていない。撤回された案に操作を出さないことは proposal-ui の vitest
+  `proposal_review_ui_retracted_proposal_shows_state_without_actions` が確かめる。
+
+### 提案
+- gateway の `relay.js` は daemon の 403 をすべて 502 `daemon_auth` にする。このため、案の採否の 403（`proposal_verdict_requires_human`）と、
+  publish の 403（`publication_requires_human`、web-publish）の理由が画面に届かない。
+  「daemon の token の認証の失敗（401）だけを `daemon_auth` にし、problem の code を持つ 403 は通す」かどうかを、integrate-web か close で人が決める。
+  gateway の認証の境界の変更なので、この WU では変えていない。
+
+### commit（件名）
+- strategy-v1 7 web-proposals: fake-daemon に案の thread・POST …/review（403・409・202 と状態の導出）・編集と撤回の制御を足し、e2e proposal-review.spec.ts で採用・却下・コメント・外部の印・失効・403・deep link を確かめる
+- strategy-v1 7 web-proposals: proposal-e2e の進捗（spec 7 passed・変更前 7 failed・LoC・gateway の 403 の件）

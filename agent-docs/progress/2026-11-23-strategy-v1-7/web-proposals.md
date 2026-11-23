@@ -65,9 +65,10 @@ completed: 2026-11-23
 - `corepack pnpm@12.6.0 -C web exec vitest run features/chat/messages/proposal.test.tsx` → `proposal_review_ui_` 10 passed。
 - `corepack pnpm@12.6.0 -C web exec vitest run features/chat features/inbox lib` → 190 passed。
 - `corepack pnpm@12.6.0 -C web exec tsc -b` → exit 0。
-- `corepack pnpm@12.6.0 -C web install --frozen-lockfile --offline && bash scripts/dev/test-affected.sh` → TEST_AFFECTED_RESULT
+- `corepack pnpm@12.6.0 -C web install --frozen-lockfile --offline && bash scripts/dev/test-affected.sh` → exit 0（対象は web の typecheck+unit。tsc -b 通過、vitest 107 files・761 passed、server の node --test 110 pass、repo-health verdict=pass。
+  new 5・worsened 2 の指摘は前回の run の確認では前の backend の WU の crates の file で、この WU の file は無い）。
 - `corepack pnpm@12.6.0 -C web exec biome check features/chat lib/sha256.ts routes/index.tsx api/client.ts features/inbox/inbox-model.ts` → 指摘 0。
-- `cargo clippy --workspace -- -D warnings` → CLIPPY_RESULT。`cargo fmt --all -- --check` → FMT_RESULT。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
 - `git diff --quiet "$CELERIS_WU_BASE" -- crates/` → exit 0（差分 0 行）。`sh "$CELERIS_WU_SCOPE_PATHS"` → web/features/chat の 10 file・web/lib/sha256.ts・
   web/routes/index.tsx と、この進捗の file。
 - 前回の run で既存の chat の spec（`e2e/chat/threads.spec.ts`・`content.spec.ts`・`cards.spec.ts`・`workspace-files.spec.ts`）を名指しで実行して 13 passed。

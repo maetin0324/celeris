@@ -7,7 +7,7 @@ updated: 2026-11-23
 ---
 # controller-checkpoint（WorkUnit）
 
-状態: 途中（run 1 で前半を実装し、yield した）。設計の正本は [ADR 2026-11-22-parent-checkpoint-evaluator](../../adr/2026-11-22-parent-checkpoint-evaluator.md) の D1〜D6・D9・D11。
+状態: 途中（run 1 で前半を実装した。run 2 で check の不合格を直し、yield した）。設計の正本は [ADR 2026-11-22-parent-checkpoint-evaluator](../../adr/2026-11-22-parent-checkpoint-evaluator.md) の D1〜D6・D9・D11。
 基準はこの WU の `$CELERIS_WU_BASE`。検査は run 1 の終わりの HEAD で実行した。
 
 ## 実装前 brief
@@ -42,11 +42,28 @@ updated: 2026-11-23
 - `cargo nextest run -p task-core -p task-ops -p task-dispatch -p celeris -E 'test(/project_|parent_checkpoint|checkpoint/)'`: exit 0、447 件 pass。
 - `cargo clippy --workspace -- -D warnings`: exit 0。
 - `cargo fmt --all -- --check`: exit 0。
-- `bash scripts/dev/test-affected.sh`: 未実行（run 2 で実行する）。
+- `bash scripts/dev/test-affected.sh`: run 1 の後の check で exit 1（下の「run 2」の節）。
 
-## 残り（run 2 以降）
+## run 2: check の不合格の原因と直し
 
-- `dispatcher/parent_evaluation.rs`（新）: 実行中の判断ごとに `has_task_run(root)` が偽・`tree_limit_hold_for` が偽・試行 < 上限のときだけ `start_side_review(root, parent_checkpoint の節, SideReviewKind::ParentEvaluation)`、run id が返れば試行の記録を書いて `ArtifactProduced`。上限で run が無ければ `invalid` の最終の記録。
+- 不合格: `bash scripts/dev/test-affected.sh` が exit 1。repo health の必須 rule `size.responsibility-growth` が worsened（module `crates/task-dispatch/src/dispatcher` の本体の行 32293 → 32298）。
+  増えたのは `dispatcher/project_wake.rs` の `configure` の呼び出し（closure で 4 行）と `RequestEvaluation` の腕。`project_decider_ts.rs` は lib.rs の `#[path]` で別の module なので数えない。
+- 直し: event 1 件を案件の wake に写す `wakes_for_event`（controller の契約。store を読むだけの関数）を `dispatcher/project_wake.rs` から `crate::project_controller` に移した。`set_project_controller` の引数を `mut decider` にし、`TreeTokens` を `token_budget::tree_tokens_used` と同じ形（`Option<&str>` を足す）にして、呼び出しを 1 行にした。
+- 結果（提出時の HEAD で実行）:
+  - `python3 scripts/dev/repo-health/repo_health.py --repo . --base $CELERIS_WU_BASE --head worktree --policy-version 1 --rules size.responsibility-growth,deps.cycle`: exit 0。dispatcher module 32293 → 32218（-75）、new・worsened は 0。
+  - `bash scripts/dev/check-health.sh --base $CELERIS_WU_BASE`: exit 0（検査器の unit 試験とゲートの試験も pass）。
+  - `cargo nextest run -p task-dispatch -p celeris -E 'test(/project_|parent_checkpoint|checkpoint/)'`: 276 件 pass。
+
+## 残りの実装の制約（run 2 で実測した上限）
+
+- dispatcher module（`dispatcher.rs`・`dispatcher/` の下・`#[path]` で読む `health_review/design_gate.rs` など）は 1 行増えても fail する。今の余裕は 75 行。
+- `Dispatcher` の method の数は 374（閾値 60、existing）。method を 1 つ足すと worsened で fail する。起動の段は `Dispatcher` に新しい method を足さず、既存の method の中の呼び出しと crate の自由関数で書く。
+- `dispatcher.rs` の file の本体の行は 2012（閾値 2000、existing）。`dispatcher.rs` に行を足さない（tick の段の呼び出しは `project_wake.rs` の既存の method に置く）。
+- `review` module は閾値の下。起動の計画（実行中の判断・試行の数・`ParentCheckpointRequest` の組み立て・試行の記録）と終わりの決着は `crates/task-dispatch/src/review/parent_evaluation.rs` の自由関数に置く。ADR D2.3 の置き場 `dispatcher/parent_evaluation.rs` からの変更になるので、ADR の付記か進捗の提案で理由を書く。
+
+## 残り（run 3 以降）
+
+- 起動の段（`review/parent_evaluation.rs` の自由関数と `project_wake.rs` の既存の method の中の呼び出し。上の制約）: 実行中の判断ごとに `has_task_run(root)` が偽・`tree_limit_hold_for` が偽・試行 < 上限のときだけ `start_side_review(root, parent_checkpoint の節, SideReviewKind::ParentEvaluation)`、run id が返れば試行の記録を書いて `ArtifactProduced`。上限で run が無ければ `invalid` の最終の記録。
 - `design_gate.rs`: `SideReviewKind::ParentEvaluation { decision_id }`・終わりの腕・`holds_side_review` の評価の半分。
 - `review/parent_evaluation.rs`（新）: `review.json` を読み `check_evaluation`、最終の記録を書く。
 - `dispatcher/tests/project_checkpoint.rs`（新）: `project_controller_checkpoint_` の dispatcher の試験（発火・効果 1 回の冪等・crash の境界・strategy の無い root と無効な案件で reviewer run 0・no-progress の escalate・suppressed の後の due・final review の run を試行に数えない・root に手元の run がある間は起こさない）。

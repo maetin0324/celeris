@@ -7,6 +7,7 @@ pub mod api;
 pub mod console;
 pub mod db;
 pub mod decisions;
+pub mod discussion;
 #[cfg(test)]
 pub(crate) mod fake_ports;
 pub mod knowledge;
@@ -135,6 +136,9 @@ pub fn all() -> Vec<ToolDef> {
         projects::get_def(),
         console::instruct_def(),
         console::reply_def(),
+        discussion::snapshot_def(),
+        discussion::search_def(),
+        discussion::propose_def(),
         org::list_def(),
         org::get_def(),
         org::create_node_def(),

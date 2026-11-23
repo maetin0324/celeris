@@ -139,6 +139,21 @@ pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[
     ),
     (
         "POST",
+        "/api/v1/chat/threads/{t}/exchange/shares",
+        "human_exchange: 外部 LLM への共有・取り込みは人の token だけが行う。CoS・MCP・operator は人の同意を作れない（ADR 2026-11-22-external-llm-discussion-exchange D4.1）。",
+    ),
+    (
+        "POST",
+        "/api/v1/chat/threads/{t}/exchange/shares/{share_id}/revoke",
+        "human_exchange: 外部 LLM への共有・取り込みは人の token だけが行う。CoS・MCP・operator は人の同意を作れない（ADR 2026-11-22-external-llm-discussion-exchange D4.1）。",
+    ),
+    (
+        "POST",
+        "/api/v1/chat/threads/{t}/exchange/imports",
+        "human_exchange: 外部 LLM への共有・取り込みは人の token だけが行う。CoS・MCP・operator は人の同意を作れない（ADR 2026-11-22-external-llm-discussion-exchange D4.1）。",
+    ),
+    (
+        "POST",
         "/api/v1/routing-eval/trials",
         "evaluation_dispatch: 評価試行の投入は評価 dispatcher 専用の運用操作。",
     ),

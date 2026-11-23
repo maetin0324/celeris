@@ -803,6 +803,36 @@ export type ChatEventListResponse = {
 
 export type ChatEventType = "message" | "text_delta" | "status" | "tool" | "run" | "queue" | "card" | "thread" | "message_revised";
 
+export type ChatExchangeImportFormat = "json" | "markdown";
+
+export type ChatExchangeImportRequest = {
+  "client_message_id": string;
+  "content"?: string | null;
+  "envelope"?: unknown;
+  "format": ChatExchangeImportFormat;
+};
+
+export type ChatExchangeImportResponse = {
+  "content_hash": string;
+  "duplicate": boolean;
+  "message": ChatMessage;
+  "project_id": string;
+};
+
+export type ChatExchangeShareRequest = {
+  "expires_at": string;
+  "include_confidential"?: boolean;
+  "message_ids": Array<string>;
+  "scope": ChatExchangeShareScope;
+};
+
+export type ChatExchangeShareResponse = {
+  "revoked": boolean;
+  "share_id": number;
+};
+
+export type ChatExchangeShareScope = "selected_excerpt" | "summary";
+
 export type ChatForwardRequest = {
   "client_message_id": string;
   "expires_at"?: string | null;
@@ -3969,7 +3999,7 @@ export type McpClientsView = {
   "items": Array<McpClient>;
 };
 
-export type McpScope = "knowledge:read" | "knowledge:propose" | "tasks:read" | "tasks:interact" | "tasks:control" | "tasks:decide" | "console:instruct" | "org:read" | "org:write" | "skills:read" | "skills:write" | "db:read" | "api:read";
+export type McpScope = "knowledge:read" | "knowledge:propose" | "tasks:read" | "tasks:interact" | "tasks:control" | "tasks:decide" | "console:instruct" | "org:read" | "org:write" | "skills:read" | "skills:write" | "db:read" | "api:read" | "discussion:read" | "discussion:propose";
 
 export type MemoryView = {
   "notes": string;

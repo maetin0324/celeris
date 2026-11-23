@@ -4,12 +4,11 @@
 
 use schemars::JsonSchema;
 use task_core::chat::{
-    ChatAttachment, ChatAttachmentResponse, ChatCheckpointSaved, ChatEvent, ChatEventListResponse,
-    ChatMessage, ChatMessageEditRequest, ChatMessageListResponse, ChatMessageResponse,
-    ChatMessageRetractRequest, ChatOpenThreadRequest, ChatPatchThreadRequest,
-    ChatPostMessageRequest, ChatPostMessageResponse, ChatReadThreadRequest, ChatReferenceRequest,
-    ChatReferenceResponse, ChatResumeQueueRequest, ChatRunResponse, ChatStopRequest,
-    ChatStopResponse, ChatThread, ChatThreadDetailResponse, ChatThreadListResponse,
+    ChatAttachmentResponse, ChatCheckpointSaved, ChatEventListResponse, ChatMessageEditRequest,
+    ChatMessageListResponse, ChatMessageResponse, ChatMessageRetractRequest, ChatOpenThreadRequest,
+    ChatPatchThreadRequest, ChatPostMessageRequest, ChatPostMessageResponse, ChatReadThreadRequest,
+    ChatReferenceRequest, ChatReferenceResponse, ChatResumeQueueRequest, ChatRunResponse,
+    ChatStopRequest, ChatStopResponse, ChatThreadDetailResponse, ChatThreadListResponse,
     ChatThreadResponse, CosOperation,
 };
 use task_core::{EventRow, Task};
@@ -329,15 +328,21 @@ pub struct ApiV1Schema {
     pub eval_trial: crate::routing_eval::EvalTrialView,
     pub eval_trial_list: crate::routing_eval::EvalTrialList,
     // ---- ADR 2026-10-05-cos-chat-home D2: CoS チャット（スレッド・メッセージ・run・添付・SSE） ----
-    pub chat_thread: ChatThread,
-    pub chat_message: ChatMessage,
-    pub chat_attachment: ChatAttachment,
+    // `ChatThread`・`ChatMessage`・`ChatAttachment`・`ChatEvent` are not listed: they stay in `$defs` through
+    // `ChatThreadResponse.thread`・`ChatMessageResponse.message`・`ChatAttachmentResponse.attachment`・
+    // `ChatEventListResponse.items` (the root's field count is repo health `size.responsibility-growth`).
     /// ADR 2026-11-21-chat-discussion-mode D5.1: `PATCH …/messages/{m}` and `…/retract` bodies
     /// (`GET …/revisions` answers `ChatEventListResponse`). `ChatRun` and `ChatCard` are not
     /// listed here: they stay in `$defs` through `ChatRunResponse.run` and `ChatMessage.cards`.
     pub chat_message_edit: ChatMessageEditRequest,
     pub chat_message_retract: ChatMessageRetractRequest,
-    pub chat_event: ChatEvent,
+    /// ADR 2026-11-22-external-llm-discussion-exchange D4.1: `POST …/exchange/shares` (and `…/revoke`) and
+    /// `POST …/exchange/imports`. `GET …/exchange/export` answers the `celeris.discussion-snapshot/1` document of
+    /// the ADR's D1.4 (JSON or Markdown), not listed here.
+    pub chat_exchange_share: crate::exchange_wire::ChatExchangeShareRequest,
+    pub chat_exchange_share_response: crate::exchange_wire::ChatExchangeShareResponse,
+    pub chat_exchange_import: crate::exchange_wire::ChatExchangeImportRequest,
+    pub chat_exchange_import_response: crate::exchange_wire::ChatExchangeImportResponse,
     pub chat_thread_open: ChatOpenThreadRequest,
     pub chat_thread_read: ChatReadThreadRequest,
     pub chat_thread_patch: ChatPatchThreadRequest,

@@ -59,6 +59,7 @@ pub mod design_review;
 pub mod direct_route;
 /// ADR 2026-11-21-chat-discussion-mode D6: 引いた chat の message の今の事実を読む。
 pub mod discussion_citation;
+pub mod discussion_exchange;
 pub mod discussion_mode;
 /// ADR 2026-10-07-build-tmp-hygiene D4.4: ディスク使用率の監視の状態。
 pub mod disk_watch;

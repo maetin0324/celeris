@@ -2052,3 +2052,11 @@ CPU 焼き負荷を使わずに、即時の stream 通知・終端・未完了 f
   「達成したい状態」の語を使う。task の木の段階・ExecutionPlan の stage を長期の目標として流用しない。
 - 案件ページの「以前の途中目標（読み取り専用）」は凍結の履歴のまま。Roadmap の panel
   （`web/features/projects/project-roadmap-panel.tsx`）は別の欄で、案件ページへの結線は A9 が行う。
+
+## 付記（2026-11-22、MCP の `decision_answer`・`task_plan_gate` の scope を `tasks:decide` に移した）
+
+- D7（R3a）・D8（R3b）で `tasks:interact` に置いた MCP の `decision_answer`・`task_plan_gate` は、
+  [ADR 2026-11-22-external-llm-discussion-exchange](2026-11-22-external-llm-discussion-exchange.md) D6（人の決定 `ext-client-scope` の答え b）で
+  `task_approve`・`task_reject` と同じ `tasks:decide` に移した。人の決定・計画・task の承認に答える MCP の道具は `tasks:decide` だけにある。
+  `decision_list` は `tasks:interact` のまま（読むだけ）。本文の「scope `tasks:interact`」の記述（D7 の答えの流れ、R3a・R3b の付記）は
+  この付記で置き換わる。API（`POST /decisions/{id}/answer`・`POST /tasks/{id}/execution/plan-gate`）と記録の主体（`mcp:<client_id>`）は変えていない。

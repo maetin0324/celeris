@@ -1,4 +1,4 @@
-//! `strategy_contract_*`: 戦略の文書と envelope の検査の試験（ADR 2026-11-21-strategy-evidence-contract D6）。
+//! `strategy_contract_*`: 戦略の文書の検査の試験（ADR 2026-11-21-strategy-evidence-contract D6）。envelope の試験は `envelope/tests.rs`。
 //!
 //! 守る不変条件: 出典の欠けた・古い・別の案件の・人が承認していない戦略は実行の検査で拒否され、反証の証拠は次の版で消せない。
 //! 既存の試験はこの module が無いので検出できない（base には戦略の文書の検査が無い）。
@@ -7,7 +7,6 @@ use std::collections::BTreeSet;
 
 use serde_json::Value;
 
-use super::envelope::{EnvelopeContext, validate_envelope};
 use super::*;
 
 mod review;
@@ -26,46 +25,6 @@ const V2_DROPS: &str = include_str!("fixtures/v2-drops-refute.json");
 const NEG_SRC: &str = include_str!("fixtures/neg-source-missing.json");
 const NEG_STALE: &str = include_str!("fixtures/neg-stale.json");
 const NEG_PROJ: &str = include_str!("fixtures/neg-other-project.json");
-
-macro_rules! envelope_fixture {
-    ($dir:literal, $name:literal) => {
-        (
-            concat!($dir, "/", $name),
-            include_str!(concat!(
-                "../../../../agent-docs/progress/2026-11-21-strategy-v1-0/fixtures/",
-                $dir,
-                "/",
-                $name
-            )),
-        )
-    };
-}
-
-const ENVELOPE_CONTEXT: &str =
-    include_str!("../../../../agent-docs/progress/2026-11-21-strategy-v1-0/fixtures/context.json");
-const ENVELOPE_BASELINE: [(&str, &str); 4] = [
-    envelope_fixture!("baseline", "chatgpt-human-paste.json"),
-    envelope_fixture!("baseline", "human-approved-in-web.json"),
-    envelope_fixture!("baseline", "internal-cos.json"),
-    envelope_fixture!("baseline", "muse-mcp-propose.json"),
-];
-const ENVELOPE_NEGATIVE: [(&str, &str); 15] = [
-    envelope_fixture!("negative", "browser-session-source.json"),
-    envelope_fixture!("negative", "confidential-outbound.json"),
-    envelope_fixture!("negative", "confirmed-without-refs.json"),
-    envelope_fixture!("negative", "consent-by-llm-full-history.json"),
-    envelope_fixture!("negative", "cos-self-approves.json"),
-    envelope_fixture!("negative", "hash-mismatch.json"),
-    envelope_fixture!("negative", "idempotency-replay-different-content.json"),
-    envelope_fixture!("negative", "llm-approval-ref.json"),
-    envelope_fixture!("negative", "mcp-claims-human.json"),
-    envelope_fixture!("negative", "missing-field.json"),
-    envelope_fixture!("negative", "no-consent.json"),
-    envelope_fixture!("negative", "other-project.json"),
-    envelope_fixture!("negative", "prompt-injection-approves.json"),
-    envelope_fixture!("negative", "secret-in-body.json"),
-    envelope_fixture!("negative", "too-long.json"),
-];
 
 fn sha(bytes: &[u8]) -> String {
     sha256_hex(std::str::from_utf8(bytes).unwrap())
@@ -189,33 +148,6 @@ fn validate_without(bytes: &[u8], ctx: &CheckContext, skip: Rule) -> Vec<Violati
         f(&input, &mut out);
     }
     out
-}
-
-#[test]
-fn strategy_contract_envelope_baselines_accepted() {
-    let ctx: EnvelopeContext = serde_json::from_str(ENVELOPE_CONTEXT).unwrap();
-    for (name, text) in ENVELOPE_BASELINE {
-        let case: Value = serde_json::from_str(text).unwrap();
-        assert_eq!(case["expect"], "accept", "{name}");
-        let got = validate_envelope(&case["envelope"], &ctx);
-        assert!(got.is_empty(), "{name}: {got:?}");
-    }
-}
-
-#[test]
-fn strategy_contract_envelope_negatives_rejected_with_expected_rule() {
-    let ctx: EnvelopeContext = serde_json::from_str(ENVELOPE_CONTEXT).unwrap();
-    let mut covered = BTreeSet::new();
-    for (name, text) in ENVELOPE_NEGATIVE {
-        let case: Value = serde_json::from_str(text).unwrap();
-        let want = case["expect"].as_str().unwrap();
-        let got = validate_envelope(&case["envelope"], &ctx);
-        println!("{name}: expect {want}, got {got:?}");
-        assert!(got.contains(&want), "{name}: expect {want}, got {got:?}");
-        covered.insert(want.split(':').next().unwrap().to_string());
-    }
-    // R1〜R13 のすべてに否定対照がある。
-    assert_eq!(covered.len(), 13, "{covered:?}");
 }
 
 #[test]

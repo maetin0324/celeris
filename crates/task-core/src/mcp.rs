@@ -38,6 +38,12 @@ pub enum McpScope {
     DbRead,
     /// ADR 2026-10-23-mcp-read-only-db-and-api D1: `api_get`（`/api/v1` への GET の代行）。
     ApiRead,
+    /// ADR 2026-11-22-external-llm-discussion-exchange D1.1: `discussion_snapshot` / `discussion_evidence_search`
+    /// （案件 thread のうち人が共有した範囲と、その client 自身の propose だけを読む）。
+    DiscussionRead,
+    /// ADR 2026-11-22-external-llm-discussion-exchange D1.1: `discussion_propose`（未承認の案を 1 件記録する）。
+    /// 綴りは envelope の R8 が照合する [`crate::strategy::envelope::MCP_PROPOSE_SCOPE`]（1 か所だけに書く）。
+    DiscussionPropose,
 }
 
 impl McpScope {
@@ -56,6 +62,8 @@ impl McpScope {
             McpScope::SkillsWrite => "skills:write",
             McpScope::DbRead => "db:read",
             McpScope::ApiRead => "api:read",
+            McpScope::DiscussionRead => "discussion:read",
+            McpScope::DiscussionPropose => crate::strategy::envelope::MCP_PROPOSE_SCOPE,
         }
     }
 
@@ -74,6 +82,8 @@ impl McpScope {
             "skills:write" => Some(McpScope::SkillsWrite),
             "db:read" => Some(McpScope::DbRead),
             "api:read" => Some(McpScope::ApiRead),
+            "discussion:read" => Some(McpScope::DiscussionRead),
+            crate::strategy::envelope::MCP_PROPOSE_SCOPE => Some(McpScope::DiscussionPropose),
             _ => None,
         }
     }
@@ -115,7 +125,8 @@ impl schemars::JsonSchema for McpScope {
                 "knowledge:read", "knowledge:propose", "tasks:read",
                 "tasks:interact", "tasks:control", "tasks:decide", "console:instruct",
                 "org:read", "org:write", "skills:read", "skills:write",
-                "db:read", "api:read",
+                "db:read", "api:read", "discussion:read",
+                crate::strategy::envelope::MCP_PROPOSE_SCOPE,
             ],
         })
     }
@@ -417,6 +428,8 @@ mod tests {
             McpScope::SkillsWrite,
             McpScope::DbRead,
             McpScope::ApiRead,
+            McpScope::DiscussionRead,
+            McpScope::DiscussionPropose,
         ] {
             assert_eq!(McpScope::parse(scope.as_str()), Some(scope));
         }

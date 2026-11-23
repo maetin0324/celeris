@@ -32,12 +32,14 @@ tasks: [01M7XQ9QWK58ESMW42Q1TGT3WZ]
 - 型: 戦略の文書の参照 `StrategyRef { task_id: String, name: String, sha256: String, candidate: Option<String> }`（`deny_unknown_fields`。`candidate` は省略可）を、task-core の新しい module
   `crates/task-core/src/strategy_ref.rs` に 1 つだけ置く。欄・serde の形・doc comment は子 5 の `task_api::cos::strategy_gate::StrategyRef` のまま移す。`task_id` は `String` のままにする
   （API の入力の id の誤りを、serde の拒否でなく gate の違反として記録する今の挙動を変えない）。この module は task-core の他の module を use しない（serde・schemars だけ。D11 の deps.cycle）。
-- 照会: `cos_operations` の strategy 付きの `task.create` の照会は、`crates/task-core/src/store/strategy_reads.rs`（新しい file。SELECT だけで書かない）の 1 関数
-  `SqliteStore::strategy_task_creates(target: Option<TaskId>) -> Result<Vec<(String, StrategyRef)>, StoreError>` だけにする。要素は `(target_id, 参照)`、順は `created_at, id`。
+- 照会: `cos_operations` の strategy 付きの `task.create` の照会は、task-core の crate 直下の新しい module `crates/task-core/src/strategy_reads.rs`（store の外。SELECT だけで書かない）の 1 つの自由関数
+  `task_core::strategy_reads::strategy_task_creates(store: &SqliteStore, target: Option<TaskId>) -> Result<Vec<(String, StrategyRef)>, StoreError>` だけにする。
+  読み取り専用の接続（`SqliteStore::with_read_conn`）を使う。要素は `(target_id, 参照)`、順は `created_at, id`。
   `None` は全件、`Some(id)` は `target_id = id` の行だけを返す。子 5 の gate は `None` で X(v) の元を読み（版ごとの選別は今までどおり呼び出し側）、controller の snapshot は `Some(root)` の最初の行を root の参照にする。
 - 消すもの: `task_api::cos::strategy_gate` の `StrategyRef` の定義・`StrategyOperation`・`strategy_operations`（`write_tx` の中の生の SQL）と、`task_worker::protocol::ParentCheckpointStrategy`。
   gate は `pub(crate) use task_core::strategy_ref::StrategyRef;` で型を読み込み、`cos/operations.rs`（`super::strategy_gate::StrategyRef` を使う）は変えない。`ParentCheckpointRequest.strategy` は同じ型を使う（D3.1）。
-- 高 risk の class `store`（`strategy_reads.rs` と `store/mod.rs` の `mod` の 1 行）に当たるので、strategy-read の WU の設計 brief にこの ADR を挙げる。
+- 照会の module は store（`crates/task-core/src/store/`）の外に置くので、高 risk の class `store` に当たらない。store の file は 1 行も変えない。
+  置き場を変えた理由は末尾の付記（WU strategy-read）に書く。
 
 strategy root でない root（人・CoS が strategy 無しで起票した root、controller が起票した root）は checkpoint を持たない。したがって低抽象度の task には何も起きない（D9.2）。
 
@@ -135,7 +137,7 @@ validate は snapshot の `checkpoints` の値（D1.3 の due と実行中、D5.
 |---|---|---|
 | `decision_id`・`root_id`・`triggers[]` | 判断の id と D1.2 の key | 判断の行 |
 | `goal` | `{request_sha256, outcomes: [{id, title, acceptance[], reached}]}`。`reached` は Rust の D6（`recorded_outcomes`・`root_satisfies`）の値 | snapshot |
-| `strategy` | root の `task_core::strategy_ref::StrategyRef`（`task_id`・`name`・`sha256`・`candidate`。D1.1 の型をそのまま使う） | D1.1 の `strategy_task_creates(Some(root))` |
+| `strategy` | root の `task_core::strategy_ref::StrategyRef`（`task_id`・`name`・`sha256`・`candidate`。D1.1 の型をそのまま使う） | D1.1 の `strategy_task_creates(store, Some(root))` |
 | `children[]` | `{task_id, title, status, reviewer_passed, criteria: [{text, kind, result}]}` | snapshot の root の行と子の events |
 | `metrics` | `{children_terminal, children_total, tokens_used, max_tokens}` | D1.2 と同じ値 |
 | `previous[]` | 同じ root の前の評価の成果物 `{name, sha256}` | root の events |
@@ -340,7 +342,7 @@ N = 3 なら C-done（3）と F-done（6）で発火し、最初の off_track �
 | checkpoint-core | `crates/task-core/src/parent_checkpoint.rs`（`triggers`・`check_evaluation`・`allowed_actions`・`PARENT_EVALUATION_RUBRIC`・型）と `crates/task-core/src/parent_checkpoint/`（試験）、`crates/task-core/src/lib.rs`（`mod` の 1 行）、WU の進捗 | `parent_checkpoint_contract_` |
 | evaluator-wire | `crates/task-worker/src/protocol.rs`・`crates/task-worker/src/change_rules/review.rs`（と試験）、`ReviewRequest {`・`ReviewOutput {` の literal を持つ試験 file（欄 `None` を足すだけ）、`docs/protocol/worker-protocol.md`（context.review の表と §10.2）・`docs/protocol/worker-protocol.schema.json`、WU の進捗 | `parent_evaluation_wire_`・`parent_evaluation_absent_` |
 | adr-revise | この ADR、`agent-docs/progress/2026-11-22-strategy-v1-6/adr-revise.md` | — |
-| strategy-read | `crates/task-core/src/strategy_ref.rs`（新）と `crates/task-core/src/lib.rs` の `mod`・`pub use` の行、`crates/task-core/src/store/strategy_reads.rs`（新、SELECT だけ）と試験、`crates/task-core/src/store/mod.rs` の `mod` の 1 行、`crates/task-api/src/cos/strategy_gate.rs`（型の定義・`StrategyOperation`・`strategy_operations` を消し、`pub(crate) use` と D1.1 の関数を使う）、`crates/task-worker/src/protocol.rs`・`crates/task-worker/src/protocol/parent_checkpoint.rs` と試験（`ParentCheckpointStrategy` を消す）、`docs/protocol/worker-protocol.md`・`docs/protocol/worker-protocol.schema.json`、型の移動で生成物が変わるときだけ `docs/api/v1/api-v1.schema.json`・`web/api/generated/`（再生成）、WU の進捗 | `strategy_reads_`。既存の子 5 の gate の試験（task-api）が変更なしで通る。`parent_evaluation_wire_` は型の名前の置き換えだけを直して通る |
+| strategy-read | `crates/task-core/src/strategy_ref.rs`（新）と `crates/task-core/src/lib.rs` の `mod`・`pub use` の行、`crates/task-core/src/strategy_reads.rs`（新、SELECT だけ）と試験 `crates/task-core/src/strategy_reads_tests.rs`（新）、`crates/task-api/src/cos/strategy_gate.rs`（型の定義・`StrategyOperation`・`strategy_operations` を消し、`pub(crate) use` と D1.1 の関数を使う）、`crates/task-worker/src/protocol.rs`・`crates/task-worker/src/protocol/parent_checkpoint.rs` と試験（`ParentCheckpointStrategy` を消す）、`docs/protocol/worker-protocol.md`・`docs/protocol/worker-protocol.schema.json`、型の移動で生成物が変わるときだけ `docs/api/v1/api-v1.schema.json`・`web/api/generated/`（再生成）、WU の進捗 | `strategy_reads_`。既存の子 5 の gate の試験（task-api）が変更なしで通る。`parent_evaluation_wire_` は型の名前の置き換えだけを直して通る |
 | review-launcher | `crates/task-dispatch/src/health_review/design_gate.rs`（共通の起動口・`SideReviewKind`・`holds_side_review` の設計 review の半分）、`crates/task-dispatch/src/dispatcher/leases.rs`（呼び出しの 1 行）、`crates/task-dispatch/src/dispatcher.rs`（`Completion::DesignReview` の variant と受け口の行だけ）、`crates/task-dispatch/src/health_review/` の試験、WU の進捗 | `side_review_`。既存の設計 review の試験（`health_review/` の scenario 試験を含む）が変更なしで通る |
 | controller-checkpoint | `crates/task-core/src/parent_checkpoint.rs`（`checkpoint_states`・試行の記録の name の関数・`ParentEvaluationRecord.triggers` の削除）と試験、`crates/task-core/src/project_proposal.rs`（`Evaluate`・snapshot の `checkpoints`・検証）、`crates/task-ops/src/project_snapshot.rs`、`crates/task-dispatch/src/project_controller.rs`（`RequestEvaluation`）、`crates/task-dispatch/src/dispatcher/{project_decider_ts,project_wake,parent_evaluation}.rs`（`parent_evaluation.rs` は新）と `dispatcher.rs` の `mod`・tick の 1 行、`crates/task-dispatch/src/health_review/design_gate.rs`（`SideReviewKind::ParentEvaluation` の variant・`parent_checkpoint` の節・終わりの腕・`holds_side_review` の評価の半分だけ）、`crates/task-dispatch/src/review/parent_evaluation.rs`（新）と `review.rs` の `mod` の 1 行、`crates/task-dispatch/src/dispatcher/tests/project_checkpoint.rs`（新）と `tests` の `mod` の 1 行、`crates/celeris/src/config/project_controller.rs`、`docs/ops/project-controller.md`、WU の進捗 | `project_controller_checkpoint_`・`parent_checkpoint_contract_` |
 | ts-checkpoint-rule | `control-ts/src/domains/project_controller.ts`・`project_controller.test.ts`、WU の進捗 | `project_controller_checkpoint_`（TS の試験名） |
@@ -352,7 +354,7 @@ N = 3 なら C-done（3）と F-done（6）で発火し、最初の off_track �
 - WU の進捗は `agent-docs/progress/2026-11-22-strategy-v1-6/<key>.md`。各 WU はこの ADR に実装時の付記を足してよい。
 - 段の順: strategy-read と review-launcher は adr-revise の後に並び（write set は重ならない）、controller-checkpoint は両方の後。controller-checkpoint は起動口と `strategy_task_creates` を呼ぶだけで、写しを作らない。
 - 高 risk の class（計画の設計 brief にこの ADR を挙げる）:
-  - strategy-read: `crates/task-core/src/store/strategy_reads.rs`・`crates/task-core/src/store/mod.rs`（`store`）。`crates/task-api/src/cos/strategy_gate.rs` は class の正規表現に当たらないが、
+  - strategy-read: 照会の module（`crates/task-core/src/strategy_reads.rs`）は store の外なので class `store` に当たらない。store の file は書かない。`crates/task-api/src/cos/strategy_gate.rs` は class の正規表現に当たらないが、
     class `authz` の `cos/operations.rs` が呼ぶ gate なので、この計画では高 risk と同じに扱う（検査の意味を変えないことを既存の gate の試験で確かめる）。
   - review-launcher: `crates/task-dispatch/src/health_review/design_gate.rs`（`review-gate`）、`crates/task-dispatch/src/dispatcher/leases.rs`（`lease`。呼び出しの 1 行）。
   - controller-checkpoint: `crates/task-dispatch/src/health_review/design_gate.rs`（`review-gate`。variant・節・腕・`holds_side_review` の評価の半分だけ）。
@@ -362,7 +364,8 @@ N = 3 なら C-done（3）と F-done（6）で発火し、最初の off_track �
   - 起動口の置き場は `design_gate.rs` の中の一般化に決める。`design_gate.rs` は `dispatcher.rs` の `#[path]` で読む `dispatcher` の子で、起動口は dispatcher の private な `running`・`Completion` を使う。
     新しい file に分けても `dispatcher` の子として読むしかなく、単位は同じ `task-dispatch/src/dispatcher` で、file と `mod` の行が増えるだけである。`dispatcher/parent_evaluation.rs` からの呼び出しも同じ単位の中に閉じ、新しい組は無い。
     終わりの腕が呼ぶ `task_dispatch::review::parent_evaluation`（単位 `review`）への組は、既存の `dispatcher` → `review` と同じ向きである。
-  - `strategy_ref.rs` は task-core の他の module を use しない葉なので、`store` → `strategy_ref`、task-api・task-worker → `task_core::strategy_ref` の組は循環の外から一方向に入る。
+  - `strategy_ref.rs` は task-core の他の module を use しない葉なので、`strategy_reads` → `strategy_ref`、task-api・task-worker → `task_core::strategy_ref` の組は循環の外から一方向に入る。
+    `strategy_reads` は `store`・`model`・`strategy_ref` に一方向に依存し、task-core の中でこれを use する module は無い（循環に入らない）。
   - `parent_checkpoint` は既に `strategy`（task-core の既存の循環の中）に依存する。`project_proposal`（循環の中）から `parent_checkpoint` への組を足すと `parent_checkpoint` が循環に入るので、
     `project_proposal::validate` は `parent_checkpoint` を呼ばず、snapshot の組み立て（task-ops）が `checkpoint_states`・`triggers`・`allowed_actions` の結果を snapshot の `checkpoints` に入れる（D2.2）。
     `checkpoint_states` は `project_wake`・`project_proposal` の型を use しない（`effect_state` は呼び出し側が `parent_checkpoint` の入力の形に写す）。
@@ -372,7 +375,7 @@ N = 3 なら C-done（3）と F-done（6）で発火し、最初の off_track �
 
 新しい DB 表・migration・event の種類・Agent サービス・Manager・trait・状態機械は足さない。足すのは、`ProjectAction::Evaluate` と `ProjectEffect::RequestEvaluation` の variant 各 1、
 snapshot の欄 `checkpoints`、`ReviewRequest.parent_checkpoint` と `ReviewOutput.parent_evaluation` の任意の節 2 つ、設定の節 `[project_controller.checkpoint]`（3 欄）、
-読み取り専用の store の関数 1 つ（gate の生の SQL を置き換える）、純関数（`triggers`・`checkpoint_states`・`check_evaluation`・`allowed_actions`）、検証の code 4 つ（`checkpoint_root_unknown`・`checkpoint_not_due`・
+読み取り専用の照会の自由関数 1 つ（`task_core::strategy_reads`。gate の生の SQL を置き換える）、純関数（`triggers`・`checkpoint_states`・`check_evaluation`・`allowed_actions`）、検証の code 4 つ（`checkpoint_root_unknown`・`checkpoint_not_due`・
 `checkpoint_evaluation_open`・`checkpoint_action_mismatch`）、replan の `reason_code` 2 つ、成果物の name の形 2 つ（最終の記録と試行の記録）である。`StrategyRef` は task-api から task-core に移すだけで、型の数は 2 から 1 に減る。
 reviewer run の起動口は設計 review の起動を一般化したもので、起動の写しは作らない。発火済み・実行中・評価済み・試行の数・写し済みは保存せず、判断の表と root の成果物の name から毎回導く。
 Evaluator は既存の reviewer run で、dispatcher は出力の形と参照を確かめるだけで LLM を呼ばない。TS は判定の選択だけで LLM を呼ばない。Project.request と承認済み Roadmap は読むだけ。
@@ -381,11 +384,11 @@ Evaluator は既存の reviewer run で、dispatcher は出力の形と参照を
 
 1. 根本原因: 子の done（局所の review）と親 Outcome の到達（D6）の間に、途中で親の目的への効き目を独立に判定する口が無く、controller は計画の最後の root の終端まで未達に気づかない。
    症状はアーキv4 の固定計画の完走（検知できた時点の後に 137 run・+264.25 USD）に出た。
-2. 責務 owner: 発火の条件・状態の導出・評価の決定的な規則は `task_core::parent_checkpoint`（純関数）。戦略の参照の型は `task_core::strategy_ref`、その照会は `task_core::store::strategy_reads`。
+2. 責務 owner: 発火の条件・状態の導出・評価の決定的な規則は `task_core::parent_checkpoint`（純関数）。戦略の参照の型は `task_core::strategy_ref`、その照会は `task_core::strategy_reads`（crate 直下。store の外）。
    発火の事実の収集と行動の検証は Project Controller（`task_ops::project_snapshot`・`task_core::project_proposal::validate`・`task_dispatch::dispatcher::project_decider_ts`）。
    評価の run の起動と結果の写しは dispatcher の共通の reviewer run の起動口（`health_review::design_gate`）と `review::parent_evaluation`。写しの方針は TS。新しい版は CoS（skill）。
 3. 既存の再利用先: controller の wake → snapshot → TS → Rust の検証 → 効果、`runaway_guard`、設計 review の reviewer run の起動・実行・終わり（D2.3 で一般化して両方が使う）、
-   子 5 の gate の `cos_operations` の照会（D1.1 で store に移して共有する）、`supervisor.has_task_run`、`tree_limit_hold_for`、子 2 の `Reference` と承認、子 5 の gate と Critic、
+   子 5 の gate の `cos_operations` の照会（D1.1 で task-core の `strategy_reads` に移して共有する）、`SqliteStore::with_read_conn`、`supervisor.has_task_run`、`tree_limit_hold_for`、子 2 の `Reference` と承認、子 5 の gate と Critic、
    `ArtifactProduced`、判断の表、`token_budget::tree_tokens_used`、ADR-0095 の読み取り専用の DB。
 4. 選択肢: (a) 評価を新しい task（評価 task）として起票する → task の数が増え、低抽象度の経路と混ざるので採らない。(b) 評価の結果を新しい event か表に保存する → 依頼が禁じるので採らない。
    (c) 子の終端ごとに毎回評価する → 費用が子の数に比例し、局所の review と重なるので採らない（N で間引く）。(d) TS か dispatcher が評価の文を判定する → LLM 抜きでは研究的な判断ができず、
@@ -417,8 +420,8 @@ Evaluator は既存の reviewer run で、dispatcher は出力の形と参照を
 
 | 保証の文 | 関数（owner） | 試験 |
 |---|---|---|
-| strategy root だけが checkpoint を持つ | `SqliteStore::strategy_task_creates`、`task_ops::project_snapshot::build` | `project_controller_checkpoint_only_strategy_roots`、`parent_checkpoint_regression_no_strategy_root_no_reviewer_run` |
-| strategy の照会は 1 か所で、gate の判定は変わらない | `store::strategy_reads::strategy_task_creates`、`cos::strategy_gate` | `strategy_reads_all_rows_in_order`・`strategy_reads_by_target`、既存の子 5 の gate の試験 |
+| strategy root だけが checkpoint を持つ | `task_core::strategy_reads::strategy_task_creates`、`task_ops::project_snapshot::build` | `project_controller_checkpoint_only_strategy_roots`、`parent_checkpoint_regression_no_strategy_root_no_reviewer_run` |
+| strategy の照会は 1 か所で、gate の判定は変わらない | `task_core::strategy_reads::strategy_task_creates`、`cos::strategy_gate` | `strategy_reads_all_rows_in_order`・`strategy_reads_by_target`・`strategy_reads_same_created_at_orders_by_id`、既存の子 5 の gate の試験 |
 | 子の終端の数が N の倍数に達すると `children:<k>` が `due` になる。再試行の `review_fail → ready` は数えない | `parent_checkpoint::triggers` | `parent_checkpoint_contract_children_every_n`、`…_review_fail_retry_not_counted`、`parent_checkpoint_shadow_fires_at_c_mid_d_done_f_done` |
 | 子の `failed`・subtree の反証の証拠・予算の閾値で `due` になる | `parent_checkpoint::triggers` | `parent_checkpoint_contract_child_failed`、`…_refute_new_evidence_only`、`…_budget_thresholds`、`parent_checkpoint_shadow_budget_50_80`・`…_refute_in_subtree`・`…_child_failed` |
 | 状態（発火済み・実行中・評価済み・試行の数）は判断の行と成果物の name だけから導く | `parent_checkpoint::checkpoint_states` | `parent_checkpoint_contract_states_from_rows_and_names`、`…_states_suppressed_is_fired`、`…_states_attempts_by_name` |
@@ -468,3 +471,16 @@ base に関数・型・variant・欄が無いのでコンパイルか主張で�
    最終の記録から trigger の一覧を外し、試行の数を試行の記録の name で数えるようにした（D2.3・D3.4）。
 
 この改訂に合わせ、計画に段 unify（adr-revise → strategy-read・review-launcher）が contract と controller の間に入った。
+
+## 付記（2026-11-22、照会の置き場を crate 直下に移した。WU strategy-read）
+
+D1.1・D11（write set の表・高 risk の class・deps.cycle）・足さないもの・実装前 brief・保証と実装の対応の表で、`cos_operations` の strategy の照会の置き場を
+`crates/task-core/src/strategy_reads.rs` の自由関数 `task_core::strategy_reads::strategy_task_creates(store, target)` に直した。関数の名前・引数の意味・戻り値・SQL の条件・順は変えていない。
+
+- 理由: 初めは照会を store の module の下に置き、`SqliteStore` の method にした。そうすると repo health の必須 rule `size.responsibility-growth` が fail した（store の module はその上限に達しており、
+  1 行の増加でも落ちる）。計画の check 3（`bash scripts/dev/test-affected.sh`）が通らず、strategy-read と controller-checkpoint が止まった。
+- 決定: 人への決定 `strategy-read-store-size` の答えは (a)「crate 直下の `task_core::strategy_reads` の自由関数に移し、この ADR と WU の check を再計画で直す」（CoS の代答。人の選択ではない）。
+  repo health の profile・rule は変えず、例外も足さない。`cos_inbox` と同じく store の外から `SqliteStore` の `pub(crate)` の `with_read_conn` を使う。
+- 結果: 照会の module は高 risk の class `store`（`^crates/task-core/src/store/`）に当たらなくなった。store・migration・events の file の差分は 0 である。
+  試験は `crates/task-core/src/strategy_reads_tests.rs`（`strategy_reads_` の 3 件）に置いた。
+- controller-checkpoint は `strategy_task_creates(store, Some(root))` を呼ぶ（D1.1・D3.1 の表）。

@@ -3725,7 +3725,8 @@
           "type": "array"
         },
         "strategy": {
-          "$ref": "#/$defs/ParentCheckpointStrategy"
+          "$ref": "#/$defs/StrategyRef",
+          "description": "root が実行している戦略の版（CoS の `task.create` の `strategy`。子 2 D3.4。型は子 5 の gate と同じ\n`task_core::strategy_ref::StrategyRef`。ADR D1.1）。"
         },
         "triggers": {
           "description": "発火した trigger の key（`children:<k>`・`child_failed:<task id>`・`refute:<strategy_id>:v<n>:<evidence id>`・\n`budget:<p>`。1〜8 件）。",
@@ -3743,35 +3744,6 @@
         "strategy",
         "metrics",
         "rubric"
-      ],
-      "type": "object"
-    },
-    "ParentCheckpointStrategy": {
-      "description": "root が実行している戦略の版（CoS の `task.create` の `strategy`。子 2 D3.4）。",
-      "properties": {
-        "candidate": {
-          "description": "実行している候補（`selected`）。実験段階の版では省略。",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "name": {
-          "description": "成果物の name `strategy/<strategy_id>/v<n>.json`。",
-          "type": "string"
-        },
-        "sha256": {
-          "type": "string"
-        },
-        "task_id": {
-          "$ref": "#/$defs/TaskId",
-          "description": "文書を作った task。"
-        }
-      },
-      "required": [
-        "task_id",
-        "name",
-        "sha256"
       ],
       "type": "object"
     },
@@ -5451,6 +5423,34 @@
         "sha256",
         "strategy_id",
         "version"
+      ],
+      "type": "object"
+    },
+    "StrategyRef": {
+      "additionalProperties": false,
+      "description": "`/cos/operations` の欄 `strategy`: 実行する戦略の文書（作った task・成果物の name・記録の sha256）。",
+      "properties": {
+        "candidate": {
+          "description": "ADR 2026-11-22-strategy-review-critic D2.2: どの候補の task か（`[a-z0-9-]{1,40}`）。実験段階の版では\nopen の候補、実行段階の版では省略か `selected` の候補。`cos_operations.payload_json.strategy.candidate` が記録になる。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "name",
+        "sha256"
       ],
       "type": "object"
     },

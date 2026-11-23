@@ -35,8 +35,8 @@ pub(crate) fn sample_parent_checkpoint() -> ParentCheckpointRequest {
                 reached: false,
             }],
         },
-        strategy: ParentCheckpointStrategy {
-            task_id: "01M7XQ9QQXY1DY56EXE0TT8X6W".parse().expect("fixed id"),
+        strategy: StrategyRef {
+            task_id: "01M7XQ9QQXY1DY56EXE0TT8X6W".to_string(),
             name: "strategy/arch-v4/v1.json".to_string(),
             sha256: "a".repeat(64),
             candidate: Some("fixed-plan".to_string()),
@@ -188,7 +188,7 @@ fn parent_evaluation_wire_schema_matches_md() {
         "ParentCheckpointRequest",
         "ParentCheckpointGoal",
         "ParentCheckpointOutcome",
-        "ParentCheckpointStrategy",
+        "StrategyRef",
         "ParentCheckpointChild",
         "ParentCheckpointCriterion",
         "ParentCheckpointMetrics",

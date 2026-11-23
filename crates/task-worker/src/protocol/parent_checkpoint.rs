@@ -7,6 +7,7 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use task_core::strategy_ref::StrategyRef;
 use task_core::{Status, TaskId};
 
 use super::RubricItem;
@@ -23,7 +24,9 @@ pub struct ParentCheckpointRequest {
     /// `budget:<p>`。1〜8 件）。
     pub triggers: Vec<String>,
     pub goal: ParentCheckpointGoal,
-    pub strategy: ParentCheckpointStrategy,
+    /// root が実行している戦略の版（CoS の `task.create` の `strategy`。子 2 D3.4。型は子 5 の gate と同じ
+    /// `task_core::strategy_ref::StrategyRef`。ADR D1.1）。
+    pub strategy: StrategyRef,
     /// root の直下の子。
     #[serde(default)]
     pub children: Vec<ParentCheckpointChild>,
@@ -60,19 +63,6 @@ pub struct ParentCheckpointOutcome {
     pub acceptance: Vec<String>,
     /// Rust の判定（D6）。
     pub reached: bool,
-}
-
-/// root が実行している戦略の版（CoS の `task.create` の `strategy`。子 2 D3.4）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ParentCheckpointStrategy {
-    /// 文書を作った task。
-    pub task_id: TaskId,
-    /// 成果物の name `strategy/<strategy_id>/v<n>.json`。
-    pub name: String,
-    pub sha256: String,
-    /// 実行している候補（`selected`）。実験段階の版では省略。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub candidate: Option<String>,
 }
 
 /// root の直下の子 1 件（events から導いた事実）。

@@ -906,8 +906,10 @@ strategy root（CoS の `task.create` で `strategy` を付けて起票した ro
 - `triggers[]`: 発火した trigger の key（`children:<k>`・`child_failed:<task id>`・`refute:<strategy_id>:v<n>:<evidence id>`・`budget:<p>`。1〜8 件）。
 - `goal`（`ParentCheckpointGoal`）: `{request_sha256, outcomes}`。`request_sha256` は Project.request の sha256。
   `outcomes[]`（`ParentCheckpointOutcome`）は `{id, title, acceptance, reached}` で、`reached` は Rust の D6 の判定（評価は到達を書かない）。
-- `strategy`（`ParentCheckpointStrategy`）: `{task_id, name, sha256, candidate?}`。root が実行している戦略の版（`name` は
-  `strategy/<strategy_id>/v<n>.json`、`candidate` は実行している候補。実験段階の版では省略）。
+- `strategy`（`StrategyRef`）: `{task_id, name, sha256, candidate?}`。root が実行している戦略の版（`name` は
+  `strategy/<strategy_id>/v<n>.json`、`candidate` は実行している候補。実験段階の版では省略）。型は CoS の `/cos/operations` の欄
+  `strategy` と同じ `task_core::strategy_ref::StrategyRef` の 1 つで（`task_id` は文字列、知らない欄は拒否）、値は
+  `cos_operations` の照会 `SqliteStore::strategy_task_creates` から取る。
 - `children[]`（`ParentCheckpointChild`）: root の直下の子 `{task_id, title, status, reviewer_passed, criteria}`。`criteria[]`
   （`ParentCheckpointCriterion`）は `{text, kind, result}`（`kind` は check の種類、`result` は `pass`・`fail`・`not_run`）。
 - `metrics`（`ParentCheckpointMetrics`）: `{children_terminal, children_total, tokens_used, max_tokens?}`（D1.2 の trigger と同じ値。

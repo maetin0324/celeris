@@ -1568,7 +1568,7 @@ pub(crate) use parent_checkpoint::tests as parent_checkpoint_tests;
 pub use parent_checkpoint::{
     ParentCheckpointChild, ParentCheckpointCriterion, ParentCheckpointGoal,
     ParentCheckpointMetrics, ParentCheckpointOutcome, ParentCheckpointPrevious,
-    ParentCheckpointRequest, ParentCheckpointStrategy,
+    ParentCheckpointRequest,
 };
 mod health;
 pub use health::{

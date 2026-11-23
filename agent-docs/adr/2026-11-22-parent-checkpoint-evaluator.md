@@ -222,6 +222,7 @@ LLM は呼ばない。形が崩れた・節が無い出力も試行に数え（�
 
 1. `due` の trigger がある strategy root があれば（既存の escalate・待ちの規則より後、launch_root より前）、最も古い trigger の root を 1 つ選び `evaluate` を返す（rule `pc/checkpoint/evaluate`）。
 2. まだ行動に写していない評価（D5.3）があれば、下の表で行動を返す（rule `pc/checkpoint/act`、signal `checkpoint` = 判断 id）。
+   置き場は paused（`pc/project-not-active`）と `pc/no-progress` の直後で、他の規則より前。replan の行は CoS 入力の日の上限に当たれば wait（`pc/checkpoint/act/daily-limit`）。理由は末尾の付記（WU ts-checkpoint-rule）。
 
 #### D5.2 写しの表（`task_core::parent_checkpoint::allowed_actions`、Rust が検証する）
 
@@ -491,3 +492,18 @@ D1.1・D11（write set の表・高 risk の class・deps.cycle）・足さな�
 - 結果: 照会の module は高 risk の class `store`（`^crates/task-core/src/store/`）に当たらなくなった。store・migration・events の file の差分は 0 である。
   試験は `crates/task-core/src/strategy_reads_tests.rs`（`strategy_reads_` の 3 件）に置いた。
 - controller-checkpoint は `strategy_task_creates(store, Some(root))` を呼ぶ（D1.1・D3.1 の表）。
+
+## 付記（2026-11-23、TS の規則の順。WU ts-checkpoint-rule）
+
+D5.1 の 2（act）の置き場を書き足した。1（evaluate）の置き場は変えていない。
+
+- 理由: Rust の `checkpoint_action_mismatch`（D5.2）は、写していない評価がある間、act 以外の proposal を落とす。act を evaluate の直後（既存の待ちの規則より後）に置くと、
+  milestone の記録や起票の判断が先に出て毎回 `invalid_output` になり、act に届かない。そこで act は paused・no-progress の guard の直後に置き、evaluate は人の待ちの規則の後・root の見守りの前に置いた。
+  no-progress の streak は `evaluate` を数える（D6、Rust の `runaway_guard` と同じ）。
+- 試験: TS の `control-ts/src/domains/project_controller.test.ts` の `project_controller_checkpoint_` の 9 件（順は `project_controller_checkpoint_comes_after_paused_no_progress_and_the_daily_cos_limit`）。
+  task-dispatch の `project_controller_checkpoint_` の試験（`dispatcher/tests/project_checkpoint.rs`）は controller-checkpoint の write set にあり、この WU では書かない。
+- 未解決（owner は controller-checkpoint の write set。詳細は `agent-docs/progress/2026-11-22-strategy-v1-6/ts-checkpoint-rule.md` の未解決事項）:
+  1. 写していない評価がある間、paused の wait・`pc/no-progress` の escalate・CoS 入力の日の上限の wait も `checkpoint_action_mismatch` で落ちる（TS の出力を Rust の検証に通して再現した）。
+     no-progress の guard が人に知らせないまま止まる。
+  2. D5.3 の「写し済み」は `effect_state` の `none` を数えない。continue の行を continue・wait で写した判断は効果が無く `none` になるので、その評価は写していないまま残る
+     （コードを読んで導いた結論。試験での再現は未確認）。

@@ -50,6 +50,12 @@ base の E-mid の fixture（`E-mid.request.json`・`E-mid.prompt.md`）と base
 `parent_checkpoint_live_sample_checks`（`#[ignore]`）は新しい request でも pass した（status Checked、違反 0、slice の外の参照 0）。目的の規則（通らなければ消す）に従い、
 sample と試験は残した。sample は報告の本文の無い入力で書かれたもので、盲検の評価（WU blind-eval-runs）が置き換える。
 
+### repo の検査（提出時の HEAD で実行）
+
+- `bash scripts/dev/test-affected.sh` → exit 0。nextest 8,764 passed・32 skipped、web の unit 745 passed（105 file）、test-ts-verify 20 passed、repo_health_gate all checks passed。
+- `cargo clippy --workspace -- -D warnings` → 成功（vendor の deno_core の既存の warning 1 件だけ）。
+- `cargo fmt --all -- --check` → exit 0。
+
 ## 試験の追加の理由（守る不変条件と、既存の試験で検出できない理由）
 
 - 不変条件: 評価器の入力に子の報告の本文が checkpoint の時点まで入り、answer key の印と時点より後の記録が入らない。上限を超えない。

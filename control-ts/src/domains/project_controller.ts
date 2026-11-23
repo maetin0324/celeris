@@ -11,7 +11,8 @@ export type ActionKind =
   | "launch_root"
   | "wait"
   | "escalate"
-  | "mark_milestone";
+  | "mark_milestone"
+  | "evaluate";
 
 export interface Outcome {
   id: string;
@@ -54,6 +55,38 @@ export interface SnapshotDecision {
   at: string;
 }
 
+/**
+ * strategy root 1 件の checkpoint（Rust の SnapshotCheckpoint。ADR 2026-11-22-parent-checkpoint-evaluator D1.3・D5.2・D5.3）。
+ * 状態は Rust が判断の行と成果物の name から導いた値で、TS は読むだけ。
+ */
+export interface SnapshotCheckpoint {
+  root_id: string;
+  /** root が参照する戦略の文書（`artifact:<文書の task>/<name>`）。 */
+  strategy_ref: string;
+  /** due の trigger（古い順）。`at` は大域の event id の 20 桁の文字列で、順にだけ使う。 */
+  due: { key: string; kind: string; at: string | null }[];
+  /** 実行中の evaluate の判断の id。 */
+  running: string | null;
+  /** 評価済みでまだ行動に写していない評価。 */
+  unmapped: SnapshotEvaluation[];
+}
+
+export interface SnapshotEvaluation {
+  decision_id: string;
+  /** `checked`・`invalid`。 */
+  status: string;
+  /** 最終の記録の effective（TS は判断に使わない。行動は allowed から選ぶ）。 */
+  effective: unknown;
+  /** 最終の記録の参照（`artifact:<root>/parent-evaluation/<判断 id>.json`）。 */
+  record_ref: string;
+  /** D5.2 の表の行動（Rust が検証する）。 */
+  allowed: {
+    kind: string;
+    reason_code: string | null;
+    question_key: string | null;
+  }[];
+}
+
 export interface ProjectSnapshot {
   now: string;
   truncated: boolean;
@@ -89,6 +122,8 @@ export interface ProjectSnapshot {
   };
   roadmap: unknown;
   authority: unknown;
+  /** strategy root の無い案件では Rust が key を出さない。 */
+  checkpoints?: SnapshotCheckpoint[];
 }
 
 export interface WaitingOn {
@@ -130,7 +165,8 @@ export type ProjectAction =
       options: string[];
       evidence_refs: string[];
     }
-  | { kind: "mark_milestone"; outcome_id: string; evidence_refs: string[] };
+  | { kind: "mark_milestone"; outcome_id: string; evidence_refs: string[] }
+  | { kind: "evaluate"; root_id: string; triggers: string[] };
 
 export interface ProjectProposal {
   action: ProjectAction;
@@ -157,7 +193,12 @@ export const POLICY = {
   /** Rust の上限（ROOT_TITLE_MAX・ROOT_OBJECTIVE_MAX）。 */
   titleMax: 200,
   objectiveMax: 8000,
+  /** Rust の上限（CHECKPOINT_TRIGGERS_MAX）。evaluate 1 回の trigger の数。 */
+  checkpointTriggersMax: 8,
 } as const;
+
+/** 写していない評価を行動に写す規則の id（Rust の CHECKPOINT_ACT_RULE）。signal `checkpoint` に判断 id を入れる。 */
+const CHECKPOINT_ACT = "pc/checkpoint/act";
 
 const TERMINAL = new Set(["done", "failed", "cancelled"]);
 
@@ -227,7 +268,9 @@ export function parseInput(input: unknown): ProjectSnapshot {
   ];
   for (const k of keys) if (!(k in input)) fail(`missing ${k}`);
   for (const k of Object.keys(input))
-    if (!keys.includes(k)) fail(`unknown field ${k}`);
+    if (!keys.includes(k) && k !== "checkpoints") fail(`unknown field ${k}`);
+  if ("checkpoints" in input && !Array.isArray(input.checkpoints))
+    fail("checkpoints");
   const s = input as unknown as ProjectSnapshot;
   if (!isObj(s.project) || typeof s.project.request_sha256 !== "string")
     fail("project");
@@ -382,13 +425,15 @@ export function decide(s: ProjectSnapshot): ProjectProposal {
       "pc/project-not-active",
     );
   }
-  // 1b. 進捗の増えない効果つきの判断（replan・launch_root）が上限まで続いた: 人に 1 回だけ聞き、後は待つ
+  // 1b. 進捗の増えない効果つきの判断（replan・launch_root・evaluate）が上限まで続いた: 人に 1 回だけ聞き、後は待つ
   //     （LLM の runaway・loop の停止。Rust も同じ上限で escalate に置き換える）。
   let streak = 0;
   for (const d of s.decisions) {
     if (d.progress_epoch !== gap.progress_epoch) break;
     if (
-      (d.kind === "replan" || d.kind === "launch_root") &&
+      (d.kind === "replan" ||
+        d.kind === "launch_root" ||
+        d.kind === "evaluate") &&
       d.effect_state !== "failed" &&
       d.effect_state !== "none"
     )
@@ -426,6 +471,68 @@ export function decide(s: ProjectSnapshot): ProjectProposal {
           rule,
           signals,
         );
+  // 1c. 親の途中評価のうち、まだ行動に写していない評価（ADR 2026-11-22-parent-checkpoint-evaluator D5.2・D5.3）。
+  //     行動は Rust の表（allowed）から選ぶ。Rust は写していない評価がある間、この規則でない行動（evaluate を除く）を
+  //     checkpoint_action_mismatch で落とすので、到達の記録・起票より先に置く。paused・no-progress は上で先に効き、
+  //     replan は CoS 入力の日の上限で待つ（`pc/checkpoint/act/daily-limit`）。
+  const checkpoints = s.checkpoints ?? [];
+  // 進行中（未終端、または合格したが取り込み待ち）の root。checkpoint の continue と規則 7 が見守る。
+  const inFlight = s.roots.filter(
+    (r) =>
+      !TERMINAL.has(r.status) ||
+      (r.status === "done" && r.reviewer_passed && !r.integrated),
+  );
+  const mapping = checkpoints.find((c) => c.unmapped.length > 0);
+  if (mapping !== undefined) {
+    const e = mapping.unmapped[0]!;
+    const signals: [string, string][] = [
+      ["checkpoint", e.decision_id],
+      ["root", mapping.root_id],
+      ["status", e.status],
+    ];
+    const replanRow = e.allowed.find(
+      (a) => a.kind === "replan" && a.reason_code !== null,
+    );
+    if (replanRow !== undefined) {
+      // 評価の文は CoS 入力に写さない（I11）。CoS は参照の記録を読み、人の承認を通る新しい版で戦略を変える（D5.4）。
+      return replan(
+        replanRow.reason_code!,
+        `strategy root ${mapping.root_id} の途中評価（判断 ${e.decision_id}）が戦略の見直しを求めた。評価の記録を読み、人の承認を通る戦略の新しい版を作ってほしい`,
+        [`task:${mapping.root_id}`, e.record_ref, mapping.strategy_ref],
+        CHECKPOINT_ACT,
+        signals,
+      );
+    }
+    const escalateRow = e.allowed.find(
+      (a) => a.kind === "escalate" && a.question_key !== null,
+    );
+    if (escalateRow !== undefined) {
+      return out(
+        {
+          kind: "escalate",
+          category: "explicit_human",
+          question_key: escalateRow.question_key!,
+          summary: `strategy root ${mapping.root_id} の途中評価（判断 ${e.decision_id}、${e.status}）が人の判断を求めた。評価の記録を読んで続け方を決めてほしい`,
+          options: [],
+          evidence_refs: [`task:${mapping.root_id}`, e.record_ref],
+        },
+        CHECKPOINT_ACT,
+        signals,
+      );
+    }
+    if (e.allowed.some((a) => a.kind === "continue")) {
+      return out(
+        {
+          kind: "continue",
+          watch_root_ids: inFlight.map((r) => r.id),
+          next_wake_after_secs: POLICY.watchSecs,
+        },
+        CHECKPOINT_ACT,
+        signals,
+      );
+    }
+    fail("checkpoint allowed actions");
+  }
   // 2. Outcome block の形が誤り: 人に 1 回だけ知らせ、後は待つ。
   if (s.outcomes_invalid) {
     return escalateOnce(
@@ -512,12 +619,32 @@ export function decide(s: ProjectSnapshot): ProjectProposal {
       [["wait", `${w.kind}:${w.id}`]],
     );
   }
+  // 6b. 親の途中評価の checkpoint（D5.1）: due の trigger があり実行中の評価の無い strategy root のうち、最も古い trigger の
+  //     root を 1 つ評価に出す。既存の escalate・待ちの規則より後、root の見守り・起票より前（root が走っている途中で評価する）。
+  const dueAt = (c: SnapshotCheckpoint) => c.due[0]?.at ?? null;
+  const older = (a: string | null, b: string | null) =>
+    a === null
+      ? false
+      : b === null || a.length < b.length || (a.length === b.length && a < b);
+  let evalRoot: SnapshotCheckpoint | null = null;
+  for (const c of checkpoints)
+    if (
+      c.running === null &&
+      c.due.length > 0 &&
+      (evalRoot === null || older(dueAt(c), dueAt(evalRoot)))
+    )
+      evalRoot = c;
+  if (evalRoot !== null) {
+    const triggers = evalRoot.due
+      .slice(0, POLICY.checkpointTriggersMax)
+      .map((t) => t.key);
+    return out(
+      { kind: "evaluate", root_id: evalRoot.root_id, triggers },
+      "pc/checkpoint/evaluate",
+      [["root", evalRoot.root_id], ...triggers.map((t): [string, string] => ["trigger", t])],
+    );
+  }
   // 7. 進行中（未終端、または合格したが取り込み待ち）の root があれば見守る。tree・dispatcher の待ちを重複しない（I15）。
-  const inFlight = s.roots.filter(
-    (r) =>
-      !TERMINAL.has(r.status) ||
-      (r.status === "done" && r.reviewer_passed && !r.integrated),
-  );
   if (inFlight.length > 0) {
     return out(
       {

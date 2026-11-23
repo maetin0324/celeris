@@ -736,6 +736,50 @@ async fn proposal_review_state_stale_after_target_edit() {
     );
 }
 
+/// Invariant: when the proposal is retracted after the person adopted it, the adopt no longer applies (`stale`) and
+/// the review message still names who adopted which revision. `proposal_review_retracted_target_is_409` only covers
+/// reviewing an already retracted proposal, not a review made before the retraction.
+#[tokio::test]
+async fn proposal_review_state_stale_after_target_retract() {
+    let env = env();
+    let app = env.router();
+    let (t, project) = thread(&env, "pr-retract-after");
+    let body = "取り込んだ要約: 計測の前に仮説を絞る";
+    let p = import(&app, &t, &project, "imp-retract-after", body).await;
+    deliver(&env, &t, "run-import");
+    let resp = send(
+        &app,
+        post_admin(
+            &review_path(&t, &p),
+            &verdict("adopt", 1, &body_sha256(body)),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 202, "{}", resp.text());
+    let review_id = resp.json()["message"]["id"]
+        .as_str()
+        .expect("id")
+        .to_string();
+    deliver(&env, &t, "run-adopt");
+    assert_eq!(
+        wire(&app, &t, &p).await["proposal"]["review_state"],
+        "adopted"
+    );
+    let retract = send(
+        &app,
+        post_admin(
+            &format!("/api/v1/chat/threads/{t}/messages/{p}/retract"),
+            &json!({"expected_revision": 1, "reason": "取り込む要約を間違えた"}),
+        ),
+    )
+    .await;
+    assert_eq!(retract.status.as_u16(), 200, "{}", retract.text());
+    let target = wire(&app, &t, &p).await;
+    assert_eq!(target["proposal"]["review_state"], "stale", "{target}");
+    assert_eq!(target["proposal"]["review_message_id"], review_id.as_str());
+    assert_eq!(target["proposal"]["reviewed_by"], "human:test");
+}
+
 /// Invariant: the wire marks an external text (`mcp_client`, `human_paste`) with `untrusted: true` from the record,
 /// never from the text; a person's own message carries no mark.
 #[tokio::test]

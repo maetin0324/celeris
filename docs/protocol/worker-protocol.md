@@ -910,8 +910,12 @@ strategy root（CoS の `task.create` で `strategy` を付けて起票した ro
   `strategy/<strategy_id>/v<n>.json`、`candidate` は実行している候補。実験段階の版では省略）。型は CoS の `/cos/operations` の欄
   `strategy` と同じ `task_core::strategy_ref::StrategyRef` の 1 つで（`task_id` は文字列、知らない欄は拒否）、値は
   `cos_operations` の照会 `SqliteStore::strategy_task_creates` から取る。
-- `children[]`（`ParentCheckpointChild`）: root の直下の子 `{task_id, title, status, reviewer_passed, criteria}`。`criteria[]`
+- `children[]`（`ParentCheckpointChild`）: root の直下の子 `{task_id, title, status, reviewer_passed, criteria, reports?}`。`criteria[]`
   （`ParentCheckpointCriterion`）は `{text, kind, result}`（`kind` は check の種類、`result` は `pass`・`fail`・`not_run`）。
+  `reports[]`（`ParentCheckpointReport`）は子の報告の本文 `{seq, at, role, text, truncated?}`（`role` は `worker`・`reviewer`）で、
+  判断の行の `created_at`（checkpoint の時点）以前の子の `WorkerFinished.outcome` を `task_core::parent_checkpoint::child_reports` が
+  選ぶ（子ごとに新しい順に 4 件、1 件 2,000 byte、全体 16,000 byte。planner の run は入れない。無ければ省略）。報告は子の主張で、
+  達成の根拠には数えない。
 - `metrics`（`ParentCheckpointMetrics`）: `{children_terminal, children_total, tokens_used, max_tokens?}`（D1.2 の trigger と同じ値。
   `max_tokens` は root の token 予算で、無ければ省略）。
 - `previous[]`（`ParentCheckpointPrevious`）: 同じ root の前の評価の記録 `{name, sha256}`（無ければ省略）。

@@ -13,8 +13,8 @@ tasks: [01M7XQ9QWK58ESMW42Q1TGT3WZ]
 
 ## 背景
 
-- アーキv4 の親は、子 A〜H がすべて done でも親の目標を満たさなかった。子 0 の replay で最初に未達を検知できた時点は E-mid（2026-11-18T20:36:35Z、子 A〜C が done）で、
-  親が最初に評価したのは 2026-11-20T14:12:10Z（約 41.6 時間後）。その間に worker の run が 137 回走り、費用は 171.06 → 435.31 USD（list price）になった。
+- アーキv4 の親は、子 A〜H がすべて done でも親の目標を満たさなかった。子 A〜C が done になった時点（子 0 の replay の E-mid、
+  2026-11-18T20:36:35Z）から、親が最初に評価した 2026-11-20T14:12:10Z まで約 41.6 時間あった。その間に worker の run が 137 回走り、費用は 171.06 → 435.31 USD（list price）になった。
 - 親の評価が無いのは、子の done（reviewer の局所の判定）と親 Outcome の到達（D6）の間に、途中で「親の目的に効いているか」を判定する口が無いからである。
   Project Controller は決定的な状態と予算だけを扱い、研究的な判断を持たない（D7）。子 5 は戦略の版と識別実験の入口を作ったが、走っている root の途中評価は無い。
 - 依頼は、既存の reviewer の run を独立の Evaluator として使い、LLM を dispatcher・TS 決定器に入れず、新しい表・event の種類・migration・Manager・trait・状態機械・
@@ -141,13 +141,28 @@ validate は snapshot の `checkpoints` の値（D1.3 の due と実行中、D5.
 | `decision_id`・`root_id`・`triggers[]` | 判断の id と D1.2 の key | 判断の行 |
 | `goal` | `{request_sha256, outcomes: [{id, title, acceptance[], reached}]}`。`reached` は Rust の D6（`recorded_outcomes`・`root_satisfies`）の値 | snapshot |
 | `strategy` | root の `task_core::strategy_ref::StrategyRef`（`task_id`・`name`・`sha256`・`candidate`。D1.1 の型をそのまま使う） | D1.1 の `strategy_task_creates(store, Some(root))` |
-| `children[]` | `{task_id, title, status, reviewer_passed, criteria: [{text, kind, result}]}` | snapshot の root の行と子の events |
+| `children[]` | `{task_id, title, status, reviewer_passed, criteria: [{text, kind, result}], reports: [{seq, at, role, text, truncated}]}` | snapshot の root の行と子の events。`reports` は D3.1.1 |
 | `metrics` | `{children_terminal, children_total, tokens_used, max_tokens}` | D1.2 と同じ値 |
 | `previous[]` | 同じ root の前の評価の成果物 `{name, sha256}` | root の events |
 | `rubric[]` | 固定の E1〜E6（`task_core::parent_checkpoint::PARENT_EVALUATION_RUBRIC` の定数。文書や run が変えられない） | 定数 |
 
-Project.request の全文は既存の `context.lineage.project`（子 2 D5）で届く。worker・CoS の報告の文は入力の欄にしない（controller の I11）。reviewer は ADR-0095 の読み取り専用の DB と
+Project.request の全文は既存の `context.lineage.project`（子 2 D5）で届く。reviewer は ADR-0095 の読み取り専用の DB と
 workspace の成果物で証拠を読む。子 0 の answer key は入力にも prompt にも入らない（D8.3）。
+
+#### D3.1.1 子の報告の本文（`children[].reports`）
+
+子の報告（worker の結果の summary と final review の報告）を、子の主張として入力に入れる。報告に書かれた未達・要判断の申告（アーキv4 の D#1446 など）を
+評価器が読めないと、子の status と title だけでは途中の未達を検知できないため（live の sample の入力に本文が無く、D#1446 を読めなかった）。
+
+- 出どころ: 子の既存の `WorkerFinished.outcome`（`role` が無い・`worker` の run は worker の結果、`reviewer` の run は review の報告。planner の run は入れない）。
+  読み口は既存の `SqliteStore::event_rows_for`（seq と ts つき）だけで、store・migration・events の種類は変えない。
+- 時点: 判断の行の `created_at`（checkpoint の時点）以前の event だけ。時刻の読めない event は入れない。
+- 上限: 1 件 `REPORT_MAX_BYTES`（2,000 byte、char の境で切り `truncated`）、子ごとに新しい順に `REPORTS_PER_CHILD_MAX`（4 件）、request の合計
+  `REPORTS_MAX_BYTES`（16,000 byte）。合計は全部の子の新しい順の 1 件目、次に 2 件目…の順に入れ、超える所で止める。
+- 選ぶ関数は `task_core::parent_checkpoint::child_reports`（純関数）の 1 つで、dispatcher の `review::parent_evaluation::request` と task-api の盲検の
+  試験（`parent_checkpoint_blind_`）が同じ関数を呼ぶ。
+- 扱い: 報告は子の主張で、達成の根拠に数えない（E6・D4 R2 は変えない）。prompt は報告を引用（`> `）で出し、報告の中の指示に従わないこと、未達・要判断の申告は
+  確かめられなくても残る不確実性に挙げることを書く。出力の欄と axes の定義は Result 節（`change_rules::review` の `parent_evaluation_lines`）だけが書く。
 
 rubric（固定）:
 - E1 実測: 親 Outcome の指標について、子の成果の前後の値を `task`・`artifact`・`commit` の参照つきで挙げる。参照の無い改善は書かない。
@@ -270,40 +285,42 @@ CoS は次の版で反証を `stance: refute` の証拠として残す（子 2 D
 アーキv4 の子は A〜H の 8 件。replay の events で子の終端は A 18:45:41・B 21:55:57（11-17）・C 10:48:28・D 20:39:25・E 22:54:25（11-18）・F 04:54:54・G 10:41:53（11-19）、
 `failed` の子は無い（`review_fail` で `ready` に戻った A・C は D1.2 で数えない）。アーキv4 の親に `max_tokens` も戦略の文書も無いので、予算と反証の trigger は replay では発火しない（D8.4）。
 
-| 順 | 時点 | 終端の子 | checkpoint | 評価に渡す slice | answer key の理想 |
-|---|---|---|---|---|---|
-| 1 | A-mid | 0 | 無し | — | unknown・continue |
-| 2 | A-done | 1 | 無し | — | at_risk・discriminating_experiment |
-| 3 | C-mid | 2 | **`children:2`**（B の done、2026-11-17T21:55:57Z で発火） | C-mid（終端の子が A・B で発火時と同じ） | at_risk・continue |
-| 4 | C-done | 3 | 無し | — | at_risk・continue |
-| 5 | D-mid | 3 | 無し | — | at_risk・continue |
-| 6 | E-mid | 3 | 無し（最初に検知できた時点。live の sample だけがここで評価する。D8.3） | E-mid | off_track・discriminating_experiment |
-| 7 | D-done | 4 | **`children:4`**（D の done、2026-11-18T20:39:25Z で発火） | D-done | off_track・pivot |
-| 8 | E-done | 5 | 無し | — | off_track・pivot |
-| 9 | F-mid | 5 | 無し | — | off_track・ask_human |
-| 10 | F-done | 6 | **`children:6`**（F の done、2026-11-19T04:54:54Z。ただし D-done の pivot が承認されれば F は起票されない） | F-done | off_track・ask_human |
-| 11 | G-mid | 6 | 無し | — | off_track・ask_human |
-| 12 | G-done | 7 | 無し | — | off_track・ask_human |
+| 順 | 時点 | 終端の子 | checkpoint | 評価に渡す slice |
+|---|---|---|---|---|
+| 1 | A-mid | 0 | 無し | — |
+| 2 | A-done | 1 | 無し | — |
+| 3 | C-mid | 2 | **`children:2`**（B の done、2026-11-17T21:55:57Z で発火） | C-mid（終端の子が A・B で発火時と同じ） |
+| 4 | C-done | 3 | 無し | — |
+| 5 | D-mid | 3 | 無し | — |
+| 6 | E-mid | 3 | 無し（盲検の評価だけがここで評価する。D8.3） | E-mid |
+| 7 | D-done | 4 | **`children:4`**（D の done、2026-11-18T20:39:25Z で発火） | D-done |
+| 8 | E-done | 5 | 無し | — |
+| 9 | F-mid | 5 | 無し | — |
+| 10 | F-done | 6 | **`children:6`**（F の done、2026-11-19T04:54:54Z） | F-done |
+| 11 | G-mid | 6 | 無し | — |
+| 12 | G-done | 7 | 無し | — |
 
-最初の off_track の checkpoint は D-done（20:39:25Z）で、検知できた E-mid の 2 分 50 秒後、D#1446（19:55:39Z）の約 44 分後である。史実の親の最初の評価（2026-11-20T14:12:10Z）より約 41.5 時間早い。
-N = 3 なら C-done（3）と F-done（6）で発火し、最初の off_track の checkpoint は F-done になる（既定を 2 にする理由）。
+D-done の checkpoint（20:39:25Z）は E-mid の 2 分 50 秒後、D#1446（19:55:39Z）の約 44 分後に発火する。史実の親の最初の評価（2026-11-20T14:12:10Z）より約 41.5 時間早い。
+N = 3 なら C-done（3）と F-done（6）で発火し、D-done では発火しない（既定を 2 にする理由）。各時点の理想の判定は文書に書かない。比べる値は子 0 の replay の
+`answer_key.json` にだけあり、試験と `python3 -I` の比較の側だけが読む（評価器が読みうる ADR・進捗・request・prompt・slice には書かない）。
 
 #### D8.2 比べ方（second-gate-shadow）
 
 - 試験は子 0 の `replay.py build` の slice を写した fixture（各 file の sha256 が `replay/manifest.sha256` と一致すること、event の ts が cutoff 以下であることを最初に確かめる）から、
   時点ごとに snapshot の checkpoint を計算し、上の表の発火・不発火と一致することを確かめる（`parent_checkpoint_shadow_fires_at_c_mid_d_done_f_done`）。
 - 発火した時点では、評価器の出力を固定の fixture（スクリプトの評価。LLM ではない）で与え、`check_evaluation` → TS の写し → Rust の検証 → 効果（shadow では `suppressed`、enabled では CoS 入力）が
-  D5.2 の表どおりになること、D-done の `pivot` から CoS の新しい版（固定計画の候補を `rejected_by` で却下）が子 5 の gate を通ること、却下した候補に戻る版が `strategy_revisit_rejected` になることを確かめる。
-- answer key（`answer_key.json`）は試験の比較の側だけが読む。評価器の入力（`ParentCheckpointRequest` と slice）に answer key の印（`ideal_verdict`・`ideal_action`・`answer_key`）が無いことを
-  試験が確かめる（子 0 の否定対照 N3 と同じ考え）。比べる値は `effective.verdict` と `effective.next` の完全一致で、一致しない時点を表に残す（合否は人が rubric で採点する）。
+  D5.2 の表どおりになること、スクリプトの評価の `pivot` から CoS の新しい版（固定計画の候補を `rejected_by` で却下）が子 5 の gate を通ること、却下した候補に戻る版が `strategy_revisit_rejected` になることを確かめる。
+- answer key（`answer_key.json`）は試験と `python3 -I` の比較の側だけが読む。評価器の入力（`ParentCheckpointRequest`・prompt・slice）に answer key の印が無いことを
+  試験が確かめる（子 0 の否定対照 N3 と同じ考え）。比べる値は `effective.verdict` と `effective.next` の完全一致で、一致しない時点は比較の出力と人の rubric の採点に残す。
 
-#### D8.3 live の sample（live-evaluator-sample）
+#### D8.3 盲検の評価の入力（E-mid・D-done）
 
-実際の LLM の 1 run が E-mid の slice で評価を書く。worker は LLM の CLI を起こせないので、WU の run 自身が評価器になる: 試験 `parent_checkpoint_live_request_renders` が E-mid の fixture から
-`ParentCheckpointRequest` と prompt を作って file に出し、WU の run はその prompt と slice の file だけを読んで `parent_evaluation` を書く。WU の objective は `answer_key.json` と
-`replay/` の answer の file を開かないことを求め、review は run の道具の記録（`worker_progress` の tool の記録）に answer key の path が無いことを読み取り専用の DB で確かめる。
-`parent_checkpoint_live_sample_checks` が sample を `check_evaluation` に通し、answer key（E-mid の off_track・discriminating_experiment）との一致・不一致を出力する。
-同じ計画の WU が書くので独立の度合いは本番の reviewer run より低い（「未確認」）。
+評価器の入力は本番の組み立てで作る: 試験 `parent_checkpoint_live_request_renders` が E-mid と D-done の slice（子 0 の時点別の events。manifest の sha256 を確かめる）から、
+子の報告を本番と同じ `task_core::parent_checkpoint::child_reports`（D3.1.1）で選び、task-worker の本物の型と prompt（`parent_checkpoint_section` と Result 節）で
+`fixtures/parent_checkpoint_live/<時点>.request.json`・`<時点>.prompt.md` を出す（`PARENT_CHECKPOINT_LIVE_WRITE=1` のときだけ書き直す）。選んだ報告は
+`fixtures/parent_checkpoint_shadow/<時点>/reports.json` にも置く。試験 `parent_checkpoint_blind_` は、request に D#1446 の本文が入ること、request・prompt・slice に
+answer key の印と時点より後の seq・時刻が無いこと、prompt に出力の欄と axes の定義があること、上限で切ることを確かめる。
+評価の run は本番の reviewer run の起動口で別の WU（blind-eval-runs）が流し、比較は試験と `python3 -I` の側だけが `answer_key.json` を読む。
 
 #### D8.4 replay で試せない trigger
 
@@ -448,7 +465,7 @@ Evaluator は既存の reviewer run で、dispatcher は出力の形と参照を
 | 節の無い review の wire・prompt は変わらない | `protocol::ReviewRequest`・`change_rules::review::parent_checkpoint_section` | `parent_evaluation_absent_request_json_unchanged`・`…_prompt_unchanged`・`…_old_review_json_parses` |
 | 節のある review の wire が schema と一致する | `protocol` | `parent_evaluation_wire_roundtrip`、`parent_evaluation_wire_schema_matches_md` |
 | 評価器の入力に answer key が入らない | `dispatcher::parent_evaluation`（入力の組み立て） | `parent_checkpoint_shadow_request_has_no_answer_key`、`parent_checkpoint_live_request_renders` |
-| D-done の pivot から子 5 の gate を通る新しい版で戦略が変わる | TS `pc/checkpoint/act`、CoS の skill、子 5 の gate | `parent_checkpoint_shadow_d_done_pivot_new_version`（gate の 422 と通過を確かめる） |
+| 評価の pivot から子 5 の gate を通る新しい版で戦略が変わる | TS `pc/checkpoint/act`、CoS の skill、子 5 の gate | `parent_checkpoint_shadow_d_done_pivot_new_version`（gate の 422 と通過を確かめる） |
 | controller が無効な案件で reviewer run が増えない | controller の I13 | `parent_checkpoint_regression_controller_off_no_reviewer_run` |
 
 変更前に落ちる試験: `parent_checkpoint_contract_*`（`checkpoint_states` の試験を含む）・`project_controller_checkpoint_*`・`parent_evaluation_wire_*`・`parent_checkpoint_shadow_*`・`strategy_reads_*`・`side_review_*` は
@@ -457,8 +474,8 @@ base に関数・型・variant・欄が無いのでコンパイルか主張で�
 
 ## 未確認
 
-- 評価の質（LLM の reviewer が answer key と同じ verdict・next を出すか）。shadow はスクリプトの評価で写しの経路だけを確かめる。live の sample は E-mid の 1 run だけで、同じ計画の WU の run なので
-  本番の独立の reviewer run より独立の度合いが低い。子 8 の pilot と人の rubric の採点で確かめる。
+- 評価の質（LLM の reviewer が answer key と同じ verdict・next を出すか）。shadow はスクリプトの評価で写しの経路だけを確かめる。盲検の評価（E-mid・D-done）は本番の
+  reviewer run の起動口で流す run の結果待ち。子 8 の pilot と人の rubric の採点でも確かめる。
 - 反証の trigger の範囲: root の subtree と参照した文書の task の外（CoS が別の task で作った新しい版）の反証では発火しない。CoS がその版を作った時点で戦略を改めている前提で、実測は無い。
 - 予算の trigger は root の `max_tokens` だけを見る。`max_tokens` の無い strategy root では発火しない。USD の閾値（戦略の候補の `cost.usd_max` に対する割合）は採っていない。
 - evaluation の reviewer run が root の run として `running` に入る間、子の終端の後の root の継続の dispatch は待つ。待ちの長さは本番で測っていない。
@@ -520,8 +537,9 @@ D8・D9.2・D11 の試験の置き場と分担を実装に合わせて書き足�
   → harness の効果（shadow は `suppressed`、enabled はスクリプトの評価を `check_evaluation` に通して最終の記録を root の `ArtifactProduced` に書く）である。
   TS の規則そのものは control-ts の `project_controller_checkpoint_` と celeris の e2e（`project_controller_e2e`・`project_cos_shadow`・`project_controller_replay`）、
   評価の run の起動口と決着は task-dispatch の `project_controller_checkpoint_` が確かめる。
-- live の request は dispatcher の `review::parent_evaluation::request`（task-api から呼べない private の関数）と同じ出どころの欄を、E-mid の slice から試験が組み立て、
-  task-worker の本物の型（`ReviewRequest`・`ParentCheckpointRequest`）と prompt の節（`change_rules::review::parent_checkpoint_section`）で出す。id は固定の値。
+- live の request は dispatcher の `review::parent_evaluation::request`（task-api から呼べない private の関数）と同じ出どころの欄を、E-mid・D-done の slice から試験が組み立て、
+  子の報告は本番と同じ `parent_checkpoint::child_reports` で選び（D3.1.1）、task-worker の本物の型（`ReviewRequest`・`ParentCheckpointRequest`）と prompt の節
+  （`change_rules::review::parent_checkpoint_section` と `result_section`）で出す。id は固定の値。
 - 反証の trigger の合成（`parent_checkpoint_shadow_refute_in_subtree`）は、root が参照する v1 の文書を文書の task（root）の成果物として置く。v1 の文書が無いと、
   v1 に既にある反証（`e-pilot-refute`）も新しい反証に数えられる（試験を書く中で確かめた挙動。参照した版の文書が読めないときの扱いは「未確認」の運用の範囲）。
 

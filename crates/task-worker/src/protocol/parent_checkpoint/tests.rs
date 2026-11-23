@@ -21,6 +21,13 @@ pub(crate) fn sample_parent_checkpoint() -> ParentCheckpointRequest {
             kind: "reviewer".to_string(),
             result: "pass".to_string(),
         }],
+        reports: vec![task_core::parent_checkpoint::ChildReport {
+            seq: 7,
+            at: "2026-11-18T19:55:39Z".to_string(),
+            role: task_core::parent_checkpoint::ReportRole::Worker,
+            text: "未達: 循環は残った".to_string(),
+            truncated: false,
+        }],
     };
     ParentCheckpointRequest {
         decision_id: "01M82FC782QS6F23C4EN9P72CT".to_string(),

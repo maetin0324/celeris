@@ -1,0 +1,121 @@
+{
+  "case": "D-done",
+  "cutoff": "2026-11-18T20:39:40.53360372Z",
+  "reports": {
+    "A": [
+      {
+        "at": "2026-11-17T16:55:44.889457059Z",
+        "role": "worker",
+        "seq": 265,
+        "text": "done: アーキ v4 A を完了した。source の改変は 0（main との差分は agent-docs/progress/2026-11-17-arch-v4-a.md だけ）。ベースラインと計測コマンド・誤検出の扱いは artifacts/baseline.md、要点は進捗ファイル（status: done）にある。条件 0: 監査根拠を main bc665168 で既存の道具（re"
+      },
+      {
+        "at": "2026-11-17T17:06:58.152916587Z",
+        "role": "reviewer",
+        "seq": 337,
+        "text": "done: アーキ v4 A のレビュー結果: 不合格。技術的な不備なので部署内で差し戻す。合否は criterion 0・2・5 が不合格、1 が合格。直すのは artifacts と進捗だけで、source は変えなくてよい。(1) baseline.md に、(4) の import 数（92/369、6/14）と修正の波及（C10、190 件・48.9%）を出すコマンドが無い。C2 の辺で"
+      },
+      {
+        "at": "2026-11-17T18:40:21.832713543Z",
+        "role": "worker",
+        "seq": 501,
+        "text": "done: 試行 2 で review の差し戻し（criterion 0・2）を直した。source の改変は 0（変えた file は agent-docs/progress/2026-11-17-arch-v4-a.md だけ）。(1) baseline.md §7 に、S1・S2 の import 数を出す C7b と、修正の波及を出す C10 の snippet を足した。どちらも既存の"
+      },
+      {
+        "at": "2026-11-17T18:45:41.030955139Z",
+        "role": "reviewer",
+        "seq": 537,
+        "text": "done: アーキ v4 A（task 01M7MZTKAXM8GJGK8BPE13CQRM）の再レビュー結果: 合格（criterion 0・1・2・5）。人が決めること・やることは無い。前回の差し戻し 2 点は直っていた。(1) baseline.md §7 の C7b と C10 を文面のまま実行すると、記載どおりの値が出た。S1 は 92/369/12、S2 は 6/14/4。C10 は "
+      }
+    ],
+    "B": [
+      {
+        "at": "2026-11-17T21:15:35.255858107Z",
+        "role": "worker",
+        "seq": 758,
+        "text": "done: WU metrics を完了した。共通受入条件 (1)〜(6) を A の baseline の規則で測り、WU 進捗 agent-docs/progress/2026-11-17-arch-v4-b/metrics.md に書いた（commit「arch-v4 B metrics: 共通受入条件 (1)〜(6) を A の baseline の規則で旧と新の検査器の before/a"
+      },
+      {
+        "at": "2026-11-17T21:32:53.828921754Z",
+        "role": "worker",
+        "seq": 932,
+        "text": "done: replay を完了した。旧（bc665168c9ca）と新（HEAD、operator が main に merge した版）の repo-health を、ADR D7 の実 commit 10 件（base は ^1）に --rules deps.cycle,deps.violation,size.responsibility-growth で当てた。exit と new/wor"
+      },
+      {
+        "at": "2026-11-17T21:45:05.969106989Z",
+        "role": "worker",
+        "seq": 1028,
+        "text": "done: アーキ v4 B の closeout を終えた。task 進捗 agent-docs/progress/2026-11-17-arch-v4-b.md を status: done（completed・updated 2026-11-17）にし、受け入れ条件 0〜5 ごとに条件・コマンド・出力の要点を書いた。before/after の表（A と違う数え方は両方の値）、replay "
+      },
+      {
+        "at": "2026-11-17T21:55:57.422618478Z",
+        "role": "reviewer",
+        "seq": 1114,
+        "text": "done: アーキ v4 B（task 01M7MZTKAZQY72EX2R4RQ1WVWF）のレビュー結果: 合格（criterion 0〜6）。人が決めることは 2 つあり、どちらも B の取り込みは止めない。(1) health の時間の悪化（S1 86.56→92.81 s、S2 81.92→88.68 s）を受け入れるか。(2) #[path] の宣言の行を数え過ぎる既知の限界を直す p"
+      }
+    ],
+    "C": [
+      {
+        "at": "2026-11-18T09:52:25.783812415Z",
+        "role": "reviewer",
+        "seq": 3157,
+        "text": "done: C の final review は不合格（criterion 3 と 6）。理由は文書の数値の誤り 1 件だけで、部署内の文書の修正（local repair）で直る。完了報告と ADR の LoC の after は cases の commit が入る前の値で、提出した差分の正しい値は production +664・production Rust +664・own_total_"
+      },
+      {
+        "at": "2026-11-18T09:59:00.537496225Z",
+        "role": "reviewer",
+        "seq": 3233,
+        "text": "done: C の計画 v4 の設計 review は合格（blocking 0 件、advisory 1 件）。v4 は v3 の設計と brief を変えず、文書だけを直す leaf loc-fix を 1 つ足す。直す内容は、前回の final review が不合格にした (6) LoC の値（正しくは +664・+664・+2,896）、地図の行の無い file の一覧、申し送りの記録。"
+      },
+      {
+        "at": "2026-11-18T10:12:43.004941635Z",
+        "role": "worker",
+        "seq": 3354,
+        "text": "done: final review の criterion 3 の指摘を文書だけで直した。(6) LoC を提出時の HEAD（件名「integrate wu/closeout (phase close)」）で測り直し、production 全言語 375,099→375,763（+664）・production Rust 330,408→331,072（+664）・own_total_with"
+      },
+      {
+        "at": "2026-11-18T10:48:28.948531029Z",
+        "role": "reviewer",
+        "seq": 3527,
+        "text": "done: アーキ v4 C の final review は合格（criterion 0〜6 すべて pass）。候補 f85df020 は main bd2e35b3 へ fast-forward で取り込め、worktree は clean。前回不合格の理由（LoC の after の値）は直っている。私が測り直した値は production +664・production Rust +66"
+      }
+    ],
+    "D": [
+      {
+        "at": "2026-11-18T18:57:09.367777832Z",
+        "role": "worker",
+        "seq": 1289,
+        "text": "done: WorkUnit metrics: A の baseline.md §7 の計測で before（git merge-base HEAD main）と after（統合後の HEAD）を測り、bc665168 の値と並べて agent-docs/progress/2026-11-18-arch-v4-d/metrics.md に書いた（commit「arch-v4 D metrics:"
+      },
+      {
+        "at": "2026-11-18T19:31:09.873094295Z",
+        "role": "worker",
+        "seq": 1345,
+        "text": "done: S1 の warm check と repo health を A と同じ手順（baseline.md §7 C8・C1、各回の前に 1 分 load ≤ 4 を待つ）で 3 回ずつ測り、agent-docs/progress/2026-11-18-arch-v4-d/timing.md に書いた（commit「arch-v4 D timing: S1 の warm check と r"
+      },
+      {
+        "at": "2026-11-18T19:55:39.991438858Z",
+        "role": "worker",
+        "seq": 1446,
+        "text": "done: D の進捗 agent-docs/progress/2026-11-18-arch-v4-d.md を書いた（status: done、受け入れ条件 0〜5 ごとの証拠、(1)〜(6) の before/after、未達/要判断、撤去したもの、回帰条件、release gate 未実施と人の手順、本番への移行は不要、提案）。未達/要判断として書いたもの: handlers ⇄ cos "
+      },
+      {
+        "at": "2026-11-18T20:39:25.924642602Z",
+        "role": "reviewer",
+        "seq": 1566,
+        "text": "done: 結論: criterion 0〜6 はすべて合格。eb1244bb は main 3033e022 へ fast-forward で取り込める。人が決めること: worker が未達/要判断とした項目の扱いを決める。項目は handlers ⇄ cos の単位の循環が残ること（組 261・単位 49 は不変）、S1 の変更波及が減らないこと、rusqlite の file +1、tes"
+      }
+    ],
+    "E": [
+      {
+        "at": "2026-11-18T11:14:33.541080722Z",
+        "role": "worker",
+        "seq": 182,
+        "text": "done: E の設計を書いた（source は変えていない）。ADR agent-docs/adr/2026-11-18-dispatcher-store-access-pilot.md に 5 節（対象 file と狭い操作・数え方と数えないもの・証明・反例試験・撤去対象）と実装前 brief を置いた。対象は WU 領域 4 file（behind_target・auto_leaf・writ"
+      }
+    ],
+    "F": [],
+    "G": [],
+    "H": []
+  }
+}

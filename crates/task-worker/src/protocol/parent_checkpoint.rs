@@ -1,9 +1,11 @@
 //! ADR 2026-11-22-parent-checkpoint-evaluator D3.1: 親の途中評価の run の入力 `context.review.parent_checkpoint`。
 //!
-//! 欄は dispatcher が判断の行・snapshot・root の events から決定的に集める（集めるのは後続の controller-checkpoint の
-//! WU）。worker・CoS の報告の文は入力の欄にしない（controller の I11）。Project.request の全文は既存の
-//! `context.lineage.project` で届く。子 0 の answer key は入力に入らない（D8.3）。
+//! 欄は dispatcher が判断の行・snapshot・root と子の events から決定的に集める（`task_dispatch::review::parent_evaluation`）。
+//! 子の報告の本文（`ParentCheckpointChild.reports`）は checkpoint の時点以前の `WorkerFinished.outcome` を
+//! `task_core::parent_checkpoint::child_reports` が上限つきで選んだもので、子の主張として渡す（達成の根拠には数えない）。
+//! Project.request の全文は既存の `context.lineage.project` で届く。子 0 の answer key は入力に入らない（D8.3）。
 //! 出力 `ReviewOutput.parent_evaluation` の形は `task_core::parent_checkpoint::ParentEvaluation` が正本で、ここに写さない。
+//! prompt の欄と axes の説明は `change_rules::review` の Result 節（`parent_evaluation_lines`）だけが持つ。
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -75,6 +77,9 @@ pub struct ParentCheckpointChild {
     pub reviewer_passed: bool,
     #[serde(default)]
     pub criteria: Vec<ParentCheckpointCriterion>,
+    /// checkpoint の時点以前の子の報告の本文（seq の昇順。無ければ省略）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reports: Vec<task_core::parent_checkpoint::ChildReport>,
 }
 
 /// 子の受け入れ条件 1 件と、その判定の結果。

@@ -54,10 +54,18 @@ pub(crate) struct Subject {
     pub(crate) max_attempts: u32,
 }
 
-/// 1 つの root の実行中の判断（判断の順）と、その `triggers`・判断の行の `request_sha256`。
+/// 実行中の `evaluate` の判断 1 件: id・`triggers`・判断の行の `request_sha256`・`created_at`（checkpoint の時点）。
+struct RunningDecision {
+    id: String,
+    triggers: Vec<String>,
+    request_sha256: String,
+    at: String,
+}
+
+/// 1 つの root の実行中の判断（判断の順）と試行の数。
 struct Running {
     root: Task,
-    decisions: Vec<(String, Vec<String>, String)>,
+    decisions: Vec<RunningDecision>,
     attempts: BTreeMap<String, u32>,
 }
 
@@ -77,7 +85,8 @@ fn launch_all(
         let rows = store.project_controller_decisions(&state.project_id, None, usize::MAX)?;
         for running in running_by_root(&store, &rows)? {
             let root = &running.root;
-            for (id, triggers, request_sha256) in &running.decisions {
+            for decision in &running.decisions {
+                let id = &decision.id;
                 // 条件 1: root の run を手元に持っていれば起こさない（`register_run` が entry を上書きするため）。
                 if d.supervisor.has_task_run(root.id) {
                     break;
@@ -91,8 +100,7 @@ fn launch_all(
                 if hold(d, root)? {
                     break;
                 }
-                let Some(request) = request(&store, root, id, triggers, request_sha256, tokens)?
-                else {
+                let Some(request) = request(&store, root, decision, tokens)? else {
                     continue;
                 };
                 let review = task_worker::ReviewRequest {
@@ -129,7 +137,8 @@ fn running_by_root(
     store: &SqliteStore,
     rows: &[ProjectControllerDecision],
 ) -> Result<Vec<Running>, DispatchError> {
-    let mut by_root: BTreeMap<String, Vec<(pc::EvaluateDecision, String)>> = BTreeMap::new();
+    let mut by_root: BTreeMap<String, Vec<(pc::EvaluateDecision, &ProjectControllerDecision)>> =
+        BTreeMap::new();
     for row in rows.iter().rev() {
         if let Some(ProjectAction::Evaluate { root_id, triggers }) =
             decision_proposal(row).map(|p| p.action)
@@ -145,10 +154,7 @@ fn running_by_root(
                 triggers,
                 effect,
             };
-            by_root
-                .entry(root_id)
-                .or_default()
-                .push((decision, row.request_sha256.clone()));
+            by_root.entry(root_id).or_default().push((decision, row));
         }
     }
     let mut out = Vec::new();
@@ -176,8 +182,13 @@ fn running_by_root(
             .running
             .iter()
             .filter_map(|id| {
-                let (d, sha) = decisions.iter().find(|(d, _)| &d.id == id)?;
-                Some((id.clone(), d.triggers.clone(), sha.clone()))
+                let (d, row) = decisions.iter().find(|(d, _)| &d.id == id)?;
+                Some(RunningDecision {
+                    id: id.clone(),
+                    triggers: d.triggers.clone(),
+                    request_sha256: row.request_sha256.clone(),
+                    at: row.created_at.clone(),
+                })
             })
             .collect();
         out.push(Running {
@@ -199,13 +210,12 @@ fn artifact_names(events: &[(u64, Event)]) -> Vec<String> {
         .collect()
 }
 
-/// D3.1 の入力。root が strategy root でなければ `None`（run を起こさない。D9.1）。
+/// D3.1 の入力。root が strategy root でなければ `None`（run を起こさない。D9.1）。子の報告の本文は判断の行の
+/// `created_at`（checkpoint の時点）以前の `WorkerFinished` から `pc::child_reports` が選ぶ（既存の `event_rows_for`）。
 fn request(
     store: &SqliteStore,
     root: &Task,
-    decision_id: &str,
-    triggers: &[String],
-    request_sha256: &str,
+    decision: &RunningDecision,
     tokens: TreeTokens,
 ) -> Result<Option<ParentCheckpointRequest>, DispatchError> {
     let Some((_, strategy)) =
@@ -215,20 +225,34 @@ fn request(
     else {
         return Ok(None);
     };
-    let mut children = Vec::new();
-    for child in store.children(root.id)? {
-        let passed = store
-            .events_for(child.id)?
-            .iter()
-            .any(|(_, e)| matches!(e, Event::ReviewerPassed { .. }));
-        children.push(ParentCheckpointChild {
+    let kids = store.children(root.id)?;
+    let mut rows = Vec::with_capacity(kids.len());
+    for child in &kids {
+        rows.push(store.event_rows_for(child.id, None, usize::MAX)?);
+    }
+    let events: Vec<Vec<(u64, &str, &Event)>> = rows
+        .iter()
+        .map(|rs| {
+            rs.iter()
+                .map(|r| (r.seq, r.ts.as_str(), &r.event))
+                .collect()
+        })
+        .collect();
+    let reports = pc::child_reports(&events, &decision.at);
+    let children: Vec<ParentCheckpointChild> = kids
+        .iter()
+        .zip(events.iter().zip(reports))
+        .map(|(child, (events, reports))| ParentCheckpointChild {
             task_id: child.id,
             title: child.title.clone(),
             status: child.status,
-            reviewer_passed: passed,
+            reviewer_passed: events
+                .iter()
+                .any(|(_, _, e)| matches!(e, Event::ReviewerPassed { .. })),
             criteria: Vec::new(),
-        });
-    }
+            reports,
+        })
+        .collect();
     let previous = store
         .events_for(root.id)?
         .into_iter()
@@ -251,11 +275,11 @@ fn request(
         max_tokens: root.budget.max_tokens,
     };
     Ok(Some(ParentCheckpointRequest {
-        decision_id: decision_id.to_string(),
+        decision_id: decision.id.clone(),
         root_id: root.id,
-        triggers: triggers.to_vec(),
+        triggers: decision.triggers.clone(),
         goal: ParentCheckpointGoal {
-            request_sha256: request_sha256.to_string(),
+            request_sha256: decision.request_sha256.clone(),
             outcomes: Vec::new(),
         },
         strategy,

@@ -1147,5 +1147,114 @@ pub fn action_allowed(
     })
 }
 
+// ---------------------------------------------------------------- 子の報告の本文（D3.1）
+
+/// D3.1: 1 件の報告の本文の byte 数の上限（超えた分は char の境で切る）。
+pub const REPORT_MAX_BYTES: usize = 2_000;
+/// D3.1: 1 つの子から入れる報告の件数の上限（新しい順）。
+pub const REPORTS_PER_CHILD_MAX: usize = 4;
+/// D3.1: 1 つの request に入れる報告の本文の合計の byte 数の上限。
+pub const REPORTS_MAX_BYTES: usize = 16_000;
+
+/// 報告を書いた run の種類（worker の結果の summary か、final review の報告か）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(rename = "ParentCheckpointReportRole")]
+pub enum ReportRole {
+    Worker,
+    Reviewer,
+}
+
+/// D3.1: 子の報告 1 件（子の `WorkerFinished` の `outcome`）。子の主張で、達成の根拠には数えない（D4 R2・E6）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[schemars(rename = "ParentCheckpointReport")]
+pub struct ChildReport {
+    /// 子の task の event の seq。
+    pub seq: u64,
+    /// event の時刻（RFC 3339）。checkpoint の時点以前だけが入る。
+    pub at: String,
+    pub role: ReportRole,
+    pub text: String,
+    /// `REPORT_MAX_BYTES` で切ったとき true。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
+}
+
+fn rfc3339(raw: &str) -> Option<time::OffsetDateTime> {
+    time::OffsetDateTime::parse(raw, &time::format_description::well_known::Rfc3339).ok()
+}
+
+fn cut_bytes(text: &str, max: usize) -> (String, bool) {
+    if text.len() <= max {
+        return (text.to_string(), false);
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    (text[..end].to_string(), true)
+}
+
+/// D3.1: 子ごとの events（`(seq, ts, event)`。`ts` は RFC 3339）から、checkpoint の時点 `cutoff` 以前の worker・reviewer の
+/// run の報告（`WorkerFinished.outcome`。planner の run は入れない）を選ぶ。子ごとに新しい順に最大
+/// `REPORTS_PER_CHILD_MAX` 件、1 件は `REPORT_MAX_BYTES` で切り、全体は新しい順の 1 件目を全部の子から、次に 2 件目を…の
+/// 順に `REPORTS_MAX_BYTES` まで入れる（後ろの子が先の子の古い報告で落ちない）。時刻の読めない event と、`cutoff` が
+/// 読めないときの全部は入れない。返す列は子の順で、各列は seq の昇順。
+pub fn child_reports(
+    children: &[Vec<(u64, &str, &crate::Event)>],
+    cutoff: &str,
+) -> Vec<Vec<ChildReport>> {
+    let Some(cut) = rfc3339(cutoff) else {
+        return vec![Vec::new(); children.len()];
+    };
+    let newest: Vec<Vec<ChildReport>> = children
+        .iter()
+        .map(|events| {
+            events
+                .iter()
+                .rev()
+                .filter(|(_, at, _)| rfc3339(at).is_some_and(|t| t <= cut))
+                .filter_map(|(seq, at, event)| {
+                    let crate::Event::WorkerFinished { outcome, role, .. } = event else {
+                        return None;
+                    };
+                    let role = match role {
+                        None | Some(crate::RunRole::Worker) => ReportRole::Worker,
+                        Some(crate::RunRole::Reviewer) => ReportRole::Reviewer,
+                        Some(crate::RunRole::Planner) => return None,
+                    };
+                    let (text, truncated) = cut_bytes(outcome, REPORT_MAX_BYTES);
+                    Some(ChildReport {
+                        seq: *seq,
+                        at: at.to_string(),
+                        role,
+                        text,
+                        truncated,
+                    })
+                })
+                .take(REPORTS_PER_CHILD_MAX)
+                .collect()
+        })
+        .collect();
+    let mut out = vec![Vec::new(); children.len()];
+    let mut total = 0usize;
+    'rank: for rank in 0..REPORTS_PER_CHILD_MAX {
+        for (i, reports) in newest.iter().enumerate() {
+            let Some(r) = reports.get(rank) else {
+                continue;
+            };
+            if total + r.text.len() > REPORTS_MAX_BYTES {
+                break 'rank;
+            }
+            total += r.text.len();
+            out[i].push(r.clone());
+        }
+    }
+    for reports in &mut out {
+        reports.sort_by_key(|r| r.seq);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests;

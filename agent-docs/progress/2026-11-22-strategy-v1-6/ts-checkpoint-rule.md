@@ -7,7 +7,7 @@ updated: 2026-11-23
 ---
 # ts-checkpoint-rule（WorkUnit）
 
-状態: 計画の問題で止まった（run 2 で plan_issue を申告した。下の「run 2」の節）。TS の実装と試験は run 1 で済んだ。
+状態: 計画の問題で止まった（run 2 で plan_issue を申告したが受け付けられず、run 3 で申告し直した。下の「run 2」「run 3」の節）。TS の実装と試験は run 1 で済んだ。
 `control-ts/src/domains/project_controller.ts` に、snapshot の `checkpoints` を読む規則 `pc/checkpoint/evaluate` と `pc/checkpoint/act` を足した。
 設計の正本は [ADR 2026-11-22-parent-checkpoint-evaluator](../../adr/2026-11-22-parent-checkpoint-evaluator.md) の D5.1〜D5.3・D6。
 基準はこの WU の `$CELERIS_WU_BASE`。検査は提出時の HEAD で実行した。
@@ -73,6 +73,18 @@ Rust 側の 2 つの穴（写していない評価がある間、guard の提案
 - 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` の出力は 3 file（TS 2 file とこの進捗）。
 - 申告した直し方: (1) controller-checkpoint を同じ key で再実行し、残り（起動の段・`design_gate.rs` の腕・`review/parent_evaluation.rs`・`dispatcher/tests/project_checkpoint.rs` の `project_controller_checkpoint_` の試験）と、上の「未解決事項」1・2 の Rust の穴を直す。(2) この WU の Rust の check は、その後の integrate-controller に移すか、`-p task-core -p celeris -p task-dispatch` に広げる。
 
+## run 3: plan_issue が受け付けられなかった原因と申告のし直し
+
+- 原因: run 2 の `result.json` は `yield.plan_issue` と `summary` を両方持っていた。`task_worker::result_report::interpret_result_text` は `summary` を `yield` より先に見るので、
+  run は done と読まれ、yield は捨てられた。そのため計画は v3 のまま、check が走り、同じ不合格で WU が retry になった（task の event の `WorkerFinished`「work_unit_retry … (2/2)」）。
+- 同じ原因で controller-checkpoint も run 2（yield のつもり）が done と読まれ、計画では done になっている（event の `WorkerFinished` の outcome が「done: …yield する」）。
+  その進捗（branch の `controller-checkpoint.md`）は `status: running` のままで、「残り（run 3 以降）」に起動の段・`design_gate.rs` の腕・`review/parent_evaluation.rs`・
+  `dispatcher/tests/project_checkpoint.rs`（task-dispatch の `project_controller_checkpoint_` の試験）が残っている。この WU の check 2 が通らない直接の理由はこれである。
+- 範囲: この WU の範囲 check が許す path は `control-ts/src/domains/project_controller(.test).ts`・`control-ts/fixtures/project_controller/`・`control-ts/behavior-changes/project_controller/`・
+  `agent-docs/progress/2026-11-22-strategy-v1-6`・この ADR だけで、`crates/task-dispatch` は入らない。範囲の中の変更で check 2 は通らない。
+- この run の変更: ADR D5.1 の 2（act）の置き場と、末尾の付記（WU ts-checkpoint-rule。順の理由・試験の名前・Rust の未解決 2 件）を書いた（run 2 の「提案」の 3 件目をこの WU の範囲で済ませた）。コードは変えていない。
+- 申告: `result.json` を `yield` だけ（`summary` 無し）で書き直した。直し方は run 2 の (1)(2) と同じで、(1) は「計画で done の controller-checkpoint を、残りを持つ WU として再実行する」と明記した。
+
 ## 行数（`git diff --numstat $CELERIS_WU_BASE`）
 
 - production（TS）: `project_controller.ts` +137 −10（純増 127）。型 4 つ（Rust の `SnapshotCheckpoint`・`SnapshotEvaluation` と同じ形）と、規則 2 つ。純増の理由は、新しい行動 `evaluate` と、写していない評価の act の規則を足したこと。
@@ -93,5 +105,7 @@ Rust 側の 2 つの穴（写していない評価がある間、guard の提案
 
 - 未解決事項 2: 「写し済み」を、rule `pc/checkpoint/act`・signal `checkpoint` = 判断 id の判断のうち `effect_state` が `failed` でないもの（`none` を含む）に変える。変える場所は ADR D5.3 と `project_snapshot::checkpoints` の `mapped`。
 - 未解決事項 1: `validate_checkpoint_act` で、rule が act でない `wait` と `escalate` は通す。どちらも計画を進めない（起票・CoS 入力・到達の記録を書かない）ので、D5.2 の不変条件「off_track・unknown から continue は出ない」は保たれる。写していない評価は残り、guard が外れた後の判断で act が写す。Rust に TS の rule id を書き込まずに済む。
-- ADR D5.1 の付記: act（2）は paused・no-progress の直後に置く（Rust が act 以外を落とすため）。evaluate（1）は D5.1 の位置のままにする。この順を ADR に書く。
-- 上の 3 件は integrate-controller か second-gate-shadow の再計画で、controller-checkpoint の write set の WU に回す。
+- ADR D5.1 の付記: act（2）は paused・no-progress の直後に置く（Rust が act 以外を落とすため）。evaluate（1）は D5.1 の位置のままにする。この順を ADR に書く（run 3 で済ませた）。
+- 上の未解決の 2 件は integrate-controller か second-gate-shadow の再計画で、controller-checkpoint の write set の WU に回す。
+- worker の結果の読み方（この WU の範囲の外。owner は `crates/task-worker/src/result_report.rs`）: `summary` と `yield` を両方持つ `result.json` は、今は黙って done と読まれる。
+  yield を捨てるのでなく、両方あるときは yield を優先するか、形の誤りとして run を落とす（retryable）ように直すことを提案する。今回、2 つの WU（controller-checkpoint・この WU）が未完のまま done と読まれた。

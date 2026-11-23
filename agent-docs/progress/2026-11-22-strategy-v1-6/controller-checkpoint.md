@@ -2,12 +2,12 @@
 title: 戦略層 v1 子 6 controller-checkpoint — Project Controller の evaluate（snapshot の信号・Rust の検証・reviewer run の効果・結果の写し）
 tasks: [01M7XQ9QWK58ESMW42Q1TGT3WZ]
 wu: controller-checkpoint
-status: running
+status: done
 updated: 2026-11-23
 ---
 # controller-checkpoint（WorkUnit）
 
-状態: 途中（run 1 で前半を実装した。run 2 で check の不合格を直し、yield した）。設計の正本は [ADR 2026-11-22-parent-checkpoint-evaluator](../../adr/2026-11-22-parent-checkpoint-evaluator.md) の D1〜D6・D9・D11。
+状態: 終了（run 1 で前半を実装し、run 2 で check の不合格を直した。run 2 は yield したが done と読まれ、この WU は計画で done になった）。残りは計画 v6 で別の WU に移した: Rust の穴 2 件は [checkpoint-act-fix](checkpoint-act-fix.md)、起動の段・試験は [controller-launch](controller-launch.md)。設計の正本は [ADR 2026-11-22-parent-checkpoint-evaluator](../../adr/2026-11-22-parent-checkpoint-evaluator.md) の D1〜D6・D9・D11。
 基準はこの WU の `$CELERIS_WU_BASE`。検査は run 1 の終わりの HEAD で実行した。
 
 ## 実装前 brief
@@ -61,7 +61,7 @@ updated: 2026-11-23
 - `dispatcher.rs` の file の本体の行は 2012（閾値 2000、existing）。`dispatcher.rs` に行を足さない（tick の段の呼び出しは `project_wake.rs` の既存の method に置く）。
 - `review` module は閾値の下。起動の計画（実行中の判断・試行の数・`ParentCheckpointRequest` の組み立て・試行の記録）と終わりの決着は `crates/task-dispatch/src/review/parent_evaluation.rs` の自由関数に置く。ADR D2.3 の置き場 `dispatcher/parent_evaluation.rs` からの変更になるので、ADR の付記か進捗の提案で理由を書く。
 
-## 残り（run 3 以降）
+## 残り（run 3 以降。計画 v6 で controller-launch に移した。進捗はそちらに書く）
 
 - 起動の段（`review/parent_evaluation.rs` の自由関数と `project_wake.rs` の既存の method の中の呼び出し。上の制約）: 実行中の判断ごとに `has_task_run(root)` が偽・`tree_limit_hold_for` が偽・試行 < 上限のときだけ `start_side_review(root, parent_checkpoint の節, SideReviewKind::ParentEvaluation)`、run id が返れば試行の記録を書いて `ArtifactProduced`。上限で run が無ければ `invalid` の最終の記録。
 - `design_gate.rs`: `SideReviewKind::ParentEvaluation { decision_id }`・終わりの腕・`holds_side_review` の評価の半分。

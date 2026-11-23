@@ -646,7 +646,7 @@ fn checkpoint_section(
 }
 
 /// 判断の行の記録（A3 の `celeris.project-decision/1`）の proposal。A1 の既定の判定の行・読めない行は `None`。
-fn decision_proposal(row: &ProjectControllerDecision) -> Option<ProjectProposal> {
+pub(crate) fn decision_proposal(row: &ProjectControllerDecision) -> Option<ProjectProposal> {
     let rec: Value = serde_json::from_str(&row.proposal_json).ok()?;
     if rec.get("schema")?.as_str()? != DECISION_RECORD_SCHEMA {
         return None;

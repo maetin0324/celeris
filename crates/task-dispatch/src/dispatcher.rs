@@ -159,7 +159,7 @@ mod wu_base;
 use work_units::previous_check_failure_lines;
 use work_units::{WorkUnitCheckFailure, WorkUnitCheckRun};
 #[path = "health_review/design_gate.rs"]
-mod design_gate;
+pub(crate) mod design_gate;
 mod worker_finish;
 mod worker_task;
 mod workspaces;
@@ -1072,7 +1072,7 @@ pub struct Dispatcher {
     test_hooks: tests::hooks::TestHooks,
     /// ADR 2026-11-11 dispatcher-state-ownership D1: 実行中の run の表（run の集合の正本）・review run の表・
     /// infra backoff・lease の照合の状態の owner（`crate::run_supervisor`。入口は `leases.rs`・`ownerless_runs.rs`）。
-    supervisor: RunSupervisor<ReviewSubject>,
+    pub(crate) supervisor: RunSupervisor<ReviewSubject>,
     /// ADR 2026-11-11 dispatcher-state-ownership D1: task・WU の実行の調整の状態（write set の予約・review 前 sync の
     /// 待ち・依存の統合・WU の用意の失敗・credential・browser・クラスタの待ち、task・WU の待ち・WU の check と統合の
     /// process・完了の channel・tick・新しい仕事を受けるか・並列度・停滞の見張り）の owner（`crate::execution_coordination`）。

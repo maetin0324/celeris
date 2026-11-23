@@ -29,9 +29,11 @@ use time::OffsetDateTime;
 
 use crate::dispatcher::Dispatcher;
 use crate::dispatcher::cos_chat::launch::CosChatLaunch;
+use crate::dispatcher::token_budget::tree_tokens_used;
 use crate::project_controller::{
     Boundary, ControllerTickStats, ProjectControllerSettings, ProjectDecider, ProjectEffect,
 };
+use crate::review::parent_evaluation;
 
 /// 全体の取り込み cursor（`feed_cursor`）の名前。
 pub const PROJECT_WAKE_CURSOR: &str = "project_wake";
@@ -80,7 +82,7 @@ impl Dispatcher {
         let Some(launch) = self.orchestration.launch_mut() else {
             return false;
         };
-        decider.configure(&settings, crate::dispatcher::token_budget::tree_tokens_used);
+        decider.configure(&settings, tree_tokens_used);
         launch.project_controller = Some(ProjectControllerRuntime {
             settings,
             decider,
@@ -177,6 +179,8 @@ impl Dispatcher {
             pass.run(&findings);
             pass.stats.pass_micros = started.elapsed().as_micros() as u64;
             rt.last = pass.stats;
+            // ADR 2026-11-22-parent-checkpoint-evaluator D2.3: 実行中の `evaluate` の判断の評価の run を起こす。
+            parent_evaluation::launch(self, &rt.settings.checkpoint, tree_tokens_used);
         }
         if let Some(launch) = self.orchestration.launch_mut() {
             launch.project_controller = Some(rt);
@@ -467,7 +471,11 @@ impl Pass<'_> {
                         &self.rt.owner,
                         (s.retry_base_secs, s.retry_max_secs, s.max_retries),
                         self.now,
-                        &|state, n| decide_exhausted_notice(state, n, &error, self.now),
+                        &|state, n| {
+                            crate::project_controller::decide_exhausted_notice(
+                                state, n, &error, self.now,
+                            )
+                        },
                     )
                     .map_err(|e| e.to_string())?;
                 tracing::warn!(%error, project, ?failure, "project controller: decide failed");
@@ -957,39 +965,6 @@ impl Pass<'_> {
                 self.now,
             )
             .map_err(|e| e.to_string())
-    }
-}
-
-/// decide の失敗が `max_retries` を超えて phase `blocked` にするときの notice（付記 A1 の 12）。
-/// source_key は案件と `revision`。同じ止まり方の再試行（crash の後など）では 1 件のまま、人が mode を
-/// 置き直す（`revision + 1`）と次に止まったときに新しい notice になる。
-fn decide_exhausted_notice(
-    state: &task_core::project_wake::ProjectControllerState,
-    failures: u32,
-    error: &str,
-    now: OffsetDateTime,
-) -> task_core::feed::NoticeEvent {
-    let project = &state.project_id;
-    let title = format!(
-        "案件 {project} の controller の判断が {failures} 回失敗し、controller を止めました"
-    );
-    let summary = format!(
-        "{title}。controller の phase は blocked で、以後この案件の判断をしません。最後の失敗: {error}。原因を直してから controller の mode を置き直すと再開します。"
-    );
-    task_core::feed::NoticeEvent {
-        source_key: format!(
-            "project_controller:decide_failed:{project}:{}",
-            state.revision
-        ),
-        kind: task_core::feed::NoticeKind::BadNews,
-        group_key: format!("bad_news:project_controller:{project}"),
-        title,
-        summary,
-        project_id: Some(project.clone()),
-        task_id: None,
-        target: None,
-        links: Vec::new(),
-        at: now,
     }
 }
 

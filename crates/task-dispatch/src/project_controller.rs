@@ -297,3 +297,36 @@ pub(crate) fn wakes_for_event(
     }
     Ok(out)
 }
+
+/// decide の失敗が `max_retries` を超えて phase `blocked` にするときの notice（付記 A1 の 12）。
+/// source_key は案件と `revision`。同じ止まり方の再試行（crash の後など）では 1 件のまま、人が mode を
+/// 置き直す（`revision + 1`）と次に止まったときに新しい notice になる。
+pub(crate) fn decide_exhausted_notice(
+    state: &task_core::project_wake::ProjectControllerState,
+    failures: u32,
+    error: &str,
+    now: time::OffsetDateTime,
+) -> task_core::feed::NoticeEvent {
+    let project = &state.project_id;
+    let title = format!(
+        "案件 {project} の controller の判断が {failures} 回失敗し、controller を止めました"
+    );
+    let summary = format!(
+        "{title}。controller の phase は blocked で、以後この案件の判断をしません。最後の失敗: {error}。原因を直してから controller の mode を置き直すと再開します。"
+    );
+    task_core::feed::NoticeEvent {
+        source_key: format!(
+            "project_controller:decide_failed:{project}:{}",
+            state.revision
+        ),
+        kind: task_core::feed::NoticeKind::BadNews,
+        group_key: format!("bad_news:project_controller:{project}"),
+        title,
+        summary,
+        project_id: Some(project.clone()),
+        task_id: None,
+        target: None,
+        links: Vec::new(),
+        at: now,
+    }
+}

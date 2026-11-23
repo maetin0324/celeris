@@ -1,0 +1,1 @@
+{"case": "D", "children_done": ["A", "B", "C"], "cost_so_far_usd": 161.5665, "cutoff": "2026-11-18T18:40:55.107022944Z", "events": 803, "id": "D-mid", "rule": "2nd phase_integrated or 1st reviewing", "snapshot_commit": "2a5a1a7896fde1fe3a2b501beb0fc268931d40a0", "snapshot_committer_date": "2026-11-18T11:14:35.000000000Z", "snapshot_files": 18}

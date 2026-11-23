@@ -1,0 +1,1 @@
+{"case": "E", "children_done": ["A", "B", "C", "D", "E"], "cost_so_far_usd": 183.251, "cutoff": "2026-11-18T22:56:13.668271508Z", "events": 946, "id": "E-done", "rule": "integration_merged", "snapshot_commit": "1c69c955f0fb05b33cd272e957737192becf2c68", "snapshot_committer_date": "2026-11-18T22:31:07.000000000Z", "snapshot_files": 30}

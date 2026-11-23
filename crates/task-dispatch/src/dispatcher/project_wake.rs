@@ -80,6 +80,10 @@ impl Dispatcher {
         let Some(launch) = self.orchestration.launch_mut() else {
             return false;
         };
+        let mut decider = decider;
+        decider.configure(&settings, |store, root| {
+            crate::dispatcher::token_budget::tree_tokens_used(store, root, None)
+        });
         launch.project_controller = Some(ProjectControllerRuntime {
             settings,
             decider,
@@ -642,6 +646,10 @@ impl Pass<'_> {
                 }
                 Err(e) => Err(e),
             },
+            // ADR 2026-11-22-parent-checkpoint-evaluator D2.3: 門（mode・phase・案件の状態。shadow では `suppressed`）を
+            // 通った後、何も書かずに `applied`（`effect_ref` = root）。評価の run は dispatcher の段
+            // （`dispatcher/parent_evaluation.rs`）が実行中の判断から共通の起動口で起こす。
+            ProjectEffect::RequestEvaluation { root_id, .. } => Ok(Some(root_id)),
             // 第 3 フェーズ I2（付記 P0-B）: 根拠を確かめ直して到達を記録する。検査に落ちれば書かずに failed。
             ProjectEffect::RecordOutcome {
                 outcome_id,
@@ -736,7 +744,8 @@ impl Pass<'_> {
         effect: &ProjectEffect,
     ) -> Result<Option<String>, String> {
         match effect {
-            ProjectEffect::None => Ok(None),
+            // 書くものが無いので、門を通る前は効いていない（shadow の `suppressed` を門に任せる）。
+            ProjectEffect::None | ProjectEffect::RequestEvaluation { .. } => Ok(None),
             ProjectEffect::RecordOutcome { .. } => {
                 crate::project_decider_ts::outcome_in_place(self.store, project, decision_id)
             }

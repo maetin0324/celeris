@@ -23,6 +23,9 @@ pub struct ProjectControllerSettings {
     pub budget: task_ops::project_budget::BudgetLimits,
     /// P4-D: `[project_controller.retention]`（wake・判断・compare の記録の GC）。`None` なら GC しない。
     pub retention: Option<ProjectRetentionSettings>,
+    /// `[project_controller.checkpoint]`（ADR 2026-11-22-parent-checkpoint-evaluator D1.2）。snapshot の due と
+    /// 評価の run の試行の上限の正本。
+    pub checkpoint: task_core::parent_checkpoint::CheckpointSettings,
 }
 
 /// P4-D（ADR 2026-11-05-phase4-p4d-retention）: GC の規則・archive の置き場・間隔。
@@ -48,9 +51,17 @@ impl Default for ProjectControllerSettings {
             max_cos_inputs_open_per_project: 1,
             budget: task_ops::project_budget::BudgetLimits::default(),
             retention: None,
+            checkpoint: task_core::parent_checkpoint::CheckpointSettings::default(),
         }
     }
 }
+
+/// root の task 木の全 run の使った token の読み口（dispatcher の `token_budget::tree_tokens_used` を渡す。
+/// ADR 2026-11-22-parent-checkpoint-evaluator D1.2 の予算の割合）。
+pub type TreeTokens = fn(
+    &task_core::store::SqliteStore,
+    task_core::TaskId,
+) -> Result<u64, task_core::store::StoreError>;
 
 /// 判断の効果（A1 の DTO）。tx1 で JSON にして判断の行に残し、tx2 はそれを読み直して実行する。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,6 +98,12 @@ pub enum ProjectEffect {
     RecordOutcome {
         outcome_id: String,
         evidence_refs: Vec<String>,
+    },
+    /// ADR 2026-11-22-parent-checkpoint-evaluator D2.3: strategy root の親の途中評価の要求。効果は何も書かず
+    /// `applied`（`effect_ref` = root）にする。評価の run は dispatcher の段が実行中の判断から起こす。
+    RequestEvaluation {
+        root_id: String,
+        triggers: Vec<String>,
     },
 }
 
@@ -130,6 +147,9 @@ pub trait ProjectDecider: Send {
     ) {
     }
 
+    /// controller を入れる時（`set_project_controller`）に 1 回、実効の設定と木の使った token の読み口を渡す。既定は何も
+    /// しない（TS の判定は `checkpoint` の設定と読み口で snapshot の checkpoint を導く）。
+    fn configure(&mut self, _settings: &ProjectControllerSettings, _tree_tokens: TreeTokens) {}
     /// 直前の `decide` の判断の記録（`proposal_json` に残す JSON）。既定は無し（入力をそのまま残す）。
     fn take_record(&mut self) -> Option<String> {
         None

@@ -55,6 +55,7 @@ fn base() -> ProjectSnapshot {
         limits: SnapshotLimits::default(),
         roadmap: None,
         authority: None,
+        checkpoints: Vec::new(),
     }
 }
 

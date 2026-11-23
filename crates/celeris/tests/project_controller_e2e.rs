@@ -207,6 +207,11 @@ impl Harness {
                 decision.outcome_id = Some(outcome_id.clone());
                 Applied::Recorded("mark_milestone".into())
             }
+            // この e2e の案件に strategy root は無く、snapshot の checkpoints が空なので検証が evaluate を通さない。
+            ProjectAction::Evaluate { root_id, .. } => {
+                decision.root_key = Some(root_id.clone());
+                Applied::Recorded("evaluate".into())
+            }
             ProjectAction::Wait { .. } | ProjectAction::Continue { .. } => {
                 decision.effect_state = "none".into();
                 Applied::Recorded(proposal.action.kind().into())

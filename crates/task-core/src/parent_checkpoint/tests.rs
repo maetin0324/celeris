@@ -920,7 +920,7 @@ fn parent_checkpoint_contract_action_kinds_match_project_action() {
 }
 
 /// 不変条件: 評価の成果物の name は `parent-evaluation/<判断 id>.json` の 1 つの定義から作り・読み、記録は
-/// `celeris.parent-evaluation-record/1` の形で書いて読み戻せる（D1.3 の evaluated は記録の `triggers` から導く）。
+/// `celeris.parent-evaluation-record/1` の形で書いて読み戻せる。記録は trigger の一覧を持たない（D3.4。trigger の正本は判断の行）。
 #[test]
 fn parent_checkpoint_contract_record_roundtrip() {
     assert_eq!(evaluation_artifact_name("D1"), "parent-evaluation/D1.json");
@@ -941,17 +941,11 @@ fn parent_checkpoint_contract_record_roundtrip() {
     let mut e = evaluation("on_track", "continue", ["succeeded", "unknown", "unknown"]);
     e["measured"] = json!([measured(vec![a.clone()])]);
     let checked = check_evaluation(Some(&e), &ev_facts(vec![a], false, passed(2)));
-    let record = ParentEvaluationRecord::new(
-        "D1",
-        "ROOT",
-        vec!["children:2".into()],
-        Some(e.clone()),
-        &checked,
-    );
+    let record = ParentEvaluationRecord::new("D1", "ROOT", Some(e.clone()), &checked);
     let v = serde_json::to_value(&record).expect("record");
     assert_eq!(v["schema"], json!(RECORD_SCHEMA));
     assert_eq!(v["status"], json!("checked"));
-    assert_eq!(v["triggers"], json!(["children:2"]));
+    assert!(v.get("triggers").is_none(), "記録が trigger の一覧を持った");
     assert_eq!(v["evaluation"], e);
     assert_eq!(v["effective"]["verdict"], json!("on_track"));
     assert_eq!(v["effective"]["axes"]["execution"], json!("succeeded"));
@@ -959,8 +953,7 @@ fn parent_checkpoint_contract_record_roundtrip() {
     assert_eq!(back, record);
 
     let invalid = check_evaluation(None, &ev_facts(vec![], false, passed(2)));
-    let record =
-        ParentEvaluationRecord::new("D2", "ROOT", vec!["budget:50".into()], None, &invalid);
+    let record = ParentEvaluationRecord::new("D2", "ROOT", None, &invalid);
     let v = serde_json::to_value(&record).expect("record");
     assert_eq!(v["status"], json!("invalid"));
     assert_eq!(v["evaluation"], Value::Null);
@@ -979,4 +972,101 @@ fn parent_checkpoint_contract_rubric_fixed() {
             .all(|(_, text)| !text.is_empty())
     );
     assert!(PARENT_EVALUATION_RUBRIC[5].1.contains("reached"));
+}
+
+// ---------------------------------------------------------------- 状態（D1.3・D2.3）
+
+fn decision(id: &str, triggers: &[&str], effect: DecisionEffect) -> EvaluateDecision {
+    EvaluateDecision {
+        id: id.into(),
+        triggers: triggers.iter().map(|t| (*t).to_string()).collect(),
+        effect,
+    }
+}
+
+/// 不変条件: 試行の記録の name は `parent-evaluation/<判断 id>.attempt-<n>.json`（n ≥ 1）の 1 つの定義から作り・読み、
+/// 最終の記録の name と取り違えない（D2.3・D3.4）。
+#[test]
+fn parent_checkpoint_contract_attempt_name_roundtrip() {
+    assert_eq!(
+        attempt_artifact_name("D1", 2),
+        "parent-evaluation/D1.attempt-2.json"
+    );
+    assert_eq!(
+        attempt_of("parent-evaluation/D1.attempt-2.json"),
+        Some(("D1", 2))
+    );
+    for bad in [
+        "parent-evaluation/D1.json",
+        "parent-evaluation/D1.attempt-0.json",
+        "parent-evaluation/D1.attempt-x.json",
+        "parent-evaluation/D1.attempt-02.json",
+        "parent-evaluation/a/b.attempt-1.json",
+        "parent-evaluation/.attempt-1.json",
+    ] {
+        assert_eq!(attempt_of(bad), None, "{bad}");
+    }
+    assert_eq!(
+        evaluation_decision_id("parent-evaluation/D1.attempt-2.json"),
+        None,
+        "試行の記録を最終の記録と読んだ"
+    );
+}
+
+/// 不変条件（D1.3）: 状態は判断の行（id・triggers・effect）と root の成果物の name だけから導く。`suppressed` は発火済みに
+/// 数えるが実行中にしない、最終の記録がある判断は評価済み、それ以外の効果の判断は発火済みに数えない、試行は同じ n を 1 回に数える。
+/// base には状態を導く関数が無く、呼び出し側が記録の中身から evaluated を集めていた（二重の正本）。
+#[test]
+fn parent_checkpoint_contract_states_from_decisions_and_names() {
+    let decisions = vec![
+        decision("D1", &["children:2"], DecisionEffect::Applied),
+        decision("D2", &["budget:50"], DecisionEffect::Suppressed),
+        decision("D3", &["child_failed:T9"], DecisionEffect::Other),
+        decision("D4", &["children:4", "budget:80"], DecisionEffect::Pending),
+    ];
+    let names = [
+        "parent-evaluation/D1.attempt-1.json",
+        "parent-evaluation/D1.json",
+        "parent-evaluation/D4.attempt-1.json",
+        "parent-evaluation/D4.attempt-1.json",
+        "parent-evaluation/D4.attempt-2.json",
+        "strategy/x/v1.json",
+    ];
+    let st = checkpoint_states(&decisions, &names);
+    let set = |xs: &[&str]| xs.iter().map(|x| (*x).to_string()).collect::<BTreeSet<_>>();
+    assert_eq!(
+        st.fired,
+        set(&["budget:50", "budget:80", "children:2", "children:4"])
+    );
+    assert_eq!(st.evaluated, set(&["children:2"]));
+    assert_eq!(
+        st.requested(),
+        set(&["budget:50", "budget:80", "children:4"])
+    );
+    assert_eq!(st.running, vec!["D4".to_string()]);
+    assert_eq!(st.evaluated_decisions, vec!["D1".to_string()]);
+    assert_eq!(st.attempts("D4"), 2);
+    assert_eq!(st.attempts("D1"), 1);
+    assert_eq!(st.attempts("D2"), 0);
+}
+
+/// 不変条件（D1.3）: shadow の `suppressed` の後、同じ trigger は due にならず（2 回目の判断を作らない）、実行中にもならない。
+#[test]
+fn parent_checkpoint_contract_suppressed_not_due_not_running() {
+    let decisions = vec![decision("D1", &["children:2"], DecisionEffect::Suppressed)];
+    let st = checkpoint_states(&decisions, &[]);
+    assert!(st.running.is_empty(), "suppressed を実行中に数えた");
+    let mut f = TriggerFacts {
+        strategy: strategy(Vec::new()),
+        children: vec![
+            done("C1", "2026-11-18T01:00:00Z"),
+            done("C2", "2026-11-18T02:00:00Z"),
+        ],
+        tokens_used: 0,
+        max_tokens: None,
+        evaluated: BTreeSet::new(),
+        requested: BTreeSet::new(),
+    };
+    st.fill(&mut f);
+    assert!(due(&triggers(&f, &CheckpointSettings::default())).is_empty());
 }

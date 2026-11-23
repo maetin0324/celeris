@@ -33,6 +33,7 @@ fn snapshot() -> ProjectSnapshot {
         limits: SnapshotLimits::default(),
         roadmap: None,
         authority: None,
+        checkpoints: Vec::new(),
     }
 }
 
@@ -193,4 +194,256 @@ fn outcome_block_rejects_bad_checks() {
         [r#"{"cmd":"true"}"#; OUTCOME_CHECKS_MAX + 1].join(",")
     );
     assert!(parse_outcomes(&block(&many)).is_err());
+}
+
+// ---------------------------------------------------------------- checkpoint（ADR 2026-11-22-parent-checkpoint-evaluator D2.2・D5.2）
+// base の validate は `evaluate` を知らず、写していない評価を無視する行動も通した。ここで守る不変条件は、strategy root の
+// due の trigger だけを 1 root 1 回で評価に出すことと、写していない評価を表の行動でしか処理できないこと。
+
+fn checkpoint(root: &str, due: &[&str], running: Option<&str>) -> SnapshotCheckpoint {
+    SnapshotCheckpoint {
+        root_id: root.into(),
+        strategy_ref: "artifact:S/strategy/s1/v1.json".into(),
+        due: due
+            .iter()
+            .map(|k| SnapshotTrigger {
+                key: (*k).into(),
+                kind: "children".into(),
+                at: None,
+            })
+            .collect(),
+        running: running.map(str::to_owned),
+        unmapped: vec![],
+    }
+}
+
+fn unmapped(id: &str, allowed: Vec<SnapshotAllowedAction>) -> SnapshotEvaluation {
+    SnapshotEvaluation {
+        decision_id: id.into(),
+        status: "checked".into(),
+        effective: serde_json::json!({"verdict": "off_track", "next": "pivot"}),
+        record_ref: format!("artifact:R/parent-evaluation/{id}.json"),
+        allowed,
+    }
+}
+
+fn act(
+    snapshot: &ProjectSnapshot,
+    action: ProjectAction,
+    rule: &str,
+    signal: Option<&str>,
+) -> ProjectProposal {
+    let mut p = launch(snapshot, &["A"]);
+    p.action = action;
+    p.explanation.rule_id = rule.into();
+    p.explanation.signals = signal
+        .map(|d| ProposalSignal {
+            name: CHECKPOINT_SIGNAL.into(),
+            detail: d.into(),
+        })
+        .into_iter()
+        .collect();
+    p
+}
+
+fn evaluate(root: &str, triggers: &[&str]) -> ProjectAction {
+    ProjectAction::Evaluate {
+        root_id: root.into(),
+        triggers: triggers.iter().map(|t| (*t).to_string()).collect(),
+    }
+}
+
+/// 不変条件（D2.2）: `evaluate` は snapshot の strategy root の due の trigger（1〜8 件、重複なし）だけを、実行中の判断の
+/// 無い root に、active の案件でだけ求められる。
+#[test]
+fn project_controller_checkpoint_evaluate_validation() {
+    let mut s = snapshot();
+    s.checkpoints = vec![checkpoint("R", &["children:2", "budget:50"], None)];
+    let ok = act(
+        &s,
+        evaluate("R", &["children:2", "budget:50"]),
+        "pc/checkpoint/evaluate",
+        None,
+    );
+    assert_eq!(validate(&s, &ok), Ok(()));
+    let p = act(
+        &s,
+        evaluate("X", &["children:2"]),
+        "pc/checkpoint/evaluate",
+        None,
+    );
+    assert_eq!(codes(validate(&s, &p)), vec!["checkpoint_root_unknown"]);
+    for bad in [
+        &[][..],
+        &["children:4"][..],
+        &["children:2", "children:2"][..],
+    ] {
+        let p = act(&s, evaluate("R", bad), "pc/checkpoint/evaluate", None);
+        assert_eq!(
+            codes(validate(&s, &p)),
+            vec!["checkpoint_not_due"],
+            "{bad:?}"
+        );
+    }
+    let nine: Vec<String> = (0..9).map(|i| format!("budget:{i}")).collect();
+    let mut s9 = s.clone();
+    s9.checkpoints[0].due = nine
+        .iter()
+        .map(|k| SnapshotTrigger {
+            key: k.clone(),
+            kind: "budget".into(),
+            at: None,
+        })
+        .collect();
+    let refs: Vec<&str> = nine.iter().map(String::as_str).collect();
+    let p = act(&s9, evaluate("R", &refs), "pc/checkpoint/evaluate", None);
+    assert_eq!(codes(validate(&s9, &p)), vec!["checkpoint_not_due"]);
+    let mut open = s.clone();
+    open.checkpoints[0].running = Some("D0".into());
+    assert_eq!(
+        codes(validate(&open, &ok)),
+        vec!["checkpoint_evaluation_open"]
+    );
+    let mut paused = s.clone();
+    paused.project.status = "paused".into();
+    let r = validate(&paused, &ok).expect_err("paused");
+    assert!(r.iter().any(|v| v.code == "launch_on_paused" && v.safety));
+    // strategy root の無い snapshot（base の形）では evaluate は出せない。
+    assert_eq!(
+        codes(validate(&snapshot(), &ok)),
+        vec!["checkpoint_root_unknown"]
+    );
+}
+
+/// 不変条件（D5.2・D5.3）: 写していない評価があると、`evaluate` 以外の行動は `pc/checkpoint/act`・signal `checkpoint` で
+/// その評価を名指し、表の行動（replan の reason_code・escalate の question_key・context_refs の範囲）に限られる。
+#[test]
+fn project_controller_checkpoint_act_must_map_unmapped() {
+    let mut s = snapshot();
+    let allowed = vec![
+        SnapshotAllowedAction {
+            kind: "replan".into(),
+            reason_code: Some("checkpoint_pivot".into()),
+            question_key: None,
+        },
+        SnapshotAllowedAction {
+            kind: "escalate".into(),
+            reason_code: None,
+            question_key: Some("checkpoint:D1".into()),
+        },
+    ];
+    let mut cp = checkpoint("R", &["children:4"], None);
+    cp.unmapped = vec![unmapped("D1", allowed)];
+    s.checkpoints = vec![cp];
+    let replan = |reason: &str, refs: &[&str]| ProjectAction::Replan {
+        reason_code: reason.into(),
+        question: "q".into(),
+        context_refs: refs.iter().map(|r| (*r).to_string()).collect(),
+    };
+    let escalate = |key: &str| ProjectAction::Escalate {
+        category: "explicit_human".into(),
+        question_key: key.into(),
+        summary: "s".into(),
+        options: vec![],
+        evidence_refs: vec![],
+    };
+    let refs = [
+        "task:R",
+        "artifact:R/parent-evaluation/D1.json",
+        "artifact:S/strategy/s1/v1.json",
+    ];
+    let good = act(
+        &s,
+        replan("checkpoint_pivot", &refs),
+        CHECKPOINT_ACT_RULE,
+        Some("D1"),
+    );
+    assert_eq!(validate(&s, &good), Ok(()));
+    let good = act(
+        &s,
+        escalate("checkpoint:D1"),
+        CHECKPOINT_ACT_RULE,
+        Some("D1"),
+    );
+    assert_eq!(validate(&s, &good), Ok(()));
+    // evaluate は写していない評価があっても出せる（D5.1 の順で evaluate が先）。
+    let ev = act(
+        &s,
+        evaluate("R", &["children:4"]),
+        "pc/checkpoint/evaluate",
+        None,
+    );
+    assert_eq!(validate(&s, &ev), Ok(()));
+    let bad = [
+        act(
+            &s,
+            replan("checkpoint_pivot", &refs),
+            "pc/outcome-open",
+            Some("D1"),
+        ),
+        act(
+            &s,
+            replan("checkpoint_experiment", &refs),
+            CHECKPOINT_ACT_RULE,
+            Some("D1"),
+        ),
+        act(
+            &s,
+            replan("checkpoint_pivot", &["task:OTHER"]),
+            CHECKPOINT_ACT_RULE,
+            Some("D1"),
+        ),
+        act(
+            &s,
+            escalate("checkpoint:D9"),
+            CHECKPOINT_ACT_RULE,
+            Some("D1"),
+        ),
+        act(
+            &s,
+            escalate("checkpoint:D1"),
+            CHECKPOINT_ACT_RULE,
+            Some("D9"),
+        ),
+        act(&s, escalate("checkpoint:D1"), CHECKPOINT_ACT_RULE, None),
+        act(
+            &s,
+            ProjectAction::Continue {
+                watch_root_ids: vec![],
+                next_wake_after_secs: 60,
+            },
+            CHECKPOINT_ACT_RULE,
+            Some("D1"),
+        ),
+    ];
+    for p in bad {
+        assert_eq!(
+            codes(validate(&s, &p)),
+            vec!["checkpoint_action_mismatch"],
+            "{:?}",
+            p.action
+        );
+    }
+    // 写していない評価が無ければ act の規則は使えない。
+    let mut none = s.clone();
+    none.checkpoints[0].unmapped.clear();
+    let p = act(
+        &none,
+        escalate("checkpoint:D1"),
+        CHECKPOINT_ACT_RULE,
+        Some("D1"),
+    );
+    assert_eq!(
+        codes(validate(&none, &p)),
+        vec!["checkpoint_action_mismatch"]
+    );
+}
+
+/// 不変条件（D9.2）: strategy root の無い snapshot の直列化に `checkpoints` の key が出ない（base の形と同じ）。
+#[test]
+fn project_controller_checkpoint_snapshot_without_strategy_roots_unchanged() {
+    let v = serde_json::to_value(snapshot()).unwrap();
+    assert!(v.get("checkpoints").is_none());
+    let back: ProjectSnapshot = serde_json::from_value(v).unwrap();
+    assert!(back.checkpoints.is_empty());
 }

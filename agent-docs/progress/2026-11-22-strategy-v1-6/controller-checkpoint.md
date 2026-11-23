@@ -59,7 +59,7 @@ updated: 2026-11-23
 - dispatcher module（`dispatcher.rs`・`dispatcher/` の下・`#[path]` で読む `health_review/design_gate.rs` など）は 1 行増えても fail する。今の余裕は 75 行。
 - `Dispatcher` の method の数は 374（閾値 60、existing）。method を 1 つ足すと worsened で fail する。起動の段は `Dispatcher` に新しい method を足さず、既存の method の中の呼び出しと crate の自由関数で書く。
 - `dispatcher.rs` の file の本体の行は 2012（閾値 2000、existing）。`dispatcher.rs` に行を足さない（tick の段の呼び出しは `project_wake.rs` の既存の method に置く）。
-- `review` module は閾値の下。起動の計画（実行中の判断・試行の数・`ParentCheckpointRequest` の組み立て・試行の記録）と終わりの決着は `crates/task-dispatch/src/review/parent_evaluation.rs` の自由関数に置く。ADR D2.3 の置き場 `dispatcher/parent_evaluation.rs` からの変更になるので、ADR の付記か進捗の提案で理由を書く。
+- `review` module は閾値の下。起動の計画（実行中の判断・試行の数・`ParentCheckpointRequest` の組み立て・試行の記録）と終わりの決着は `crates/task-dispatch/src/review/parent_evaluation.rs` の自由関数に置く。ADR D2.3・D11 の置き場の本文は controller-launch が直した（付記は足していない）。
 
 ## 残り（run 3 以降。計画 v6 で controller-launch に移した。進捗はそちらに書く）
 

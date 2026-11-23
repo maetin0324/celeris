@@ -4,9 +4,11 @@ import type { ChatMessage, ChatThread } from "../../../api/generated/types";
 import { ScreenFrame } from "../../../components/shell/screen-frame";
 import { Button } from "../../../components/ui/button";
 import { CardLink, ChatCardItem } from "../cards/chat-card";
+import { reviewProposal } from "../data/client";
 import { useChatSession } from "../data/use-chat-session";
 import { attachmentIdsOf, useAttachmentMap, useOlderMessages } from "../messages/history";
 import { MessageList } from "../messages/message-list";
+import type { ProposalReviewActions } from "../messages/proposal";
 import { ThreadsModel } from "../threads/model";
 import { ConversationInput } from "./conversation-input";
 
@@ -16,7 +18,7 @@ import { ConversationInput } from "./conversation-input";
  * スレッドを選ぶ一覧は置かない。
  */
 export function ChatHome() {
-  const { thread } = useSearch({ from: "/" });
+  const { thread, message } = useSearch({ from: "/" });
   const navigate = useNavigate();
   const [model] = useState(() => new ThreadsModel());
   const [loaded, setLoaded] = useState(false);
@@ -103,7 +105,13 @@ export function ChatHome() {
         style={{ height }}
       >
         {thread ? (
-          <ChatConversation key={thread} threadId={thread} model={model} onBackToGeneral={backToGeneral} />
+          <ChatConversation
+            key={thread}
+            threadId={thread}
+            focusMessageId={message}
+            model={model}
+            onBackToGeneral={backToGeneral}
+          />
         ) : threads.error ? (
           <p role="alert" className="flex-1 p-4 text-destructive">
             {threads.error}
@@ -165,10 +173,13 @@ export function EscalationSourceLink({ message }: { message: Pick<ChatMessage, "
 
 function ChatConversation({
   threadId,
+  focusMessageId,
   model,
   onBackToGeneral,
 }: {
   threadId: string;
+  /** `/?thread=&message=` の発言（読み込み済みならそこへ移って強調する）。 */
+  focusMessageId?: string;
   model: ThreadsModel;
   onBackToGeneral: () => void;
 }) {
@@ -183,6 +194,14 @@ function ChatConversation({
   const attachments = useAttachmentMap(attachmentIdsOf(chat));
   // ADR 2026-11-21-chat-discussion-mode D5・D9: 自分の発言の編集・撤回。409 の後は snapshot から取り直す。
   const revision = useMemo(() => ({ revise: session.revise, reload: () => void session.refresh() }), [session]);
+  // ADR 2026-11-23-project-observability-publish D2: 案の採否。送った後は同じ snapshot の取り直しで状態を読み直す。
+  const proposalReview = useMemo<ProposalReviewActions>(
+    () => ({
+      submit: (target, body) => reviewProposal(target.thread_id, target.id, body),
+      reload: () => void session.refresh(),
+    }),
+    [session],
+  );
   return (
     <>
       <ThreadBar thread={chat.thread ?? null} onBackToGeneral={onBackToGeneral} />
@@ -221,6 +240,8 @@ function ChatConversation({
           session.dispatch({ type: "pending_discard", clientMessageId: pending.client_message_id })
         }
         revision={revision}
+        proposalReview={proposalReview}
+        focusMessageId={focusMessageId}
         empty={<p className="mx-auto max-w-3xl text-muted-foreground">CoS にメッセージを送って会話を始めましょう。</p>}
       />
       <ConversationInput thread={chat.thread ?? undefined} threadId={threadId} session={session} snapshot={snapshot} />

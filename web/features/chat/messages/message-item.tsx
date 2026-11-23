@@ -9,6 +9,7 @@ import { chatPaths } from "../data/client";
 import type { DraftMessage, PendingMessage, ToolEntry } from "../data/reducer";
 import { CitationList } from "./citations";
 import { AttachmentList, chatAttachmentElementId, chatPreviewKind, ToolCallList } from "./parts";
+import { ExternalMark, ProposalReview, type ProposalReviewActions } from "./proposal";
 import { type MessageRevisionActions, RevisionControls, RevisionHistory, RevisionNote } from "./revision";
 import { MessageMeta, messageSpeaker, roleName } from "./speaker";
 import { chatMessageElementId, linkWorkspacePaths, workspaceAttachmentFor } from "./workspace-links";
@@ -29,6 +30,7 @@ function Bubble({
   children,
   label,
   id,
+  highlighted,
 }: {
   speaker: ChatMessage["role"];
   busy?: boolean;
@@ -36,6 +38,8 @@ function Bubble({
   label: string;
   /** 確定した message の要素 id（引用から移る先。focus を受けるので tabIndex -1）。 */
   id?: string;
+  /** `/?thread=&message=` で開いた発言（枠と文字で強調する）。 */
+  highlighted?: boolean;
 }) {
   return (
     <article
@@ -44,12 +48,19 @@ function Bubble({
       aria-label={label}
       aria-busy={busy ? true : undefined}
       data-role={speaker}
+      data-highlighted={highlighted ? "true" : undefined}
       className={cn(
         "flex min-w-0 flex-col gap-2",
         speaker === "user" && "items-end",
         speaker === "system" && "items-center",
+        highlighted && "rounded-md p-2 ring-2 ring-ring",
       )}
     >
+      {highlighted ? (
+        <p data-slot="chat-message-linked" className="text-label text-muted-foreground">
+          リンクで開いた発言
+        </p>
+      ) : null}
       {children}
     </article>
   );
@@ -106,6 +117,8 @@ export function MessageItem({
   attachments = {},
   renderCards,
   revision,
+  proposalReview,
+  highlighted,
 }: {
   message: ChatMessage;
   streaming: boolean;
@@ -114,6 +127,10 @@ export function MessageItem({
   renderCards?: RenderCards;
   /** 自分の発言の編集・撤回（ADR 2026-11-21-chat-discussion-mode D5）。無ければ操作を出さない。 */
   revision?: MessageRevisionActions;
+  /** 案の採用・却下・コメント（ADR 2026-11-23-project-observability-publish D2）。無ければ状態だけを出す。 */
+  proposalReview?: ProposalReviewActions;
+  /** `/?thread=&message=` で開いた発言。 */
+  highlighted?: boolean;
 }) {
   const note = streaming ? undefined : stateNote[message.state];
   const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
@@ -187,8 +204,10 @@ export function MessageItem({
       busy={streaming}
       label={messageSpeaker(message).label}
       id={chatMessageElementId(message.id)}
+      highlighted={highlighted}
     >
       <MessageMeta message={message} />
+      <ExternalMark message={message} />
       <ToolCallList tools={tools} />
       <Body
         speaker={message.role}
@@ -198,6 +217,7 @@ export function MessageItem({
       />
       <RevisionNote message={message} />
       <AttachmentList ids={message.attachment_ids} attachments={attachments} open={open} onToggle={toggle} />
+      {!streaming ? <ProposalReview message={message} attachments={attachments} actions={proposalReview} /> : null}
       {message.role === "assistant" && !streaming ? <CitationList message={message} /> : null}
       <RevisionHistory message={message} load={revision?.loadRevisions} />
       {revision && !streaming ? <RevisionControls message={message} actions={revision} /> : null}

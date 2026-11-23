@@ -1,7 +1,7 @@
 // 受信箱（ADR-0133、docs/api/v1/inbox-notifications.md）の画面側の規則。表示名・破壊的な選択・専用画面への誘導。
 // 型は生成型をそのまま使い、写しを作らない。
 
-import { ApiError } from "../../api/client";
+import { ApiError, problemCode, problemDetail } from "../../api/client";
 import type { BrowserWait, InboxItem, InboxKind, InboxOption } from "../../api/generated/types";
 
 export const INBOX_KINDS: readonly InboxKind[] = [
@@ -173,20 +173,6 @@ export function nativeTarget(item: InboxItem, waits: readonly BrowserWait[] = []
 export type AnswerOutcome =
   | { ok: true; removed: boolean }
   | { ok: false; message: string; native?: boolean; stale?: boolean; field?: "note" };
-
-function problemCode(body: unknown): string | undefined {
-  if (!body || typeof body !== "object") return undefined;
-  const record = body as Record<string, unknown>;
-  const code = record.code ?? record.error;
-  return typeof code === "string" ? code : undefined;
-}
-
-function problemDetail(body: unknown): string | undefined {
-  if (typeof body === "string") return body;
-  if (!body || typeof body !== "object") return undefined;
-  const detail = (body as Record<string, unknown>).detail;
-  return typeof detail === "string" ? detail : undefined;
-}
 
 /** answer の失敗を人の読める文と次の行き先にする。 */
 export function answerFailure(error: unknown): Extract<AnswerOutcome, { ok: false }> {

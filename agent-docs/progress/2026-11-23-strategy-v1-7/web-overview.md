@@ -48,6 +48,18 @@ completed: 2026-11-23
 - `git diff "$CELERIS_WU_BASE" -- crates/ | wc -l` → 0。`sh "$CELERIS_WU_SCOPE_PATHS"` → 上の 6 file と、この進捗の file。
 - `corepack pnpm@12.6.0 -C web exec biome check`（変えた file）→ 指摘 0（fake-daemon.mjs の既存の警告 2 件は触っていない行）。
 
+### 再実行（計画 v3、提出時の HEAD で実行）
+最初の run の後に計画の check『`git diff --quiet $(git merge-base HEAD main) -- crates/`』が落ちた。基点の main の merge-base は、
+統合先 branch に先に入った backend 段（publish-api・proposal-api・overview-api）の crates/ の差分 35 file を数えていた。
+この WU の差分に crates/ は無い。計画 v3 が基点を `$CELERIS_WU_BASE` に直したので、成果は作り直さずに検査だけを再実行した。
+- `git diff --quiet "$CELERIS_WU_BASE" -- crates/` → exit 0。`sh "$CELERIS_WU_SCOPE_PATHS"` → 上の 6 file と、この進捗の file。
+- `corepack pnpm@12.6.0 -C web exec playwright test e2e/work/project-overview.spec.ts` → 2 passed、exit 0。
+- `corepack pnpm@12.6.0 -C web exec vitest run features/projects/project-overview-panel.test.tsx` → 6 passed。
+- `bash scripts/dev/test-affected.sh`（対象は web の typecheck+unit）→ exit 0。tsc -b 通過、vitest 106 files・751 passed、server の node --test 110 pass、
+  repo-health verdict=pass（new 5・worsened 2 は前回と同じ）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- 回帰の既存 spec（上の 34 件と nfr の 10 件）はこの再実行では流していない。この WU の file は最初の run から変わっていない。
+
 ## 測定（LoC、基準 `$CELERIS_WU_BASE`、`git diff --numstat`）
 - production（web）: +371 / −1（panel +352、detail view +8、queries +11/−1）。
 - test: +520 / −2（vitest +218、e2e spec +118、fake daemon の fixture +184/−2）。
@@ -56,6 +68,7 @@ completed: 2026-11-23
 ## commit（件名）
 - strategy-v1 7 web-overview: 案件の詳細に概要の panel（14 項目・印・強い警告・drill-down）、overview の fixture と project-overview の e2e・unit 試験
 - strategy-v1 7 web-overview: 進捗を書く
+- strategy-v1 7 web-overview: 計画 v3 の check の再実行の結果を進捗に足す
 
 ## 未確認・引き継ぎ
 - chat の link は `/?thread=` だけに移る。`message` の search の欄は web-proposals の WU が `web/routes/index.tsx` に足すので、統合の後に

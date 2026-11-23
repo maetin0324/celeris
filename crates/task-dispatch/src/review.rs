@@ -300,6 +300,8 @@ pub fn reviewer_hint() -> WorkerHint {
 }
 
 mod critic;
+/// ADR 2026-11-22-parent-checkpoint-evaluator D2.3・D3.4: 親の途中評価の run の起動の条件・試行の記録・決着。
+pub(crate) mod parent_evaluation;
 mod required;
 pub use required::{
     HEALTH_CHECK_ERROR, HealthItem, RepoHealth, RequiredCheckBinding, RequiredRepoChecks,

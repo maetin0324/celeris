@@ -174,7 +174,8 @@ impl CheckpointSettings {
 
 // ---------------------------------------------------------------- 発火（D1.2・D1.3）
 
-/// 子の `Transitioned` の 1 件（`to` と event の時刻。RFC 3339 の UTC で、文字列の順が時刻の順）。
+/// 子の `Transitioned` の 1 件（`to` と event の順を表す文字列。文字列の順が event の順。controller は大域の event id を
+/// 20 桁で入れる）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChildTransition {
     pub to: Status,
@@ -189,7 +190,7 @@ pub struct ChildFacts {
 }
 
 /// 戦略の文書の `ArtifactProduced` 1 件（root の subtree と root が参照する文書の task のもの）。
-/// `bytes` は記録が引けなければ `None`。`at` は event の時刻。
+/// `bytes` は記録が引けなければ `None`。`at` は event の順（[`ChildTransition::at`] と同じ）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StrategyDocumentFacts {
     pub name: String,
@@ -206,7 +207,7 @@ pub struct StrategyFacts {
 }
 
 /// 1 つの root の発火の事実。`strategy` が `None` の root（strategy root でない）は trigger を持たない。
-/// `evaluated` は記録の `triggers`、`requested` は `evaluate` の判断（`pending`・`applied`・`suppressed`）の `triggers`。
+/// `evaluated`・`requested` は [`checkpoint_states`] の出力だけから入れる（[`CheckpointStates::fill`]。呼び出し側が別の方法で集めない）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TriggerFacts {
     pub strategy: Option<StrategyFacts>,
@@ -234,7 +235,7 @@ pub enum TriggerState {
     Evaluated,
 }
 
-/// 条件が今真の trigger 1 件。`at` は条件が真になった event の時刻（予算は時刻を持たないので `None`）。
+/// 条件が今真の trigger 1 件。`at` は条件が真になった event の順（予算は持たないので `None`）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Trigger {
     pub key: String,
@@ -914,22 +915,23 @@ pub fn evaluation_artifact_name(decision_id: &str) -> String {
     format!("{EVALUATION_ARTIFACT_PREFIX}{decision_id}.json")
 }
 
-/// name が記録の成果物なら判断 id。[`evaluation_artifact_name`] で作り直して一致するものだけ。
+/// name が最終の記録の成果物なら判断 id。[`evaluation_artifact_name`] で作り直して一致するもので、試行の記録
+/// （[`attempt_of`]）でないものだけ。
 pub fn evaluation_decision_id(name: &str) -> Option<&str> {
     let id = name
         .strip_prefix(EVALUATION_ARTIFACT_PREFIX)?
         .strip_suffix(".json")?;
-    (!id.is_empty() && !id.contains('/')).then_some(id)
+    (!id.is_empty() && !id.contains('/') && attempt_of(name).is_none()).then_some(id)
 }
 
 /// D3.4: root の成果物 `parent-evaluation/<判断 id>.json` の中身。`evaluation` は `checked` のときだけ写す。
+/// trigger の一覧は持たない（どの trigger の評価かは判断の行が正本で、`decision_id` がその行を指す。D1.3）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ParentEvaluationRecord {
     pub schema: String,
     pub decision_id: String,
     pub root_id: String,
-    pub triggers: Vec<String>,
     pub status: RecordStatus,
     pub evaluation: Option<Value>,
     pub effective: Effective,
@@ -940,7 +942,6 @@ impl ParentEvaluationRecord {
     pub fn new(
         decision_id: &str,
         root_id: &str,
-        triggers: Vec<String>,
         evaluation: Option<Value>,
         checked: &CheckedEvaluation,
     ) -> Self {
@@ -948,7 +949,6 @@ impl ParentEvaluationRecord {
             schema: RECORD_SCHEMA.to_string(),
             decision_id: decision_id.to_string(),
             root_id: root_id.to_string(),
-            triggers,
             status: checked.status,
             evaluation: evaluation.filter(|_| checked.status == RecordStatus::Checked),
             effective: checked.effective.clone(),
@@ -959,6 +959,116 @@ impl ParentEvaluationRecord {
                 .collect(),
         }
     }
+}
+
+/// 試行の記録の kind（D2.3）。
+pub const ATTEMPT_ARTIFACT_KIND: &str = "parent_evaluation_attempt";
+/// 試行の記録の schema（D2.3）。
+pub const ATTEMPT_SCHEMA: &str = "celeris.parent-evaluation-attempt/1";
+
+/// 試行の記録の成果物の name（`parent-evaluation/<判断 id>.attempt-<n>.json`、n ≥ 1。D2.3）。
+pub fn attempt_artifact_name(decision_id: &str, attempt: u32) -> String {
+    format!("{EVALUATION_ARTIFACT_PREFIX}{decision_id}.attempt-{attempt}.json")
+}
+
+/// name が試行の記録なら `(判断 id, n)`。[`attempt_artifact_name`] で作り直して一致するものだけ。
+pub fn attempt_of(name: &str) -> Option<(&str, u32)> {
+    let rest = name
+        .strip_prefix(EVALUATION_ARTIFACT_PREFIX)?
+        .strip_suffix(".json")?;
+    let (id, n) = rest.rsplit_once(".attempt-")?;
+    let n: u32 = n.parse().ok()?;
+    (!id.is_empty() && !id.contains('/') && n >= 1 && attempt_artifact_name(id, n) == name)
+        .then_some((id, n))
+}
+
+// ---------------------------------------------------------------- 状態（D1.3）
+
+/// `evaluate` の判断の効果の状態を、発火の状態に要る区別だけに写したもの（呼び出し側が判断の行の `effect_state` から写す。
+/// この module は controller の型を use しない。D11 の deps.cycle）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecisionEffect {
+    Pending,
+    Applied,
+    /// shadow の案件の記録。発火済みに数え、実行中にしない。
+    Suppressed,
+    /// `none`・`failed` など。発火済みに数えない（次の判断で再び due になる）。
+    Other,
+}
+
+/// 1 つの root の `evaluate` の判断 1 件（判断の行の `id`・`triggers`・`effect_state`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvaluateDecision {
+    pub id: String,
+    pub triggers: Vec<String>,
+    pub effect: DecisionEffect,
+}
+
+/// D1.3 の状態（保存しない）。`running`・`evaluated_decisions` は判断の順のまま。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CheckpointStates {
+    /// 発火済みの trigger（`pending`・`applied`・`suppressed` の判断の `triggers` の和）。
+    pub fired: BTreeSet<String>,
+    /// 評価済みの trigger（最終の記録がある判断の `triggers`）。
+    pub evaluated: BTreeSet<String>,
+    /// 実行中の判断（`pending`・`applied` で最終の記録が無い）。
+    pub running: Vec<String>,
+    /// 最終の記録がある判断。
+    pub evaluated_decisions: Vec<String>,
+    attempts: BTreeMap<String, BTreeSet<u32>>,
+}
+
+impl CheckpointStates {
+    /// 発火済みのうち評価済みでない trigger（[`TriggerFacts::requested`]）。
+    pub fn requested(&self) -> BTreeSet<String> {
+        self.fired.difference(&self.evaluated).cloned().collect()
+    }
+
+    /// 判断の試行の数（試行の記録の name の数。同じ n は 1 回）。
+    pub fn attempts(&self, decision_id: &str) -> u32 {
+        self.attempts
+            .get(decision_id)
+            .map_or(0, |s| u32::try_from(s.len()).unwrap_or(u32::MAX))
+    }
+
+    /// [`triggers`] の入力の `requested`・`evaluated` をこの状態だけから入れる。
+    pub fn fill(&self, facts: &mut TriggerFacts) {
+        facts.requested = self.requested();
+        facts.evaluated = self.evaluated.clone();
+    }
+}
+
+/// D1.3: 判断の行と root の `ArtifactProduced` の name だけから状態を導く（時刻・run の数・記録の中身は入力にしない）。
+pub fn checkpoint_states(
+    decisions: &[EvaluateDecision],
+    artifact_names: &[&str],
+) -> CheckpointStates {
+    let finals: BTreeSet<&str> = artifact_names
+        .iter()
+        .filter_map(|n| evaluation_decision_id(n))
+        .collect();
+    let mut st = CheckpointStates::default();
+    for (id, n) in artifact_names.iter().filter_map(|n| attempt_of(n)) {
+        st.attempts.entry(id.to_string()).or_default().insert(n);
+    }
+    for d in decisions {
+        let has_final = finals.contains(d.id.as_str());
+        if has_final {
+            st.evaluated.extend(d.triggers.iter().cloned());
+            st.evaluated_decisions.push(d.id.clone());
+        }
+        match d.effect {
+            DecisionEffect::Pending | DecisionEffect::Applied => {
+                st.fired.extend(d.triggers.iter().cloned());
+                if !has_final {
+                    st.running.push(d.id.clone());
+                }
+            }
+            DecisionEffect::Suppressed => st.fired.extend(d.triggers.iter().cloned()),
+            DecisionEffect::Other => {}
+        }
+    }
+    st
 }
 
 // ---------------------------------------------------------------- 写しの表（D5.2）

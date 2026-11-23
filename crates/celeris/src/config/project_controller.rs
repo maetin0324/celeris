@@ -39,6 +39,63 @@ pub struct ProjectControllerConfig {
     /// P4-D: `[project_controller.retention]`（節が無い・`enabled = false` なら GC しない）。
     #[serde(default)]
     pub retention: ProjectRetentionConfig,
+    /// `[project_controller.checkpoint]`（ADR 2026-11-22-parent-checkpoint-evaluator D1.2）。節が無ければ既定値。
+    #[serde(default)]
+    pub checkpoint: ProjectCheckpointConfig,
+}
+
+/// ```toml
+/// [project_controller.checkpoint]
+/// children_per_checkpoint = 2      # 1〜8。root の子の終端が N 件ごとに評価
+/// budget_thresholds_pct = [50, 80] # 1〜99 の狭義の昇順・4 件まで。root の max_tokens に対する割合
+/// max_evaluation_attempts = 2      # 1〜3。1 回の評価の reviewer run の試行の上限
+/// ```
+/// strategy root（CoS が `strategy` 付きで起票した root）だけが対象。止めるのは案件の controller の mode `off`
+/// （この節に flag は無い）。値の誤りは設定エラー（`task_core::parent_checkpoint::CheckpointSettings::new` が判定する）。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectCheckpointConfig {
+    #[serde(default = "d_children_per_checkpoint")]
+    pub children_per_checkpoint: u32,
+    #[serde(default = "d_budget_thresholds_pct")]
+    pub budget_thresholds_pct: Vec<u8>,
+    #[serde(default = "d_max_evaluation_attempts")]
+    pub max_evaluation_attempts: u32,
+}
+
+impl Default for ProjectCheckpointConfig {
+    fn default() -> Self {
+        Self {
+            children_per_checkpoint: d_children_per_checkpoint(),
+            budget_thresholds_pct: d_budget_thresholds_pct(),
+            max_evaluation_attempts: d_max_evaluation_attempts(),
+        }
+    }
+}
+
+fn d_children_per_checkpoint() -> u32 {
+    defaults().checkpoint.children_per_checkpoint()
+}
+fn d_budget_thresholds_pct() -> Vec<u8> {
+    defaults().checkpoint.budget_thresholds_pct().to_vec()
+}
+fn d_max_evaluation_attempts() -> u32 {
+    defaults().checkpoint.max_evaluation_attempts()
+}
+
+impl ProjectCheckpointConfig {
+    fn settings(
+        &self,
+    ) -> Result<
+        task_core::parent_checkpoint::CheckpointSettings,
+        task_core::parent_checkpoint::SettingsError,
+    > {
+        task_core::parent_checkpoint::CheckpointSettings::new(
+            self.children_per_checkpoint,
+            self.budget_thresholds_pct.clone(),
+            self.max_evaluation_attempts,
+        )
+    }
 }
 
 /// ```toml
@@ -382,6 +439,9 @@ impl ProjectControllerConfig {
             ));
         }
         self.retention.validate()?;
+        self.checkpoint
+            .settings()
+            .map_err(|e| ConfigError::Invalid(e.to_string()))?;
         if self.allowed_project_ids.iter().any(|p| p.trim().is_empty()) {
             return Err(ConfigError::Invalid(
                 "[project_controller] allowed_project_ids must not contain blank ids".into(),
@@ -403,6 +463,8 @@ impl ProjectControllerConfig {
             max_cos_inputs_open_per_project: self.max_cos_inputs_open_per_project,
             budget: self.budget.limits(),
             retention: self.retention.settings(),
+            // validate を通った値だけが来る（範囲外は設定エラーで daemon が起きない）。
+            checkpoint: self.checkpoint.settings().unwrap_or_default(),
         }
     }
 }
@@ -410,6 +472,39 @@ impl ProjectControllerConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 不変条件（ADR 2026-11-22-parent-checkpoint-evaluator D1.2）: `[project_controller.checkpoint]` は 3 欄だけで、
+    /// 節が無ければ既定値、範囲外・未知の欄は設定エラー。base にはこの節が無く、値の誤りを検出する試験も無い。
+    #[test]
+    fn project_controller_checkpoint_config_section() {
+        let c: ProjectControllerConfig = toml::from_str("").unwrap();
+        assert_eq!(
+            c.settings().checkpoint,
+            task_core::parent_checkpoint::CheckpointSettings::default()
+        );
+        let c: ProjectControllerConfig = toml::from_str(
+            "[checkpoint]\nchildren_per_checkpoint = 3\nbudget_thresholds_pct = [60]\nmax_evaluation_attempts = 1",
+        )
+        .unwrap();
+        c.validate().unwrap();
+        let s = c.settings().checkpoint;
+        assert_eq!(s.children_per_checkpoint(), 3);
+        assert_eq!(s.budget_thresholds_pct(), &[60]);
+        assert_eq!(s.max_evaluation_attempts(), 1);
+        for bad in [
+            "[checkpoint]\nchildren_per_checkpoint = 0",
+            "[checkpoint]\nchildren_per_checkpoint = 9",
+            "[checkpoint]\nbudget_thresholds_pct = [80, 50]",
+            "[checkpoint]\nbudget_thresholds_pct = [100]",
+            "[checkpoint]\nmax_evaluation_attempts = 4",
+        ] {
+            let c: ProjectControllerConfig = toml::from_str(bad).unwrap();
+            assert!(c.validate().is_err(), "{bad}");
+        }
+        assert!(
+            toml::from_str::<ProjectControllerConfig>("[checkpoint]\nenabled = false").is_err()
+        );
+    }
 
     #[test]
     fn project_controller_config_defaults_and_unknown_field() {

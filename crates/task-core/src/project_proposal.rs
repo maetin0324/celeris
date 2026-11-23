@@ -50,6 +50,12 @@ pub const ESCALATION_CATEGORIES: [&str; 7] = [
     "standing_permission",
     "explicit_human",
 ];
+/// 写していない評価を行動に写す規則（ADR 2026-11-22-parent-checkpoint-evaluator D5.1・D5.3）。
+pub const CHECKPOINT_ACT_RULE: &str = "pc/checkpoint/act";
+/// 写す評価の判断 id を持つ signal の name（D5.3）。
+pub const CHECKPOINT_SIGNAL: &str = "checkpoint";
+/// `evaluate` の 1 回の判断の trigger の上限（件。`parent_checkpoint::TRIGGERS_PER_DECISION_MAX` と同じ値）。
+pub const CHECKPOINT_TRIGGERS_MAX: usize = 8;
 /// Outcome block の fence の info string。
 pub const OUTCOMES_FENCE: &str = "```celeris-outcomes";
 
@@ -261,6 +267,59 @@ pub struct ProjectSnapshot {
     pub roadmap: Option<serde_json::Value>,
     /// A7 が埋める。
     pub authority: Option<serde_json::Value>,
+    /// strategy root ごとの checkpoint（ADR 2026-11-22-parent-checkpoint-evaluator D1.3）。strategy root の無い案件では
+    /// 空で、直列化に出さない（snapshot の形は base と同じ）。task-ops の組み立てが `parent_checkpoint` の結果から入れ、
+    /// [`validate`] はこの値だけを見る（D2.2。この module は `parent_checkpoint` を呼ばない）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checkpoints: Vec<SnapshotCheckpoint>,
+}
+
+/// strategy root 1 件の checkpoint（D1.3・D5.2・D5.3）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SnapshotCheckpoint {
+    pub root_id: String,
+    /// root が参照する戦略の文書（`artifact:<文書の task>/<name>`）。
+    pub strategy_ref: String,
+    /// due の trigger（古い順。D1.2）。
+    pub due: Vec<SnapshotTrigger>,
+    /// 実行中の `evaluate` の判断の id（D1.3。1 root につき同時に 1 回）。
+    pub running: Option<String>,
+    /// 評価済みでまだ行動に写していない評価（D5.3）。
+    pub unmapped: Vec<SnapshotEvaluation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SnapshotTrigger {
+    pub key: String,
+    /// `children`・`child_failed`・`refute`・`budget`。
+    pub kind: String,
+    pub at: Option<String>,
+}
+
+/// 写していない評価 1 件。`effective` は最終の記録の `effective` のまま、`allowed` は D5.2 の表の行動。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SnapshotEvaluation {
+    pub decision_id: String,
+    /// `checked`・`invalid`。
+    pub status: String,
+    pub effective: serde_json::Value,
+    /// 最終の記録（`artifact:<root>/parent-evaluation/<判断 id>.json`）。
+    pub record_ref: String,
+    pub allowed: Vec<SnapshotAllowedAction>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SnapshotAllowedAction {
+    /// `ProjectAction::kind()`。
+    pub kind: String,
+    /// `replan` の `reason_code`。
+    pub reason_code: Option<String>,
+    /// `escalate` の `question_key`（`checkpoint:<判断 id>`）。
+    pub question_key: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -442,6 +501,12 @@ pub enum ProjectAction {
         outcome_id: String,
         evidence_refs: Vec<String>,
     },
+    /// strategy root の親の途中評価を 1 回求める（ADR 2026-11-22-parent-checkpoint-evaluator D2）。効果は何も書かず、
+    /// dispatcher の段が共通の reviewer run の起動口で評価の run を起こす。
+    Evaluate {
+        root_id: String,
+        triggers: Vec<String>,
+    },
 }
 
 impl ProjectAction {
@@ -453,6 +518,7 @@ impl ProjectAction {
             ProjectAction::Wait { .. } => "wait",
             ProjectAction::Escalate { .. } => "escalate",
             ProjectAction::MarkMilestone { .. } => "mark_milestone",
+            ProjectAction::Evaluate { .. } => "evaluate",
         }
     }
 }
@@ -746,8 +812,135 @@ pub fn validate(
             }
         }
         ProjectAction::LaunchRoot { root } => validate_launch(snapshot, root, &mut v),
+        ProjectAction::Evaluate { root_id, triggers } => {
+            validate_evaluate(snapshot, root_id, triggers, &mut v)
+        }
     }
+    validate_checkpoint_act(snapshot, proposal, &mut v);
     if v.is_empty() { Ok(()) } else { Err(v) }
+}
+
+/// D2.2: `evaluate` は snapshot の strategy root の due の trigger だけを、実行中の判断の無い root に、active の案件で求める。
+fn validate_evaluate(
+    snapshot: &ProjectSnapshot,
+    root_id: &str,
+    triggers: &[String],
+    v: &mut Vec<ProposalViolation>,
+) {
+    if snapshot.project.status != "active" {
+        v.push(ProposalViolation::new(
+            "launch_on_paused",
+            true,
+            format!("project is {}", snapshot.project.status),
+        ));
+    }
+    let Some(cp) = snapshot.checkpoints.iter().find(|c| c.root_id == root_id) else {
+        v.push(ProposalViolation::new(
+            "checkpoint_root_unknown",
+            false,
+            format!("root {root_id:?} is not a strategy root of the snapshot"),
+        ));
+        return;
+    };
+    let unique: BTreeSet<&str> = triggers.iter().map(String::as_str).collect();
+    let due_ok = triggers.iter().all(|t| cp.due.iter().any(|d| &d.key == t));
+    if triggers.is_empty()
+        || triggers.len() > CHECKPOINT_TRIGGERS_MAX
+        || unique.len() != triggers.len()
+        || !due_ok
+    {
+        v.push(ProposalViolation::new(
+            "checkpoint_not_due",
+            false,
+            format!(
+                "triggers {triggers:?} are not 1..={CHECKPOINT_TRIGGERS_MAX} distinct due keys"
+            ),
+        ));
+    }
+    if let Some(open) = &cp.running {
+        v.push(ProposalViolation::new(
+            "checkpoint_evaluation_open",
+            false,
+            format!("decision {open} is still evaluating root {root_id}"),
+        ));
+    }
+}
+
+/// D5.2・D5.3: 写していない評価があるとき、rule が `pc/checkpoint/act` でない行動は、計画を進めない `evaluate`・
+/// `wait(waiting)`・`escalate`（guard の待ち・人への知らせ）だけ。それ以外は rule `pc/checkpoint/act`・signal
+/// `checkpoint` = その判断 id で、表の行動だけ。rule `pc/checkpoint/act` は写していない評価を名指すときだけ使える。
+/// `replan` の `context_refs` は root・最終の記録・戦略の文書の参照だけ（評価の文を CoS 入力に写さない。I11）。
+fn validate_checkpoint_act(
+    snapshot: &ProjectSnapshot,
+    proposal: &ProjectProposal,
+    v: &mut Vec<ProposalViolation>,
+) {
+    let is_act = proposal.explanation.rule_id == CHECKPOINT_ACT_RULE;
+    let any_unmapped = snapshot.checkpoints.iter().any(|c| !c.unmapped.is_empty());
+    let holds = matches!(
+        proposal.action,
+        ProjectAction::Evaluate { .. }
+            | ProjectAction::Escalate { .. }
+            | ProjectAction::Wait {
+                phase: WaitPhase::Waiting,
+                ..
+            }
+    );
+    if !is_act && (holds || !any_unmapped) {
+        return;
+    }
+    let named = proposal
+        .explanation
+        .signals
+        .iter()
+        .find(|s| s.name == CHECKPOINT_SIGNAL)
+        .map(|s| s.detail.as_str());
+    let target = snapshot.checkpoints.iter().find_map(|c| {
+        c.unmapped
+            .iter()
+            .find(|e| Some(e.decision_id.as_str()) == named)
+            .map(|e| (c, e))
+    });
+    let ok = is_act
+        && target.is_some_and(|(cp, e)| {
+            let (kind, reason, question, refs_ok) = match &proposal.action {
+                ProjectAction::Replan {
+                    reason_code,
+                    context_refs,
+                    ..
+                } => {
+                    let task_ref = format!("task:{}", cp.root_id);
+                    let refs_ok = context_refs
+                        .iter()
+                        .all(|r| r == &task_ref || r == &e.record_ref || r == &cp.strategy_ref);
+                    ("replan", Some(reason_code.as_str()), None, refs_ok)
+                }
+                ProjectAction::Escalate { question_key, .. } => {
+                    ("escalate", None, Some(question_key.as_str()), true)
+                }
+                other => (other.kind(), None, None, true),
+            };
+            refs_ok
+                && e.allowed.iter().any(|a| {
+                    a.kind == kind
+                        && match kind {
+                            "replan" => a.reason_code.as_deref() == reason,
+                            "escalate" => a.question_key.as_deref() == question,
+                            _ => true,
+                        }
+                })
+        });
+    if !ok {
+        v.push(ProposalViolation::new(
+            "checkpoint_action_mismatch",
+            false,
+            format!(
+                "rule {:?} / {} does not map an unmapped checkpoint evaluation ({named:?})",
+                proposal.explanation.rule_id,
+                proposal.action.kind()
+            ),
+        ));
+    }
 }
 
 /// `outcome:<id>:<n>` を `(id, n)` に分ける。

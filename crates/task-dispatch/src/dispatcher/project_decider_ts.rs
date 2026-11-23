@@ -22,6 +22,7 @@ use serde_json::{Value, json};
 use task_core::authority::{
     ActionClass, AuthorityVerdict, GrantScope, NewAuthorityAudit, ScopeKind,
 };
+use task_core::parent_checkpoint::CheckpointSettings;
 use task_core::project_proposal::{
     self as pp, ProjectAction, ProjectProposal, ProjectSnapshot, ProposalViolation,
     SnapshotController, SnapshotDecision, SnapshotLimits, SnapshotWake, WaitPhase,
@@ -35,7 +36,9 @@ use task_ops::project_snapshot::{self as ps, LaunchRootMeta, SnapshotContext};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use crate::project_controller::{ProjectDecider, ProjectDecision, ProjectEffect};
+use crate::project_controller::{
+    ProjectControllerSettings, ProjectDecider, ProjectDecision, ProjectEffect, TreeTokens,
+};
 use crate::script_policy::{PolicyScript, PolicyScriptError};
 
 /// 判断の記録（`proposal_json`）の schema。
@@ -113,6 +116,10 @@ pub struct TsProjectDecider {
     /// 試験: 領域の mode を読まずに常に呼ぶ口（`ts` と同じ扱い）。
     fixed: Option<Arc<dyn PolicyScript>>,
     record: Option<String>,
+    /// ADR 2026-11-22-parent-checkpoint-evaluator D1: `[project_controller.checkpoint]` と木の使った token の読み口
+    /// （[`ProjectDecider::configure`] で入る）。入っていない判定（controller の runtime を通らない試験・pilot）は
+    /// snapshot に `checkpoints` を入れない。
+    checkpoint: Option<(CheckpointSettings, TreeTokens)>,
 }
 
 impl TsProjectDecider {
@@ -123,6 +130,7 @@ impl TsProjectDecider {
             access: None,
             fixed: None,
             record: None,
+            checkpoint: None,
         }
     }
 
@@ -186,6 +194,10 @@ impl ProjectDecider for TsProjectDecider {
         self.record.take()
     }
 
+    fn configure(&mut self, settings: &ProjectControllerSettings, tree_tokens: TreeTokens) {
+        self.checkpoint = Some((settings.checkpoint.clone(), tree_tokens));
+    }
+
     fn decide(&mut self, input: &ProjectDecideInput) -> Result<ProjectDecision, String> {
         self.record = None;
         let store = self
@@ -193,7 +205,11 @@ impl ProjectDecider for TsProjectDecider {
             .clone()
             .ok_or_else(|| "project controller decider has no store".to_string())?;
         let now = OffsetDateTime::parse(&input.now, &Rfc3339).map_err(|e| e.to_string())?;
-        let snapshot = build_snapshot(&store, input, &self.limits, now)?;
+        let mut snapshot = build_snapshot(&store, input, &self.limits, now)?;
+        if let Some((settings, tree_tokens)) = &self.checkpoint {
+            snapshot.checkpoints =
+                checkpoint_section(&store, input, &snapshot, settings, *tree_tokens)?;
+        }
         let snapshot_sha256 = pp::sha256_hex(&serde_json::to_string(&snapshot).unwrap_or_default());
         let mut rec = json!({
             "schema": DECISION_RECORD_SCHEMA,
@@ -598,13 +614,50 @@ pub fn build_snapshot(
     .map_err(|e| e.to_string())
 }
 
-/// 判断の行を snapshot の履歴の 1 件にする（A3 の記録だけ。A1 の既定の判定の行は読まない）。
-pub fn snapshot_decision(row: &ProjectControllerDecision) -> Option<SnapshotDecision> {
+/// ADR 2026-11-22-parent-checkpoint-evaluator D1.3: snapshot の `checkpoints`。判断の表は `evaluate` と
+/// `pc/checkpoint/act` を最後まで読む（履歴の件数を超えた古い判断で同じ trigger を 2 回発火させない）。木の使った token は
+/// 呼び出し側の読み口（dispatcher の `token_budget::tree_tokens_used`）で数える。
+fn checkpoint_section(
+    store: &SqliteStore,
+    input: &ProjectDecideInput,
+    snapshot: &ProjectSnapshot,
+    settings: &CheckpointSettings,
+    tree_tokens: TreeTokens,
+) -> Result<Vec<pp::SnapshotCheckpoint>, String> {
+    let rows = store
+        .project_controller_decisions(&input.project_id, None, usize::MAX)
+        .map_err(|e| e.to_string())?;
+    let proposals: Vec<(&ProjectControllerDecision, ProjectProposal)> = rows
+        .iter()
+        .filter_map(|r| Some((r, decision_proposal(r)?)))
+        .collect();
+    let rows: Vec<ps::CheckpointDecisionRow<'_>> = proposals
+        .iter()
+        .map(|(r, p)| ps::CheckpointDecisionRow {
+            id: &r.id,
+            effect_state: r.effect_state.as_str(),
+            proposal: p,
+        })
+        .collect();
+    ps::checkpoints(store, &snapshot.roots, &rows, settings, &mut |root| {
+        tree_tokens(store, root, None).map_err(task_ops::OpsError::from)
+    })
+    .map_err(|e| e.to_string())
+}
+
+/// 判断の行の記録（A3 の `celeris.project-decision/1`）の proposal。A1 の既定の判定の行・読めない行は `None`。
+pub(crate) fn decision_proposal(row: &ProjectControllerDecision) -> Option<ProjectProposal> {
     let rec: Value = serde_json::from_str(&row.proposal_json).ok()?;
     if rec.get("schema")?.as_str()? != DECISION_RECORD_SCHEMA {
         return None;
     }
-    let proposal: ProjectProposal = serde_json::from_value(rec.get("proposal")?.clone()).ok()?;
+    serde_json::from_value(rec.get("proposal")?.clone()).ok()
+}
+
+/// 判断の行を snapshot の履歴の 1 件にする（A3 の記録だけ。A1 の既定の判定の行は読まない）。
+pub fn snapshot_decision(row: &ProjectControllerDecision) -> Option<SnapshotDecision> {
+    let rec: Value = serde_json::from_str(&row.proposal_json).ok()?;
+    let proposal = decision_proposal(row)?;
     let (root_key, reason_code, outcome_id) = match &proposal.action {
         ProjectAction::LaunchRoot { root } => (Some(root.key.clone()), None, None),
         ProjectAction::Escalate { question_key, .. } => (Some(question_key.clone()), None, None),
@@ -616,6 +669,7 @@ pub fn snapshot_decision(row: &ProjectControllerDecision) -> Option<SnapshotDeci
             None,
         ),
         ProjectAction::MarkMilestone { outcome_id, .. } => (None, None, Some(outcome_id.clone())),
+        ProjectAction::Evaluate { root_id, .. } => (Some(root_id.clone()), None, None),
         _ => (None, None, None),
     };
     Some(SnapshotDecision {
@@ -642,7 +696,8 @@ pub fn classification_of(p: &ProjectProposal) -> Option<String> {
         .filter(|c| CLASSIFICATIONS.contains(&c.as_str()))
 }
 
-/// Rust の安全の上限（I12）: 進捗の増えない効果つきの判断（`replan`・`launch_root`）が
+/// Rust の安全の上限（I12）: 進捗の増えない効果つきの判断（`replan`・`launch_root`・`evaluate`。evaluate は
+/// ADR 2026-11-22-parent-checkpoint-evaluator D6）が
 /// `max_no_progress_decisions` 件続いたら、TS が何を返しても `escalate`（1 回）に置き換える。
 /// 置き換えたら guard の名を返す。
 pub fn runaway_guard(
@@ -651,7 +706,9 @@ pub fn runaway_guard(
 ) -> (ProjectProposal, Option<String>) {
     if !matches!(
         proposal.action,
-        ProjectAction::Replan { .. } | ProjectAction::LaunchRoot { .. }
+        ProjectAction::Replan { .. }
+            | ProjectAction::LaunchRoot { .. }
+            | ProjectAction::Evaluate { .. }
     ) {
         return (proposal, None);
     }
@@ -661,7 +718,7 @@ pub fn runaway_guard(
         .iter()
         .take_while(|d| d.progress_epoch == epoch)
         .filter(|d| {
-            matches!(d.kind.as_str(), "replan" | "launch_root")
+            matches!(d.kind.as_str(), "replan" | "launch_root" | "evaluate")
                 && matches!(
                     d.effect_state.as_str(),
                     "applied" | "suppressed" | "pending"
@@ -919,6 +976,12 @@ pub fn to_decision(
                 spec: Box::new(spec),
                 meta: serde_json::to_string(&meta).ok(),
                 authority: None,
+            };
+        }
+        ProjectAction::Evaluate { root_id, triggers } => {
+            d.effect = ProjectEffect::RequestEvaluation {
+                root_id: root_id.clone(),
+                triggers: triggers.clone(),
             };
         }
         ProjectAction::Escalate {

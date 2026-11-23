@@ -35,16 +35,20 @@ use crate::health_review::design::{
 };
 use crate::health_review::input::requested_policy;
 use crate::health_review::policy::base_review_policy;
+use crate::review::parent_evaluation as pe;
 use crate::run_settlement::run_end_record;
 use task_core::ExecutionPlanSpec;
 use task_core::design_review::ReviewPolicyState;
 use task_worker::protocol::DesignReviewRequest;
 
 /// side review（task の status を変えない reviewer run）の完了の種類。起動口に渡し、終わりの判定の振り分けに使う。
-pub(super) enum SideReviewKind {
+pub(crate) enum SideReviewKind {
     /// 採用前の計画の設計 review（ADR 2026-11-07-health-review-integration D3.5）。判定は
     /// `design_verdict::settle_design_review`。
     Design,
+    /// 親の途中評価（ADR 2026-11-22-parent-checkpoint-evaluator D2.3。中身は判断の id と試行の上限）。判定は
+    /// `review::parent_evaluation::settle`。
+    ParentEvaluation(pe::Subject),
 }
 
 impl SideReviewKind {
@@ -52,6 +56,7 @@ impl SideReviewKind {
     fn label(&self) -> &'static str {
         match self {
             Self::Design => "design review",
+            Self::ParentEvaluation(_) => "parent evaluation",
         }
     }
 }
@@ -263,8 +268,9 @@ impl Dispatcher {
     }
 
     /// `abort_stale_runs` 用: `run_id` がこの task の待っている side review の走っている run なら `true`。side review の
-    /// run は task の status を変えずに走り lease を持たないので、lease の有無だけで止めない。今は設計 review（待っている
-    /// `DesignReviewRequested` の、まだ終わっていない reviewer run）だけを見る。判定は events だけで決まる。
+    /// run は task の status を変えずに走り lease を持たないので、lease の有無だけで止めない。設計 review（待っている
+    /// `DesignReviewRequested` の、まだ終わっていない reviewer run）と、親の途中評価（最終の記録の無い判断の最後の試行の
+    /// run で `WorkerFinished` が無い。`review::parent_evaluation::in_flight`）を見る。判定は events だけで決まる。
     pub(super) fn holds_side_review(
         &self,
         task: &Task,
@@ -272,7 +278,8 @@ impl Dispatcher {
     ) -> Result<bool, DispatchError> {
         let events = self.store.events_for(task.id)?;
         Ok(pending_design_review(&events)
-            .is_some_and(|(seq, _)| design_review_in_flight(&events, seq) == Some(run_id)))
+            .is_some_and(|(seq, _)| design_review_in_flight(&events, seq) == Some(run_id))
+            || pe::in_flight(&events, run_id))
     }
 
     /// 共通の起動口（ADR 2026-11-22-parent-checkpoint-evaluator D2.3）: `pick_reviewer` で reviewer を選び、
@@ -281,7 +288,7 @@ impl Dispatcher {
     /// 渡さない。run は `running` に task の run として入る（並列度・cancel・同じ task の二重 dispatch の抑止）。終わりは
     /// `kind` を持つ `Completion::SideReview` で [`Self::on_side_review_finished`] に届く。起こした run の id を返し、task の
     /// dir が無い・reviewer を選べない（routing・admission・quota・予算）ときは `None`（何も書かない）。
-    pub(super) fn start_side_review(
+    pub(crate) fn start_side_review(
         &mut self,
         task: &Task,
         review: task_worker::ReviewRequest,
@@ -451,6 +458,9 @@ impl Dispatcher {
         }
         match kind {
             SideReviewKind::Design => self.settle_design_review(task_id, &run_id, &end.result),
+            SideReviewKind::ParentEvaluation(s) => {
+                pe::settle(self, task_id, &run_id, s, &end.result)
+            }
         }
     }
 }

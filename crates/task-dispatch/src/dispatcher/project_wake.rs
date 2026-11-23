@@ -14,6 +14,7 @@
 //!   効果の `Err` と CoS 入力の Busy は `pending` のまま backoff で延期し、`Err` が `max_retries` を超えたら
 //!   notice を書いて `failed`・phase `blocked` にする（ADR 付記 A1 の 10）。
 
+use task_core::Status;
 use task_core::project_proposal::sha256_hex;
 use task_core::project_wake::{
     ControllerPhase, EffectState, NewProjectWake, ProjectControllerDecision, ProjectDecideInput,
@@ -23,15 +24,16 @@ use task_core::store::{
     CommitOutcome, EffectAdmit, EffectDeferKind, EffectDeferral, IdempotencyClaim,
     NewProjectDecision, RootCreate, SqliteStore,
 };
-use task_core::{Event, Status, TaskId};
 use task_ops::add::NewTaskSpec;
 use time::OffsetDateTime;
 
 use crate::dispatcher::Dispatcher;
 use crate::dispatcher::cos_chat::launch::CosChatLaunch;
+use crate::dispatcher::token_budget::tree_tokens_used;
 use crate::project_controller::{
     Boundary, ControllerTickStats, ProjectControllerSettings, ProjectDecider, ProjectEffect,
 };
+use crate::review::parent_evaluation;
 
 /// 全体の取り込み cursor（`feed_cursor`）の名前。
 pub const PROJECT_WAKE_CURSOR: &str = "project_wake";
@@ -74,12 +76,13 @@ impl Dispatcher {
     pub fn set_project_controller(
         &mut self,
         settings: ProjectControllerSettings,
-        decider: Box<dyn ProjectDecider>,
+        mut decider: Box<dyn ProjectDecider>,
         owner: String,
     ) -> bool {
         let Some(launch) = self.orchestration.launch_mut() else {
             return false;
         };
+        decider.configure(&settings, tree_tokens_used);
         launch.project_controller = Some(ProjectControllerRuntime {
             settings,
             decider,
@@ -176,6 +179,10 @@ impl Dispatcher {
             pass.run(&findings);
             pass.stats.pass_micros = started.elapsed().as_micros() as u64;
             rt.last = pass.stats;
+            // ADR 2026-11-22-parent-checkpoint-evaluator D2.3: 実行中の `evaluate` の判断の評価の run を起こす。
+            parent_evaluation::launch(self, &rt.settings.checkpoint, tree_tokens_used, |d, t| {
+                d.tree_limit_hold_for(t, task_core::NextRun::Worker)
+            });
         }
         if let Some(launch) = self.orchestration.launch_mut() {
             launch.project_controller = Some(rt);
@@ -319,7 +326,12 @@ impl Pass<'_> {
             };
             let mut wakes = Vec::new();
             for row in &rows {
-                wakes.extend(wakes_for_event(store, row.id, row.task_id, &row.event)?);
+                wakes.extend(crate::project_controller::wakes_for_event(
+                    store,
+                    row.id,
+                    row.task_id,
+                    &row.event,
+                )?);
             }
             self.stats.ingested += store
                 .project_wake_ingest(
@@ -461,7 +473,11 @@ impl Pass<'_> {
                         &self.rt.owner,
                         (s.retry_base_secs, s.retry_max_secs, s.max_retries),
                         self.now,
-                        &|state, n| decide_exhausted_notice(state, n, &error, self.now),
+                        &|state, n| {
+                            crate::project_controller::decide_exhausted_notice(
+                                state, n, &error, self.now,
+                            )
+                        },
                     )
                     .map_err(|e| e.to_string())?;
                 tracing::warn!(%error, project, ?failure, "project controller: decide failed");
@@ -642,6 +658,10 @@ impl Pass<'_> {
                 }
                 Err(e) => Err(e),
             },
+            // ADR 2026-11-22-parent-checkpoint-evaluator D2.3: 門（mode・phase・案件の状態。shadow では `suppressed`）を
+            // 通った後、何も書かずに `applied`（`effect_ref` = root）。評価の run は dispatcher の段
+            // （`dispatcher/parent_evaluation.rs`）が実行中の判断から共通の起動口で起こす。
+            ProjectEffect::RequestEvaluation { root_id, .. } => Ok(Some(root_id)),
             // 第 3 フェーズ I2（付記 P0-B）: 根拠を確かめ直して到達を記録する。検査に落ちれば書かずに failed。
             ProjectEffect::RecordOutcome {
                 outcome_id,
@@ -736,7 +756,8 @@ impl Pass<'_> {
         effect: &ProjectEffect,
     ) -> Result<Option<String>, String> {
         match effect {
-            ProjectEffect::None => Ok(None),
+            // 書くものが無いので、門を通る前は効いていない（shadow の `suppressed` を門に任せる）。
+            ProjectEffect::None | ProjectEffect::RequestEvaluation { .. } => Ok(None),
             ProjectEffect::RecordOutcome { .. } => {
                 crate::project_decider_ts::outcome_in_place(self.store, project, decision_id)
             }
@@ -949,39 +970,6 @@ impl Pass<'_> {
     }
 }
 
-/// decide の失敗が `max_retries` を超えて phase `blocked` にするときの notice（付記 A1 の 12）。
-/// source_key は案件と `revision`。同じ止まり方の再試行（crash の後など）では 1 件のまま、人が mode を
-/// 置き直す（`revision + 1`）と次に止まったときに新しい notice になる。
-fn decide_exhausted_notice(
-    state: &task_core::project_wake::ProjectControllerState,
-    failures: u32,
-    error: &str,
-    now: OffsetDateTime,
-) -> task_core::feed::NoticeEvent {
-    let project = &state.project_id;
-    let title = format!(
-        "案件 {project} の controller の判断が {failures} 回失敗し、controller を止めました"
-    );
-    let summary = format!(
-        "{title}。controller の phase は blocked で、以後この案件の判断をしません。最後の失敗: {error}。原因を直してから controller の mode を置き直すと再開します。"
-    );
-    task_core::feed::NoticeEvent {
-        source_key: format!(
-            "project_controller:decide_failed:{project}:{}",
-            state.revision
-        ),
-        kind: task_core::feed::NoticeKind::BadNews,
-        group_key: format!("bad_news:project_controller:{project}"),
-        title,
-        summary,
-        project_id: Some(project.clone()),
-        task_id: None,
-        target: None,
-        links: Vec::new(),
-        at: now,
-    }
-}
-
 fn root_claim(key: &str, spec: &NewTaskSpec) -> Result<IdempotencyClaim, String> {
     let request_hash = sha256_hex(&serde_json::to_string(spec).map_err(|e| e.to_string())?);
     Ok(IdempotencyClaim {
@@ -989,95 +977,6 @@ fn root_claim(key: &str, spec: &NewTaskSpec) -> Result<IdempotencyClaim, String>
         operation: "project_controller.create_root".into(),
         request_hash,
     })
-}
-
-fn wakes_for_event(
-    store: &SqliteStore,
-    event_id: u64,
-    task_id: TaskId,
-    event: &Event,
-) -> Result<Vec<NewProjectWake>, String> {
-    let kind = match event {
-        // 第 4 フェーズ P4-B（G1）: 根拠の失効。done の root が非終端へ戻った（reopen・retry）か、取り込みが
-        // reopen された。achieved の案件でも Rust が達成を数え直す（`project_guard` の 1 段目）。
-        Event::Transitioned {
-            from: Status::Done,
-            to,
-            ..
-        } if !to.is_terminal() => Some(ProjectWakeKind::EvidenceChanged),
-        Event::IntegrationReopened { .. } => Some(ProjectWakeKind::EvidenceChanged),
-        Event::Transitioned { to, reason, .. } => match to {
-            Status::Done => Some(ProjectWakeKind::RootDone),
-            Status::Failed if reason == "review_fail" => Some(ProjectWakeKind::ReviewFailed),
-            Status::Failed => Some(ProjectWakeKind::RootFailed),
-            Status::Cancelled => None,
-            _ => return Ok(Vec::new()),
-        },
-        Event::DecisionAnswered { .. }
-        | Event::Answered { .. }
-        | Event::ApprovalDecided { .. }
-        | Event::PlanGateDecided { .. } => Some(ProjectWakeKind::DecisionAnswered),
-        // A9: root の取り込みが閉じた（merge）。done の wake の時点では
-        // 取り込み前なので、閉じたときにもう一度起こす（次の root を起票できる）。
-        Event::IntegrationMerged { .. } => Some(ProjectWakeKind::RootDone),
-        Event::ClusterJobWaitFinished { .. }
-        | Event::BrowserWaitResolved { .. }
-        | Event::BrowserPrerequisiteResumed { .. } => Some(ProjectWakeKind::ExternalReleased),
-        _ => return Ok(Vec::new()),
-    };
-    let Some(task) = store.get(task_id).map_err(|e| e.to_string())? else {
-        return Ok(Vec::new());
-    };
-    let Some(project) = task.project_id else {
-        return Ok(Vec::new());
-    };
-    let mut out = Vec::new();
-    let mut push = |kind: ProjectWakeKind, subject: TaskId| {
-        let prefix = match kind {
-            ProjectWakeKind::ExternalReleased => "external",
-            other => other.as_str(),
-        };
-        out.push(NewProjectWake {
-            project_id: project.to_string(),
-            wake_key: format!("{prefix}:{subject}:{event_id}"),
-            kind,
-            source_event_id: Some(event_id as i64),
-            source_ref: Some(subject.to_string()),
-        });
-    };
-    match kind {
-        Some(ProjectWakeKind::RootDone) => {
-            if task_ops::root_done::is_root_done(&task) {
-                push(ProjectWakeKind::RootDone, task.id);
-            }
-        }
-        Some(
-            k @ (ProjectWakeKind::RootFailed
-            | ProjectWakeKind::ReviewFailed
-            | ProjectWakeKind::EvidenceChanged),
-        ) => {
-            if task_core::is_root_task(&task) {
-                push(k, task.id);
-            }
-        }
-        Some(k) => push(k, task.id),
-        None => {}
-    }
-    // 子の終端: 親の待ち（`awaited_children`）が空になったら親の案件に `children_settled`（I15: 親を起こすのは
-    // 既存の tree。controller は観測するだけ）。
-    if let (Event::Transitioned { to, .. }, Some(parent)) = (event, task.parent_id)
-        && to.is_terminal()
-    {
-        let awaited =
-            task_ops::delegate::child_wait::awaited_children(store, parent, true, &mut |_| {
-                Ok(false)
-            })
-            .map_err(|e| e.to_string())?;
-        if awaited.is_empty() {
-            push(ProjectWakeKind::ChildrenSettled, parent);
-        }
-    }
-    Ok(out)
 }
 
 pub(super) fn project_request_sha256(store: &SqliteStore, project: &str) -> String {

@@ -127,6 +127,36 @@ pub(crate) fn resolve_run_file(
     })
 }
 
+/// task の `ArtifactProduced` の全件（`(run_id, artifact)`、記録の順）。戦略の文書（`cos::strategy_gate`）と
+/// publish manifest（`crate::publish`）が同じ読み方を使う。
+pub(crate) fn produced_artifacts(
+    store: &SqliteStore,
+    task: task_core::TaskId,
+) -> Result<Vec<(String, ArtifactRef)>, ApiProblem> {
+    Ok(store
+        .events_for(task)
+        .map_err(crate::problem::store_problem)?
+        .into_iter()
+        .filter_map(|(_, e)| match e {
+            Event::ArtifactProduced { run_id, artifact } => Some((run_id, artifact)),
+            _ => None,
+        })
+        .collect())
+}
+
+/// 記録された成果物の file の今の byte 列（workspace の外・無い file は `None`）。
+pub(crate) fn artifact_bytes(
+    store: &SqliteStore,
+    roots: &WorkspaceRoots,
+    task: &Task,
+    recorded: &str,
+) -> Option<Vec<u8>> {
+    let dir = task_local_dir(store, roots, task).ok()?;
+    let ws = canonical_workspace(&dir).ok()?;
+    let path = resolve_artifact(&ws, recorded).ok()?;
+    std::fs::read(path).ok()
+}
+
 /// 記録された成果物のパス。空・絶対パス・`..` を含むものはワーカー側の規則（ADR-0003 D5）と同じく 403。
 pub(crate) fn resolve_artifact(ws: &Path, recorded: &str) -> Result<PathBuf, ApiProblem> {
     let relative = Path::new(recorded);

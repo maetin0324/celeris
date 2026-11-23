@@ -852,7 +852,9 @@ export type ChatMessage = {
   "discussion_mode"?: ChatDiscussionMode | null;
   "edited"?: ChatMessageChange | null;
   "escalation"?: ChatEscalationRef | null;
+  "external"?: ChatMessageExternal | null;
   "id": string;
+  "proposal"?: ChatMessageProposal | null;
   "provenance"?: ChatProvenance | null;
   "relay"?: ChatRelay | null;
   "reply_to_id"?: string | null;
@@ -883,11 +885,25 @@ export type ChatMessageEditRequest = {
   "text": string;
 };
 
+export type ChatMessageExternal = {
+  "source_kind": string;
+  "source_label": string;
+  "untrusted": boolean;
+};
+
 export type ChatMessageListResponse = {
   "items": Array<ChatMessage>;
   "next_after_seq"?: number | null;
   "next_before_seq"?: number | null;
   "snapshot_event_id": string;
+};
+
+export type ChatMessageProposal = {
+  "kind": ProposalKind;
+  "review_message_id"?: string | null;
+  "review_state": ProposalReviewState;
+  "reviewed_at"?: string | null;
+  "reviewed_by"?: string | null;
 };
 
 export type ChatMessageResponse = {
@@ -3970,6 +3986,46 @@ export type LocalSettingsPutBody = {
   "workspace_root"?: string | null;
 };
 
+export type ManifestRule = "shape" | "unsupported_claim" | "unresolved_reference" | "contradicted" | "hidden_uncertainty" | "refute_removed" | "secret" | "other_project" | "idempotency" | "id_conflict";
+
+export type ManifestSignoffView = {
+  "answered_at"?: string | null;
+  "answered_by"?: string | null;
+  "decision_id"?: string | null;
+  "decision_status"?: DecisionStatus | null;
+  "key": string;
+  "state": SignoffState;
+};
+
+export type ManifestView = {
+  "claims": Array<unknown>;
+  "current_sha256"?: string | null;
+  "evidence": Array<unknown>;
+  "file_matches_record": boolean;
+  "limitations": Array<unknown>;
+  "manifest_id": string;
+  "name": string;
+  "open_questions": Array<unknown>;
+  "project_id"?: string | null;
+  "recorded_sha256": string;
+  "reproduction": Array<unknown>;
+  "signoff": ManifestSignoffView;
+  "strong_warnings": Array<string>;
+  "target"?: unknown;
+  "task_id": string;
+  "unsupported_claims": Array<string>;
+  "version": number;
+  "versions": Array<number>;
+  "violations": Array<ManifestViolationView>;
+};
+
+export type ManifestViolationView = {
+  "code": string;
+  "detail": string;
+  "path": string;
+  "rule": ManifestRule;
+};
+
 export type McpCall = {
   "at": string;
   "client_id": string;
@@ -4740,6 +4796,75 @@ export type ProjectListItem = {
   "workspace"?: WorkspaceSpec | null;
 };
 
+export type ProjectOverview = {
+  "generated_at": string;
+  "items": Array<ProjectOverviewItem>;
+  "project_id": string;
+  "request_sha256": string;
+  "schema": string;
+  "truncated": Array<string>;
+  "warnings": Array<ProjectOverviewWarning>;
+};
+
+export type ProjectOverviewEntry = {
+  "detail": unknown;
+  "id": string;
+  "links": Array<ProjectOverviewLink>;
+  "mark": ProjectOverviewMark;
+};
+
+export type ProjectOverviewItem = {
+  "entries": Array<ProjectOverviewEntry>;
+  "key": string;
+  "mark"?: ProjectOverviewMark | null;
+  "recorded": boolean;
+};
+
+export type ProjectOverviewLink = {
+  "kind": "task";
+  "task_id": string;
+} | {
+  "kind": "artifact";
+  "name": string;
+  "sha256": string;
+  "task_id": string;
+} | {
+  "kind": "notebook";
+  "name": string;
+  "task_id": string;
+} | {
+  "kind": "log";
+  "run_id": string;
+  "task_id": string;
+} | {
+  "kind": "git";
+  "repo": string;
+  "sha": string;
+  "task_id"?: string | null;
+} | {
+  "kind": "literature";
+  "path"?: string | null;
+  "sha256"?: string | null;
+  "url"?: string | null;
+} | {
+  "kind": "chat";
+  "message_id": string;
+  "revision": number;
+  "sha256": string;
+  "state"?: ChatCitationState | null;
+  "thread_id": string;
+};
+
+export type ProjectOverviewMark = "confirmed" | "estimated" | "needs_decision" | "contradicted";
+
+export type ProjectOverviewWarning = {
+  "code": string;
+  "entry"?: string | null;
+  "item": string;
+  "links": Array<ProjectOverviewLink>;
+  "strong": boolean;
+};
+
 export type ProjectPatchBody = {
   "auto_advance"?: boolean | null;
   "request"?: string | null;
@@ -4846,6 +4971,21 @@ export type PromotionView = {
   "release_sha"?: string | null;
   "status": PromotionStatus;
 };
+
+export type ProposalKind = "external_llm" | "human_import" | "cos_strategy";
+
+export type ProposalReviewRequest = {
+  "attachment"?: string | null;
+  "client_message_id"?: string | null;
+  "expected_revision": number;
+  "note"?: string | null;
+  "sha256": string;
+  "verdict": ProposalVerdict;
+};
+
+export type ProposalReviewState = "rejected" | "pending" | "adopted" | "commented" | "stale";
+
+export type ProposalVerdict = "adopt" | "reject" | "comment";
 
 export type ProposedMilestone = {
   "key": string;
@@ -6006,6 +6146,8 @@ export type SideIntent = {
   "path": string;
   "unavailable"?: string | null;
 };
+
+export type SignoffState = "unsigned" | "signed" | "rejected" | "stale" | "superseded";
 
 export type SitePolicyList = {
   "items": Array<BrowserSitePolicyRecord>;

@@ -125,6 +125,11 @@ link は `{kind, …}` の 7 種だけである。Web は kind ごとに既存�
     sha256。`note` は 2,000 文字まで（`comment` では 1 文字以上が必須）。
 - 呼べるのは `Principal::Human` だけ。`Principal::Operator`（relay を含む）・`Principal::Mcp`・`Principal::Cos`・`Principal::Unauthenticated` は
   403、problem の code `proposal_verdict_requires_human`。判定は roadmap の decide と同じ形（`requires_human`）で handler の先頭に置く。
+  - 実装（WU proposal-api）: MCP の token と CoS の run は handler より前の層で止まる。MCP の token は middleware の「MCP の token は読むだけ」の guard で
+    403 `forbidden`。CoS の run の直接の呼び出しは 422 `cos_audit_context_required`、`/cos/operations` 経由は 422 `cos_operation_not_allowed`。
+    handler の 403 `proposal_verdict_requires_human` は operator（relay を含む）と token の無い構成に返り、前の層が変わっても MCP・CoS を止める
+    （handler の unit 試験で 4 主体を確かめる）。worker の run は API の主体を持たず DB を読むだけなので、採否の message を書けない。採否の状態の導出（D2.4）も
+    author が `human:` の採否の message だけを数える。
 - CoS の operation の allowlist に足さない（`crates/task-api/src/cos/ops/surface.rs` の `EXCLUDED` と
   [ADR 2026-10-09-cos-operations-all-mutations](2026-10-09-cos-operations-all-mutations.md) の表に登録する）。MCP の道具も足さない。
 
@@ -224,6 +229,8 @@ link は `{kind, …}` の 7 種だけである。Web は kind ごとに既存�
 - 署名の前の内容の検査: 人の HTTP の回答で `option = sign` のとき、task-api の decisions の handler が `task_api::publish::manifest_status` で manifest を
   検査し、違反があれば 422 `publish_manifest_invalid`、file の今の byte 列の sha256 が question と違えば 409 `publish_manifest_stale` にする。
   この検査を HTTP の handler に置くのは、署名できる経路が人の HTTP だけだからである（CoS と MCP は上の主体の拒否で先に止まる）。
+  回答の改め（`POST /decisions/{id}/revise`）で `sign` に変えるときも同じ検査を通す。token の無い構成の要求は管理系の入口（`require_admin`）で 401 になり、
+  共有の owner も `human:local` を拒む。manifest の GET は `?version=` で版を選べる（省けば最新の版）。
   概要（O14）と manifest の画面は同じ `manifest_status` を使う。
 
 #### D3.4 失効と状態（保存しない）
@@ -260,9 +267,13 @@ link は `{kind, …}` の 7 種だけである。Web は kind ごとに既存�
 
 | 守る不変条件 | 予定の試験（正式名） | 変更前に落ちるか |
 |---|---|---|
-| 非人の主体は publish manifest に署名できない（operator・CoS・MCP・token の無い構成） | `publish_signoff_operator_answer_is_403_and_records_nothing`・`publish_signoff_cos_operation_decision_answer_is_403_and_audited`・`publish_signoff_mcp_decision_answer_is_refused`・`publish_signoff_unauthenticated_local_is_403` | 落ちる（base はどの主体の回答も受ける） |
+| 非人の主体は publish manifest に署名できない（operator・CoS・MCP・token の無い構成） | `publish_signoff_operator_answer_is_403_and_records_nothing`・`publish_signoff_cos_operation_decision_answer_is_403_and_audited`・`publish_signoff_mcp_decision_answer_is_refused`（celeris-mcp）・`publish_signoff_unauthenticated_local_is_refused`（HTTP は管理系の入口で 401、共有の owner も `human:local` を拒む） | 落ちる（base はどの主体の回答も受ける） |
 | 人の発言の引用でも CoS は署名できない | `publish_signoff_cos_instructed_by_human_message_cannot_sign` | 落ちる |
 | 回答の改めでも非人は署名できない | `publish_signoff_revise_by_non_human_is_403` | 落ちる |
+| worker の run（API の主体を持たない。run の id・`worker:` を名乗る回答）も署名できない | `publish_signoff_worker_run_cannot_sign` | 落ちる |
+| 外部 LLM・会話の文（「承認する」「publish して」）は署名にならない | `publish_signoff_external_llm_text_cannot_sign` | 落ちる |
+| 別の案件の参照を持つ manifest には署名できない | `publish_signoff_other_project_reference_is_422` | 落ちる |
+| 署名の状態は sha256・版・最後の回答から導く | `publish_signoff_state_follows_sha_version_and_answer` | 落ちる（関数が無い） |
 | 人の HTTP の回答だけが今の sha256 に署名する | `publish_signoff_human_answer_signs_current_sha` | 落ちる（署名の状態の導出が無い） |
 | 本文が変われば署名は失効し、新しい版は署名し直す | `publish_signoff_after_file_change_is_stale`・`publish_signoff_newer_version_marks_previous_signoff_superseded` | 落ちる |
 | 検査に通らない manifest には署名できない | `publish_signoff_invalid_manifest_is_422` | 落ちる |
@@ -271,17 +282,21 @@ link は `{kind, …}` の 7 種だけである。Web は kind ごとに既存�
 | 他の決定の回答は今と同じ | `publish_signoff_other_decision_keys_unchanged` | 通る（回帰） |
 | manifest は claims → evidence → 再現条件 → limitations・未解決 → 署名 の順で読める | `publish_manifest_view_orders_claims_evidence_reproduction_limitations_signoff` | 落ちる |
 | 基準の manifest は違反が無い | `publish_manifest_valid_baseline_has_no_violations` | 落ちる（検査の関数が無い） |
+| 再現条件の command の長さと commit の形、文書の大きさの上限 | `publish_manifest_limits_reject_long_commands_and_bad_commit` | 落ちる（検査の関数が無い） |
 | 証拠の無い claim・内部の参照の無い確認済みの claim・再現条件の無い確認済みの claim を拒む | `publish_manifest_claim_without_evidence_is_invalid`・`publish_manifest_confirmed_claim_needs_internal_reference`・`publish_manifest_confirmed_claim_needs_reproduction` | 落ちる |
 | 支持と反証の両方を持つ claim は確認済みにできず、未確認の claim は limitations か未解決に載る | `publish_manifest_supported_and_refuted_claim_cannot_be_confirmed`・`publish_manifest_unconfirmed_claim_must_be_listed_in_limitations` | 落ちる |
 | 反証は版を進めても消えない | `publish_manifest_refute_evidence_cannot_be_removed_in_next_version` | 落ちる |
 | 秘密・署名の自己申告・別の案件の参照・同じ版の 2 つの sha256・2 つ目の manifest の id を拒む | `publish_manifest_secret_in_body_is_invalid`・`publish_manifest_signed_state_in_document_is_invalid`・`publish_manifest_other_project_reference_is_invalid`・`publish_manifest_same_version_other_sha_is_conflict`・`publish_manifest_second_id_in_task_is_conflict` | 落ちる |
 | 上書きされた file を検査済みと出さない | `publish_manifest_view_reports_overwritten_file_as_stale` | 落ちる |
-| 案の採否は人だけ | `proposal_review_operator_is_403_proposal_verdict_requires_human`・`proposal_review_mcp_and_cos_principals_are_403`・`proposal_review_unauthenticated_local_is_403` | 落ちる（base に route が無い） |
+| 案の採否は人だけ | `proposal_review_operator_is_403_proposal_verdict_requires_human`・`proposal_review_mcp_and_cos_principals_are_refused`・`proposal_review_unauthenticated_local_is_403`・`proposal_review_non_human_principals_are_403_at_handler`（task-api の handler の unit） | 落ちる（base に route が無い。`proposal_review_mcp_and_cos_principals_are_refused` の MCP の 403 と CoS の 422 は base の guard でも同じで、base では wire の `proposal` が無いことで落ちる） |
 | 採否の route は CoS の operation に無い | `proposal_review_route_not_in_cos_operations` | 落ちる |
-| 採用は execute の人の指示の message で、承認ではない | `proposal_review_human_adopt_posts_execute_instruction_message`・`proposal_review_adopt_is_not_strategy_approval` | 落ちる |
+| 採用は execute の人の指示の message で、承認ではない | `proposal_review_human_adopt_posts_execute_instruction_message`・`proposal_review_adopt_is_not_strategy_approval`・`proposal_review_text_is_fixed_and_adopt_is_not_approval`（task-core の unit） | 落ちる |
 | 却下・コメントは discuss の message で副作用が無い | `proposal_review_reject_and_comment_post_discuss_messages` | 落ちる |
 | 人が見た版と違う案・撤回された案・案でない message は採否できない | `proposal_review_stale_revision_is_409`・`proposal_review_sha_mismatch_is_409`・`proposal_review_retracted_target_is_409`・`proposal_review_non_proposal_target_is_422` | 落ちる |
-| 採否の状態は保存せず導き、案の編集で失効する | `proposal_review_state_is_derived_not_stored`・`proposal_review_state_stale_after_target_edit` | 落ちる |
+| 別の案件の thread の案は、この thread の path から採否できない（404） | `proposal_review_other_project_thread_is_refused` | 落ちる |
+| CoS の案の添付は添付の sha256 で照合し、添付に無い path と本文の sha256 を拒む | `proposal_review_cos_strategy_draft_reviewed_by_attachment_sha` | 落ちる |
+| 採否の状態は保存せず導き、案の編集・撤回で失効する | `proposal_review_state_is_derived_not_stored`・`proposal_review_state_stale_after_target_edit`・`proposal_review_state_stale_after_target_retract`・`proposal_review_state_follows_last_verdict_of_a_person`（task-core の unit） | 落ちる |
+| 案の種類と外部の印は記録（role・author・`metadata_json.exchange`）から導き、本文から導かない | `proposal_review_kind_and_mark_come_from_the_record`（task-core の unit） | 落ちる（関数が無い） |
 | 外部の文は wire で untrusted と印が付き、文の中の指示で状態が変わらない | `proposal_review_external_text_marked_untrusted_on_wire`・`proposal_review_injected_text_cannot_adopt` | 落ちる |
 | 同じ client_message_id の再送は二重にならない | `proposal_review_idempotent_client_message_id` | 落ちる |
 | 概要は 14 項目を決めた順で返し、既存の GET の欄を写さない | `project_overview_lists_fourteen_items_in_order`・`project_overview_does_not_copy_existing_get_fields` | 落ちる（base に route が無い） |
@@ -289,12 +304,12 @@ link は `{kind, …}` の 7 種だけである。Web は kind ごとに既存�
 | 原目的の sha256 は Project.request と一致する | `project_overview_request_sha_matches_project_request` | 落ちる |
 | 戦略の版は decisions から引き、成果物の全走査をしない | `project_overview_strategy_versions_from_decisions_not_artifact_scan` | 落ちる |
 | 人でない回答・回答待ちの戦略を承認済みと出さない | `project_overview_unapproved_strategy_is_not_marked_approved`・`project_overview_operator_answered_strategy_is_not_approved` | 落ちる |
-| 古い戦略・矛盾した仮説・未反映の反証・失効した引用は強い警告 | `project_overview_stale_strategy_is_contradicted_with_strong_warning`・`project_overview_contradicted_hypothesis_is_strong_warning`・`project_overview_unapplied_refutation_is_strong_warning`・`project_overview_stale_citation_is_strong_warning` | 落ちる |
+| 古い戦略・矛盾した仮説・未反映の反証は強い警告（失効した引用の `citation_stale` は実装したが試験は無い。下の「未確認」） | `project_overview_stale_strategy_is_contradicted_with_strong_warning`・`project_overview_contradicted_hypothesis_is_strong_warning`・`project_overview_unapplied_refutation_is_strong_warning` | 落ちる |
 | 根拠の無い評価の主張は推定で、3 軸を分けて出す | `project_overview_unsupported_evaluation_claim_is_estimated_with_warning`・`project_overview_evaluation_axes_shown_separately` | 落ちる |
 | 外部の出典は推定 | `project_overview_external_source_is_estimated` | 落ちる |
-| 予算の超過と単価の不明は強い警告 | `project_overview_budget_spent_over_experiment_budget_is_strong_warning`・`project_overview_unknown_cost_is_needs_decision` | 落ちる |
-| 判断待ちは要判断、公開の準備度は署名の決定から導く | `project_overview_open_decisions_are_needs_decision`・`project_overview_publish_readiness_from_signoff_decisions` | 落ちる |
-| link は 7 種だけで、URL は https だけ | `project_overview_links_cover_seven_kinds`・`project_overview_url_link_is_https_only` | 落ちる |
+| 予算の超過と単価の不明は強い警告（`budget_exceeded`・`cost_unknown` は実装したが試験は無い。下の「未確認」） | 無し | — |
+| 判断待ちは要判断、公開の準備度は署名の決定から導き、未署名・失効した manifest は強い警告 | `project_overview_open_decisions_are_needs_decision`・`project_overview_publish_readiness_from_signoff_decisions`・`project_overview_unsigned_or_stale_manifest_is_strong_warning` | 落ちる |
+| link の URL は https だけ（7 種の型は wire の enum `ProjectOverviewLink` で固定。`log` の link はまだ出さない。下の「未確認」） | `project_overview_url_link_is_https_only` | 落ちる |
 | 別の案件の記録を出さず、記録の無い項目に印を付けない | `project_overview_other_project_data_excluded`・`project_overview_empty_project_items_absent` | 落ちる |
 | 人が概要で 14 項目・印・強い警告を読み、各 link で移れる | `web/e2e/work/project-overview.spec.ts` | 落ちる（画面が無い） |
 | 人が chat の案を採用・却下・コメントでき、外部の文に印が付く | `web/e2e/chat/proposal-review.spec.ts` | 落ちる |
@@ -352,3 +367,6 @@ link は `{kind, …}` の 7 種だけである。Web は kind ごとに既存�
 - `human:local`（token の無い構成）を署名に数えない規則は、戦略の承認（子 2 D2.2 は `is_human_principal` だけを見る）より厳しい。2 つを揃えるかは子 9 で人が決める。
 - 人の token の名前が `local` のとき、その人の署名も数えない。本番の token の名前は確かめていない。
 - 本番の config の変更は無い。本番への昇格・publish・外部公開は人が行う。
+- overview-api の WU（2026-11-23）: 失効した引用（`citation_stale`）・予算の超過（`budget_exceeded`）・単価の不明（`cost_unknown`）は導出を実装したが
+  試験が無い。`log` の link（run の id）はまだ出さない。O10 の `wall_secs` は返さない（`RollupMetrics` に壁時計の合計が無い）。
+  O3 の却下の候補（`contradicted`）は規則 1 の強い警告から外した（D1.3 の表の「無し」に合わせた）。

@@ -403,6 +403,14 @@ pub(crate) fn message_from_raw(conn: &Connection, r: MessageRaw) -> Result<ChatM
         _ => None,
     };
     Ok(ChatMessage {
+        marks: crate::proposal_review_wire::ChatMessageProposalMarks::of_message(
+            conn,
+            &r.thread_id,
+            &r.id,
+            &r.role,
+            &r.text,
+            &meta,
+        )?,
         role: enum_from(&r.role)?,
         state: enum_from(&r.state)?,
         id: r.id,
@@ -501,7 +509,7 @@ pub(crate) fn emit_message(
         m.run_id.as_deref(),
         Some(&m.id),
         ChatEventType::Message,
-        &ChatEventData::Message(ChatMessageData { message: m.clone() }),
+        &ChatEventData::Message(Box::new(ChatMessageData { message: m.clone() })),
         now,
     )
 }

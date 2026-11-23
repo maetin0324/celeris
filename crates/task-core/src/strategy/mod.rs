@@ -457,10 +457,8 @@ pub struct Violation {
     pub detail: String,
 }
 
-/// 成果物の name（D3.1）。
-pub fn artifact_name(strategy_id: &str, version: u32) -> String {
-    format!("strategy/{strategy_id}/v{version}.json")
-}
+/// 成果物の name（D3.1）。定義は leaf の `strategy_ref`（`proposal_review_wire` が循環に入らずに使う）。
+pub use crate::strategy_ref::artifact_name;
 
 /// D1.4: 文書の idempotency の key。
 pub fn idempotency_key(strategy_id: &str, version: u32) -> String {

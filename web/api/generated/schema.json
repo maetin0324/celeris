@@ -4164,8 +4164,30 @@
           ],
           "description": "ADR 2026-10-28-single-human-window-general-cos D2: present on a card (札) of the general\nthread that stands for an item a project CoS routed to the person. `state` / `open` are\nread from the item every time (the card is resolved when the item is)."
         },
+        "external": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatMessageExternal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "D2.4: present on a text from an external LLM or imported by a person (untrusted)."
+        },
         "id": {
           "type": "string"
+        },
+        "proposal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatMessageProposal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "D2.4: present on a message a person may adopt, reject or comment on."
         },
         "provenance": {
           "anyOf": [
@@ -4313,6 +4335,27 @@
       ],
       "type": "object"
     },
+    "ChatMessageExternal": {
+      "description": "D2.4: `ChatMessage.external`, the mark of a text that came from outside Celeris. `untrusted` is always `true`.",
+      "properties": {
+        "source_kind": {
+          "description": "`exchange.source.kind`: `mcp_client`, `human_paste` or `markdown_import`.",
+          "type": "string"
+        },
+        "source_label": {
+          "type": "string"
+        },
+        "untrusted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "source_kind",
+        "source_label",
+        "untrusted"
+      ],
+      "type": "object"
+    },
     "ChatMessageListResponse": {
       "properties": {
         "items": {
@@ -4344,6 +4387,42 @@
       "required": [
         "items",
         "snapshot_event_id"
+      ],
+      "type": "object"
+    },
+    "ChatMessageProposal": {
+      "description": "D2.4: `ChatMessage.proposal`.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ProposalKind"
+        },
+        "review_message_id": {
+          "description": "The review message the state comes from.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "review_state": {
+          "$ref": "#/$defs/ProposalReviewState"
+        },
+        "reviewed_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reviewed_by": {
+          "description": "`human:<name>` who wrote that review.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "review_state"
       ],
       "type": "object"
     },
@@ -19631,6 +19710,244 @@
       },
       "type": "object"
     },
+    "ManifestRule": {
+      "description": "検査の規則（M1〜M10 と D3.1 の 2 つの衝突）。`code()` は API の problem の code。",
+      "oneOf": [
+        {
+          "const": "shape",
+          "description": "M1・M10: 形・上限・署名の状態の自己申告。",
+          "type": "string"
+        },
+        {
+          "const": "unsupported_claim",
+          "description": "M2・M3・M5: 根拠の無い claim（証拠が無い・内部の参照が無い・再現条件が無い）。",
+          "type": "string"
+        },
+        {
+          "const": "unresolved_reference",
+          "description": "参照が引けない（同じ案件の commit・成果物・文献 URL・chat・task・knowledge に解決しない）。",
+          "type": "string"
+        },
+        {
+          "const": "contradicted",
+          "description": "M4: 支持と反証の両方を持つ claim を確認済みにした。",
+          "type": "string"
+        },
+        {
+          "const": "hidden_uncertainty",
+          "description": "M6: 未確認・反証のある claim が limitations にも未解決にも載っていない。",
+          "type": "string"
+        },
+        {
+          "const": "refute_removed",
+          "description": "M7.",
+          "type": "string"
+        },
+        {
+          "const": "secret",
+          "description": "M8.",
+          "type": "string"
+        },
+        {
+          "const": "other_project",
+          "description": "M9.",
+          "type": "string"
+        },
+        {
+          "const": "idempotency",
+          "description": "D3.1: 同じ name に違う sha256。",
+          "type": "string"
+        },
+        {
+          "const": "id_conflict",
+          "description": "D3.1: 1 つの task に 2 つ目の `manifest_id`。",
+          "type": "string"
+        }
+      ]
+    },
+    "ManifestSignoffView": {
+      "description": "署名の状態（D3.3・D3.4。決定と file から導く）。",
+      "properties": {
+        "answered_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "answered_by": {
+          "description": "最後の回答の主体（`signed` のときは人）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "decision_id": {
+          "description": "manifest を作った task の、この版の署名の決定の id（出ていなければ `None`）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "decision_status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DecisionStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "key": {
+          "description": "署名の決定の key（`publish-signoff-v<n>`）。",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/SignoffState"
+        }
+      },
+      "required": [
+        "state",
+        "key"
+      ],
+      "type": "object"
+    },
+    "ManifestView": {
+      "description": "`GET /tasks/{id}/publish/{manifest_id}` の応答。欄の順は人が読む順（claims → evidence → 再現条件 →\nlimitations・未解決 → 人の署名）。manifest の各項目は文書の形のまま（`task_core::publish::Manifest`）。",
+      "properties": {
+        "claims": {
+          "items": true,
+          "type": "array"
+        },
+        "current_sha256": {
+          "description": "file の今の byte 列の sha256（読めなければ `None`）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evidence": {
+          "items": true,
+          "type": "array"
+        },
+        "file_matches_record": {
+          "description": "file の今の byte 列が記録と同じか。`false` の file は検査済みと出さない（違反に数える）。",
+          "type": "boolean"
+        },
+        "limitations": {
+          "items": true,
+          "type": "array"
+        },
+        "manifest_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "open_questions": {
+          "items": true,
+          "type": "array"
+        },
+        "project_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recorded_sha256": {
+          "description": "`ArtifactProduced` の sha256（dispatcher が計算した値）。",
+          "type": "string"
+        },
+        "reproduction": {
+          "items": true,
+          "type": "array"
+        },
+        "signoff": {
+          "$ref": "#/$defs/ManifestSignoffView"
+        },
+        "strong_warnings": {
+          "description": "概要の強い警告（`manifest_confidential`・`manifest_blocking_question`）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "target": true,
+        "task_id": {
+          "type": "string"
+        },
+        "unsupported_claims": {
+          "description": "根拠の無い claim の id（証拠・内部の参照・再現条件の欠け）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "versions": {
+          "description": "同じ `manifest_id` の版（昇順）。",
+          "items": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "violations": {
+          "items": {
+            "$ref": "#/$defs/ManifestViolationView"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "task_id",
+        "manifest_id",
+        "version",
+        "versions",
+        "name",
+        "recorded_sha256",
+        "file_matches_record",
+        "violations",
+        "unsupported_claims",
+        "strong_warnings",
+        "claims",
+        "evidence",
+        "reproduction",
+        "limitations",
+        "open_questions",
+        "signoff"
+      ],
+      "type": "object"
+    },
+    "ManifestViolationView": {
+      "description": "検査の違反 1 件（`task_core::publish::ManifestViolation` の写し）。",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "rule": {
+          "$ref": "#/$defs/ManifestRule"
+        }
+      },
+      "required": [
+        "rule",
+        "code",
+        "path",
+        "detail"
+      ],
+      "type": "object"
+    },
     "McpCall": {
       "description": "`mcp_calls` の 1 行（ADR-0056 D4: 結果の本文は持たない。`request` は読み取りの道具の要求だけ）。",
       "properties": {
@@ -23722,6 +24039,334 @@
       ],
       "type": "object"
     },
+    "ProjectOverview": {
+      "description": "`GET /api/v1/projects/{id}/overview` の応答（D1.1）。",
+      "properties": {
+        "generated_at": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/ProjectOverviewItem"
+          },
+          "type": "array"
+        },
+        "project_id": {
+          "type": "string"
+        },
+        "request_sha256": {
+          "type": "string"
+        },
+        "schema": {
+          "type": "string"
+        },
+        "truncated": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "$ref": "#/$defs/ProjectOverviewWarning"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema",
+        "project_id",
+        "generated_at",
+        "request_sha256",
+        "items",
+        "warnings",
+        "truncated"
+      ],
+      "type": "object"
+    },
+    "ProjectOverviewEntry": {
+      "description": "項目の 1 件。`detail` は項目ごとの欄（D1.3 の「概要が返すもの」）。",
+      "properties": {
+        "detail": true,
+        "id": {
+          "type": "string"
+        },
+        "links": {
+          "items": {
+            "$ref": "#/$defs/ProjectOverviewLink"
+          },
+          "type": "array"
+        },
+        "mark": {
+          "$ref": "#/$defs/ProjectOverviewMark"
+        }
+      },
+      "required": [
+        "id",
+        "mark",
+        "detail",
+        "links"
+      ],
+      "type": "object"
+    },
+    "ProjectOverviewItem": {
+      "description": "14 項目の 1 つ。記録が無ければ `recorded: false` で `mark` は無い（D1.2）。",
+      "properties": {
+        "entries": {
+          "items": {
+            "$ref": "#/$defs/ProjectOverviewEntry"
+          },
+          "type": "array"
+        },
+        "key": {
+          "type": "string"
+        },
+        "mark": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProjectOverviewMark"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recorded": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "key",
+        "recorded",
+        "entries"
+      ],
+      "type": "object"
+    },
+    "ProjectOverviewLink": {
+      "description": "D1.4 の drill-down の link（7 種）。Web は kind ごとに既存の画面へ移る。",
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "const": "task",
+              "type": "string"
+            },
+            "task_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "task_id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "artifact",
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "sha256": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "task_id",
+            "name",
+            "sha256"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "notebook",
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "task_id",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "log",
+              "type": "string"
+            },
+            "run_id": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "task_id",
+            "run_id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "git",
+              "type": "string"
+            },
+            "repo": {
+              "type": "string"
+            },
+            "sha": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "repo",
+            "sha"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "literature",
+              "type": "string"
+            },
+            "path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "sha256": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "url": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "chat",
+              "type": "string"
+            },
+            "message_id": {
+              "type": "string"
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "sha256": {
+              "type": "string"
+            },
+            "state": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ChatCitationState"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "引用の今の状態（`current`・`edited`・`retracted`・`missing`）。"
+            },
+            "thread_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "thread_id",
+            "message_id",
+            "revision",
+            "sha256"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ProjectOverviewMark": {
+      "description": "D1.2 の印（4 語。子 2 の `confidence` と同じ語）。",
+      "enum": [
+        "confirmed",
+        "estimated",
+        "needs_decision",
+        "contradicted"
+      ],
+      "type": "string"
+    },
+    "ProjectOverviewWarning": {
+      "description": "D1.2 の警告。文は Web が code から組む。",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "entry": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "item": {
+          "type": "string"
+        },
+        "links": {
+          "items": {
+            "$ref": "#/$defs/ProjectOverviewLink"
+          },
+          "type": "array"
+        },
+        "strong": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "code",
+        "item",
+        "strong",
+        "links"
+      ],
+      "type": "object"
+    },
     "ProjectPatchBody": {
       "additionalProperties": false,
       "description": "`PATCH /projects/{id}` の要求本文。`status` / `workspace` はどちらも任意（書いたものだけ変える）。\n`\"workspace\": null` を明示すると作業場所を消す（案件を「作業場所なし」に戻す）。",
@@ -24252,6 +24897,109 @@
         "status"
       ],
       "type": "object"
+    },
+    "ProposalKind": {
+      "description": "D2.2: the three kinds of message a person may review.",
+      "oneOf": [
+        {
+          "const": "external_llm",
+          "description": "An external LLM's propose (`role=user`, `author = mcp:<client_id>`, `metadata_json.exchange`).",
+          "type": "string"
+        },
+        {
+          "const": "human_import",
+          "description": "A summary or quote a person imported (`exchange.source.kind` is `human_paste` / `markdown_import`).",
+          "type": "string"
+        },
+        {
+          "const": "cos_strategy",
+          "description": "A CoS reply with a strategy draft attached (`strategy/<id>/v<n>.json`).",
+          "type": "string"
+        }
+      ]
+    },
+    "ProposalReviewRequest": {
+      "additionalProperties": false,
+      "description": "D2.1: `POST /chat/threads/{t}/messages/{m}/review`. `expected_revision` and `sha256` are the proposal as the\nperson saw it; for a CoS draft `attachment` names it and `sha256` is the attachment's.",
+      "properties": {
+        "attachment": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "client_message_id": {
+          "description": "Idempotency (the chat key): the same key and text return the review already posted.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expected_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "note": {
+          "description": "Up to 2,000 characters; required (1 or more) for `comment`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "verdict": {
+          "$ref": "#/$defs/ProposalVerdict"
+        }
+      },
+      "required": [
+        "verdict",
+        "expected_revision",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "ProposalReviewState": {
+      "description": "D2.4: the review state of a proposal, derived on every read (never stored).",
+      "oneOf": [
+        {
+          "enum": [
+            "rejected"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "pending",
+          "description": "No person has reviewed it.",
+          "type": "string"
+        },
+        {
+          "const": "adopted",
+          "description": "The last adopt / reject of a person was adopt. This is not an approval (子 2 D2.2).",
+          "type": "string"
+        },
+        {
+          "const": "commented",
+          "description": "Only comments.",
+          "type": "string"
+        },
+        {
+          "const": "stale",
+          "description": "The proposal was edited or retracted after the revision the person reviewed.",
+          "type": "string"
+        }
+      ]
+    },
+    "ProposalVerdict": {
+      "description": "D2.1: what the person decided about a proposal.",
+      "enum": [
+        "adopt",
+        "reject",
+        "comment"
+      ],
+      "type": "string"
     },
     "ProposedMilestone": {
       "description": "`Event::ProjectPlanProposed.milestones[]`（ADR-0074 D3.3）。",
@@ -30081,6 +30829,17 @@
       ],
       "type": "object"
     },
+    "SignoffState": {
+      "description": "署名の状態（D3.4。保存しない）。",
+      "enum": [
+        "unsigned",
+        "signed",
+        "rejected",
+        "stale",
+        "superseded"
+      ],
+      "type": "string"
+    },
     "SitePolicyList": {
       "description": "`GET /browser/site-policies` の応答。",
       "properties": {
@@ -35515,6 +36274,10 @@
     "chat_post_message_response": {
       "$ref": "#/$defs/ChatPostMessageResponse"
     },
+    "chat_proposal_review": {
+      "$ref": "#/$defs/ProposalReviewRequest",
+      "description": "ADR 2026-11-23-project-observability-publish D2.1: `POST …/messages/{m}/review` (answers `ChatPostMessageResponse`)."
+    },
     "chat_reference": {
       "$ref": "#/$defs/ChatReferenceRequest"
     },
@@ -35716,9 +36479,6 @@
       "$ref": "#/$defs/DocsTree",
       "description": "Phase 57（ADR-0044 D7）: 文書（git が正本）。ツリー・ページ・編集・用意・昇格。"
     },
-    "eval_trial": {
-      "$ref": "#/$defs/EvalTrialView"
-    },
     "eval_trial_list": {
       "$ref": "#/$defs/EvalTrialList"
     },
@@ -35754,9 +36514,6 @@
     },
     "harness_candidate": {
       "$ref": "#/$defs/HarnessCandidateView"
-    },
-    "harness_rule": {
-      "$ref": "#/$defs/HarnessRuleView"
     },
     "harnesses": {
       "items": {
@@ -35970,6 +36727,10 @@
       "$ref": "#/$defs/ProjectList",
       "description": "Phase 23（ADR-0033 D2）: 案件と途中目標。"
     },
+    "project_overview": {
+      "$ref": "#/$defs/ProjectOverview",
+      "description": "D1: `GET /projects/{id}/overview`（`celeris.project-overview/1`、読み取り専用）。"
+    },
     "project_patch": {
       "$ref": "#/$defs/ProjectPatchBody"
     },
@@ -35986,6 +36747,10 @@
     },
     "project_plan_decided": {
       "$ref": "#/$defs/ProjectPlanDecided"
+    },
+    "publish_manifest": {
+      "$ref": "#/$defs/ManifestView",
+      "description": "ADR 2026-11-23-project-observability-publish D3: `GET /tasks/{id}/publish/{manifest_id}`。"
     },
     "release_promote": {
       "$ref": "#/$defs/ReleasePromoteAccepted"
@@ -36085,9 +36850,6 @@
     },
     "script_exhaustive_run_list": {
       "$ref": "#/$defs/ScriptExhaustiveRunList"
-    },
-    "script_generation": {
-      "$ref": "#/$defs/ScriptGenerationView"
     },
     "script_generation_register_body": {
       "$ref": "#/$defs/ScriptGenerationRegisterBody"
@@ -36371,7 +37133,6 @@
     "stream_reset",
     "llm_sources",
     "harnesses",
-    "harness_rule",
     "harness_candidate",
     "routing_stages",
     "routing_stage",
@@ -36381,7 +37142,6 @@
     "script_domain_mode_body",
     "script_domain_mode_result",
     "script_generations",
-    "script_generation",
     "script_generation_register_body",
     "script_generation_retire_body",
     "script_guard_clear_body",
@@ -36434,6 +37194,8 @@
     "decision_answer",
     "decision_withdraw",
     "decision_outcome",
+    "publish_manifest",
+    "project_overview",
     "task_tree",
     "cron_job_create",
     "cron_job_patch",
@@ -36443,10 +37205,10 @@
     "cron_run_result",
     "eval_trials_create",
     "eval_trials_created",
-    "eval_trial",
     "eval_trial_list",
     "chat_message_edit",
     "chat_message_retract",
+    "chat_proposal_review",
     "chat_exchange_share",
     "chat_exchange_share_response",
     "chat_exchange_import",

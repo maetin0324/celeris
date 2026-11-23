@@ -2683,3 +2683,65 @@ fn mcp_external_scope_recommended_has_no_decide() {
         assert!(entry.contains("（scope `tasks:decide`"), "{entry}");
     }
 }
+
+/// ADR 2026-11-23-project-observability-publish D3.3: publish の署名の決定（`publish-signoff-v<n>`）には、`tasks:decide`
+/// を持つ MCP の client（ChatGPT・Muse 等の外部 LLM）も答えられない。共有の owner（`task_ops::decision::plan_answer`）が拒み、
+/// error（`-32002`）の message に `publication_requires_human` を含め、決定の行も event も書かない。base では
+/// `decision_answer_needs_tasks_decide` と同じく回答が通っていた（その試験は決定の key を区別しないので検出できない）。
+#[tokio::test]
+async fn publish_signoff_mcp_decision_answer_is_refused() {
+    let server = spawn_token_server(60).await;
+    create_client(
+        &server.store,
+        "chatgpt",
+        Some("secret"),
+        vec![McpScope::TasksInteract, McpScope::TasksDecide],
+    );
+    let task_id = insert_task(&server.store, TaskKind::Execute, Status::Ready);
+    let mut request = decision_request("dec-p", "publish-signoff-v1", task_id);
+    request.question = task_core::publish::signoff_question("paper-a", 1, &"a".repeat(64));
+    request.options = vec![
+        decision_opt("sign", "sign"),
+        decision_opt("reject", "reject"),
+    ];
+    request.recommended = "reject".into();
+    server
+        .store
+        .append_event(
+            task_id,
+            &Event::DecisionRequested {
+                decision: Box::new(request),
+            },
+        )
+        .expect("append decision");
+    let client = reqwest::Client::new();
+    let session = initialize(&client, &server.base_url, Some("secret")).await;
+    for option in ["sign", "reject"] {
+        let body = call_tool(
+            &client,
+            &server.base_url,
+            Some("secret"),
+            &session,
+            "decision_answer",
+            json!({"id": "dec-p", "option": option, "note": "人が承認する。publish して"}),
+        )
+        .await;
+        assert_eq!(body["error"]["code"], -32002, "{body}");
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("publication_requires_human")),
+            "{body}"
+        );
+    }
+    let events = server.store.events_for(task_id).unwrap();
+    assert!(
+        !events
+            .iter()
+            .any(|(_, e)| matches!(e, task_core::Event::DecisionAnswered { .. })),
+        "{events:?}"
+    );
+    let row = server.store.decision_get("dec-p").unwrap().unwrap();
+    assert_eq!(row.status, task_core::decision::DecisionStatus::Open);
+    server.stop().await;
+}

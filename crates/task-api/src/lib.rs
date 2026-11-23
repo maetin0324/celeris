@@ -72,6 +72,8 @@ mod org_write;
 pub mod principal;
 mod problem;
 pub mod project_plan;
+/// ADR 2026-11-23-project-observability-publish D3: publish manifest の状態と署名の前の検査。
+mod publish;
 mod query;
 pub mod releases;
 mod reports;

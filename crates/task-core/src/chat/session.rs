@@ -394,7 +394,7 @@ impl SqliteStore {
             Some(run_id),
             None,
             ChatEventType::Run,
-            &ChatEventData::Run(ChatRunData { run: run.clone() }),
+            &ChatEventData::Run(Box::new(ChatRunData { run: run.clone() })),
             &at,
         )?;
         tx.commit()?;

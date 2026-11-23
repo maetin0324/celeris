@@ -2,6 +2,7 @@
 
 pub mod attachments;
 pub mod exchange;
+mod proposal_review;
 mod revise;
 pub mod stream;
 
@@ -82,6 +83,10 @@ pub(crate) fn routes() -> axum::Router<ApiState> {
         .route(
             "/api/v1/chat/threads/{t}/messages/{m}/revisions",
             get(revise::list_revisions),
+        )
+        .route(
+            "/api/v1/chat/threads/{t}/messages/{m}/review",
+            post(proposal_review::post_review),
         )
         .route("/api/v1/chat/threads/{t}/relays", post(post_relay))
         .route("/api/v1/chat/threads/{t}/forwards", post(post_forward))

@@ -2,13 +2,12 @@
 title: 戦略層 v1 子 6 ts-checkpoint-rule — control-ts の規則 pc/checkpoint と評価の結果の写し
 tasks: [01M7XQ9QWK58ESMW42Q1TGT3WZ]
 wu: ts-checkpoint-rule
-status: done
+status: blocked
 updated: 2026-11-23
-completed: 2026-11-23
 ---
 # ts-checkpoint-rule（WorkUnit）
 
-完了日: 2026-11-23。
+状態: 計画の問題で止まった（run 2 で plan_issue を申告した。下の「run 2」の節）。TS の実装と試験は run 1 で済んだ。
 `control-ts/src/domains/project_controller.ts` に、snapshot の `checkpoints` を読む規則 `pc/checkpoint/evaluate` と `pc/checkpoint/act` を足した。
 設計の正本は [ADR 2026-11-22-parent-checkpoint-evaluator](../../adr/2026-11-22-parent-checkpoint-evaluator.md) の D5.1〜D5.3・D6。
 基準はこの WU の `$CELERIS_WU_BASE`。検査は提出時の HEAD で実行した。
@@ -64,6 +63,15 @@ Rust 側の 2 つの穴（写していない評価がある間、guard の提案
 - `cargo clippy --workspace -- -D warnings`: exit 0。
 - `cargo fmt --all -- --check`: exit 0。
 - 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` の出力は 2 file（`project_controller.ts`・`project_controller.test.ts`）。commit 後はこの進捗も入る。
+
+## run 2: check の不合格と計画の問題の申告
+
+- 不合格の check: `cargo nextest run -p task-dispatch --no-fail-fast -E 'test(/project_controller_checkpoint_/)'` が exit 4（`error: no tests to run`、task-dispatch の 1964 件はすべて skip）。提出時の HEAD で再実行して同じ結果だった。
+- 原因: task-dispatch に名前が `project_controller_checkpoint_` の試験が 1 件も無い（`git grep -c project_controller_checkpoint_ -- crates/task-dispatch` は 0 件）。ADR の write set の表では、その試験（`crates/task-dispatch/src/dispatcher/tests/project_checkpoint.rs`）は controller-checkpoint の範囲にある。この WU の範囲は `control-ts/src/domains/project_controller.ts`・`project_controller.test.ts`・WU の進捗だけで、ADR が決めたこの WU の試験名は TS の `project_controller_checkpoint_` になっている。controller-checkpoint は run 2 で yield し、dispatcher の試験と起動の段を「残り」にしたまま、計画では完了になっている。この WU の範囲の変更では、この check は通らない。
+- 今ある Rust の `project_controller_checkpoint_` の試験（task-core 3 件・celeris 1 件）: `cargo nextest run -p task-core -p celeris --no-fail-fast -E 'test(/project_controller_checkpoint_/)'` が exit 0、4 件 pass（提出時の HEAD で実行）。
+- TS: `pnpm run typecheck` exit 0、`npx vitest run src/domains/project_controller.test.ts` 30 件 pass（提出時の HEAD で実行）。
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` の出力は 3 file（TS 2 file とこの進捗）。
+- 申告した直し方: (1) controller-checkpoint を同じ key で再実行し、残り（起動の段・`design_gate.rs` の腕・`review/parent_evaluation.rs`・`dispatcher/tests/project_checkpoint.rs` の `project_controller_checkpoint_` の試験）と、上の「未解決事項」1・2 の Rust の穴を直す。(2) この WU の Rust の check は、その後の integrate-controller に移すか、`-p task-core -p celeris -p task-dispatch` に広げる。
 
 ## 行数（`git diff --numstat $CELERIS_WU_BASE`）
 

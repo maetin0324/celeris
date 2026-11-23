@@ -84,6 +84,10 @@ Rust 側の 2 つの穴（写していない評価がある間、guard の提案
   `agent-docs/progress/2026-11-22-strategy-v1-6`・この ADR だけで、`crates/task-dispatch` は入らない。範囲の中の変更で check 2 は通らない。
 - この run の変更: ADR D5.1 の 2（act）の置き場と、末尾の付記（WU ts-checkpoint-rule。順の理由・試験の名前・Rust の未解決 2 件）を書いた（run 2 の「提案」の 3 件目をこの WU の範囲で済ませた）。コードは変えていない。
 - 申告: `result.json` を `yield` だけ（`summary` 無し）で書き直した。直し方は run 2 の (1)(2) と同じで、(1) は「計画で done の controller-checkpoint を、残りを持つ WU として再実行する」と明記した。
+- run 3 の検査（提出時の HEAD で実行）: check 2 `cargo nextest run -p task-dispatch --no-fail-fast -E 'test(/project_controller_checkpoint_/)'` は exit 4（0 件、1964 件 skip。変わらず）。
+  `pnpm typecheck` exit 0、`npx vitest run src/domains/project_controller.test.ts` 30 件 pass、`bash scripts/dev/test-affected.sh` exit 0（ts-verify、project_controller 15/15 matched、cargo 0 回）、
+  `cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0、`cargo nextest run -p task-core -p celeris -E 'test(/project_controller_checkpoint_/)'` 4 件 pass、
+  範囲 check（計画の正規表現）は範囲外 0、`sh scripts/dev/progress-index.sh --check` ok。
 
 ## 行数（`git diff --numstat $CELERIS_WU_BASE`）
 

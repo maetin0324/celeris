@@ -234,8 +234,9 @@ pub struct ApiV1Schema {
     pub script_domain_mode_body: crate::script_domains::ScriptDomainModeBody,
     pub script_domain_mode_result: crate::script_domains::ScriptDomainModeResult,
     /// 付記 S5-1・S5-4: generation の一覧・登録・退役と、script-guard の停止の解除。
+    // `ScriptGenerationView` is not listed: it stays in `$defs` through `ScriptGenerationList.generations` (the root's
+    // field count is repo health `size.responsibility-growth`; ADR 2026-11-23-project-observability-publish D1 adds `project_overview`).
     pub script_generations: crate::script_generations::ScriptGenerationList,
-    pub script_generation: crate::script_generations::ScriptGenerationView,
     pub script_generation_register_body: crate::script_generations::ScriptGenerationRegisterBody,
     pub script_generation_retire_body: crate::script_generations::ScriptGenerationRetireBody,
     pub script_guard_clear_body: crate::script_domains::ScriptGuardClearBody,
@@ -314,6 +315,8 @@ pub struct ApiV1Schema {
     pub decision_outcome: task_ops::decision::DecisionOutcome,
     /// ADR 2026-11-23-project-observability-publish D3: `GET /tasks/{id}/publish/{manifest_id}`。
     pub publish_manifest: crate::publish::ManifestView,
+    /// D1: `GET /projects/{id}/overview`（`celeris.project-overview/1`、読み取り専用）。
+    pub project_overview: task_ops::project_overview::ProjectOverview,
     /// ADR-0079 D11（Phase R4a）: `GET /tasks/{id}/task-tree`（木と roll-up）。
     pub task_tree: task_ops::tree_view::TaskTreeView,
     /// ADR-0131 D5: 定期実行（cron job）。作成・更新の本文、job（一覧・詳細）、履歴、手動実行の応答。

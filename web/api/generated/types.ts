@@ -4796,6 +4796,75 @@ export type ProjectListItem = {
   "workspace"?: WorkspaceSpec | null;
 };
 
+export type ProjectOverview = {
+  "generated_at": string;
+  "items": Array<ProjectOverviewItem>;
+  "project_id": string;
+  "request_sha256": string;
+  "schema": string;
+  "truncated": Array<string>;
+  "warnings": Array<ProjectOverviewWarning>;
+};
+
+export type ProjectOverviewEntry = {
+  "detail": unknown;
+  "id": string;
+  "links": Array<ProjectOverviewLink>;
+  "mark": ProjectOverviewMark;
+};
+
+export type ProjectOverviewItem = {
+  "entries": Array<ProjectOverviewEntry>;
+  "key": string;
+  "mark"?: ProjectOverviewMark | null;
+  "recorded": boolean;
+};
+
+export type ProjectOverviewLink = {
+  "kind": "task";
+  "task_id": string;
+} | {
+  "kind": "artifact";
+  "name": string;
+  "sha256": string;
+  "task_id": string;
+} | {
+  "kind": "notebook";
+  "name": string;
+  "task_id": string;
+} | {
+  "kind": "log";
+  "run_id": string;
+  "task_id": string;
+} | {
+  "kind": "git";
+  "repo": string;
+  "sha": string;
+  "task_id"?: string | null;
+} | {
+  "kind": "literature";
+  "path"?: string | null;
+  "sha256"?: string | null;
+  "url"?: string | null;
+} | {
+  "kind": "chat";
+  "message_id": string;
+  "revision": number;
+  "sha256": string;
+  "state"?: ChatCitationState | null;
+  "thread_id": string;
+};
+
+export type ProjectOverviewMark = "confirmed" | "estimated" | "needs_decision" | "contradicted";
+
+export type ProjectOverviewWarning = {
+  "code": string;
+  "entry"?: string | null;
+  "item": string;
+  "links": Array<ProjectOverviewLink>;
+  "strong": boolean;
+};
+
 export type ProjectPatchBody = {
   "auto_advance"?: boolean | null;
   "request"?: string | null;

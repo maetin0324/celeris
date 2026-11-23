@@ -439,7 +439,7 @@ pub struct CheckpointDecisionRow<'a> {
     pub proposal: &'a pp::ProjectProposal,
 }
 
-fn decision_effect(state: &str) -> pc::DecisionEffect {
+pub(crate) fn decision_effect(state: &str) -> pc::DecisionEffect {
     match state {
         "pending" => pc::DecisionEffect::Pending,
         "applied" => pc::DecisionEffect::Applied,
@@ -623,7 +623,7 @@ pub fn checkpoints(
 
 /// `owner` が記録した成果物の file の bytes。`ArtifactRef.path` は `owner` の足回りからの相対（worker の成果物・
 /// dispatcher の評価の記録とも）。足回りを解けない・file が無ければ `None`。
-fn artifact_bytes(
+pub(crate) fn artifact_bytes(
     store: &SqliteStore,
     workspace_roots: &WorkspaceRoots,
     owner: &Task,

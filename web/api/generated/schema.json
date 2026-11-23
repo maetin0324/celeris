@@ -24039,6 +24039,334 @@
       ],
       "type": "object"
     },
+    "ProjectOverview": {
+      "description": "`GET /api/v1/projects/{id}/overview` の応答（D1.1）。",
+      "properties": {
+        "generated_at": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/ProjectOverviewItem"
+          },
+          "type": "array"
+        },
+        "project_id": {
+          "type": "string"
+        },
+        "request_sha256": {
+          "type": "string"
+        },
+        "schema": {
+          "type": "string"
+        },
+        "truncated": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "$ref": "#/$defs/ProjectOverviewWarning"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema",
+        "project_id",
+        "generated_at",
+        "request_sha256",
+        "items",
+        "warnings",
+        "truncated"
+      ],
+      "type": "object"
+    },
+    "ProjectOverviewEntry": {
+      "description": "項目の 1 件。`detail` は項目ごとの欄（D1.3 の「概要が返すもの」）。",
+      "properties": {
+        "detail": true,
+        "id": {
+          "type": "string"
+        },
+        "links": {
+          "items": {
+            "$ref": "#/$defs/ProjectOverviewLink"
+          },
+          "type": "array"
+        },
+        "mark": {
+          "$ref": "#/$defs/ProjectOverviewMark"
+        }
+      },
+      "required": [
+        "id",
+        "mark",
+        "detail",
+        "links"
+      ],
+      "type": "object"
+    },
+    "ProjectOverviewItem": {
+      "description": "14 項目の 1 つ。記録が無ければ `recorded: false` で `mark` は無い（D1.2）。",
+      "properties": {
+        "entries": {
+          "items": {
+            "$ref": "#/$defs/ProjectOverviewEntry"
+          },
+          "type": "array"
+        },
+        "key": {
+          "type": "string"
+        },
+        "mark": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProjectOverviewMark"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recorded": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "key",
+        "recorded",
+        "entries"
+      ],
+      "type": "object"
+    },
+    "ProjectOverviewLink": {
+      "description": "D1.4 の drill-down の link（7 種）。Web は kind ごとに既存の画面へ移る。",
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "const": "task",
+              "type": "string"
+            },
+            "task_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "task_id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "artifact",
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "sha256": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "task_id",
+            "name",
+            "sha256"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "notebook",
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "task_id",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "log",
+              "type": "string"
+            },
+            "run_id": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "task_id",
+            "run_id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "git",
+              "type": "string"
+            },
+            "repo": {
+              "type": "string"
+            },
+            "sha": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "repo",
+            "sha"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "literature",
+              "type": "string"
+            },
+            "path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "sha256": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "url": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "chat",
+              "type": "string"
+            },
+            "message_id": {
+              "type": "string"
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "sha256": {
+              "type": "string"
+            },
+            "state": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ChatCitationState"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "引用の今の状態（`current`・`edited`・`retracted`・`missing`）。"
+            },
+            "thread_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "thread_id",
+            "message_id",
+            "revision",
+            "sha256"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ProjectOverviewMark": {
+      "description": "D1.2 の印（4 語。子 2 の `confidence` と同じ語）。",
+      "enum": [
+        "confirmed",
+        "estimated",
+        "needs_decision",
+        "contradicted"
+      ],
+      "type": "string"
+    },
+    "ProjectOverviewWarning": {
+      "description": "D1.2 の警告。文は Web が code から組む。",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "entry": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "item": {
+          "type": "string"
+        },
+        "links": {
+          "items": {
+            "$ref": "#/$defs/ProjectOverviewLink"
+          },
+          "type": "array"
+        },
+        "strong": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "code",
+        "item",
+        "strong",
+        "links"
+      ],
+      "type": "object"
+    },
     "ProjectPatchBody": {
       "additionalProperties": false,
       "description": "`PATCH /projects/{id}` の要求本文。`status` / `workspace` はどちらも任意（書いたものだけ変える）。\n`\"workspace\": null` を明示すると作業場所を消す（案件を「作業場所なし」に戻す）。",
@@ -36399,6 +36727,10 @@
       "$ref": "#/$defs/ProjectList",
       "description": "Phase 23（ADR-0033 D2）: 案件と途中目標。"
     },
+    "project_overview": {
+      "$ref": "#/$defs/ProjectOverview",
+      "description": "D1: `GET /projects/{id}/overview`（`celeris.project-overview/1`、読み取り専用）。"
+    },
     "project_patch": {
       "$ref": "#/$defs/ProjectPatchBody"
     },
@@ -36518,9 +36850,6 @@
     },
     "script_exhaustive_run_list": {
       "$ref": "#/$defs/ScriptExhaustiveRunList"
-    },
-    "script_generation": {
-      "$ref": "#/$defs/ScriptGenerationView"
     },
     "script_generation_register_body": {
       "$ref": "#/$defs/ScriptGenerationRegisterBody"
@@ -36813,7 +37142,6 @@
     "script_domain_mode_body",
     "script_domain_mode_result",
     "script_generations",
-    "script_generation",
     "script_generation_register_body",
     "script_generation_retire_body",
     "script_guard_clear_body",
@@ -36867,6 +37195,7 @@
     "decision_withdraw",
     "decision_outcome",
     "publish_manifest",
+    "project_overview",
     "task_tree",
     "cron_job_create",
     "cron_job_patch",

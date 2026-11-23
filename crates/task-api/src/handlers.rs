@@ -17,6 +17,7 @@ mod config_fields;
 mod idempotency;
 pub(crate) mod org;
 pub(crate) mod project_controller;
+mod project_overview;
 pub(crate) mod projects;
 pub(crate) mod reload;
 pub(crate) mod roadmap;
@@ -166,6 +167,8 @@ pub(crate) fn router(state: ApiState) -> Router {
         .route("/api/v1/projects/{id}/status", put(put_project_status))
         // ADR 2026-11-04-project-controller A1: 案件の controller（durable wake）。
         .merge(project_controller::routes())
+        // ADR 2026-11-23-project-observability-publish D1: 案件の概要（読み取り専用）。
+        .merge(project_overview::routes())
         // 付記 A5: 案件の Roadmap（版付きの途中目標。旧 milestones とは別の名詞）。
         .merge(roadmap::routes())
         .merge(authority::routes())

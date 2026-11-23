@@ -62,6 +62,7 @@ pub mod plan;
 pub mod plan_gate;
 pub mod project_budget;
 pub mod project_controller_view;
+pub mod project_overview;
 pub mod project_plan;
 pub mod project_snapshot;
 /// ADR-0072「Phase F6 実装時の決定」: 起票済みの Task を後から分解の経路に入れる / atomic に戻す。

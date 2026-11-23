@@ -139,9 +139,9 @@ validate は snapshot の `checkpoints` の値（D1.3 の due と実行中、D5.
 | 欄 | 中身 | 出どころ（決定的） |
 |---|---|---|
 | `decision_id`・`root_id`・`triggers[]` | 判断の id と D1.2 の key | 判断の行 |
-| `goal` | `{request_sha256, outcomes: [{id, title, acceptance[], reached}]}`。`reached` は Rust の D6（`recorded_outcomes`・`root_satisfies`）の値 | snapshot |
+| `goal` | `{request_sha256, outcomes: [{id, title, acceptance[], reached}]}`。`reached` は Rust の D6（`recorded_outcomes`・`root_satisfies`）の値。**未実装**: `review::parent_evaluation::request` は `outcomes` を空（`Vec::new()`）で渡し、入るのは `request_sha256` だけ（prompt は「（Outcome の記録は無い）」を出す。「未確認」） | snapshot |
 | `strategy` | root の `task_core::strategy_ref::StrategyRef`（`task_id`・`name`・`sha256`・`candidate`。D1.1 の型をそのまま使う） | D1.1 の `strategy_task_creates(store, Some(root))` |
-| `children[]` | `{task_id, title, status, reviewer_passed, criteria: [{text, kind, result}], reports: [{seq, at, role, text, truncated}]}` | snapshot の root の行と子の events。`reports` は D3.1.1 |
+| `children[]` | `{task_id, title, status, reviewer_passed, criteria: [{text, kind, result}], reports: [{seq, at, role, text, truncated}]}`。**未実装**: `criteria` は空（`Vec::new()`）で渡す。`task_id`・`title`・`status`・`reviewer_passed`・`reports` は入る（「未確認」） | snapshot の root の行と子の events。`reports` は D3.1.1 |
 | `metrics` | `{children_terminal, children_total, tokens_used, max_tokens}` | D1.2 と同じ値 |
 | `previous[]` | 同じ root の前の評価の成果物 `{name, sha256}` | root の events |
 | `rubric[]` | 固定の E1〜E6（`task_core::parent_checkpoint::PARENT_EVALUATION_RUBRIC` の定数。文書や run が変えられない） | 定数 |
@@ -225,7 +225,7 @@ LLM は呼ばない。形が崩れた・節が無い出力も試行に数え（�
 - R2 `measured[]`・`learned[]`・`refuted[]` の 1 件は、解決した `task`・`artifact`・`commit` の参照が 1 件以上あるときだけ supported。それ以外（参照 0 件・解決しない・`url`・`knowledge`・`chat` だけ）は `unsupported` に 1 を足す。
   外部の文（`url` など）は untrusted で、支持に数えない（子 2 D2.3 の `confirmed` と同じ考え）。
 - R3 `verdict = on_track` は、supported の `measured` が 1 件以上で `unsupported = 0` のときだけ有効。それ以外は `effective.verdict = unknown`。**参照の無い改善の主張がある評価は on_track にならない。**
-- R4 `axes.goal` は Rust の D6 が決める: `goal_reached` が真なら `met`、偽で評価が `met` と書いたら `unknown` にして `unsupported` に 1 を足す。`not_met`・`unknown` はそのまま。
+- R4 `axes.goal` は Rust の D6 が決める: `goal_reached` が真なら `met`、偽で評価が `met` と書いたら `unknown` にして `unsupported` に 1 を足す。`not_met`・`unknown` はそのまま。**未実装**: dispatcher の `review::parent_evaluation::facts` は `goal_reached` を D6 から読まず `false` に固定して渡すので、本番の評価の有効な `axes.goal` は `met` にならない（「未確認」）。
   **Outcome の到達（`reached`・`achieved`）は評価から書かない。** 到達の記録は既存の `mark_milestone`（D6 の根拠の確かめ直し）だけが書く。
 - R5 `axes.execution` は Rust の事実で決める: 終端の子がすべて `done` かつ合格なら `succeeded`、`failed` の子があれば `failed`、それ以外は `partial`（子が 0 件なら `unknown`）。評価の値と違えば違反に記録する（判定は事実の側）。
 - R6 `axes.epistemic = advanced` は supported の `learned`・`refuted` が 1 件以上のときだけ。それ以外は `unknown`。
@@ -445,30 +445,34 @@ Evaluator は既存の reviewer run で、dispatcher は出力の形と参照を
 
 | 保証の文 | 関数（owner） | 試験 |
 |---|---|---|
-| strategy root だけが checkpoint を持つ | `task_core::strategy_reads::strategy_task_creates`、`task_ops::project_snapshot::build` | `project_controller_checkpoint_only_strategy_roots`、`parent_checkpoint_regression_no_strategy_root_no_reviewer_run` |
+| strategy root だけが checkpoint を持つ | `task_core::strategy_reads::strategy_task_creates`、`task_ops::project_snapshot::build` | `parent_checkpoint_contract_no_strategy_root_no_triggers`、`project_controller_checkpoint_snapshot_without_strategy_roots_unchanged`、`project_controller_checkpoint_no_strategy_root_or_disabled_starts_no_run`、`parent_checkpoint_regression_no_strategy_root_no_reviewer_run` |
 | strategy の照会は 1 か所で、gate の判定は変わらない | `task_core::strategy_reads::strategy_task_creates`、`cos::strategy_gate` | `strategy_reads_all_rows_in_order`・`strategy_reads_by_target`・`strategy_reads_same_created_at_orders_by_id`、既存の子 5 の gate の試験 |
-| 子の終端の数が N の倍数に達すると `children:<k>` が `due` になる。再試行の `review_fail → ready` は数えない | `parent_checkpoint::triggers` | `parent_checkpoint_contract_children_every_n`、`…_review_fail_retry_not_counted`、`parent_checkpoint_shadow_fires_at_c_mid_d_done_f_done` |
-| 子の `failed`・subtree の反証の証拠・予算の閾値で `due` になる | `parent_checkpoint::triggers` | `parent_checkpoint_contract_child_failed`、`…_refute_new_evidence_only`、`…_budget_thresholds`、`parent_checkpoint_shadow_budget_50_80`・`…_refute_in_subtree`・`…_child_failed` |
-| 状態（発火済み・実行中・評価済み・試行の数）は判断の行と成果物の name だけから導く | `parent_checkpoint::checkpoint_states` | `parent_checkpoint_contract_states_from_rows_and_names`、`…_states_suppressed_is_fired`、`…_states_attempts_by_name` |
-| 同じ trigger の判断は 2 回作られない（shadow の `suppressed` も発火済み） | `checkpoint_states`、`project_proposal::validate`（`checkpoint_not_due`） | `project_controller_checkpoint_same_trigger_once`、`parent_checkpoint_regression_shadow_no_reviewer_run` |
-| `evaluate` の検証の 4 規則（`checkpoint_evaluation_open` は実行中だけを見る） | `project_proposal::validate`（snapshot の値） | `project_controller_checkpoint_validate_codes` |
-| `evaluate` の効果は共通の起動口で reviewer run を 1 回起こし、task の status を変えない | `dispatcher::parent_evaluation`、`design_gate` の起動口、`project_wake` の効果の段 | `project_controller_checkpoint_evaluate_spawns_one_reviewer_run`、`…_root_status_unchanged` |
-| 起動は `has_task_run(root)` が偽で `tree_limit_hold_for` が止めないときだけ | `dispatcher::parent_evaluation` | `project_controller_checkpoint_no_launch_while_root_run`、`…_tree_limit_holds` |
-| 試行は試行の記録の name で数え、`max_evaluation_attempts` まで。run が消えても数え、上限で `invalid` の記録 | `checkpoint_states`、`dispatcher::parent_evaluation`、`review::parent_evaluation` | `project_controller_checkpoint_attempts_capped`、`…_lost_run_counts_attempt` |
-| 走っている評価の run と設計 review の run は `abort_stale_runs` で止められない | `holds_side_review` | `side_review_holds_design_review_run`、`project_controller_checkpoint_run_survives_abort_stale` |
-| 設計 review の挙動は起動口の一般化の前と同じ | `design_gate` の起動口 | 既存の設計 review の試験（`health_review/` の scenario 試験）が変更なしで通る |
-| 参照の無い改善は unsupported で、on_track にならない | `parent_checkpoint::check_evaluation`（R2・R3） | `parent_checkpoint_contract_unsupported_not_on_track`、`…_url_only_is_unsupported` |
-| goal の `met` は Rust の D6 だけ | `check_evaluation`（R4） | `parent_checkpoint_contract_goal_met_needs_d6` |
-| 負の研究結果は 3 軸で表す | `check_evaluation`（R5・R6・`negative_result`） | `parent_checkpoint_contract_negative_result_axes` |
-| 写していない評価に対する行動は D5.2 の表だけ | `parent_checkpoint::allowed_actions`、`project_proposal::validate`（`checkpoint_action_mismatch`、snapshot の値） | `parent_checkpoint_contract_allowed_actions_table`、`project_controller_checkpoint_off_track_continue_rejected` |
-| `evaluate` は進捗に数えず、no-progress の guard が止める | `runaway_guard` | `project_controller_checkpoint_no_progress_guard_counts_evaluate` |
-| 節の無い review の wire・prompt は変わらない | `protocol::ReviewRequest`・`change_rules::review::parent_checkpoint_section` | `parent_evaluation_absent_request_json_unchanged`・`…_prompt_unchanged`・`…_old_review_json_parses` |
-| 節のある review の wire が schema と一致する | `protocol` | `parent_evaluation_wire_roundtrip`、`parent_evaluation_wire_schema_matches_md` |
-| 評価器の入力に answer key が入らない | `dispatcher::parent_evaluation`（入力の組み立て） | `parent_checkpoint_shadow_request_has_no_answer_key`、`parent_checkpoint_live_request_renders` |
-| 評価の pivot から子 5 の gate を通る新しい版で戦略が変わる | TS `pc/checkpoint/act`、CoS の skill、子 5 の gate | `parent_checkpoint_shadow_d_done_pivot_new_version`（gate の 422 と通過を確かめる） |
-| controller が無効な案件で reviewer run が増えない | controller の I13 | `parent_checkpoint_regression_controller_off_no_reviewer_run` |
+| 子の終端の数が N の倍数に達すると `children:<k>` が `due` になる。再試行の `review_fail → ready` は数えない | `parent_checkpoint::triggers` | `parent_checkpoint_contract_children_every_n`、`parent_checkpoint_contract_children_jump_max_only`、`parent_checkpoint_contract_review_fail_retry_not_counted`、`parent_checkpoint_shadow_fires_at_c_mid_d_done_f_done` |
+| 子の `failed`・subtree の反証の証拠・予算の閾値で `due` になる | `parent_checkpoint::triggers` | `parent_checkpoint_contract_child_failed`、`parent_checkpoint_contract_refute_new_evidence_only`、`parent_checkpoint_contract_budget_thresholds`、`parent_checkpoint_shadow_budget_50_80`・`parent_checkpoint_shadow_refute_in_subtree`・`parent_checkpoint_shadow_child_failed` |
+| 状態（発火済み・実行中・評価済み・試行の数）は判断の行と成果物の name だけから導く | `parent_checkpoint::checkpoint_states` | `parent_checkpoint_contract_states_from_decisions_and_names`、`parent_checkpoint_contract_suppressed_not_due_not_running`、`parent_checkpoint_contract_attempt_name_roundtrip` |
+| 同じ trigger の判断は 2 回作られない（shadow の `suppressed` も発火済み） | `checkpoint_states`、`project_proposal::validate`（`checkpoint_not_due`） | `parent_checkpoint_contract_trigger_state_order`、`project_controller_checkpoint_evaluate_validation`、`project_controller_checkpoint_effect_once_is_idempotent`、`project_controller_checkpoint_suppressed_due_does_not_open`、`parent_checkpoint_regression_shadow_no_reviewer_run` |
+| `evaluate` の検証の 4 規則（`checkpoint_evaluation_open` は実行中だけを見る） | `project_proposal::validate`（snapshot の値） | `project_controller_checkpoint_evaluate_validation`、`project_controller_checkpoint_suppressed_due_does_not_open` |
+| `evaluate` の効果は共通の起動口で reviewer run を 1 回起こす（crash の後の再起動でも 1 回） | `review::parent_evaluation::launch`、`design_gate` の起動口（`start_side_review`）、`project_wake` の効果の段 | `project_controller_checkpoint_fires_one_run_and_settles`、`project_controller_checkpoint_effect_once_is_idempotent`、`project_controller_checkpoint_crash_boundaries_start_one_run` |
+| 起動は root の run が手元に無い（`has_task_run(root)` が偽）ときだけ | `review::parent_evaluation::launch` | `project_controller_checkpoint_waits_while_root_has_local_run` |
+| 試行は試行の記録の name で数え、`max_evaluation_attempts` まで。run が消えても数え、上限で `invalid` の記録。root の final review の run は試行に数えない | `checkpoint_states`、`review::parent_evaluation`（`launch`・`settle`） | `project_controller_checkpoint_attempt_limit_records_invalid`、`project_controller_checkpoint_limit_without_run_records_invalid`、`project_controller_checkpoint_final_review_run_is_not_an_attempt`、`parent_checkpoint_contract_attempt_name_roundtrip` |
+| 走っている設計 review の run は `abort_stale_runs` で止められない。走っている評価の run では `abort_stale_runs` の例外 `holds_side_review` が真になる | `holds_side_review` | `reviewer_side_run_holds_the_running_design_review`、`project_controller_checkpoint_fires_one_run_and_settles` |
+| 設計 review の挙動は起動口の一般化の前と同じ | `design_gate` の起動口 | `reviewer_side_run_design_review_writes_the_same_events_and_request`、`reviewer_side_run_completion_kind_routes_to_the_design_verdict`、既存の設計 review の試験（`health_review/` の scenario 試験）が変更なしで通る |
+| 参照の無い改善は unsupported で、on_track にならない | `parent_checkpoint::check_evaluation`（R2・R3） | `parent_checkpoint_contract_unsupported_not_on_track`、`parent_checkpoint_contract_url_only_is_unsupported`、`parent_checkpoint_contract_on_track_with_resolved_measure`、`parent_checkpoint_shadow_unsupported_claims_never_on_track` |
+| goal の `met` は Rust の D6 だけ（`check_evaluation` の規則。dispatcher が渡す `goal_reached` は未実装で `false` 固定。D4 R4） | `check_evaluation`（R4） | `parent_checkpoint_contract_goal_met_needs_d6` |
+| 負の研究結果は 3 軸で表す | `check_evaluation`（R5・R6・`negative_result`） | `parent_checkpoint_contract_negative_result_axes`、`parent_checkpoint_contract_execution_from_facts`、`parent_checkpoint_contract_epistemic_advanced_needs_support` |
+| 写していない評価に対する行動は D5.2 の表と guard の行動だけで、`off_track`・`unknown` の評価から `continue`・起票・CoS 入力は出ない | `parent_checkpoint::allowed_actions`、`project_proposal::validate`（`checkpoint_action_mismatch`・`validate_checkpoint_act`、snapshot の値） | `parent_checkpoint_contract_allowed_actions_table`、`project_controller_checkpoint_act_must_map_unmapped`、`project_controller_checkpoint_guard_while_unmapped_holds_pass_and_progress_fails` |
+| continue・wait の写し（`effect_state = none`）は写し済みに数え、次の規則に戻る | `task_ops::project_snapshot::checkpoints` | `project_controller_checkpoint_continue_maps_none_effect_and_returns_to_rules`、`parent_checkpoint_shadow_continue_mapping_unblocks_next_launch` |
+| 写していない評価の間も no-progress の guard の `escalate` は検証を通り、人に知らせる | `project_proposal::validate_checkpoint_act`、TS の `pc/no-progress` | `project_controller_checkpoint_no_progress_escalates_while_unmapped`、`parent_checkpoint_shadow_no_progress_escalates_while_unmapped`、`project_controller_checkpoint_guard_while_unmapped_holds_pass_and_progress_fails` |
+| 節の無い review の wire・prompt は変わらない | `protocol::ReviewRequest`・`change_rules::review::parent_checkpoint_section` | `parent_evaluation_absent_request_json_unchanged`・`parent_evaluation_absent_prompt_unchanged`・`parent_evaluation_absent_old_review_json_parses`、`parent_checkpoint_regression_final_review_unchanged` |
+| 節のある review の wire が schema と一致する | `protocol` | `parent_evaluation_wire_roundtrip`、`parent_evaluation_wire_schema_matches_md`、`parent_evaluation_wire_malformed_evaluation_still_reads`、`parent_evaluation_wire_prompt_section`、`parent_evaluation_wire_result_example_passes_shape_check` |
+| 評価器の入力に answer key と checkpoint の時点より後の記録が入らない。子の報告は上限の中 | `review::parent_evaluation::request`（入力の組み立て）、`parent_checkpoint::child_reports` | `parent_checkpoint_blind_no_answer_key_or_future`、`parent_checkpoint_blind_request_has_d1446_body`、`parent_checkpoint_blind_reports_capped`、`parent_checkpoint_blind_child_reports_cutoff_and_caps`、`parent_checkpoint_live_request_renders`（task-api の試験は `request` と同じ出どころの欄を試験の中で組み立てる。付記 WU second-gate-shadow） |
+| 評価の pivot から子 5 の gate を通る新しい版で戦略が変わる | 写しの規則（`pc/checkpoint/act`）、CoS の skill、子 5 の gate | `parent_checkpoint_pivot_chain_d_done_pivot_to_gated_v2`（gate の 422 と通過を確かめる。入力の評価はスクリプトで、写しは試験の中の規則） |
+| controller が無効・shadow の案件で reviewer run が増えない | controller の I13、効果の `suppressed` | `parent_checkpoint_regression_controller_off_no_reviewer_run`、`project_controller_checkpoint_no_strategy_root_or_disabled_starts_no_run`、`project_controller_checkpoint_shadow_starts_no_reviewer_run`、`parent_checkpoint_shadow_suppressed_writes_no_evaluation` |
 
-変更前に落ちる試験: `parent_checkpoint_contract_*`（`checkpoint_states` の試験を含む）・`project_controller_checkpoint_*`・`parent_evaluation_wire_*`・`parent_checkpoint_shadow_*`・`strategy_reads_*`・`side_review_*` は
+次の保証は試験で確かめていない（「未確認」）: `evaluate` の効果が root の task の status を変えないこと、木の上限（`tree_limit_hold_for`）が止める間は評価の run を起こさないこと、
+走っている評価の run に `abort_stale_runs` を当てても止まらないこと、Rust の `runaway_guard` が `evaluate` を no-progress の連続に数えること（TS の規則の側は control-ts の試験が確かめる）。
+
+変更前に落ちる試験: `parent_checkpoint_contract_*`（`checkpoint_states` の試験を含む）・`project_controller_checkpoint_*`・`parent_evaluation_wire_*`・`parent_checkpoint_shadow_*`・`strategy_reads_*`・`reviewer_side_run_*` は
 base に関数・型・variant・欄が無いのでコンパイルか主張で落ちる。`parent_checkpoint_regression_*`・`parent_evaluation_absent_*`・既存の設計 review と子 5 の gate の試験は base でも通る回帰で、
 変更の後も同じ値であることを確かめる。
 
@@ -483,6 +487,14 @@ base に関数・型・variant・欄が無いのでコンパイルか主張で�
 - snapshot の組み立てが root の `evaluate` の判断を判断の表から最後まで読む時間は、本番の判断の件数で測っていない。
 - 子 5 の穴（D10）は見送った。採否は親の closeout で人が決める。
 - 本番の config の変更は無い（節が無ければ既定値）。本番で controller を `enabled` にする案件は人が決める（既存）。
+- 評価器の入力の欠落（D3.1 の `goal`・`children[]`、D4 R4 の未実装）: `crates/task-dispatch/src/review/parent_evaluation.rs` の `request` は `goal.outcomes` と `children[].criteria` を空で渡し、
+  `facts` は `goal_reached` を `false` に固定する。評価器の prompt には承認済み Roadmap に Outcome があっても「（Outcome の記録は無い）」が出て、E6 の `goal.outcomes[].reached` は空の一覧を指す。
+  E-mid・D-done の盲検の 4 run（2026-11-23）はこの入力で流れた（fixture の `E-mid.request.json`・`D-done.request.json` の `goal.outcomes` は `[]`、子の `criteria` は 8 件とも空。
+  1 回目の D-done の評価は uncertainty に「親の Outcome の記録は無い」と書いた）。4 run の verdict・next は、親の Outcome と子の受け入れ条件の結果を受け取らない評価器の出力である。
+  D6 の読み口（`task_ops::project_controller_view::recorded_outcomes`・`task_core::project_proposal::root_satisfies`）から入れる修正は子 8 の測定の前に置く（子 6 の進捗の「子 8 への引き継ぎ」）。
+- 試験の無い保証: `evaluate` の効果が root の task の status を変えないこと、木の上限（`tree_limit_hold_for`、`parent_evaluation::TreeHold`）が止める間は評価の run を起こさないこと、
+  走っている評価の run に `abort_stale_runs` を当てても止まらないこと（試験は設計 review の run だけに当て、評価の run は `holds_side_review` が真になることまで）、
+  Rust の `runaway_guard` が `evaluate` を no-progress の連続に数えること（TS の規則の側は control-ts の試験が確かめる）。
 
 ## 付記（2026-11-22、設計 review の不合格に合わせた改訂。WU adr-revise）
 
@@ -588,3 +600,33 @@ D8・D9.2・D11 の試験の置き場と分担を実装に合わせて書き足�
   3. 2 時点の answer key に合わせて prompt（`change_rules::review::parent_checkpoint_section`）を直さない（過適合を避ける）。
   条件付きの理由（独立の評価器の評価から pivot が起きていない、評価器が file を読まず prompt だけで判定した、C-mid・F-done の盲検の評価が無い）は子 6 の進捗の「第二ゲートの判定」にある。
   決定的な下限を足す案（評価器が continue でも人への判断にする）と、入力を直して LLM で再評価する案は採らなかった。D1〜D11 の決定の中身は変えていない。
+
+## 付記（2026-11-23、保証の表の試験名と評価器の入力の未実装。WU close-docfix）
+
+計画 v7 の final review が挙げた文書の不備 2 件を直した。コード・試験・script・fixture は変えていない。D1〜D11 の決定の中身と前の付記は変えていない。
+
+1. 「保証と実装の対応」の表: 実在しない試験名と「…_」の略記を、`git grep -nE 'fn <名前>\(' -- crates` で実在を確かめた名前に直した。試験の無い保証は文を試験に合わせて直し、残りを表の下と「未確認」に移した。
+   置き換えた旧い名前（実在しなかったもの）と、置き換え先:
+   - `project_controller_checkpoint_only_strategy_roots` → `parent_checkpoint_contract_no_strategy_root_no_triggers`・`project_controller_checkpoint_snapshot_without_strategy_roots_unchanged`・`project_controller_checkpoint_no_strategy_root_or_disabled_starts_no_run`
+   - `project_controller_checkpoint_same_trigger_once` → `parent_checkpoint_contract_trigger_state_order`・`project_controller_checkpoint_effect_once_is_idempotent`・`project_controller_checkpoint_suppressed_due_does_not_open`
+   - `project_controller_checkpoint_validate_codes` → `project_controller_checkpoint_evaluate_validation`
+   - `project_controller_checkpoint_evaluate_spawns_one_reviewer_run` → `project_controller_checkpoint_fires_one_run_and_settles`・`project_controller_checkpoint_crash_boundaries_start_one_run`
+   - `project_controller_checkpoint_no_launch_while_root_run` → `project_controller_checkpoint_waits_while_root_has_local_run`
+   - `project_controller_checkpoint_attempts_capped` → `project_controller_checkpoint_attempt_limit_records_invalid`
+   - `project_controller_checkpoint_run_survives_abort_stale` → `project_controller_checkpoint_fires_one_run_and_settles`（`holds_side_review` が真になることまで。`abort_stale_runs` を当てる所は未確認）
+   - `project_controller_checkpoint_off_track_continue_rejected` → `project_controller_checkpoint_act_must_map_unmapped`・`project_controller_checkpoint_guard_while_unmapped_holds_pass_and_progress_fails`
+   - `project_controller_checkpoint_no_progress_guard_counts_evaluate` → `project_controller_checkpoint_no_progress_escalates_while_unmapped`・`parent_checkpoint_shadow_no_progress_escalates_while_unmapped`（保証の文を「写していない評価の間も guard の escalate が通る」に直した。Rust の `runaway_guard` が `evaluate` を数えることは未確認）
+   - `parent_checkpoint_contract_states_from_rows_and_names` → `parent_checkpoint_contract_states_from_decisions_and_names`
+   - `parent_checkpoint_shadow_request_has_no_answer_key` → `parent_checkpoint_blind_no_answer_key_or_future`
+   - `parent_checkpoint_shadow_d_done_pivot_new_version` → `parent_checkpoint_pivot_chain_d_done_pivot_to_gated_v2`
+   - `side_review_holds_design_review_run` → `reviewer_side_run_holds_the_running_design_review`（「変更前に落ちる試験」の `side_review_*` も `reviewer_side_run_*` に直した）
+   - 略記で、展開しても実在しなかったもの: `…_root_status_unchanged`・`…_tree_limit_holds`・`…_lost_run_counts_attempt`・`…_states_suppressed_is_fired`・`…_states_attempts_by_name`。
+     前の 2 件の保証（root の status を変えない、木の上限で起こさない）は未確認に移した。後の 3 件は `project_controller_checkpoint_limit_without_run_records_invalid`・
+     `parent_checkpoint_contract_suppressed_not_due_not_running`・`parent_checkpoint_contract_attempt_name_roundtrip` に置き換えた。
+   - 略記で、展開すると実在したもの（正式名で書き直した）: `parent_checkpoint_contract_` の `review_fail_retry_not_counted`・`refute_new_evidence_only`・`budget_thresholds`・`url_only_is_unsupported`、
+     `parent_checkpoint_shadow_` の `refute_in_subtree`・`child_failed`、`parent_evaluation_absent_` の `prompt_unchanged`・`old_review_json_parses`。
+   - 関数の列の `dispatcher::parent_evaluation`（実在しない module）を、付記 WU close-gate の置き場 `review::parent_evaluation`（`launch`・`settle`・`request`）に直した。
+   - 行を 1 つ足した: continue・wait の写しを写し済みに数える（WU checkpoint-act-fix の修正。`project_controller_checkpoint_continue_maps_none_effect_and_returns_to_rules`）。
+2. 評価器の入力の未実装: D3.1 の表の `goal`・`children[]` の行と D4 の R4 に「未実装」を書き、「未確認」に、`review::parent_evaluation::request` が `goal.outcomes`・`children[].criteria` を空で渡すこと、
+   `facts` が `goal_reached` を `false` に固定すること、盲検の 4 run がこの入力で流れたことを書いた。設計（D3.1・D4 の本文）は変えていない。
+   D6 の読み口から入力を入れる修正の文案は子 6 の進捗の「子 8 への引き継ぎ」と「提案」にある。

@@ -205,7 +205,7 @@ fn health_review_design_verdict_consecutive_failures_and_reason_line() {
 }
 
 /// 不変条件（ADR 2026-11-19-planner-reviewer-prompt-coverage D2）: 採用前の計画の設計 review の reviewer の prompt
-/// （`run_design_reviewer` と同じく `crate::review::synthetic_review_task` で対象 task の objective と acceptance を写した
+/// （`run_side_reviewer` と同じく `crate::review::synthetic_review_task` で対象 task の objective と acceptance を写した
 /// `Review` task を、`ReviewRequest { design: Some(..) }` の `RunContext` で `claude_code::build_prompt` に渡したもの）に、
 /// 3,000 文字の objective の末尾の印と全受入条件の text が切れずに載り、設計 review の節も出る。設計 review は計画が
 /// 依頼の末尾の条件（禁止事項・不変条件）を満たすかを判定するので、末尾が落ちると判定の根拠が欠ける。
@@ -260,8 +260,8 @@ fn prompt_full_objective_design_review_keeps_objective_tail() {
 }
 
 /// 不変条件（ADR 2026-11-21-ancestor-objective-in-prompts D3）: 子 task の計画の設計 review の reviewer の prompt
-/// （`run_design_reviewer` と同じく `ReviewRequest { design: Some(..) }` と祖先を `lineage.ancestors` に写した `RunContext`）
-/// に、`start_design_review` と同じく store から `prompt_ancestors::chain_to_root` で組んだ親の 3,000 文字の objective の末尾の印と受入条件の末尾の
+/// （`run_side_reviewer` と同じく `ReviewRequest { design: Some(..) }` と祖先を `lineage.ancestors` に写した `RunContext`）
+/// に、`start_side_review` と同じく store から `prompt_ancestors::chain_to_root` で組んだ親の 3,000 文字の objective の末尾の印と受入条件の末尾の
 /// 印がちょうど 1 回ずつ載る。設計 review は計画が人の元の目的（親の禁止事項・不変条件）を満たすかを判定する。
 /// 既存の試験で検出できない理由: `prompt_full_objective_design_review_keeps_objective_tail` は対象 task 自身の objective と
 /// 受入条件だけを見て、祖先を持つ task を使わない。

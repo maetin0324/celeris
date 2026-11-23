@@ -4653,7 +4653,7 @@
               "type": "null"
             }
           ],
-          "description": "ADR 2026-11-07-health-review-integration D3.5: 採用前の計画の設計 review の run（dispatcher の\n`Completion::DesignReview` の経路）だけ `Some`（`summary`・`evidence`・`criteria` は空）。`RunContext` の\n直下でなくここに置く（欄の数の上限。進捗 `2026-11-07-health-v2-g2/dispatch/risk-events.md`）。final review・\nWU の review では常に `None`（final review の差分の設計の節は `diff_design`）。\n`Box` は `RunContext` を大きくしないため（future の stack。wire の形は変わらない）。"
+          "description": "ADR 2026-11-07-health-review-integration D3.5: 採用前の計画の設計 review の run（dispatcher の\n`SideReviewKind::Design` の `Completion::SideReview` の経路）だけ `Some`（`summary`・`evidence`・`criteria` は空）。`RunContext` の\n直下でなくここに置く（欄の数の上限。進捗 `2026-11-07-health-v2-g2/dispatch/risk-events.md`）。final review・\nWU の review では常に `None`（final review の差分の設計の節は `diff_design`）。\n`Box` は `RunContext` を大きくしないため（future の stack。wire の形は変わらない）。"
         },
         "diff_design": {
           "anyOf": [

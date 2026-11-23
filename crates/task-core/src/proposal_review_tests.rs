@@ -6,7 +6,7 @@ use super::*;
 use crate::chat_citation::{ChatCitation, CitedMessage};
 use crate::proposal_review_wire::{
     ProposalKind, ProposalReviewRecord, ProposalReviewState, ReviewMessage, external_mark,
-    proposal_kind, review_state,
+    proposal_kind, proposal_review_state,
 };
 
 fn now(revision: u64, sha: &str) -> CitedMessage {
@@ -47,7 +47,7 @@ fn proposal_review_state_follows_last_verdict_of_a_person() {
     let sha = "a".repeat(64);
     let state = |rs: &[ReviewMessage], s: &str| {
         let s = s.to_owned();
-        review_state(ProposalKind::ExternalLlm, rs, move |_| Some(now(1, &s))).review_state
+        proposal_review_state(ProposalKind::ExternalLlm, rs, move |_| Some(now(1, &s))).review_state
     };
     assert_eq!(state(&[], &sha), ProposalReviewState::Pending);
     let forged = review("r0", "mcp:chatgpt", ProposalVerdict::Adopt, &sha);

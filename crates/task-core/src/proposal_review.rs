@@ -90,7 +90,7 @@ pub fn review_text(
         "案 {}（rev {}、sha256:{}）",
         target.message_id, target.revision, target.sha256
     );
-    let draft = attachment.and_then(crate::strategy_critic::strategy_artifact);
+    let draft = attachment.and_then(crate::strategy_ref::strategy_artifact);
     let mut text = match (verdict, draft) {
         (ProposalVerdict::Adopt, Some((id, v))) => format!(
             "{what}を採る。task の成果物 `{}` を基に、決定 `{}` で人の承認を求めよ。これは承認ではない。",

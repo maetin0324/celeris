@@ -125,6 +125,11 @@ link は `{kind, …}` の 7 種だけである。Web は kind ごとに既存�
     sha256。`note` は 2,000 文字まで（`comment` では 1 文字以上が必須）。
 - 呼べるのは `Principal::Human` だけ。`Principal::Operator`（relay を含む）・`Principal::Mcp`・`Principal::Cos`・`Principal::Unauthenticated` は
   403、problem の code `proposal_verdict_requires_human`。判定は roadmap の decide と同じ形（`requires_human`）で handler の先頭に置く。
+  - 実装（WU proposal-api）: MCP の token と CoS の run は handler より前の層で止まる。MCP の token は middleware の「MCP の token は読むだけ」の guard で
+    403 `forbidden`。CoS の run の直接の呼び出しは 422 `cos_audit_context_required`、`/cos/operations` 経由は 422 `cos_operation_not_allowed`。
+    handler の 403 `proposal_verdict_requires_human` は operator（relay を含む）と token の無い構成に返り、前の層が変わっても MCP・CoS を止める
+    （handler の unit 試験で 4 主体を確かめる）。worker の run は API の主体を持たず DB を読むだけなので、採否の message を書けない。採否の状態の導出（D2.4）も
+    author が `human:` の採否の message だけを数える。
 - CoS の operation の allowlist に足さない（`crates/task-api/src/cos/ops/surface.rs` の `EXCLUDED` と
   [ADR 2026-10-09-cos-operations-all-mutations](2026-10-09-cos-operations-all-mutations.md) の表に登録する）。MCP の道具も足さない。
 
@@ -283,12 +288,15 @@ link は `{kind, …}` の 7 種だけである。Web は kind ごとに既存�
 | 反証は版を進めても消えない | `publish_manifest_refute_evidence_cannot_be_removed_in_next_version` | 落ちる |
 | 秘密・署名の自己申告・別の案件の参照・同じ版の 2 つの sha256・2 つ目の manifest の id を拒む | `publish_manifest_secret_in_body_is_invalid`・`publish_manifest_signed_state_in_document_is_invalid`・`publish_manifest_other_project_reference_is_invalid`・`publish_manifest_same_version_other_sha_is_conflict`・`publish_manifest_second_id_in_task_is_conflict` | 落ちる |
 | 上書きされた file を検査済みと出さない | `publish_manifest_view_reports_overwritten_file_as_stale` | 落ちる |
-| 案の採否は人だけ | `proposal_review_operator_is_403_proposal_verdict_requires_human`・`proposal_review_mcp_and_cos_principals_are_403`・`proposal_review_unauthenticated_local_is_403` | 落ちる（base に route が無い） |
+| 案の採否は人だけ | `proposal_review_operator_is_403_proposal_verdict_requires_human`・`proposal_review_mcp_and_cos_principals_are_refused`・`proposal_review_unauthenticated_local_is_403`・`proposal_review_non_human_principals_are_403_at_handler`（task-api の handler の unit） | 落ちる（base に route が無い。`proposal_review_mcp_and_cos_principals_are_refused` の MCP の 403 と CoS の 422 は base の guard でも同じで、base では wire の `proposal` が無いことで落ちる） |
 | 採否の route は CoS の operation に無い | `proposal_review_route_not_in_cos_operations` | 落ちる |
-| 採用は execute の人の指示の message で、承認ではない | `proposal_review_human_adopt_posts_execute_instruction_message`・`proposal_review_adopt_is_not_strategy_approval` | 落ちる |
+| 採用は execute の人の指示の message で、承認ではない | `proposal_review_human_adopt_posts_execute_instruction_message`・`proposal_review_adopt_is_not_strategy_approval`・`proposal_review_text_is_fixed_and_adopt_is_not_approval`（task-core の unit） | 落ちる |
 | 却下・コメントは discuss の message で副作用が無い | `proposal_review_reject_and_comment_post_discuss_messages` | 落ちる |
 | 人が見た版と違う案・撤回された案・案でない message は採否できない | `proposal_review_stale_revision_is_409`・`proposal_review_sha_mismatch_is_409`・`proposal_review_retracted_target_is_409`・`proposal_review_non_proposal_target_is_422` | 落ちる |
-| 採否の状態は保存せず導き、案の編集で失効する | `proposal_review_state_is_derived_not_stored`・`proposal_review_state_stale_after_target_edit` | 落ちる |
+| 別の案件の thread の案は、この thread の path から採否できない（404） | `proposal_review_other_project_thread_is_refused` | 落ちる |
+| CoS の案の添付は添付の sha256 で照合し、添付に無い path と本文の sha256 を拒む | `proposal_review_cos_strategy_draft_reviewed_by_attachment_sha` | 落ちる |
+| 採否の状態は保存せず導き、案の編集・撤回で失効する | `proposal_review_state_is_derived_not_stored`・`proposal_review_state_stale_after_target_edit`・`proposal_review_state_stale_after_target_retract`・`proposal_review_state_follows_last_verdict_of_a_person`（task-core の unit） | 落ちる |
+| 案の種類と外部の印は記録（role・author・`metadata_json.exchange`）から導き、本文から導かない | `proposal_review_kind_and_mark_come_from_the_record`（task-core の unit） | 落ちる（関数が無い） |
 | 外部の文は wire で untrusted と印が付き、文の中の指示で状態が変わらない | `proposal_review_external_text_marked_untrusted_on_wire`・`proposal_review_injected_text_cannot_adopt` | 落ちる |
 | 同じ client_message_id の再送は二重にならない | `proposal_review_idempotent_client_message_id` | 落ちる |
 | 概要は 14 項目を決めた順で返し、既存の GET の欄を写さない | `project_overview_lists_fourteen_items_in_order`・`project_overview_does_not_copy_existing_get_fields` | 落ちる（base に route が無い） |

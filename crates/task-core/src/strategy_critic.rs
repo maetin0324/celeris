@@ -1,13 +1,13 @@
 //! ADR 2026-11-22-strategy-review-critic D3.1・D3.4: Critic の対象と固定の基準。
 //!
 //! 対象は task の events の `ArtifactProduced` から毎回導き、保存しない（規約 4）。成果物の名前の形は
-//! [`crate::strategy::artifact_name`] が唯一の定義で、ここはその逆を取り、同じ関数で作り直して一致したものだけを採る。
+//! [`crate::strategy_ref::artifact_name`] が唯一の定義で、その逆 [`crate::strategy_ref::strategy_artifact`] が同じ関数で
+//! 作り直して一致したものだけを採る（leaf の `strategy_ref` に置き、ここと `strategy` は再 export する）。
 //! 純関数だけで、I/O も LLM も無い。
 
 use std::collections::BTreeMap;
 
 use crate::Event;
-use crate::strategy::artifact_name;
 
 /// D3.4 の固定の基準（id と本文）。文書や run は変えられない。
 pub const CRITIC_RUBRIC: [(&str, &str); 5] = [
@@ -47,15 +47,8 @@ pub struct CriticSubject {
     pub conflict: bool,
 }
 
-/// name が戦略の成果物（`artifact_name(id, v)` の形）なら `(id, v)`。
-pub fn strategy_artifact(name: &str) -> Option<(String, u32)> {
-    let (id, version) = name.strip_prefix("strategy/")?.rsplit_once("/v")?;
-    let version: u32 = version.strip_suffix(".json")?.parse().ok()?;
-    if id.is_empty() || id.contains('/') || artifact_name(id, version) != name {
-        return None;
-    }
-    Some((id.to_string(), version))
-}
+/// name が戦略の成果物（`artifact_name(id, v)` の形）なら `(id, v)`。定義は leaf の `strategy_ref`。
+pub use crate::strategy_ref::strategy_artifact;
 
 /// `sha256:` の前置きを除いた値（同じ値の書き方の違いを衝突にしない）。
 pub fn bare_sha256(sha: &str) -> &str {

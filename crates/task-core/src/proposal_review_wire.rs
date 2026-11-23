@@ -3,7 +3,7 @@
 //! (`external`: `untrusted`), and the record a review message keeps in `metadata_json.proposal_review`.
 //!
 //! A leaf like [`crate::chat_citation`]: it depends on nothing in this crate but the leaves `chat_citation`,
-//! `chat_revision_wire` and the pure name parser [`crate::strategy_critic::strategy_artifact`], so [`crate::chat`]
+//! `chat_revision_wire` and the pure name parser [`crate::strategy_ref::strategy_artifact`], so [`crate::chat`]
 //! builds the wire fields from it without a cycle and without growing `chat` (repo health
 //! `size.responsibility-growth`). The write is [`crate::proposal_review`]. Nothing here is stored: the state is
 //! derived on every read from the review messages of the same thread (規約 4).
@@ -124,7 +124,7 @@ pub fn strategy_drafts(meta: &Value) -> Vec<(String, String)> {
         .filter_map(|f| {
             let path = f.get("path")?.as_str()?;
             let attachment = f.get("attachment_id")?.as_str()?;
-            crate::strategy_critic::strategy_artifact(path)?;
+            crate::strategy_ref::strategy_artifact(path)?;
             Some((path.to_owned(), attachment.to_owned()))
         })
         .collect()
@@ -169,7 +169,7 @@ pub struct ReviewMessage {
 /// the review's `attachment`; for a CoS draft its `sha256` is the attachment's). The last adopt / reject decides; with only comments the state is
 /// `commented`; none is `pending`. If the deciding review saw another revision or body than `now`, it is `stale`.
 /// Only reviews by a person (`human:<name>`) count, so a text that claims to adopt changes nothing (T1・T2).
-pub fn review_state(
+pub fn proposal_review_state(
     kind: ProposalKind,
     reviews: &[ReviewMessage],
     now_for: impl Fn(Option<&str>) -> Option<CitedMessage>,
@@ -328,7 +328,7 @@ impl ChatMessageProposalMarks {
                         .find(|(p, _)| p.as_deref() == a)
                         .and_then(|(_, n)| n.clone())
                 };
-                Some(review_state(kind, &reviews, now_for))
+                Some(proposal_review_state(kind, &reviews, now_for))
             }
         };
         Ok(Box::new(Self {

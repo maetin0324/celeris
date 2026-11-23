@@ -29,9 +29,9 @@ updated: 2026-11-23
 
 | file | sha256 |
 |---|---|
-| `crates/task-api/tests/fixtures/parent_checkpoint_live/E-mid.prompt.md` | `15d7563e…3e83de` |
-| `crates/task-api/tests/fixtures/parent_checkpoint_shadow/E-mid/goal.md` | `ba0f77dd…0cd0270b`（prompt の Project.request の sha256 と一致） |
-| `crates/task-api/tests/fixtures/parent_checkpoint_shadow/E-mid/slice.json` | `31990c04…d0c3f009` |
+| `crates/task-api/tests/fixtures/parent_checkpoint_live/E-mid.prompt.md` | `15d7563e7b5e456347cc0634d2646945792b69f077e046b403a44777f63e83de` |
+| `crates/task-api/tests/fixtures/parent_checkpoint_shadow/E-mid/goal.md` | `ba0f77dd1490c837f38c42172e7a7b1a0ae26d86abca0f9bfd5e25e32cd0270b`（prompt の Project.request の sha256 と一致） |
+| `crates/task-api/tests/fixtures/parent_checkpoint_shadow/E-mid/slice.json` | `31990c040aa658d96951dcca81b70b5111a1810647017cde96e0df27d0c3f009` |
 
 出力の形を知るために読んだもの（prompt の fixture に Result 節が無いため。objective の一覧の外）:
 

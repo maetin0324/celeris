@@ -2,27 +2,26 @@
 title: 戦略層 v1 子 6 pivot-chain-test — D-done の pivot から新しい戦略の版と子 5 の gate までを 1 つの試験でつなぐ
 tasks: [01M7XQ9QWK58ESMW42Q1TGT3WZ]
 wu: pivot-chain-test
-status: blocked
+status: done
 updated: 2026-11-23
 ---
 # pivot-chain-test（WorkUnit）
 
-未完（2026-11-23、plan_issue で replan を求めた）。基準はこの WU の `$CELERIS_WU_BASE`。検査は提出時の HEAD で実行した。
+完了日: 2026-11-23。基準はこの WU の `$CELERIS_WU_BASE`。検査は提出時の HEAD で実行した。
 
-## 範囲の check の不合格（2026-11-23）
+## 範囲の訂正と再実行（2026-11-23）
 
-- 前の run は done を返したが、計画の範囲の check が exit 1 で落ちた。範囲の外の path は次の 7 件で、この run で同じ check を再実行して同じ結果を確かめた。
+- 最初の提出は、計画の範囲の check が exit 1 で落ちた。範囲の外の path は次の 7 件だった。
   `crates/task-dispatch/src/review/parent_evaluation.rs`・`crates/task-dispatch/src/project_controller.rs`・
   `crates/task-dispatch/src/dispatcher/project_decider_ts.rs`・`crates/task-dispatch/src/dispatcher/project_wake.rs`・
   `crates/task-dispatch/src/dispatcher/tests/project_checkpoint.rs`・`crates/task-api/tests/parent_checkpoint_shadow.rs`・
   `crates/task-api/tests/parent_checkpoint_regression.rs`。
 - 原因: 鎖の切れ目の owner は、評価の記録の書き手（task-dispatch の `write_record`）と、snapshot に足回りの root を渡す
-  `ProjectDecider::configure`（task-dispatch）だった。計画の範囲（task-api の cos・task-ops の project_*・task-core の strategy）に入っていない。
-  範囲の中だけで直すと、API の path の検査を弱めるか、試験が dispatcher と違う形で記録を書くことになる（どちらも回避策なので採らない）。
-- 同じ段の blind-eval-input も `review/parent_evaluation.rs` を変えるが、変える hunk は 285 行目付近までで、`write_record`（419 行目付近）とは重ならない。
-  blind-eval-input は `parent_checkpoint_shadow.rs` を変えていない（その worktree の `git diff --stat` で確かめた）。
-- 提出時の HEAD での結果: `parent_checkpoint_pivot_chain` は 1 passed。`-E 'test(/project_controller_checkpoint|parent_checkpoint|strategy|project_checkpoint/)'` は 136 passed。
-- 提案（replan）: 同じ key で pivot-chain-test を再実行し、範囲の check の許す path に上の 7 件を足す。実装は branch の commit をそのまま使う。
+  `ProjectDecider::configure`（task-dispatch）だった。最初の計画の範囲（task-api の cos・task-ops の project_*・task-core の strategy）に入っていなかった。
+  範囲の中だけで直すと、API の path の検査を弱めるか、試験が dispatcher と違う形で記録を書くことになる。どちらも回避策なので採らず、plan_issue で replan を求めた。
+- replan（計画 v6、人が承認）は同じ key で再実行し、範囲に上の 7 件を足した。実装は branch の commit をそのまま使い、再実行で直した code は無い。
+- 再実行の範囲の check（7 件を足した版）は、提出時の HEAD で exit 0。
+- 同じ段の blind-eval-input も `review/parent_evaluation.rs` を変える。ただし変える hunk は 285 行目付近までで、`write_record`（419 行目付近）とは重ならない。
 
 ## 結論
 
@@ -84,10 +83,15 @@ updated: 2026-11-23
 
 ## 証拠コマンドと結果（提出時の HEAD で実行）
 
+- 範囲の check（task-dispatch の 5 file と task-api の 2 試験を足した版）: exit 0（範囲の外の path は 0 件）。
 - `cargo nextest run -p task-api --test parent_checkpoint_pivot_chain`: 1 passed。
-- `cargo nextest run -p task-ops -p task-dispatch -p task-api -p task-core -E 'test(/project_controller_checkpoint|parent_checkpoint|strategy|project_checkpoint/)'`:
-  136 passed（子 2・5 の strategy の試験、`parent_checkpoint_shadow_`・`_regression_`・`_live_`、task-dispatch の `project_checkpoint`、task-ops の checkpoint の試験を含む）。
-- `bash scripts/dev/test-affected.sh`: exit 0。nextest 7042 passed・30 skipped（task-api・task-dispatch・task-ops・task-worker と逆依存）。web の tsc -b は通過、vitest 105 files・745 passed。
+- `cargo nextest run -p task-ops -p task-dispatch -p task-api -p task-core -E 'test(/project_controller_checkpoint|parent_checkpoint|strategy|project_checkpoint/)'`: 136 passed。
+  内訳（同じ filter の `cargo nextest list`）: `parent_checkpoint_pivot_chain_` 1 件、`parent_checkpoint_shadow_` 11 件、
+  task-dispatch の `project_checkpoint` 11 件（記録の path が相対であることを `final_record` が確かめる）、
+  task-ops の `project_controller_checkpoint_continue_maps_none_effect_and_returns_to_rules` 1 件、子 2・5 の `strategy` 79 件。
+  その他は `parent_checkpoint_regression_`・`_live_` と task-core の `parent_checkpoint` の試験。
+- `cargo nextest run -p task-ops -E 'test(/checkpoint/)'`: 7 passed。
+- `bash scripts/dev/test-affected.sh`: exit 0。nextest は 7042 passed・30 skipped。web の tsc -b は通過し、vitest は 105 files・745 passed。
 - `cargo clippy --workspace -- -D warnings`: exit 0。
 - `cargo fmt --all -- --check`: exit 0。
 

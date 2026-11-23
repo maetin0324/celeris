@@ -594,25 +594,16 @@ async fn project_controller_checkpoint_final_review_run_is_not_an_attempt() {
             },
         )
         .unwrap();
-    c.store
-        .run_index_start(task_core::RunRow {
-            run_id: review_run.clone(),
-            task_id: c.root.id.to_string(),
-            work_unit_id: None,
-            role: task_core::RunIndexRole::Reviewer,
-            seq: 1,
-            status: task_core::RunIndexStatus::Running,
-            adapter: Some("instant".into()),
-            model: Some("m".into()),
-            account: None,
-            session_id: None,
-            checkpoint: None,
-            usage: None,
-            metrics: None,
-            started_at: T0.into(),
-            finished_at: None,
-        })
+    // runs 索引の final review の行（終わった run）。行は SQL で置く（起動口の外で runs の行を書く経路を試験に増やさない）。
+    rusqlite::Connection::open(c.env.db())
+        .unwrap()
+        .execute(
+            "INSERT INTO runs (run_id, task_id, role, seq, status, started_at, finished_at)
+             VALUES (?1, ?2, 'reviewer', 1, 'completed', ?3, ?3)",
+            rusqlite::params![review_run, c.root.id.to_string(), T0],
+        )
         .unwrap();
+    assert_eq!(c.reviewer_rows(), 1);
     c.wake();
     let id = c.decisions("evaluate")[0].id.clone();
     assert_eq!(c.attempts(), vec![pc::attempt_artifact_name(&id, 1)]);
@@ -621,6 +612,7 @@ async fn project_controller_checkpoint_final_review_run_is_not_an_attempt() {
         2,
         "the final review run and one evaluation run"
     );
+    assert_eq!(c.reviewer_rows(), 2);
 }
 
 /// root の run が手元にある間（`has_task_run`）は評価の run を起こさない（`register_run` が entry を上書きするため）。

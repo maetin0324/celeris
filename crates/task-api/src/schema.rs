@@ -221,7 +221,8 @@ pub struct ApiV1Schema {
     /// Phase 65（ADR-0053 D4）: `GET /llm/sources`（API と型のみ。GUI 表示は Phase 66）。
     pub llm_sources: crate::types::LlmSourcesView,
     pub harnesses: Vec<crate::types::HarnessView>,
-    pub harness_rule: crate::types::HarnessRuleView,
+    // `HarnessRuleView` is not listed: it stays in `$defs` through `HarnessView` (the root's field count is repo
+    // health `size.responsibility-growth`; ADR 2026-11-23-project-observability-publish D2 adds `chat_proposal_review`).
     pub harness_candidate: crate::types::HarnessCandidateView,
     /// ADR 2026-10-11-llm-source-model-routing-evaluation D3: `GET`/`POST /routing/stages` と `GET /routing/evidence`。
     pub routing_stages: task_ops::routing_stage::RoutingStageList,
@@ -339,6 +340,8 @@ pub struct ApiV1Schema {
     /// listed here: they stay in `$defs` through `ChatRunResponse.run` and `ChatMessage.cards`.
     pub chat_message_edit: ChatMessageEditRequest,
     pub chat_message_retract: ChatMessageRetractRequest,
+    /// ADR 2026-11-23-project-observability-publish D2.1: `POST …/messages/{m}/review` (answers `ChatPostMessageResponse`).
+    pub chat_proposal_review: task_core::proposal_review::ProposalReviewRequest,
     /// ADR 2026-11-22-external-llm-discussion-exchange D4.1: `POST …/exchange/shares` (and `…/revoke`) and
     /// `POST …/exchange/imports`. `GET …/exchange/export` answers the `celeris.discussion-snapshot/1` document of
     /// the ADR's D1.4 (JSON or Markdown), not listed here.

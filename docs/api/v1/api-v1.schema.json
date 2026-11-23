@@ -4164,8 +4164,30 @@
           ],
           "description": "ADR 2026-10-28-single-human-window-general-cos D2: present on a card (札) of the general\nthread that stands for an item a project CoS routed to the person. `state` / `open` are\nread from the item every time (the card is resolved when the item is)."
         },
+        "external": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatMessageExternal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "D2.4: present on a text from an external LLM or imported by a person (untrusted)."
+        },
         "id": {
           "type": "string"
+        },
+        "proposal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatMessageProposal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "D2.4: present on a message a person may adopt, reject or comment on."
         },
         "provenance": {
           "anyOf": [
@@ -4313,6 +4335,27 @@
       ],
       "type": "object"
     },
+    "ChatMessageExternal": {
+      "description": "D2.4: `ChatMessage.external`, the mark of a text that came from outside Celeris. `untrusted` is always `true`.",
+      "properties": {
+        "source_kind": {
+          "description": "`exchange.source.kind`: `mcp_client`, `human_paste` or `markdown_import`.",
+          "type": "string"
+        },
+        "source_label": {
+          "type": "string"
+        },
+        "untrusted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "source_kind",
+        "source_label",
+        "untrusted"
+      ],
+      "type": "object"
+    },
     "ChatMessageListResponse": {
       "properties": {
         "items": {
@@ -4344,6 +4387,42 @@
       "required": [
         "items",
         "snapshot_event_id"
+      ],
+      "type": "object"
+    },
+    "ChatMessageProposal": {
+      "description": "D2.4: `ChatMessage.proposal`.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ProposalKind"
+        },
+        "review_message_id": {
+          "description": "The review message the state comes from.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "review_state": {
+          "$ref": "#/$defs/ProposalReviewState"
+        },
+        "reviewed_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reviewed_by": {
+          "description": "`human:<name>` who wrote that review.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "review_state"
       ],
       "type": "object"
     },
@@ -24491,6 +24570,109 @@
       ],
       "type": "object"
     },
+    "ProposalKind": {
+      "description": "D2.2: the three kinds of message a person may review.",
+      "oneOf": [
+        {
+          "const": "external_llm",
+          "description": "An external LLM's propose (`role=user`, `author = mcp:<client_id>`, `metadata_json.exchange`).",
+          "type": "string"
+        },
+        {
+          "const": "human_import",
+          "description": "A summary or quote a person imported (`exchange.source.kind` is `human_paste` / `markdown_import`).",
+          "type": "string"
+        },
+        {
+          "const": "cos_strategy",
+          "description": "A CoS reply with a strategy draft attached (`strategy/<id>/v<n>.json`).",
+          "type": "string"
+        }
+      ]
+    },
+    "ProposalReviewRequest": {
+      "additionalProperties": false,
+      "description": "D2.1: `POST /chat/threads/{t}/messages/{m}/review`. `expected_revision` and `sha256` are the proposal as the\nperson saw it; for a CoS draft `attachment` names it and `sha256` is the attachment's.",
+      "properties": {
+        "attachment": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "client_message_id": {
+          "description": "Idempotency (the chat key): the same key and text return the review already posted.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expected_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "note": {
+          "description": "Up to 2,000 characters; required (1 or more) for `comment`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "verdict": {
+          "$ref": "#/$defs/ProposalVerdict"
+        }
+      },
+      "required": [
+        "verdict",
+        "expected_revision",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "ProposalReviewState": {
+      "description": "D2.4: the review state of a proposal, derived on every read (never stored).",
+      "oneOf": [
+        {
+          "enum": [
+            "rejected"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "pending",
+          "description": "No person has reviewed it.",
+          "type": "string"
+        },
+        {
+          "const": "adopted",
+          "description": "The last adopt / reject of a person was adopt. This is not an approval (子 2 D2.2).",
+          "type": "string"
+        },
+        {
+          "const": "commented",
+          "description": "Only comments.",
+          "type": "string"
+        },
+        {
+          "const": "stale",
+          "description": "The proposal was edited or retracted after the revision the person reviewed.",
+          "type": "string"
+        }
+      ]
+    },
+    "ProposalVerdict": {
+      "description": "D2.1: what the person decided about a proposal.",
+      "enum": [
+        "adopt",
+        "reject",
+        "comment"
+      ],
+      "type": "string"
+    },
     "ProposedMilestone": {
       "description": "`Event::ProjectPlanProposed.milestones[]`（ADR-0074 D3.3）。",
       "properties": {
@@ -35764,6 +35946,10 @@
     "chat_post_message_response": {
       "$ref": "#/$defs/ChatPostMessageResponse"
     },
+    "chat_proposal_review": {
+      "$ref": "#/$defs/ProposalReviewRequest",
+      "description": "ADR 2026-11-23-project-observability-publish D2.1: `POST …/messages/{m}/review` (answers `ChatPostMessageResponse`)."
+    },
     "chat_reference": {
       "$ref": "#/$defs/ChatReferenceRequest"
     },
@@ -36000,9 +36186,6 @@
     },
     "harness_candidate": {
       "$ref": "#/$defs/HarnessCandidateView"
-    },
-    "harness_rule": {
-      "$ref": "#/$defs/HarnessRuleView"
     },
     "harnesses": {
       "items": {
@@ -36621,7 +36804,6 @@
     "stream_reset",
     "llm_sources",
     "harnesses",
-    "harness_rule",
     "harness_candidate",
     "routing_stages",
     "routing_stage",
@@ -36697,6 +36879,7 @@
     "eval_trial_list",
     "chat_message_edit",
     "chat_message_retract",
+    "chat_proposal_review",
     "chat_exchange_share",
     "chat_exchange_share_response",
     "chat_exchange_import",

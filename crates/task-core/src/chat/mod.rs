@@ -264,6 +264,9 @@ pub struct ChatMessage {
     /// derived from the cited message as it is now (never stored).
     #[serde(flatten)]
     pub cited: Box<ChatMessageCitations>,
+    /// ADR 2026-11-23-project-observability-publish D2.4: `proposal` / `external`, derived on every read.
+    #[serde(flatten)]
+    pub marks: Box<crate::proposal_review_wire::ChatMessageProposalMarks>,
     pub created_at: String,
     pub updated_at: String,
 }

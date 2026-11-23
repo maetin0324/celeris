@@ -852,7 +852,9 @@ export type ChatMessage = {
   "discussion_mode"?: ChatDiscussionMode | null;
   "edited"?: ChatMessageChange | null;
   "escalation"?: ChatEscalationRef | null;
+  "external"?: ChatMessageExternal | null;
   "id": string;
+  "proposal"?: ChatMessageProposal | null;
   "provenance"?: ChatProvenance | null;
   "relay"?: ChatRelay | null;
   "reply_to_id"?: string | null;
@@ -883,11 +885,25 @@ export type ChatMessageEditRequest = {
   "text": string;
 };
 
+export type ChatMessageExternal = {
+  "source_kind": string;
+  "source_label": string;
+  "untrusted": boolean;
+};
+
 export type ChatMessageListResponse = {
   "items": Array<ChatMessage>;
   "next_after_seq"?: number | null;
   "next_before_seq"?: number | null;
   "snapshot_event_id": string;
+};
+
+export type ChatMessageProposal = {
+  "kind": ProposalKind;
+  "review_message_id"?: string | null;
+  "review_state": ProposalReviewState;
+  "reviewed_at"?: string | null;
+  "reviewed_by"?: string | null;
 };
 
 export type ChatMessageResponse = {
@@ -4886,6 +4902,21 @@ export type PromotionView = {
   "release_sha"?: string | null;
   "status": PromotionStatus;
 };
+
+export type ProposalKind = "external_llm" | "human_import" | "cos_strategy";
+
+export type ProposalReviewRequest = {
+  "attachment"?: string | null;
+  "client_message_id"?: string | null;
+  "expected_revision": number;
+  "note"?: string | null;
+  "sha256": string;
+  "verdict": ProposalVerdict;
+};
+
+export type ProposalReviewState = "rejected" | "pending" | "adopted" | "commented" | "stale";
+
+export type ProposalVerdict = "adopt" | "reject" | "comment";
 
 export type ProposedMilestone = {
   "key": string;

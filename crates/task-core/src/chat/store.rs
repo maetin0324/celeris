@@ -403,6 +403,14 @@ pub(crate) fn message_from_raw(conn: &Connection, r: MessageRaw) -> Result<ChatM
         _ => None,
     };
     Ok(ChatMessage {
+        marks: crate::proposal_review_wire::ChatMessageProposalMarks::of_message(
+            conn,
+            &r.thread_id,
+            &r.id,
+            &r.role,
+            &r.text,
+            &meta,
+        )?,
         role: enum_from(&r.role)?,
         state: enum_from(&r.state)?,
         id: r.id,

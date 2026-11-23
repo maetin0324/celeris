@@ -89,6 +89,7 @@ Live View の grant/check/read は owner attestation を入力するため除外
 | POST | `/chat/threads/{t}/relays` | `human_instruction_relay` | 人の指示の取り次ぎは認証済み外部主体だけが行う。CoS は指示を作れない。 |
 | PATCH | `/chat/threads/{t}/messages/{m}` | `human_message_edit` | 人の発言の編集は書いた人の token だけが行う。CoS は人の発言を書き換えられない（ADR 2026-11-21-chat-discussion-mode D5.1）。 |
 | POST | `/chat/threads/{t}/messages/{m}/retract` | `human_message_edit` | 人の発言の撤回は書いた人の token だけが行う。CoS は人の発言を撤回できない（ADR 2026-11-21-chat-discussion-mode D5.1）。 |
+| POST | `/chat/threads/{t}/messages/{m}/review` | `human_proposal_verdict` | chat の案の採用・却下・コメントは人の token だけが行う。CoS・MCP・operator は人の採否を作れない（ADR 2026-11-23-project-observability-publish D2.1）。 |
 | POST | `/chat/threads/{t}/exchange/shares` | `human_exchange` | 外部 LLM への共有・取り込みは人の token だけが行う。CoS・MCP・operator は人の同意を作れない（ADR 2026-11-22-external-llm-discussion-exchange D4.1）。 |
 | POST | `/chat/threads/{t}/exchange/shares/{share_id}/revoke` | `human_exchange` | 外部 LLM への共有・取り込みは人の token だけが行う。CoS・MCP・operator は人の同意を作れない（ADR 2026-11-22-external-llm-discussion-exchange D4.1）。 |
 | POST | `/chat/threads/{t}/exchange/imports` | `human_exchange` | 外部 LLM への共有・取り込みは人の token だけが行う。CoS・MCP・operator は人の同意を作れない（ADR 2026-11-22-external-llm-discussion-exchange D4.1）。 |
@@ -316,6 +317,7 @@ R の操作では領域 write は不要だが operation・event・card は同一
 | POST | `/chat/threads/{t}/relays` | X: `human_instruction_relay` | `chat/mod.rs` | router のみ |
 | PATCH | `/chat/threads/{t}/messages/{m}` | X: `human_message_edit` | `chat/revise.rs` | 共通 |
 | POST | `/chat/threads/{t}/messages/{m}/retract` | X: `human_message_edit` | `chat/revise.rs` | 共通 |
+| POST | `/chat/threads/{t}/messages/{m}/review` | X: `human_proposal_verdict` | `chat/proposal_review.rs` | 共通 |
 | POST | `/chat/threads/{t}/exchange/shares` | X: `human_exchange` | `chat/exchange.rs` | 共通 |
 | POST | `/chat/threads/{t}/exchange/shares/{share_id}/revoke` | X: `human_exchange` | `chat/exchange.rs` | 共通 |
 | POST | `/chat/threads/{t}/exchange/imports` | X: `human_exchange` | `chat/exchange.rs` | 共通 |

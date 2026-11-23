@@ -1,0 +1,31 @@
+{
+  "adapter": "claude-code",
+  "children": {
+    "A": "01M843DM7WBW3D60APAP4TFQ84",
+    "B": "01M843DM7X6EBK1JTMTD9DDFRD",
+    "C": "01M843DM7XK56HKT7RJPFJX28J",
+    "D": "01M843DM7YX5QV6H14E2SJPW5R",
+    "E": "01M843DM7ZMR8VE013S9TS45CA",
+    "F": "01M843DM7ZBB4A1XC3WASC2FQF",
+    "G": "01M843DM80NRMTNENPAMDN2DJH",
+    "H": "01M843DM81YG0JG3YWG6JPKB9Q"
+  },
+  "harness": "config",
+  "model": "claude-sonnet-5-5",
+  "point": "D-done",
+  "project_id": "01M843DM6FT810298EY2AGMSJS",
+  "root_id": "01M843DM6FET2ZB087JTTDFSMT",
+  "run_id": "01M843EJP0WARBZVBNEZ051DN1",
+  "status": "completed",
+  "usage": {
+    "cache_creation_tokens": 40813,
+    "cache_read_tokens": 36384,
+    "context_tokens": 40815,
+    "cost_usd": 0.1371973,
+    "duplicate_reads": 0,
+    "input_tokens": 4,
+    "output_tokens": 2788,
+    "session_resumed": false
+  },
+  "usd": 0.1371973
+}

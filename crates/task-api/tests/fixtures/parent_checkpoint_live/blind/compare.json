@@ -1,0 +1,59 @@
+{
+  "failed": [],
+  "pass": true,
+  "points": {
+    "D-done": {
+      "expected_next": "pivot",
+      "expected_verdict": "off_track",
+      "forbidden_reads": [],
+      "harness": "config",
+      "model": "claude-sonnet-5-5",
+      "next": "ask_human",
+      "next_match": false,
+      "reads": 1,
+      "reads_outside": [],
+      "status": "checked",
+      "usage": {
+        "cache_creation_tokens": 40813,
+        "cache_read_tokens": 36384,
+        "context_tokens": 40815,
+        "cost_usd": 0.1371973,
+        "duplicate_reads": 0,
+        "input_tokens": 4,
+        "output_tokens": 2788,
+        "session_resumed": false
+      },
+      "usd": 0.1371973,
+      "verdict": "at_risk",
+      "verdict_match": false,
+      "violations": []
+    },
+    "E-mid": {
+      "expected_next": "discriminating_experiment",
+      "expected_verdict": "off_track",
+      "forbidden_reads": [],
+      "harness": "config",
+      "model": "claude-sonnet-5-5",
+      "next": "continue",
+      "next_match": false,
+      "reads": 1,
+      "reads_outside": [],
+      "status": "checked",
+      "usage": {
+        "cache_creation_tokens": 33421,
+        "cache_read_tokens": 44908,
+        "context_tokens": 41385,
+        "cost_usd": 0.1206821,
+        "duplicate_reads": 0,
+        "input_tokens": 4,
+        "output_tokens": 2814,
+        "session_resumed": false
+      },
+      "usd": 0.1206821,
+      "verdict": "at_risk",
+      "verdict_match": false,
+      "violations": []
+    }
+  },
+  "schema": "celeris.parent-eval-blind-compare/1"
+}

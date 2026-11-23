@@ -542,3 +542,49 @@ D8・D9.2・D11 の試験の置き場と分担を実装に合わせて書き足�
   （`change_rules::review::parent_checkpoint_section` と `result_section`）で出す。id は固定の値。
 - 反証の trigger の合成（`parent_checkpoint_shadow_refute_in_subtree`）は、root が参照する v1 の文書を文書の task（root）の成果物として置く。v1 の文書が無いと、
   v1 に既にある反証（`e-pilot-refute`）も新しい反証に数えられる（試験を書く中で確かめた挙動。参照した版の文書が読めないときの扱いは「未確認」の運用の範囲）。
+
+## 付記（2026-11-23、ts-checkpoint-rule の未解決 2 件の解決・評価の run の起動口の置き場・反証の key。WU close-gate）
+
+付記（WU ts-checkpoint-rule）の未解決 2 件は WU checkpoint-act-fix が Rust 側で直した（D5.2・D5.3 の本文はその WU がその場で直した）。決定の中身は変えていない。
+
+1. 写していない評価がある間に、paused の wait・`pc/no-progress` の escalate・CoS 入力の日の上限の wait が `checkpoint_action_mismatch` で落ちた件: 直った。
+   `task_core::project_proposal::validate_checkpoint_act` は、rule が act でない `evaluate`・`escalate`・`wait(phase = waiting)` を、写していない評価があっても通す。
+   起票・`replan`（CoS 入力）・`mark_milestone`・`wait(achieved)`・`continue` は今も落とす。Rust に TS の rule id は書いていない。
+   試験: task-core の `project_controller_checkpoint_guard_while_unmapped_holds_pass_and_progress_fails`、task-dispatch の `project_controller_checkpoint_no_progress_escalates_while_unmapped`、
+   task-api の `parent_checkpoint_shadow_no_progress_escalates_while_unmapped`。
+2. continue・wait の写し（`effect_state = none`）が写し済みに数えられなかった件: 直った。`task_ops::project_snapshot::checkpoints` の写し済みは `effect_state != "failed"` である。
+   試験: task-ops の `project_controller_checkpoint_continue_maps_none_effect_and_returns_to_rules`、task-api の `parent_checkpoint_shadow_continue_mapping_unblocks_next_launch`。
+
+評価の reviewer run の起動口の置き場（WU controller-launch。D2.3・D11 の本文はその WU が直した）:
+
+- run の起動・実行・終わりの記録は、設計 review と共通の起動口 `crates/task-dispatch/src/health_review/design_gate.rs` の `start_side_review`・`on_side_review_finished`・`holds_side_review`
+  （種類は `SideReviewKind::Design` と `SideReviewKind::ParentEvaluation`）。設計 review の起動の本体の写しは作っていない（WU review-launcher が 1 つにした）。
+- 評価の起動の条件・試行の記録（`parent-evaluation/<id>.attempt-<n>.json`）・決着（最終の記録 `parent-evaluation/<id>.json`）は `crates/task-dispatch/src/review/parent_evaluation.rs` の自由関数
+  `launch`・`settle`・`in_flight`。`Dispatcher` に method は足していない。tick の呼び出しは `dispatcher/project_wake.rs` の `tick_project_controller`、木の上限の判定は同じ file が
+  `parent_evaluation::TreeHold` として渡す。
+- 試験は `crates/task-dispatch/src/dispatcher/tests/project_checkpoint.rs`（`project_controller_checkpoint_`）と `crates/task-dispatch/src/dispatcher/tests/reviewer_side_run.rs`（`reviewer_side_run_`）。
+
+反証の key（D1.2。WU checkpoint-core の実装と試験 `parent_checkpoint_contract_` の `refute_new_evidence_only` の行）: 同じ証拠 id が v2 と v3 に持ち越されたとき、trigger は最初に現れた版の key
+（`refute:<strategy_id>:v2:<evidence id>`）1 つだけを出す。版ごとに key を変えると、同じ反証で評価が 2 回起きる。
+
+残る未確認（判断の保持の GC が continue・wait の写しの判断を消すと、その評価が写していない評価に戻る件）は、子 6 の進捗（`agent-docs/progress/2026-11-22-strategy-v1-6.md`）の「未確認の事項」に書いた。
+
+案 A の盲検の評価（2026-11-23。人が案 A を選び、WU blind-eval-input・pivot-chain-test・blind-eval-runs が行った。決定の中身は変えていない）:
+
+- 入力の変更（WU blind-eval-input。D3.1.1・D3.3・D8.1・D8.3 の本文はその WU がその場で直した）: request の子ごとに checkpoint の時点以前の報告の本文を
+  `task_core::parent_checkpoint::child_reports` で入れ、prompt に出力の欄と axes の定義を入れた。D8.1 から時点ごとの期待の値を消し、比べる値は子 0 の `answer_key.json` だけに置いた。
+- 記録の path の訂正（WU pivot-chain-test）: `review/parent_evaluation.rs` の `write_record` は最終の記録の `ArtifactRef.path` を root の足回りからの相対で書く。
+  snapshot（`task_ops::project_snapshot::checkpoints`）は記録と戦略の文書を、記録した task の足回りを基準に読む。前は絶対 path で、API と子 5 の gate が記録を読めなかった。
+  試験 `parent_checkpoint_pivot_chain_d_done_pivot_to_gated_v2` が、スクリプトの D-done の評価から新しい版が子 5 の gate を通るまでをつなぐ。
+- driver（WU blind-eval-runs）: `scripts/dev/parent-eval-blind.sh` は一時 home の daemon で、slice から seed した使い捨ての案件の controller を `enabled` にし、
+  D2.3 の起動口（`start_side_review`、`SideReviewKind::ParentEvaluation`）で reviewer run を 1 本起こす。reviewer の作業 tree は slice の file だけで、ADR・replay・試験・進捗を置かない。
+  worker の run の中では実 LLM の評価を断る（`CELERIS_RUN_ID`）。比較は `scripts/dev/parent-eval-blind-compare.py` だけが answer key を開く。
+- 結果: operator が人の承認の範囲で E-mid・D-done を 2 回ずつ評価した（4 run、claude-sonnet-5-5、計 0.487 USD）。記録は 4 本とも `checked`。
+  評価器の verdict は 4 本とも `at_risk`、next は E-mid が continue、D-done が ask_human（D-done は `negative_result` が真、反証 1 件）。評価器は作業 tree の file を読まなかった。
+  answer key との一致・不一致は `crates/task-api/tests/fixtures/parent_checkpoint_live/blind/compare.json` と子 6 の進捗に書いた。
+- 第二ゲートの判定: WU close-gate は案 A の結果で未達と判定し、人に案を聞いた。人（2026-11-23）は**条件付き合格**を選んだ。条件は次の 3 つで、子 8 の受け入れ条件に引き継ぐ。
+  1. 評価器の質は子 8 の pilot で、C-mid・D-done・F-done の盲検の評価と人の rubric で測る。
+  2. それまで本番の controller の checkpoint の評価は mode `shadow` のままにし、`enabled` にしない。
+  3. 2 時点の answer key に合わせて prompt（`change_rules::review::parent_checkpoint_section`）を直さない（過適合を避ける）。
+  条件付きの理由（独立の評価器の評価から pivot が起きていない、評価器が file を読まず prompt だけで判定した、C-mid・F-done の盲検の評価が無い）は子 6 の進捗の「第二ゲートの判定」にある。
+  決定的な下限を足す案（評価器が continue でも人への判断にする）と、入力を直して LLM で再評価する案は採らなかった。D1〜D11 の決定の中身は変えていない。

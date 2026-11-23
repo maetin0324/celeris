@@ -447,3 +447,97 @@ fn project_controller_checkpoint_snapshot_without_strategy_roots_unchanged() {
     let back: ProjectSnapshot = serde_json::from_value(v).unwrap();
     assert!(back.checkpoints.is_empty());
 }
+
+/// 不変条件（D5.2）: 写していない評価がある間も、計画を進めない guard の行動（act でない rule の `wait(waiting)` と
+/// `escalate`）は通る。起票・CoS 入力（replan）・milestone・到達の記録（`wait(achieved)`）・continue は今までどおり
+/// `checkpoint_action_mismatch` で落ちる（off_track・unknown の評価から計画は進まない）。
+/// 既存の `..._act_must_map_unmapped` は act の rule の行動だけを見るので、guard の wait・escalate が落ちることを検出しない。
+#[test]
+fn project_controller_checkpoint_guard_while_unmapped_holds_pass_and_progress_fails() {
+    let mut s = snapshot();
+    let allowed = vec![SnapshotAllowedAction {
+        kind: "replan".into(),
+        reason_code: Some("checkpoint_pivot".into()),
+        question_key: None,
+    }];
+    let mut cp = checkpoint("R", &[], None);
+    cp.unmapped = vec![unmapped("D1", allowed)];
+    s.checkpoints = vec![cp];
+    let wait = |phase: WaitPhase| ProjectAction::Wait {
+        waiting_on: vec![WaitingOn {
+            kind: crate::project_brief::WaitingOnKind::Human,
+            target: None,
+            note: "n".into(),
+        }],
+        next_wake_after_secs: 3600,
+        phase,
+    };
+    let mut paused = s.clone();
+    paused.project.status = "paused".into();
+    let p = act(
+        &paused,
+        wait(WaitPhase::Waiting),
+        "pc/project-not-active",
+        None,
+    );
+    assert_eq!(validate(&paused, &p), Ok(()), "paused の wait");
+    let no_progress = act(
+        &s,
+        ProjectAction::Escalate {
+            category: "explicit_human".into(),
+            question_key: "no_progress:0".into(),
+            summary: "s".into(),
+            options: vec![],
+            evidence_refs: vec![],
+        },
+        "pc/no-progress",
+        None,
+    );
+    assert_eq!(
+        validate(&s, &no_progress),
+        Ok(()),
+        "no-progress の escalate"
+    );
+    let daily = act(
+        &s,
+        wait(WaitPhase::Waiting),
+        "pc/checkpoint/act/daily-limit",
+        Some("D1"),
+    );
+    assert_eq!(validate(&s, &daily), Ok(()), "CoS 入力の日の上限の wait");
+    let replan = ProjectAction::Replan {
+        reason_code: "root_failed".into(),
+        question: "q".into(),
+        context_refs: vec!["task:R".into()],
+    };
+    let progress = [
+        launch(&s, &["A"]),
+        act(&s, replan, "pc/root-failed", None),
+        act(
+            &s,
+            ProjectAction::MarkMilestone {
+                outcome_id: "o1".into(),
+                evidence_refs: vec!["task:R".into()],
+            },
+            "pc/milestone",
+            None,
+        ),
+        act(&s, wait(WaitPhase::Achieved), "pc/achieved", None),
+        act(
+            &s,
+            ProjectAction::Continue {
+                watch_root_ids: vec!["R".into()],
+                next_wake_after_secs: 60,
+            },
+            "pc/root-in-flight",
+            None,
+        ),
+    ];
+    for p in progress {
+        assert!(
+            codes(validate(&s, &p)).contains(&"checkpoint_action_mismatch".to_string()),
+            "{:?}",
+            p.action
+        );
+    }
+}

@@ -230,12 +230,14 @@ LLM は呼ばない。形が崩れた・節が無い出力も試行に数え（�
 | 任意 | `ask_human` | `escalate`（`question_key = checkpoint:<判断 id>`） | 受信箱の `project_controller` に 1 件（既存） |
 | `invalid` の記録 | — | `escalate` | 同上 |
 
-Rust の検証 `checkpoint_action_mismatch`: 写していない評価があるのに、rule が `pc/checkpoint/act` でない、または表に無い行動を返した proposal は `invalid_output`。
+Rust の検証 `checkpoint_action_mismatch`: 写していない評価があるのに、rule が `pc/checkpoint/act` で表に無い行動、または rule が `pc/checkpoint/act` でなく計画を進める行動（`launch_root`・`replan`・`mark_milestone`・`wait(achieved)`・`continue`）を返した proposal は `invalid_output`。
+rule が `pc/checkpoint/act` でない `evaluate`・`wait(waiting)`・`escalate` は通す（paused の待ち・no-progress の escalate・CoS 入力の日の上限の待ちなどの guard）。どれも起票・CoS 入力・到達の記録を書かないので、off_track・unknown の評価から計画は進まない（表の行に無い continue は出ない）。写していない評価は残り、guard が外れた後の判断で act が写す。Rust は TS の rule id を名指さず、行動の種類で分ける。
 `replan` の `context_refs` は `task:<root>`・`artifact:<root>/parent-evaluation/<判断 id>.json`・戦略の文書の参照だけ（id だけ。評価の文を CoS 入力の本文に写さない。I11）。
 
 #### D5.3 「行動に写した」の導き方
 
-評価済み（D1.3）の判断 e は、判断の表に rule が `pc/checkpoint/act` かつ signal `checkpoint` = e の判断 id で、`effect_state` が `pending`・`applied`・`suppressed` の判断があれば写し済み。
+評価済み（D1.3）の判断 e は、判断の表に rule が `pc/checkpoint/act` かつ signal `checkpoint` = e の判断 id で、`effect_state` が `failed` でない判断（`none`・`pending`・`applied`・`suppressed`）があれば写し済み。
+`continue`・`wait` の写しは効果が無く `none` になるので、`none` も数える（数えないと continue の行の評価がいつまでも写していない評価に残り、次の起票・milestone に戻れない）。`failed` の写しは数えず、次の判断で写し直す。`invalid_output` の判断は proposal を記録しないので数えない。
 signal が判断 id を持つので、時刻は比べない。保存しない。
 
 #### D5.4 人の承認と変えないもの

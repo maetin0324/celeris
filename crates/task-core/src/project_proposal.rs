@@ -866,9 +866,10 @@ fn validate_evaluate(
     }
 }
 
-/// D5.2・D5.3: 写していない評価があるとき、`evaluate` 以外の行動は rule `pc/checkpoint/act`・signal `checkpoint` = その
-/// 判断 id で、表の行動だけ。rule `pc/checkpoint/act` は写していない評価を名指すときだけ使える。`replan` の
-/// `context_refs` は root・最終の記録・戦略の文書の参照だけ（評価の文を CoS 入力に写さない。I11）。
+/// D5.2・D5.3: 写していない評価があるとき、rule が `pc/checkpoint/act` でない行動は、計画を進めない `evaluate`・
+/// `wait(waiting)`・`escalate`（guard の待ち・人への知らせ）だけ。それ以外は rule `pc/checkpoint/act`・signal
+/// `checkpoint` = その判断 id で、表の行動だけ。rule `pc/checkpoint/act` は写していない評価を名指すときだけ使える。
+/// `replan` の `context_refs` は root・最終の記録・戦略の文書の参照だけ（評価の文を CoS 入力に写さない。I11）。
 fn validate_checkpoint_act(
     snapshot: &ProjectSnapshot,
     proposal: &ProjectProposal,
@@ -876,10 +877,16 @@ fn validate_checkpoint_act(
 ) {
     let is_act = proposal.explanation.rule_id == CHECKPOINT_ACT_RULE;
     let any_unmapped = snapshot.checkpoints.iter().any(|c| !c.unmapped.is_empty());
-    if matches!(proposal.action, ProjectAction::Evaluate { .. }) && !is_act {
-        return;
-    }
-    if !is_act && !any_unmapped {
+    let holds = matches!(
+        proposal.action,
+        ProjectAction::Evaluate { .. }
+            | ProjectAction::Escalate { .. }
+            | ProjectAction::Wait {
+                phase: WaitPhase::Waiting,
+                ..
+            }
+    );
+    if !is_act && (holds || !any_unmapped) {
         return;
     }
     let named = proposal

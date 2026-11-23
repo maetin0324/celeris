@@ -583,6 +583,7 @@ pub fn checkpoints(
                 at: t.at,
             })
             .collect();
+        // D5.3: 写しの判断の効果が failed でなければ写し済み（continue・wait の写しは効果 none）。
         let mapped = |id: &str| {
             decisions.iter().any(|d| {
                 d.proposal.explanation.rule_id == pp::CHECKPOINT_ACT_RULE
@@ -591,7 +592,7 @@ pub fn checkpoints(
                         .signals
                         .iter()
                         .any(|s| s.name == pp::CHECKPOINT_SIGNAL && s.detail == id)
-                    && matches!(d.effect_state, "pending" | "applied" | "suppressed")
+                    && d.effect_state != "failed"
             })
         };
         let unmapped = states
@@ -1016,5 +1017,259 @@ mod root_row_tests {
             transitioned(Status::Ready, Status::Done, "approve"),
         ]);
         assert!(!row.reviewer_passed);
+    }
+}
+
+#[cfg(test)]
+mod checkpoint_tests {
+    //! ADR 2026-11-22-parent-checkpoint-evaluator D5.3 の「写し済み」の試験（prefix `project_controller_checkpoint_`）。
+    //! 守る不変条件: continue の行の評価を continue・wait（効果 `none`）で写した判断の後は、その評価は写し済みになり、
+    //! 既存の規則（起票・milestone）が `checkpoint_action_mismatch` で落ちない。効果が `failed` の写しは写し済みに数えない。
+    //! task-core の試験は snapshot の `unmapped` を手で置くので、snapshot の組み立てが写しを数えないことを検出できない。
+    use super::*;
+    use crate::add::create_task;
+    use task_core::chat::{AuditContext, ChatActor};
+    use task_core::project_proposal::ProjectAction;
+
+    fn proposal(action: ProjectAction, rule: &str, signal: Option<&str>) -> pp::ProjectProposal {
+        pp::ProjectProposal {
+            action,
+            gap: pp::ProposalGap {
+                reached: vec![],
+                open: vec!["o1".into()],
+                unknown: vec![],
+                progress_epoch: 0,
+            },
+            explanation: pp::ProposalExplanation {
+                rule_id: rule.into(),
+                signals: signal
+                    .map(|d| pp::ProposalSignal {
+                        name: pp::CHECKPOINT_SIGNAL.into(),
+                        detail: d.into(),
+                    })
+                    .into_iter()
+                    .collect(),
+            },
+            based_on: pp::ProposalBasedOn {
+                revision: 0,
+                human_epoch: 0,
+                request_sha256: String::new(),
+            },
+        }
+    }
+
+    /// strategy root 1 件と、その判断 `D1` の最終の記録（on_track・continue）を置いた store。
+    fn strategy_root(dir: &std::path::Path) -> (SqliteStore, pp::SnapshotRoot) {
+        let store = SqliteStore::open_in_memory().expect("store");
+        let spec: NewTaskSpec = serde_json::from_value(serde_json::json!({
+            "title": "t", "objective": "o",
+            "acceptance": [{"type": "command", "cmd": "true", "expect_exit": 0}]
+        }))
+        .expect("spec");
+        let now = OffsetDateTime::now_utc();
+        let task = create_task(&store, spec, now).expect("task");
+        let ctx = AuditContext {
+            actor: ChatActor::Cos,
+            thread_id: "thread".into(),
+            run_id: "run".into(),
+            operation_id: "01M80000000000000000000001".into(),
+            reason: "checkpoint test".into(),
+            policy_version: "v1".into(),
+        };
+        let payload = serde_json::json!({
+            "method": "POST", "path": "/api/v1/tasks", "body": {"title": "t"},
+            "strategy": {"task_id": "S", "name": "strategy/s1/v1.json",
+                         "sha256": format!("sha256:{}", "a".repeat(64)), "candidate": null}
+        });
+        store
+            .cos_operation_apply_at(
+                &ctx,
+                "01M80000000000000000000001",
+                "hash",
+                "task",
+                &task.id.to_string(),
+                None,
+                "task.create",
+                &payload,
+                now,
+                |_, _| Ok(serde_json::json!({})),
+            )
+            .expect("cos op");
+        let checked = pc::CheckedEvaluation {
+            status: pc::RecordStatus::Checked,
+            effective: pc::Effective {
+                verdict: pc::Verdict::OnTrack,
+                next: pc::Next::Continue,
+                axes: pc::Axes {
+                    execution: pc::ExecutionAxis::Succeeded,
+                    epistemic: pc::EpistemicAxis::Advanced,
+                    goal: pc::GoalAxis::Unknown,
+                },
+                unsupported: 0,
+                negative_result: false,
+            },
+            violations: vec![],
+        };
+        let record = pc::ParentEvaluationRecord::new("D1", &task.id.to_string(), None, &checked);
+        let path = dir.join("D1.json");
+        std::fs::write(&path, serde_json::to_vec(&record).expect("record")).expect("write");
+        store
+            .append_event(
+                task.id,
+                &Event::ArtifactProduced {
+                    run_id: "r".into(),
+                    artifact: task_core::ArtifactRef {
+                        name: pc::evaluation_artifact_name("D1"),
+                        path: path.display().to_string(),
+                        sha256: "0".repeat(64),
+                        kind: "file".into(),
+                        declared: true,
+                    },
+                },
+            )
+            .expect("artifact");
+        let row = root_row(&store, &task, None, now, &mut Vec::new()).expect("row");
+        (store, row)
+    }
+
+    fn unmapped(
+        store: &SqliteStore,
+        root: &pp::SnapshotRoot,
+        rows: &[(&str, &str, &pp::ProjectProposal)],
+    ) -> Vec<pp::SnapshotCheckpoint> {
+        let rows: Vec<CheckpointDecisionRow<'_>> = rows
+            .iter()
+            .map(|(id, effect_state, proposal)| CheckpointDecisionRow {
+                id,
+                effect_state,
+                proposal,
+            })
+            .collect();
+        checkpoints(
+            store,
+            std::slice::from_ref(root),
+            &rows,
+            &pc::CheckpointSettings::default(),
+            &mut |_| Ok(0),
+        )
+        .expect("checkpoints")
+    }
+
+    #[test]
+    fn project_controller_checkpoint_continue_maps_none_effect_and_returns_to_rules() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (store, root) = strategy_root(dir.path());
+        let evaluate = proposal(
+            ProjectAction::Evaluate {
+                root_id: root.id.clone(),
+                triggers: vec!["children:2".into()],
+            },
+            "pc/checkpoint/evaluate",
+            None,
+        );
+        let watch = proposal(
+            ProjectAction::Continue {
+                watch_root_ids: vec![root.id.clone()],
+                next_wake_after_secs: 60,
+            },
+            pp::CHECKPOINT_ACT_RULE,
+            Some("D1"),
+        );
+        let wait = proposal(
+            ProjectAction::Wait {
+                waiting_on: vec![],
+                next_wake_after_secs: 60,
+                phase: pp::WaitPhase::Waiting,
+            },
+            pp::CHECKPOINT_ACT_RULE,
+            Some("D1"),
+        );
+        // 写す前: 評価 D1 は写していない評価で、表は continue・wait。
+        let before = unmapped(&store, &root, &[("D1", "applied", &evaluate)]);
+        assert_eq!(before.len(), 1);
+        let ids: Vec<&str> = before[0]
+            .unmapped
+            .iter()
+            .map(|e| e.decision_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["D1"]);
+        let kinds: Vec<&str> = before[0].unmapped[0]
+            .allowed
+            .iter()
+            .map(|a| a.kind.as_str())
+            .collect();
+        assert_eq!(kinds, vec!["continue", "wait"]);
+        // 効果 none の continue・wait で写した後は写し済み。
+        for mapping in [&watch, &wait] {
+            let after = unmapped(
+                &store,
+                &root,
+                &[("D2", "none", mapping), ("D1", "applied", &evaluate)],
+            );
+            assert!(after[0].unmapped.is_empty(), "{:?}", mapping.action);
+            // 既存の規則に戻る: milestone の提案は checkpoint_action_mismatch で落ちない。
+            let mut snapshot = snapshot_with(after);
+            snapshot.roots = vec![root.clone()];
+            let milestone = proposal(
+                ProjectAction::MarkMilestone {
+                    outcome_id: "o1".into(),
+                    evidence_refs: vec![format!("task:{}", root.id)],
+                },
+                "pc/milestone",
+                None,
+            );
+            let codes: Vec<String> = pp::validate(&snapshot, &milestone)
+                .err()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|v| v.code)
+                .collect();
+            assert!(
+                !codes.contains(&"checkpoint_action_mismatch".to_string()),
+                "{codes:?}"
+            );
+        }
+        // 効果が failed の写しは写し済みに数えない（次の判断で写し直す）。
+        let failed = unmapped(
+            &store,
+            &root,
+            &[("D2", "failed", &watch), ("D1", "applied", &evaluate)],
+        );
+        assert_eq!(failed[0].unmapped.len(), 1);
+    }
+
+    fn snapshot_with(checkpoints: Vec<pp::SnapshotCheckpoint>) -> ProjectSnapshot {
+        const REQUEST: &str = "依頼\n```celeris-outcomes\n[{\"id\":\"o1\",\"title\":\"t\",\"acceptance\":[\"A\"]}]\n```\n";
+        ProjectSnapshot {
+            now: "2026-11-23T00:00:00Z".into(),
+            truncated: false,
+            project: pp::SnapshotProject {
+                id: "P".into(),
+                title: "p".into(),
+                status: "active".into(),
+                request: REQUEST.into(),
+                request_sha256: pp::sha256_hex(REQUEST),
+            },
+            brief: None,
+            outcomes: parse_outcomes(REQUEST).expect("outcomes"),
+            outcomes_invalid: false,
+            roots: vec![],
+            waits: vec![],
+            stagnation: vec![],
+            wakes: vec![],
+            decisions: vec![],
+            controller: SnapshotController {
+                mode: "enabled".into(),
+                phase: "active".into(),
+                revision: 0,
+                human_epoch: 0,
+                retry_count: 0,
+                progress_epoch: 0,
+            },
+            limits: SnapshotLimits::default(),
+            roadmap: None,
+            authority: None,
+            checkpoints,
+        }
     }
 }

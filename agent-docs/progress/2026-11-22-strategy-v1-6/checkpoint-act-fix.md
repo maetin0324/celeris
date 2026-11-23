@@ -33,6 +33,7 @@ completed: 2026-11-23
 
 - task-core の新しい試験: `paused の wait` の assert で `Err([ProposalViolation { code: "checkpoint_action_mismatch", … "rule \"pc/project-not-active\" / wait does not map an unmapped checkpoint evaluation (None)" }])`。
 - task-ops の新しい試験: 効果 `none` の continue の写しの後の `assert!(after[0].unmapped.is_empty())` で fail（`Continue { watch_root_ids: [..], next_wake_after_secs: 60 }`）。写す前の assert（D1 が写していない評価、表が continue・wait）は通ったので、fixture は正しい。
+- 提出時の HEAD でも再確認した: `project_proposal.rs` と `project_snapshot.rs` の production の差分だけを `git apply -R` で戻すと同じ command で 5 件中 2 件 fail（`project_proposal_tests.rs:483`・`project_snapshot.rs:1208`）、戻した差分を元に戻すと 5 件 pass。
 
 ## 変更
 

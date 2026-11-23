@@ -1,5 +1,7 @@
 //! ADR 2026-11-07-health-review-integration D3.3・D3.5・D3.6: 計画の採用前の risk 判定と、高 risk の計画だけの設計
-//! review の起動（Dispatcher の状態を使う配線）。
+//! review の起動（Dispatcher の状態を使う配線）。task の status を変えない reviewer run（side review）の共通の起動口
+//! [`Dispatcher::start_side_review`]・終わり [`Dispatcher::on_side_review_finished`]・`abort_stale_runs` の例外
+//! [`Dispatcher::holds_side_review`] もここに置く（ADR 2026-11-22-parent-checkpoint-evaluator D2.3・D11）。
 //!
 //! 実行中の run（`running`）と完了の channel（`Completion`）は `dispatcher` の private な状態なので、この file は
 //! `dispatcher` の子 module として `#[path]` で読む（`dispatcher.rs` の `mod design_gate`）。file を
@@ -13,13 +15,13 @@
 //!    判定の最も高い level が `none`・`low` なら今までどおり採用する（追加の run なし。D3.6）。`high`・`unknown` なら
 //!    `Event::DesignReviewRequested` を追記し、計画を採用せずに task を `ready` に戻す（D3.5 1.）。
 //! 3. [`Dispatcher::design_review_hold`]（`dispatch_one`）: 待っている設計 review がある task には planner も WU も
-//!    起こさない。まだ reviewer run を起こしていなければ `pick_reviewer` で選んで起こす（D3.5 2.）。ただし木の run・
-//!    費用の上限を超えていれば起こさず、`kind: limit` の決定を要求する（`tree_limit_hold_for`。付記 C1）。待ちは
-//!    events だけで決まるので、デーモンの再起動の後も同じ判定になる（I9）。
-//! 4. [`Dispatcher::on_design_review_finished`]: 設計 review の run の終わりは `Completion::DesignReview` で届き、
-//!    `WorkerFinished`（role reviewer）・quota・runs 索引を記録してから `design_verdict::settle_design_review` に渡す
-//!    （`review.json` の `design` → `DesignReviewed` → 採用 / replan / `PlanGate`。D3.5 3〜5）。task の final review の
-//!    判定（`on_review_finished`・`review_verdict`）には流さない。
+//!    起こさない。まだ reviewer run を起こしていなければ共通の起動口（`SideReviewKind::Design`）で起こす（D3.5 2.）。
+//!    ただし木の run・費用の上限を超えていれば起こさず、`kind: limit` の決定を要求する（`tree_limit_hold_for`。付記 C1）。
+//!    待ちは events だけで決まるので、デーモンの再起動の後も同じ判定になる（I9）。
+//! 4. [`Dispatcher::on_side_review_finished`]: side review の run の終わりは `Completion::SideReview` で届き、
+//!    `WorkerFinished`（role reviewer）・quota・runs 索引を記録してから、完了の種類（[`SideReviewKind`]）の判定に渡す。
+//!    設計 review は `design_verdict::settle_design_review`（`review.json` の `design` → `DesignReviewed` → 採用 / replan /
+//!    `PlanGate`。D3.5 3〜5）。task の final review の判定（`on_review_finished`・`review_verdict`）には流さない。
 
 use super::*;
 
@@ -38,11 +40,28 @@ use task_core::ExecutionPlanSpec;
 use task_core::design_review::ReviewPolicyState;
 use task_worker::protocol::DesignReviewRequest;
 
-/// 設計 review の reviewer run の終わり（`Completion::DesignReview`）。
-pub(super) struct DesignReviewEnd {
+/// side review（task の status を変えない reviewer run）の完了の種類。起動口に渡し、終わりの判定の振り分けに使う。
+pub(super) enum SideReviewKind {
+    /// 採用前の計画の設計 review（ADR 2026-11-07-health-review-integration D3.5）。判定は
+    /// `design_verdict::settle_design_review`。
+    Design,
+}
+
+impl SideReviewKind {
+    /// log・progress・`WorkerFinished.outcome` の文に入る run の名前。
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Design => "design review",
+        }
+    }
+}
+
+/// side review の reviewer run の終わり（`Completion::SideReview`）。
+pub(super) struct SideReviewEnd {
     pub(super) task_id: TaskId,
     pub(super) run_id: String,
     pub(super) provider: ProviderId,
+    pub(super) kind: SideReviewKind,
     pub(super) result: Result<RunOutcome, AdapterError>,
 }
 
@@ -229,20 +248,24 @@ impl Dispatcher {
             bases.filter_map(|(n, paths)| Some((self.repo_review_base(task, &n).ok()?, paths)));
         let (review_policy, owner_rows) =
             requested_policy(bases, policy_sha256.as_deref(), &risk.reasons);
-        let request = DesignReviewRequest {
-            brief: plan.design_brief.clone(),
-            plan_summary: plan_summary(plan),
-            risk: risk.clone(),
-            review_policy,
-            owner_rows,
+        let review = task_worker::ReviewRequest {
+            design: Some(Box::new(DesignReviewRequest {
+                brief: plan.design_brief.clone(),
+                plan_summary: plan_summary(plan),
+                risk: risk.clone(),
+                review_policy,
+                owner_rows,
+            })),
+            ..Default::default()
         };
-        self.start_design_review(task, request)?;
+        self.start_side_review(task, review, SideReviewKind::Design)?;
         Ok(true)
     }
 
-    /// `abort_stale_runs` 用: `run_id` がこの task の待っている設計 review の run（まだ終わっていない）なら `true`。
-    /// 設計 review の run は task が `ready` のまま走り lease を持たないので、lease の有無だけで止めない。
-    pub(super) fn holds_design_review(
+    /// `abort_stale_runs` 用: `run_id` がこの task の待っている side review の走っている run なら `true`。side review の
+    /// run は task の status を変えずに走り lease を持たないので、lease の有無だけで止めない。今は設計 review（待っている
+    /// `DesignReviewRequested` の、まだ終わっていない reviewer run）だけを見る。判定は events だけで決まる。
+    pub(super) fn holds_side_review(
         &self,
         task: &Task,
         run_id: &str,
@@ -252,41 +275,35 @@ impl Dispatcher {
             .is_some_and(|(seq, _)| design_review_in_flight(&events, seq) == Some(run_id)))
     }
 
-    /// D3.5 2.: `pick_reviewer` で reviewer を選び、`run_reviewer_inner` と同じ形の reviewer run を起こす（新しい run
-    /// 種別は作らない）。文脈は `ReviewRequest.design` だけで、task の review の文脈（summary・evidence・criteria）は
-    /// 渡さない。run は `running` に task の run として入る（並列度・cancel・同じ task の二重 dispatch の抑止）。
-    fn start_design_review(
+    /// 共通の起動口（ADR 2026-11-22-parent-checkpoint-evaluator D2.3）: `pick_reviewer` で reviewer を選び、
+    /// `run_reviewer_inner` と同じ形の reviewer run を起こす（新しい run 種別は作らない）。文脈は `review`（呼び出し側が
+    /// 組んだ `ReviewRequest` の節。設計 review は `design` だけ）で、task の review の文脈（summary・evidence・criteria）は
+    /// 渡さない。run は `running` に task の run として入る（並列度・cancel・同じ task の二重 dispatch の抑止）。終わりは
+    /// `kind` を持つ `Completion::SideReview` で [`Self::on_side_review_finished`] に届く。起こした run の id を返し、task の
+    /// dir が無い・reviewer を選べない（routing・admission・quota・予算）ときは `None`（何も書かない）。
+    pub(super) fn start_side_review(
         &mut self,
         task: &Task,
-        request: DesignReviewRequest,
-    ) -> Result<(), DispatchError> {
+        review: task_worker::ReviewRequest,
+        kind: SideReviewKind,
+    ) -> Result<Option<String>, DispatchError> {
+        let label = kind.label();
         let Some(dir) = self.task_dir(task) else {
-            tracing::warn!(task_id = %task.id, "design review deferred: the task directory is unknown");
-            return Ok(());
+            tracing::warn!(task_id = %task.id, kind = label, "side review deferred: the task directory is unknown");
+            return Ok(None);
         };
-        let subject = self
-            .store
-            .events_for(task.id)?
-            .into_iter()
-            .rev()
-            .find_map(|(_, e)| match e {
-                Event::WorkerStarted {
-                    run_id,
-                    role: Some(RunRole::Planner),
-                    ..
-                } => Some(run_id),
-                _ => None,
-            })
-            .unwrap_or_default();
+        // `pick_reviewer` の対象の run（progress の宛先と reviewer の sink）は task の最後の planner run。
+        let events = self.store.events_for(task.id)?;
+        let subject = planner_run_before(&events, u64::MAX).unwrap_or_default();
         // 付記 C2: final review と同じ task 木の token 予算の watch（`run_watch`）を run と sink に付ける。読めなければ
         // run を起こさず次の tick でやり直す（`?`。C1 の判定と同じ扱い）。
         let watch = token_budget::run_watch(self.store.as_ref(), task, None)?;
         // ADR 2026-11-21-ancestor-objective-in-prompts D3: 対象 task の祖先の目的と受入条件の全文（final review と同じ列）。
         // 読めなければ WorkerStarted・runs の行・quota_begin の前に返り、run を起こさない（`?`。予算の watch と同じ扱い）。
         let lineage = crate::prompt_ancestors::lineage(self.store.as_ref(), task, Vec::new())?;
-        let Some(reviewer) = self.pick_reviewer(task, &subject, Ok(watch)) else {
-            tracing::debug!(task_id = %task.id, "design review deferred (no admissible reviewer route)");
-            return Ok(());
+        let Some(reviewer) = self.pick_reviewer(task, subject, Ok(watch)) else {
+            tracing::debug!(task_id = %task.id, kind = label, "side review deferred (no admissible reviewer route)");
+            return Ok(None);
         };
         let run = reviewer.run;
         let run_id = run.run_id.clone();
@@ -341,26 +358,26 @@ impl Dispatcher {
                     &Ok(reviewer.pick.clone()),
                     &reviewer.trace,
                 ) {
-                    tracing::warn!(task_id = %task.id, %run_id, error = %e, "failed to record the design reviewer route selection");
+                    tracing::warn!(task_id = %task.id, %run_id, kind = label, error = %e, "failed to record the side reviewer route selection");
                 }
             }
             Err(e) => {
-                tracing::warn!(task_id = %task.id, %run_id, error = %e, "failed to record the design review run start in the runs index");
+                tracing::warn!(task_id = %task.id, %run_id, kind = label, error = %e, "failed to record the side review run start in the runs index");
             }
         }
         self.quota_begin(Some(&account), reviewer.account_adapter, &run_id);
         let artifacts_dir = self.artifacts_dir(task, &dir);
-        let subject_task = task.clone();
+        let target = task.clone();
         let (task_id, end_run_id, provider) = (task.id, run_id.clone(), source.to_string());
         let tx = self.coord.completion_sender();
         let handle = tokio::spawn(async move {
             let result =
-                run_design_reviewer(&subject_task, &dir, &artifacts_dir, request, lineage, run)
-                    .await;
-            let _ = tx.send(Completion::DesignReview(Box::new(DesignReviewEnd {
+                run_side_reviewer(&target, &dir, &artifacts_dir, review, label, lineage, run).await;
+            let _ = tx.send(Completion::SideReview(Box::new(SideReviewEnd {
                 task_id,
                 run_id: end_run_id,
                 provider,
+                kind,
                 result,
             })));
         });
@@ -370,7 +387,7 @@ impl Dispatcher {
                 work_unit: None,
             },
             RunEntry {
-                run_id,
+                run_id: run_id.clone(),
                 provider: source.to_string(),
                 handle,
                 since: OffsetDateTime::now_utc(),
@@ -382,27 +399,22 @@ impl Dispatcher {
                 route: Some((source, reviewer.pick.account)),
             },
         );
-        Ok(())
+        Ok(Some(run_id))
     }
 
-    /// 設計 review の run の終わり。`WorkerFinished`（role reviewer）・quota・runs 索引を記録し、判定の扱い（`review.json`
-    /// の `design` → `DesignReviewed` → 採用 / replan / `PlanGate`）は `design_verdict::settle_design_review`。task の
-    /// final review の判定（`on_review_finished`・`review_verdict`）には流さない。
-    pub(super) fn on_design_review_finished(
+    /// side review の run の終わり。`WorkerFinished`（role reviewer）・quota・runs 索引を記録し、`review.json` の扱いは
+    /// 完了の種類で振り分ける（設計 review は `design_verdict::settle_design_review`: `design` → `DesignReviewed` →
+    /// 採用 / replan / `PlanGate`）。task の final review の判定（`on_review_finished`・`review_verdict`）には流さない。
+    pub(super) fn on_side_review_finished(
         &mut self,
-        end: DesignReviewEnd,
+        end: SideReviewEnd,
     ) -> Result<(), DispatchError> {
-        let DesignReviewEnd {
-            task_id,
-            run_id,
-            provider,
-            result,
-        } = end;
+        let (task_id, run_id, kind) = (end.task_id, end.run_id, end.kind);
         let (account, account_adapter, since) = self
             .take_running_by_run_id(&run_id)
             .map(|e| (e.account, e.account_adapter, Some(e.since)))
             .unwrap_or((None, None, None));
-        let (run_end, outcome, usage) = run_end_of(&result, "design review");
+        let (run_end, outcome, usage) = run_end_of(&end.result, kind.label());
         let model = self.started_model_of(task_id, &run_id);
         let quota = self.routing.settle_quota(
             &self.store,
@@ -410,7 +422,7 @@ impl Dispatcher {
             &run_id,
             None,
             account.as_deref().zip(account_adapter),
-            provider.to_string(),
+            end.provider.to_string(),
             &model,
             usage.as_ref(),
         );
@@ -419,7 +431,7 @@ impl Dispatcher {
             retries: 0,
             ..Default::default()
         });
-        tracing::info!(%task_id, %run_id, %outcome, "design review run finished (the verdict is read by design_verdict, not by the final review)");
+        tracing::info!(%task_id, %run_id, kind = kind.label(), %outcome, "side review run finished (the verdict is read by its kind, not by the final review)");
         let role = Some(RunRole::Reviewer);
         let finished = run_end_record(&run_id, outcome, usage, role, metrics, run_end);
         self.store.append_event(task_id, &finished)?;
@@ -435,19 +447,23 @@ impl Dispatcher {
             metrics,
             OffsetDateTime::now_utc(),
         ) {
-            tracing::warn!(%task_id, %run_id, error = %e, "failed to finish the runs index row for the design review run");
+            tracing::warn!(%task_id, %run_id, kind = kind.label(), error = %e, "failed to finish the runs index row for the side review run");
         }
-        self.settle_design_review(task_id, &run_id, &result)
+        match kind {
+            SideReviewKind::Design => self.settle_design_review(task_id, &run_id, &end.result),
+        }
     }
 }
 
 /// `run_reviewer_inner` と同じ形で reviewer の adapter を起こす（合成の `Review` task・対象 task の dir・成果物 dir・
-/// run 専用の `TMPDIR`）。文脈は設計 review の依頼（`ReviewRequest.design`）だけ。前の `review.json` は消してから起こす。
-async fn run_design_reviewer(
+/// run 専用の `TMPDIR`）。文脈は起動口に渡された `ReviewRequest` の節だけ。前の `review.json` は消してから起こす。
+/// `label` は progress の文に入る run の名前（[`SideReviewKind`]）。
+async fn run_side_reviewer(
     task: &Task,
     workspace_dir: &Path,
     artifacts_dir: &Path,
-    request: DesignReviewRequest,
+    review: task_worker::ReviewRequest,
+    label: &str,
     lineage: task_worker::protocol::TaskLineageContext,
     run: crate::review::ReviewerRun,
 ) -> Result<RunOutcome, AdapterError> {
@@ -468,10 +484,7 @@ async fn run_design_reviewer(
             node: run.node.clone(),
             profile: run.profile.clone(),
             skills: run.skills.clone(),
-            review: Some(task_worker::ReviewRequest {
-                design: Some(Box::new(request)),
-                ..Default::default()
-            }),
+            review: Some(review),
             subject_genre: run.subject_genre.clone(),
             session: run.session.clone(),
             session_diff: run.session_diff.clone(),
@@ -483,9 +496,10 @@ async fn run_design_reviewer(
     let (adapter, _run_tmp) =
         crate::review::with_run_tmpdir(&run.adapter, workspace_dir, &run.run_id);
     run.sink
-        .progress(&format!("design review started (adapter={})", adapter.id()));
+        .progress(&format!("{label} started (adapter={})", adapter.id()));
     // 付記 C3・C4: final review と同じ watch の処理。予算で止めた run（`BudgetExhausted{Tokens}`）は `done` で終わらない
-    // run として `settle_design_review` が次の dispatch の起こし直しに回す（予算が尽きた後の run は adapter を起こさない）。
+    // run として種類の判定（設計 review は `settle_design_review`）が次の dispatch の起こし直しに回す（予算が尽きた後の
+    // run は adapter を起こさない）。
     crate::review::run_within_token_budget(&adapter, req, &run).await
 }
 
@@ -514,7 +528,7 @@ pub(super) fn plan_file_checked(result: &Result<RunOutcome, AdapterError>) -> bo
     )
 }
 
-/// planner run と設計 review の run の終わり方（`RunEnd`・`WorkerFinished.outcome` の文・usage）。どちらの run も
+/// planner run と side review の run の終わり方（`RunEnd`・`WorkerFinished.outcome` の文・usage）。どちらの run も
 /// 続き（continuation）にも job の待ちにもならないので、yield と job の待ち（ADR-0090）は不正な試行として扱う。
 /// `role` は文に入る run の名前（`planner` など）。
 pub(super) fn run_end_of(

@@ -741,8 +741,8 @@ enum Completion {
         run_id: String,
         result: Result<RunOutcome, AdapterError>,
     },
-    /// ADR 2026-11-07-health-review-integration D3.5: 設計 review の reviewer run が終わった（final review の判定には流さない）。
-    DesignReview(Box<design_gate::DesignReviewEnd>),
+    /// ADR 2026-11-22-parent-checkpoint-evaluator D2.3: side review（設計 review）の run が終わった（判定は種類で振り分け、final review には流さない）。
+    SideReview(Box<design_gate::SideReviewEnd>),
 }
 
 /// Phase 33: `recent_work_of` が `list_page` から読む候補の上限（裏方タスクを除いた後に
@@ -1873,7 +1873,7 @@ impl Dispatcher {
                 Completion::EvalWorker { run_id, result } => {
                     self.on_eval_worker_finished(run_id, result);
                 }
-                Completion::DesignReview(end) => self.on_design_review_finished(*end)?,
+                Completion::SideReview(end) => self.on_side_review_finished(*end)?,
             }
         }
         Ok((finished, reviewed))

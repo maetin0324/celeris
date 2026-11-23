@@ -568,3 +568,17 @@ D8・D9.2・D11 の試験の置き場と分担を実装に合わせて書き足�
 （`refute:<strategy_id>:v2:<evidence id>`）1 つだけを出す。版ごとに key を変えると、同じ反証で評価が 2 回起きる。
 
 残る未確認（判断の保持の GC が continue・wait の写しの判断を消すと、その評価が写していない評価に戻る件）は、子 6 の進捗（`agent-docs/progress/2026-11-22-strategy-v1-6.md`）の「未確認の事項」に書いた。
+
+案 A の盲検の評価（2026-11-23。人が案 A を選び、WU blind-eval-input・pivot-chain-test・blind-eval-runs が行った。決定の中身は変えていない）:
+
+- 入力の変更（WU blind-eval-input。D3.1.1・D3.3・D8.1・D8.3 の本文はその WU がその場で直した）: request の子ごとに checkpoint の時点以前の報告の本文を
+  `task_core::parent_checkpoint::child_reports` で入れ、prompt に出力の欄と axes の定義を入れた。D8.1 から時点ごとの期待の値を消し、比べる値は子 0 の `answer_key.json` だけに置いた。
+- 記録の path の訂正（WU pivot-chain-test）: `review/parent_evaluation.rs` の `write_record` は最終の記録の `ArtifactRef.path` を root の足回りからの相対で書く。
+  snapshot（`task_ops::project_snapshot::checkpoints`）は記録と戦略の文書を、記録した task の足回りを基準に読む。前は絶対 path で、API と子 5 の gate が記録を読めなかった。
+  試験 `parent_checkpoint_pivot_chain_d_done_pivot_to_gated_v2` が、スクリプトの D-done の評価から新しい版が子 5 の gate を通るまでをつなぐ。
+- driver（WU blind-eval-runs）: `scripts/dev/parent-eval-blind.sh` は一時 home の daemon で、slice から seed した使い捨ての案件の controller を `enabled` にし、
+  D2.3 の起動口（`start_side_review`、`SideReviewKind::ParentEvaluation`）で reviewer run を 1 本起こす。reviewer の作業 tree は slice の file だけで、ADR・replay・試験・進捗を置かない。
+  worker の run の中では実 LLM の評価を断る（`CELERIS_RUN_ID`）。比較は `scripts/dev/parent-eval-blind-compare.py` だけが answer key を開く。
+- 結果: operator が人の承認の範囲で E-mid・D-done を 2 回ずつ評価した（4 run、claude-sonnet-5-5、計 0.487 USD）。記録は 4 本とも `checked`。
+  評価器の verdict は 4 本とも `at_risk`、next は E-mid が continue、D-done が ask_human（D-done は `negative_result` が真、反証 1 件）。評価器は作業 tree の file を読まなかった。
+  answer key との一致・不一致は `crates/task-api/tests/fixtures/parent_checkpoint_live/blind/compare.json` と子 6 の進捗に書いた。第二ゲートの判定（未達）は子 6 の進捗にある。

@@ -1,0 +1,116 @@
+{
+  "decision_id": "01M843EJNS8QNBEVYA60Z1BFAT",
+  "effective": {
+    "axes": {
+      "epistemic": "advanced",
+      "execution": "succeeded",
+      "goal": "not_met"
+    },
+    "negative_result": true,
+    "next": "ask_human",
+    "unsupported": 0,
+    "verdict": "at_risk"
+  },
+  "evaluation": {
+    "axes": {
+      "epistemic": "advanced",
+      "execution": "succeeded",
+      "goal": "not_met"
+    },
+    "learned": [
+      {
+        "references": [
+          {
+            "kind": "task",
+            "task_id": "01M843DM7WBW3D60APAP4TFQ84"
+          },
+          {
+            "kind": "task",
+            "task_id": "01M843DM7X6EBK1JTMTD9DDFRD"
+          },
+          {
+            "kind": "task",
+            "task_id": "01M843DM7XK56HKT7RJPFJX28J"
+          },
+          {
+            "kind": "task",
+            "task_id": "01M843DM7YX5QV6H14E2SJPW5R"
+          }
+        ],
+        "statement": "A〜D は reviewer 合格つきで done になり、before の基準、検査器の改修、リスク判定、HTTP/CoS の pilot が揃った。ただし E〜H が未完のため、親の受入条件（1)〜(6) の after はまだ通して測れていない。"
+      }
+    ],
+    "measured": [
+      {
+        "after": "S1 92.81 / S2 88.68",
+        "before": "S1 86.56 / S2 81.92",
+        "claim": "B で repo-health の health 時間が悪化した（review の報告による。私は再測定していない）",
+        "metric": "repo health 所要時間 S1 / S2（秒）",
+        "references": [
+          {
+            "kind": "task",
+            "task_id": "01M843DM7X6EBK1JTMTD9DDFRD"
+          }
+        ]
+      },
+      {
+        "after": "375,763（+664）",
+        "before": "375,099",
+        "claim": "C は設計リスク判定の改修で production 本体が増えた（review の再測定値の報告。私は未確認）",
+        "metric": "production 全言語 LoC（基準 bc665168）",
+        "references": [
+          {
+            "kind": "task",
+            "task_id": "01M843DM7XK56HKT7RJPFJX28J"
+          }
+        ]
+      },
+      {
+        "after": "単位 49・組 261（不変）",
+        "before": "単位 49・辺 261",
+        "claim": "D の pilot 後も handlers と cos の単位循環が残る（D の worker 申告を review が受けた。私は未確認）",
+        "metric": "task-api 内 SCC の単位数・辺数",
+        "references": [
+          {
+            "kind": "task",
+            "task_id": "01M843DM7YX5QV6H14E2SJPW5R"
+          }
+        ]
+      }
+    ],
+    "next": "ask_human",
+    "reason": "A〜D の 4 件は reviewer 合格つきの done で execution は succeeded とした。ただし測れた改善は少ない。D は循環を減らせず、C は本体行数を増やし、B は health 時間を悪化させた。この 3 点は子の申告で、私は再測定していない。E〜H は未完で、親の目的は未達と見る。D の未達の扱いと B の時間悪化の許容は人の判断が要るため、ask_human とした。",
+    "refuted": [
+      {
+        "hypothesis": "共有 use-case への集約だけで handlers ⇄ cos の循環が減る",
+        "references": [
+          {
+            "kind": "task",
+            "task_id": "01M843DM7YX5QV6H14E2SJPW5R"
+          }
+        ],
+        "statement": "D は done だが、申告では単位の循環（49 単位・261 組）も S1 の変更波及も減っていない。この仮説は D では支持されていない。"
+      }
+    ],
+    "schema": "celeris.parent-evaluation/1",
+    "uncertainty": [
+      {
+        "resolve_by": "E の結果と D の未達項目（循環が残ること、波及が減らないこと）の扱いを人が判断する。H で A の基準コマンドにより再計測する。",
+        "statement": "循環・波及・LoC の純減という親の目的が、E〜H で実測により達成できるか未確認。C は本体が +664 行、D は循環が不変で、成果に数えない変更に近い。"
+      },
+      {
+        "resolve_by": "人が許容可否を決める。G の 3 回比較で再測定する。",
+        "statement": "B で health 時間が約 7% 悪化した。これを受け入れるか未決定。"
+      },
+      {
+        "resolve_by": "E〜H の完了を待つ。",
+        "statement": "E は status=ready、reviewer_passed=false で、F〜H は draft。親の Outcome の記録は無い。"
+      }
+    ],
+    "verdict": "at_risk"
+  },
+  "root_id": "01M843DM6FET2ZB087JTTDFSMT",
+  "schema": "celeris.parent-evaluation-record/1",
+  "status": "checked",
+  "violations": []
+}

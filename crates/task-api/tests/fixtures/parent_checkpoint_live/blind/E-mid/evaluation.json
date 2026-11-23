@@ -1,0 +1,94 @@
+{
+  "decision_id": "01M843CV7XQ41M16TPR05047ER",
+  "effective": {
+    "axes": {
+      "epistemic": "advanced",
+      "execution": "succeeded",
+      "goal": "unknown"
+    },
+    "negative_result": false,
+    "next": "continue",
+    "unsupported": 0,
+    "verdict": "at_risk"
+  },
+  "evaluation": {
+    "axes": {
+      "epistemic": "advanced",
+      "execution": "succeeded",
+      "goal": "unknown"
+    },
+    "learned": [
+      {
+        "references": [
+          {
+            "kind": "task",
+            "task_id": "01M843BWNZJKXQ4Y7PM11SVMCQ"
+          }
+        ],
+        "statement": "A の基準（計測コマンド C1〜C10、2 シナリオ S1・S2）は reviewer が文面どおり再実行して記載値を再現した（S1 92/369/12、S2 6/14/4）。B〜H が同じ規則で前後比較できる土台はできた。"
+      },
+      {
+        "references": [
+          {
+            "kind": "task",
+            "task_id": "01M843BWP0PA89BH83WNS72CNK"
+          },
+          {
+            "kind": "task",
+            "task_id": "01M843BWP0A0BMS90F1Z4QTNZM"
+          }
+        ],
+        "statement": "B（検査器の強化）と C（設計リスク判定の拡張、6 ケースの実証）は reviewer の合格つきで done になった。ただしこれらは検査の強化であり、循環や共有状態そのものを減らす成果ではない。"
+      }
+    ],
+    "measured": [
+      {
+        "after": "375,763 (+664)",
+        "before": "375,099 (bc665168)",
+        "claim": "C の reviewer が測り直した LoC の増加。親の目的は責務境界の改善で、現時点で本体行数は純減していない。",
+        "metric": "production LoC (C, base→HEAD)",
+        "references": [
+          {
+            "kind": "task",
+            "task_id": "01M843BWP0A0BMS90F1Z4QTNZM"
+          }
+        ]
+      },
+      {
+        "after": "S1 92.81 s / S2 88.68 s",
+        "before": "S1 86.56 s / S2 81.92 s",
+        "claim": "B の reviewer が挙げた health 時間の悪化。検査器を強めた代償として S1・S2 とも遅くなった。",
+        "metric": "repo-health 所要時間 S1/S2 (B)",
+        "references": [
+          {
+            "kind": "task",
+            "task_id": "01M843BWP0PA89BH83WNS72CNK"
+          }
+        ]
+      }
+    ],
+    "next": "continue",
+    "reason": "A〜C は reviewer 合格で done、終端の子はすべて合格つき。ただし終端は 8 件中 3 件で、成果は基準と検査の強化に限られる。構造の改善の実測値はまだ無く、LoC は +664、health 時間は悪化している。今の戦略に反証はないので続行する。D〜F で純減が出なければ人に判断を求める。",
+    "refuted": [],
+    "schema": "celeris.parent-evaluation/1",
+    "uncertainty": [
+      {
+        "resolve_by": "D の review 結果を待ち、未達なら原因と追加候補を人に聞く。E・F の完了後に A の C 系コマンドで再計測する。",
+        "statement": "親の目的である構造の改善（handlers⇄cos の循環、Dispatcher の store/config 参照、Connection の漏れ）は D〜F が未完了で、実測の前後値がまだ無い。D は review 中で、worker が未達/要判断を申告している（内容は未確認）。"
+      },
+      {
+        "resolve_by": "G で 3 回ずつ測る時間比較と、H の LoC 再計測で確かめる。",
+        "statement": "検査の強化で health が約 6 s 遅くなり、C は production を +664 行増やした。純減を求める子（E・F）で相殺できるかは未確認。"
+      },
+      {
+        "resolve_by": "E の実装後に同じ scope で再計測し、届かなければ replan する。",
+        "statement": "E は設計が終わっただけで、実装前の ready 状態。store 参照 5 file 以上・config 3 file 以上の純減が達成できるかは未確認。"
+      }
+    ],
+    "verdict": "at_risk"
+  },
+  "root_id": "01M843BWMJ8YQNAX0WH4T7GJAG",
+  "schema": "celeris.parent-evaluation-record/1",
+  "status": "checked",
+  "violations": []
+}

@@ -43,7 +43,9 @@ pub fn observe(
             })
             .filter_map(|w| {
                 w.last_status.iter().find(|j| match wait.scheduler {
-                    ClusterScheduler::Pbs => super::job_matches(&j.job_id, &job.job_id),
+                    ClusterScheduler::Pbs | ClusterScheduler::Nqsv => {
+                        super::job_matches(&j.job_id, &job.job_id)
+                    }
                     ClusterScheduler::Slurm => j.job_id == job.job_id,
                 })
             })

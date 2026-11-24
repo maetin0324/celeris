@@ -432,6 +432,11 @@ pub(crate) const MIGRATIONS: &[(u32, &str)] = &[
         126,
         include_str!("../migrations/0126_repo_auto_integrate.sql"),
     ),
+    // ADR 2026-11-24-cluster-job-wait-nqsv D6: `cluster_job_waits.scheduler` の CHECK に `nqsv` を足す（表の作り直し）。
+    (
+        127,
+        include_str!("../migrations/0127_cluster_job_waits_nqsv.sql"),
+    ),
 ];
 
 /// 他の celeris/* ブランチが使っていて、このブランチにはまだ無い版数（0038 work_unit_sessions、

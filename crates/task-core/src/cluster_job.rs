@@ -1,8 +1,9 @@
-//! ADR-0090: クラスタ job（PBS / Slurm）の durable wait。
+//! ADR-0090: クラスタ job（PBS / Slurm / NQSV）の durable wait。
 //!
 //! worker の run が `result.json` の `{"type": "wait", "kind": "cluster_job", ...}` で終わると、dispatcher は
 //! その run を閉じ（`runs.status = waiting`）、task（または WorkUnit）を止めて `ClusterJobWaitStarted` を残す。
-//! daemon の tick がクラスタの ssh master 越しに `qstat -xf`（PBS）/ `sacct`（Slurm）を `poll_secs` ごとに
+//! daemon の tick がクラスタの ssh master 越しに `qstat -xf`（PBS）/ `sacct`（Slurm）/ `qstat -f`（NQSV。ログイン
+//! シェルの中。ADR 2026-11-24-cluster-job-wait-nqsv）を `poll_secs` ごとに
 //! 高々 1 回だけ流し、次のどれかで `ClusterJobWaitFinished{satisfied}` と一緒に task を continuation の run に戻す:
 //! すべての job が終わった（detail は空）、job の 1 つが失敗で終わった（detail `job_failed`。失敗の発生ごとに
 //! 1 回）、job が Q/H のまま `queued_wake_secs` を超えた（detail `queue_stalled`。job ごとに 1 回）。起床の条件は
@@ -48,6 +49,9 @@ pub const REASON_RESUME: &str = "cluster_job_resume";
 pub enum ClusterScheduler {
     Pbs,
     Slurm,
+    // NEC NQSV（Pegasus）。`qstat` に `-x` が無く、終わった request は `does not exist` になる
+    // （ADR 2026-11-24-cluster-job-wait-nqsv。`///` にすると JSON Schema が enum から oneOf に変わるので `//`）。
+    Nqsv,
 }
 
 impl ClusterScheduler {
@@ -55,6 +59,7 @@ impl ClusterScheduler {
         match self {
             Self::Pbs => "pbs",
             Self::Slurm => "slurm",
+            Self::Nqsv => "nqsv",
         }
     }
 
@@ -62,6 +67,7 @@ impl ClusterScheduler {
         match s {
             "pbs" => Some(Self::Pbs),
             "slurm" => Some(Self::Slurm),
+            "nqsv" => Some(Self::Nqsv),
             _ => None,
         }
     }
@@ -71,17 +77,18 @@ impl ClusterScheduler {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ClusterJobState {
-    /// 待ち行列にいる（PBS `Q` / `W` / `T`、Slurm `PENDING`）。
+    /// 待ち行列にいる（PBS `Q` / `W` / `T`、Slurm `PENDING`、NQSV `ARR` / `WAI` / `QUE` / `STG`）。
     Queued,
-    /// 保留・一時停止（PBS `H` / `S` / `U`、Slurm `SUSPENDED` / `REQUEUE_HOLD`）。
+    /// 保留・一時停止（PBS `H` / `S` / `U`、Slurm `SUSPENDED` / `REQUEUE_HOLD`、NQSV `HLD` / `HOL` / `SUS`）。
     Held,
-    /// 実行中（PBS `R` / `B`、Slurm `RUNNING`）。
+    /// 実行中（PBS `R` / `B`、Slurm `RUNNING`、NQSV `PRR` / `RUN` / `MIG`）。
     Running,
-    /// 終了処理中（PBS `E`、Slurm `COMPLETING`）。
+    /// 終了処理中（PBS `E`、Slurm `COMPLETING`、NQSV `POR` / `EXT`）。
     Exiting,
     /// 終わった（PBS `F` / `X` / `C`、Slurm の終端の状態）。
     Finished,
-    /// scheduler が「その job は知らない」と明示した（履歴が消えた・id の誤り）。終わったものとして扱う。
+    /// scheduler が「その job は知らない」と明示した（履歴が消えた・id の誤り。NQSV では終わった request は
+    /// 常にこれ）。終わったものとして扱う。
     Gone,
     /// 出力に現れなかった（poll の失敗かもしれないので終わったとは扱わない）。
     Unknown,
@@ -255,7 +262,7 @@ fn parse_wait_fields(
     }
     let scheduler = match spec.get("scheduler").and_then(|s| s.as_str()) {
         Some(s) => ClusterScheduler::parse(&s.to_ascii_lowercase())
-            .ok_or_else(|| format!("unknown scheduler {s:?} (pbs | slurm)"))?,
+            .ok_or_else(|| format!("unknown scheduler {s:?} (pbs | slurm | nqsv)"))?,
         None => ClusterScheduler::Pbs,
     };
     let cluster = match spec.get("cluster") {
@@ -468,6 +475,7 @@ pub fn all_finished(jobs: &[String], statuses: &[ClusterJobStatus]) -> bool {
 ///
 /// - PBS: `qstat -xf <ids>`（`-x` で終わった job の履歴も返す。PBS Pro の job history が前提）。
 /// - Slurm: `sacct -n -P -X -o JobID,State%64,ExitCode -j <ids>`（`squeue` は終わった job を返さない）。
+/// - NQSV: `qstat -f <ids>`（`-x` が無い。終わった request は `does not exist` と答える）。
 pub fn poll_command(scheduler: ClusterScheduler, jobs: &[String]) -> String {
     let ids: Vec<&str> = jobs
         .iter()
@@ -476,10 +484,25 @@ pub fn poll_command(scheduler: ClusterScheduler, jobs: &[String]) -> String {
         .collect();
     match scheduler {
         ClusterScheduler::Pbs => format!("qstat -xf {}", ids.join(" ")),
+        ClusterScheduler::Nqsv => format!("qstat -f {}", ids.join(" ")),
         ClusterScheduler::Slurm => format!(
             "sacct -n -P -X -o JobID,State%64,ExitCode -j {}",
             ids.join(",")
         ),
+    }
+}
+
+/// クラスタで流す poll の script（シェルの 1 行）。`prelude` はクラスタの `env`・`setup` を `&&` で繋いだ前置き
+/// （空でもよい。末尾は ` && `）。
+///
+/// - PBS / Slurm: `<prelude><poll_command>`（ADR-0090 D2 のまま）。
+/// - NQSV: `bash -lc '<prelude><poll_command>'`。`qstat` は site の profile（`/opt/nec/nqsv/bin`）でしか PATH に入らない
+///   ので、ログインシェルの profile を読んだ後で `env`・`setup` と `qstat` を流す（ADR 2026-11-24-cluster-job-wait-nqsv D2）。
+pub fn poll_script(scheduler: ClusterScheduler, prelude: &str, jobs: &[String]) -> String {
+    let script = format!("{prelude}{}", poll_command(scheduler, jobs));
+    match scheduler {
+        ClusterScheduler::Pbs | ClusterScheduler::Slurm => script,
+        ClusterScheduler::Nqsv => format!("bash -lc '{}'", script.replace('\'', "'\\''")),
     }
 }
 
@@ -493,6 +516,7 @@ pub fn parse_poll_output(
     match scheduler {
         ClusterScheduler::Pbs => parse_pbs_qstat_xf(stdout, stderr, jobs),
         ClusterScheduler::Slurm => parse_slurm_sacct(stdout, jobs),
+        ClusterScheduler::Nqsv => parse_nqsv_qstat_f(stdout, stderr, jobs),
     }
 }
 
@@ -615,6 +639,106 @@ pub fn parse_pbs_qstat_xf(stdout: &str, stderr: &str, jobs: &[String]) -> Vec<Cl
                 };
             }
             ClusterJobStatus::unknown(j)
+        })
+        .collect()
+}
+
+/// NQSV の状態名（`qstat -Q` の列名と、その長い形）を正規化する。
+fn nqsv_state(state: &str) -> ClusterJobState {
+    match state.to_ascii_uppercase().as_str() {
+        "ARR" | "ARRIVING" | "WAI" | "WAITING" | "QUE" | "QUEUED" | "STG" | "STAGING" => {
+            ClusterJobState::Queued
+        }
+        "HLD" | "HELD" | "HOL" | "HOLDING" | "SUS" | "SUSPENDED" => ClusterJobState::Held,
+        "PRR" | "PRE-RUNNING" | "RUN" | "RUNNING" | "MIG" | "MIGRATING" => ClusterJobState::Running,
+        "POR" | "POST-RUNNING" | "EXT" | "EXITING" => ClusterJobState::Exiting,
+        _ => ClusterJobState::Unknown,
+    }
+}
+
+/// NQSV の `Batch Request: 315477.nqsv does not exist on nqsv.` の行なら、その request id を返す。
+fn nqsv_missing_request(line: &str) -> Option<&str> {
+    let rest = line.trim().strip_prefix("Batch Request:")?;
+    let (id, _) = rest.trim().split_once(" does not exist")?;
+    Some(id.trim())
+}
+
+/// NQSV の `qstat -f <ids>` の出力を読む（ADR 2026-11-24-cluster-job-wait-nqsv D3・D4）。
+///
+/// - stdout・stderr の `Batch Request: <id> does not exist on <server>.` は [`ClusterJobState::Gone`]
+///   （NQSV は終わった request を返さないので、正常終了も失敗もこれ。終了コードは不明）。
+/// - 要求した id を含むそれ以外の行は、その request の段落の始まり。段落の中で key が `State` で終わる行
+///   （`Current State: RUNNING` / `State = QUE`）の値の先頭の語を [`nqsv_state`] で読む。読めなければ
+///   [`ClusterJobState::Unknown`]（終わったとは扱わない）。Q・R の段落の書式は実機で未取得。
+/// - 出力に現れない request は [`ClusterJobState::Unknown`]。
+pub fn parse_nqsv_qstat_f(stdout: &str, stderr: &str, jobs: &[String]) -> Vec<ClusterJobStatus> {
+    let lines = || stdout.lines().chain(stderr.lines());
+    let missing: Vec<(&str, &str)> = lines()
+        .filter_map(|l| nqsv_missing_request(l).map(|id| (id, l.trim())))
+        .collect();
+    // 要求した request ごとの段落（要求した id の語を含む、`does not exist` でない行から次の段落の始まりまで）。
+    let mentions = |line: &str, j: &str| {
+        line.split(|c: char| {
+            !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '[' | ']'))
+        })
+        .any(|word| !word.is_empty() && job_matches(j, word))
+    };
+    let mut blocks: Vec<(usize, Option<String>)> = Vec::new();
+    for line in stdout.lines() {
+        if nqsv_missing_request(line).is_some() {
+            continue;
+        }
+        if let Some(idx) = jobs.iter().position(|j| mentions(line, j))
+            && blocks.last().is_none_or(|(current, _)| *current != idx)
+        {
+            blocks.push((idx, None));
+            continue;
+        }
+        let Some((_, state)) = blocks.last_mut() else {
+            continue;
+        };
+        let Some((key, value)) = line.split_once(':').or_else(|| line.split_once('=')) else {
+            continue;
+        };
+        if state.is_none() && key.trim().to_ascii_lowercase().ends_with("state") {
+            *state = value.split_whitespace().next().map(str::to_string);
+        }
+    }
+    jobs.iter()
+        .enumerate()
+        .map(|(idx, j)| {
+            if let Some((_, line)) = missing.iter().find(|(id, _)| job_matches(j, id)) {
+                return ClusterJobStatus {
+                    job_id: j.clone(),
+                    state: ClusterJobState::Gone,
+                    exit_status: None,
+                    raw_state: Some((*line).to_string()),
+                    scheduling: Vec::new(),
+                    queued_since: None,
+                    queue_notified: false,
+                };
+            }
+            let mut own = blocks.iter().filter(|(i, _)| *i == idx).peekable();
+            let listed = own.peek().is_some();
+            let raw = own.find_map(|(_, state)| state.clone());
+            match listed.then_some(raw) {
+                Some(raw) => ClusterJobStatus {
+                    job_id: j.clone(),
+                    state: raw
+                        .as_deref()
+                        .map(nqsv_state)
+                        .unwrap_or(ClusterJobState::Unknown),
+                    exit_status: None,
+                    raw_state: Some(
+                        raw.clone()
+                            .unwrap_or_else(|| "listed by qstat (state not read)".to_string()),
+                    ),
+                    scheduling: Vec::new(),
+                    queued_since: None,
+                    queue_notified: false,
+                },
+                None => ClusterJobStatus::unknown(j),
+            }
         })
         .collect()
 }

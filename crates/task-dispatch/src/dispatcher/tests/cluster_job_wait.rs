@@ -1774,3 +1774,101 @@ async fn cluster_wait_decisions_atomic_node_job_end_first() {
 async fn cluster_wait_decisions_atomic_node_answer_first() {
     atomic_node_waits_for_job_and_answer(false).await;
 }
+
+/// ADR 2026-11-24-cluster-job-wait-nqsv: NEC NQSV（Pegasus）の wait。
+///
+/// 不変条件: NQSV の wait の poll は非ログインの ssh でも qstat を見つける形（`bash -lc` の中で env・setup・`qstat -f`）
+/// で流し、Q・R の request では解けず、`Batch Request: <id> does not exist on nqsv.`（2026-11-24 に Pegasus で取った
+/// 出力）で `satisfied` になって continuation の run に戻る。既存の試験は PBS（`qstat -xf`）の出力しか流さないので、
+/// NQSV の poll の形と終わり方の読み方の誤り（本番で 3 件の wait が期限切れでしか解けなかった）を検出できない。
+#[tokio::test]
+async fn an_nqsv_wait_polls_in_a_login_shell_and_resumes_when_the_request_no_longer_exists() {
+    let dir = tempfile::tempdir().unwrap();
+    let Terminal::Waiting {
+        mut request,
+        checkpoint,
+        usage,
+    } = wait_terminal(&["315477"], None)
+    else {
+        unreachable!("wait_terminal builds a wait")
+    };
+    request.scheduler = task_core::cluster_job::ClusterScheduler::Nqsv;
+    let nqsv = |stdout: &str| task_worker::RemoteCommandOutput {
+        exit: Some(0),
+        stdout: stdout.to_string(),
+        stderr: String::new(),
+    };
+    let (store, mut d, task, adapter, polls) = setup(
+        dir.path(),
+        vec![Terminal::Waiting {
+            request,
+            checkpoint,
+            usage,
+        }],
+        vec![
+            // 合成（Q・R の `qstat -f` の書式は実機で未取得。ADR D4 の想定の形）。
+            nqsv(
+                "Request ID: 315477.nqsv\n    Request Name: pilot-run.sh\n    Current State: QUE\n",
+            ),
+            nqsv(
+                "Request ID: 315477.nqsv\n    Request Name: pilot-run.sh\n    Current State: RUNNING\n",
+            ),
+            // 実機の出力（stdout、exit 0）。
+            nqsv("Batch Request: 315477.nqsv does not exist on nqsv.\n"),
+        ],
+    );
+    let id = task.id;
+    tick_until(&mut d, |_| {
+        store
+            .events_for(id)
+            .unwrap()
+            .iter()
+            .any(|(_, e)| matches!(e, Event::ClusterJobWaitPolled { .. }))
+    })
+    .await;
+    settle_polls(&mut d).await;
+    assert_eq!(
+        polls.lock().unwrap()[0].script,
+        "bash -lc '{ module load openpbs; } && qstat -f 315477'"
+    );
+    let waits = store.cluster_job_waits_for_task(id).unwrap();
+    assert_eq!(waits[0].state, ClusterJobWaitState::Waiting);
+    assert_eq!(waits[0].last_status[0].state, ClusterJobState::Queued);
+    assert_eq!(store.get(id).unwrap().unwrap().status, Status::Blocked);
+
+    // R の間も解けない。
+    advance(&d, 31);
+    tick_until(&mut d, |d| {
+        polls.lock().unwrap().len() == 2 && d.cluster.job_polls_in_flight() == 0
+    })
+    .await;
+    let waits = store.cluster_job_waits_for_task(id).unwrap();
+    assert_eq!(waits[0].state, ClusterJobWaitState::Waiting);
+    assert_eq!(waits[0].last_status[0].state, ClusterJobState::Running);
+    assert_eq!(store.get(id).unwrap().unwrap().status, Status::Blocked);
+
+    // request が消えた: satisfied → continuation の run → done。
+    advance(&d, 31);
+    tick_until(&mut d, |_| {
+        store.get(id).unwrap().unwrap().status == Status::Done
+    })
+    .await;
+    let waits = store.cluster_job_waits_for_task(id).unwrap();
+    assert_eq!(waits[0].state, ClusterJobWaitState::Satisfied);
+    assert_eq!(waits[0].last_status[0].state, ClusterJobState::Gone);
+    let seen = adapter.seen.lock().unwrap();
+    assert_eq!(seen.len(), 2);
+    let jobs = seen[1]
+        .continuation
+        .clone()
+        .expect("the resumed run is a continuation")
+        .cluster_jobs
+        .expect("cluster job results");
+    assert_eq!(jobs.scheduler, "nqsv");
+    assert_eq!(jobs.state, "satisfied");
+    assert!(jobs.jobs[0].starts_with("315477: "), "{jobs:?}");
+    let preamble = task_worker::preamble::continuation_section(&seen[1]);
+    assert!(preamble.contains("does not exist"), "{preamble}");
+    drop(seen);
+    assert_replay_is_clean(&store);
+}

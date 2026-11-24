@@ -425,7 +425,7 @@ celeris 側の扱い（ADR-0016 D2, 実装メモ M2/M6/M7）:
 |---|---|---|---|
 | `kind` | string | ✓ | 常に `"cluster_job"`（それ以外は不正） |
 | `cluster` | string | – | `[[clusters]] id` |
-| `scheduler` | string | – | `pbs` \| `slurm`。省略時は `pbs` |
+| `scheduler` | string | – | `pbs`（PBS Pro）\| `slurm` \| `nqsv`（NEC NQSV。終わった request は `qstat -f` の `does not exist` で読み、終了コードは不明）。省略時は `pbs` |
 | `jobs` | array | ✓ | 待つ job id（文字列） |
 | `poll_secs` / `timeout_secs` | integer | – | 確かめる間隔と待つ上限 |
 | `checkpoint` | object | – | `yielded` と同じ checkpoint の意味の欄 |

@@ -469,7 +469,7 @@ fn migration_0034_adds_cluster_job_waits_to_a_schema_33_db() {
     }
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), crate::SCHEMA_VERSION);
-    assert_eq!(crate::SCHEMA_VERSION, 126);
+    assert_eq!(crate::SCHEMA_VERSION, 127);
     assert!(store.cluster_job_waits_waiting().unwrap().is_empty());
     assert!(store.get(t.id).unwrap().is_some());
 }
@@ -699,4 +699,189 @@ fn a_rerun_seen_queued_that_fails_again_wakes_again() {
             "a failure after observing {state} is a new failure"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// ADR 2026-11-24-cluster-job-wait-nqsv: NEC NQSV（Pegasus）
+// ---------------------------------------------------------------------------
+
+/// 実機の出力: 2026-11-24T12:28:33Z に Pegasus で `bash -lc "qstat -f 315477 315478.nqsv"`（stdout、exit 0、stderr 空）。
+/// 終わった request は server 名の無い id で聞いても `<番号>.nqsv` の形で答える。
+const NQSV_DOES_NOT_EXIST: &str = "Batch Request: 315477.nqsv does not exist on nqsv.\n\
+Batch Request: 315478.nqsv does not exist on nqsv.\n";
+
+/// 実機の出力: 2026-11-24T12:28:33Z に Pegasus で `bash -lc "qstat -xf 315477.nqsv"`（NQSV に `-x` は無い。exit 0）の先頭。
+const NQSV_QSTAT_X_USAGE: &str = "qstat: invalid option -- 'x'\nusage: \n\
+qstat    [-P privilege] [-V] [-f] [-n] [-l] [-d] [-m] [-s] [-a]\n\
+         [-u userlist] [-q quelist] [-c cpumode] [-F Item list]\n\
+         [-o Item list] [-O Item list] [--group[=group-name]]\n\
+         [--adjust-column] [--planned-start-time] [batch_request_identifier ...]\n";
+
+/// **合成**（実機の書式ではない。Q・R の request の `qstat -f` は未取得。ADR D4 の想定の形）。状態名は Pegasus の
+/// `qstat -Q` の列名（`ARR WAI QUE PRR RUN POR EXT HLD HOL SUS MIG STG`）から取った。
+const NQSV_LIVE_SYNTHETIC: &str = "Request ID: 315480.nqsv\n\
+    Request Name: pilot-run.sh\n\
+    Owner: rmaeda\n\
+    Current State: QUE\n\
+    Queue: gpu\n\
+\n\
+Request ID: 315481.nqsv\n\
+    Request Name: pilot-run-b.sh\n\
+    Current State: RUNNING (Since 2026/11/24 09:00:00)\n\
+\n\
+Request ID: 315482.nqsv\n\
+    State = HLD\n\
+\n\
+Request ID: 315483.nqsv\n\
+    Request Name: no-state-line.sh\n";
+
+/// 不変条件: NQSV の終わった request（`does not exist`）は `gone` で、wait を満たす。PBS の parser は `Unknown Job Id`
+/// しか読まないので、この出力では全 job が `unknown` のまま（既存の試験はこの文言を持たない）。
+#[test]
+fn nqsv_request_that_does_not_exist_is_gone_and_satisfies_the_wait() {
+    let jobs = ids(&["315477", "315478.nqsv"]);
+    let got = parse_poll_output(ClusterScheduler::Nqsv, NQSV_DOES_NOT_EXIST, "", &jobs);
+    assert_eq!(got[0].state, ClusterJobState::Gone);
+    assert_eq!(got[1].state, ClusterJobState::Gone);
+    assert_eq!(got[0].exit_status, None, "NQSV gives no exit status");
+    assert_eq!(
+        got[0].raw_state.as_deref(),
+        Some("Batch Request: 315477.nqsv does not exist on nqsv.")
+    );
+    assert!(all_finished(&jobs, &got));
+    // 同じ行が stderr に出ても読む（2>&1 で見た運用者の確認では stream が分からなかった）。
+    let got = parse_poll_output(ClusterScheduler::Nqsv, "", NQSV_DOES_NOT_EXIST, &jobs);
+    assert!(all_finished(&jobs, &got));
+    // 1 件だけ消えていれば、もう 1 件は unknown のまま（解けない）。
+    let jobs = ids(&["315477", "315479"]);
+    let got = parse_poll_output(ClusterScheduler::Nqsv, NQSV_DOES_NOT_EXIST, "", &jobs);
+    assert_eq!(got[1].state, ClusterJobState::Unknown);
+    assert!(!all_finished(&jobs, &got));
+}
+
+/// 不変条件: `does not exist` の無い request（Q・R・H、状態の読めない段落、出力に無い）では wait が解けない。
+#[test]
+fn nqsv_queued_running_and_unread_requests_do_not_satisfy_the_wait() {
+    let jobs = ids(&["315480", "315481", "315482", "315483", "315484"]);
+    let got = parse_poll_output(ClusterScheduler::Nqsv, NQSV_LIVE_SYNTHETIC, "", &jobs);
+    assert_eq!(got[0].state, ClusterJobState::Queued);
+    assert_eq!(got[0].raw_state.as_deref(), Some("QUE"));
+    assert_eq!(got[1].state, ClusterJobState::Running);
+    assert_eq!(got[2].state, ClusterJobState::Held);
+    assert_eq!(got[3].state, ClusterJobState::Unknown);
+    assert_eq!(
+        got[3].raw_state.as_deref(),
+        Some("listed by qstat (state not read)")
+    );
+    assert_eq!(got[4].state, ClusterJobState::Unknown);
+    assert!(got.iter().all(|s| !s.state.is_finished()));
+    // Q と R の request が 1 つでも残れば、他が消えていても解けない。
+    let jobs = ids(&["315477", "315481"]);
+    let out = format!("{NQSV_DOES_NOT_EXIST}{NQSV_LIVE_SYNTHETIC}");
+    let got = parse_poll_output(ClusterScheduler::Nqsv, &out, "", &jobs);
+    assert_eq!(got[0].state, ClusterJobState::Gone);
+    assert_eq!(got[1].state, ClusterJobState::Running);
+    assert!(!all_finished(&jobs, &got));
+    // `qstat -xf`（PBS の形）を NQSV に流した usage は、どの request も終わったことにしない。
+    let got = parse_poll_output(ClusterScheduler::Nqsv, "", NQSV_QSTAT_X_USAGE, &jobs);
+    assert!(got.iter().all(|s| s.state == ClusterJobState::Unknown));
+}
+
+/// 不変条件: NQSV の poll は非ログインの ssh でも qstat を見つける形（ログインシェルの中で env・setup・`qstat -f`）で、
+/// `-x` を使わない。PBS・Slurm の script は従来どおり（前置き + poll_command）。
+#[test]
+fn nqsv_poll_script_runs_qstat_f_inside_a_login_shell() {
+    let prelude = "export NQSV_X='it'\\''s' && { module load nqsv; } && ";
+    let script = poll_script(
+        ClusterScheduler::Nqsv,
+        prelude,
+        &ids(&["315477", "315478.nqsv", "1; rm -rf ~"]),
+    );
+    assert_eq!(
+        script,
+        "bash -lc 'export NQSV_X='\\''it'\\''\\'\\'''\\''s'\\'' && { module load nqsv; } && qstat -f 315477 315478.nqsv'"
+    );
+    assert!(!script.contains("-xf"));
+    assert_eq!(
+        poll_command(ClusterScheduler::Nqsv, &ids(&["315477"])),
+        "qstat -f 315477"
+    );
+    assert_eq!(
+        poll_script(
+            ClusterScheduler::Pbs,
+            "{ module load openpbs; } && ",
+            &ids(&["1"])
+        ),
+        "{ module load openpbs; } && qstat -xf 1"
+    );
+    assert_eq!(
+        poll_script(ClusterScheduler::Slurm, "", &ids(&["1", "2"])),
+        "sacct -n -P -X -o JobID,State%64,ExitCode -j 1,2"
+    );
+    // worker の申告は `nqsv` を受け付ける（大文字も）。
+    let v = serde_json::json!({"type": "wait", "scheduler": "NQSV", "jobs": ["315477.nqsv"]});
+    let (req, _) = parse_wait_request(&v).unwrap().unwrap();
+    assert_eq!(req.scheduler, ClusterScheduler::Nqsv);
+    assert_eq!(
+        ClusterScheduler::parse("nqsv"),
+        Some(ClusterScheduler::Nqsv)
+    );
+    assert_eq!(ClusterScheduler::Nqsv.as_str(), "nqsv");
+}
+
+/// 不変条件（no-data-loss）: migration 0127 は schema 126 の `cluster_job_waits` の行を残し、`nqsv` の行を入れられる
+/// ようにする（126 の CHECK は `nqsv` を拒む）。
+#[test]
+fn migration_0127_keeps_wait_rows_and_accepts_nqsv() {
+    use crate::SqliteStore;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("celeris.db");
+    let t = task(crate::Status::Blocked);
+    {
+        let store = SqliteStore::open(&path).unwrap();
+        store.insert(&t).unwrap();
+    }
+    let insert = |conn: &Connection, wait_id: &str, scheduler: &str| {
+        conn.execute(
+            "INSERT INTO cluster_job_waits (wait_id, task_id, run_id, cluster, scheduler, jobs_json, poll_secs, \
+             timeout_secs, created_at, deadline, state) VALUES (?1, ?2, 'run-1', 'pegasus', ?3, '[\"315477\"]', \
+             300, 3600, '2026-11-24T09:00:00Z', '2026-11-24T12:30:00Z', 'waiting')",
+            params![wait_id, t.id.to_string(), scheduler],
+        )
+    };
+    {
+        // schema 126 の表に戻す（0034 の CHECK）。
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "DROP TABLE cluster_job_waits; \
+             CREATE TABLE cluster_job_waits (wait_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, work_unit_id TEXT, \
+             run_id TEXT NOT NULL, cluster TEXT NOT NULL, \
+             scheduler TEXT NOT NULL CHECK (scheduler IN ('pbs', 'slurm')), jobs_json TEXT NOT NULL, \
+             poll_secs INTEGER NOT NULL, timeout_secs INTEGER NOT NULL, summary TEXT NOT NULL DEFAULT '', \
+             checkpoint_json TEXT, created_at TEXT NOT NULL, deadline TEXT NOT NULL, last_polled_at TEXT, \
+             finished_at TEXT, \
+             state TEXT NOT NULL CHECK (state IN ('waiting', 'satisfied', 'timed_out', 'cancelled')), \
+             last_status_json TEXT NOT NULL DEFAULT '[]'); \
+             DELETE FROM schema_migrations WHERE version = 127;",
+        )
+        .unwrap();
+        insert(&conn, "w-pbs", "pbs").unwrap();
+        assert!(
+            insert(&conn, "w-nqsv-old", "nqsv").is_err(),
+            "schema 126 rejects nqsv"
+        );
+    }
+    let store = SqliteStore::open(&path).unwrap();
+    assert_eq!(store.schema_version().unwrap(), 127);
+    let kept = store.cluster_job_wait_get("w-pbs").unwrap().unwrap();
+    assert_eq!(kept.scheduler, ClusterScheduler::Pbs);
+    assert_eq!(kept.jobs, ids(&["315477"]));
+    drop(store);
+    let conn = Connection::open(&path).unwrap();
+    insert(&conn, "w-nqsv", "nqsv").unwrap();
+    drop(conn);
+    let store = SqliteStore::open(&path).unwrap();
+    let w = store.cluster_job_wait_get("w-nqsv").unwrap().unwrap();
+    assert_eq!(w.scheduler, ClusterScheduler::Nqsv);
+    assert_eq!(store.cluster_job_waits_waiting().unwrap().len(), 2);
 }

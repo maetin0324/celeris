@@ -474,7 +474,8 @@ fn tunnel_prober_loop(
 /// poll の ssh の打ち切り（秒）。
 const POLL_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// ADR-0090 D2: poll の要求（フックに渡す）。`script` はクラスタで流す 1 行（`setup` の後に `qstat -xf ...`）。
+/// ADR-0090 D2: poll の要求（フックに渡す）。`script` はクラスタで流す 1 行（`setup` の後に `qstat -xf ...`。
+/// NQSV は `bash -lc '...'`）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClusterJobPollRequest {
     pub cluster: String,
@@ -783,23 +784,23 @@ impl ClusterRuntime {
         &mut self.last_cluster_command_probe
     }
 
-    /// ADR-0090 D2: poll の要求を組む（`env`・`setup` の後に `qstat -xf` / `sacct`）。
+    /// ADR-0090 D2: poll の要求を組む（`env`・`setup` の後に `qstat -xf` / `sacct` / `qstat -f`。NQSV は全体を
+    /// ログインシェルで包む。形は [`cluster_job::poll_script`] が決める）。
     pub(crate) fn job_poll_request(
         spec: &ClusterSpec,
         wait: &ClusterJobWait,
     ) -> ClusterJobPollRequest {
-        let mut script = String::new();
+        let mut prelude = String::new();
         for (k, v) in &spec.env {
-            script.push_str(&format!("export {k}={} && ", shell_quote(v)));
+            prelude.push_str(&format!("export {k}={} && ", shell_quote(v)));
         }
         for line in &spec.setup {
-            script.push_str(&format!("{{ {line}; }} && "));
+            prelude.push_str(&format!("{{ {line}; }} && "));
         }
-        script.push_str(&cluster_job::poll_command(wait.scheduler, &wait.jobs));
         ClusterJobPollRequest {
             cluster: wait.cluster.clone(),
             host: spec.host.clone(),
-            script,
+            script: cluster_job::poll_script(wait.scheduler, &prelude, &wait.jobs),
             timeout: POLL_TIMEOUT,
         }
     }

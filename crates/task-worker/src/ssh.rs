@@ -711,8 +711,8 @@ pub fn remote_exec_instructions(settings: &SshSettings) -> String {
     format!("{base}\n{}", cluster_job_wait_instructions(settings))
 }
 
-/// ADR-0090 D5: 長いクラスタ job（PBS / Slurm）の扱い（worker の remote-exec の前置きの 1 段落）。
-pub const CLUSTER_JOB_RECOVERY_GUIDANCE: &str = "測定の条件でない限りホスト固定をしないこと。固定が必要なら理由を進捗に書くこと。失敗または長い Q/H で再開したら、ログと qstat -x（Slurm は sacct）の記録で原因を確認し、再投入・資源指定の緩和や解除・qdel（Slurm は scancel）を自分で判断すること。node-h の上限など人の承認が必要な場合だけ質問すること。待ち直すときは、調べ終えた終了済みの job を外し、まだ Q/R の job と再投入した job だけを wait に書くこと。失敗済みの job を残しても、その失敗で再び起こされることはありません（Q/R/H を経て同じ id で再び失敗したときだけ起こされます）。\n";
+/// ADR-0090 D5: 長いクラスタ job（PBS / Slurm / NQSV）の扱い（worker の remote-exec の前置きの 1 段落）。
+pub const CLUSTER_JOB_RECOVERY_GUIDANCE: &str = "測定の条件でない限りホスト固定をしないこと。固定が必要なら理由を進捗に書くこと。失敗または長い Q/H で再開したら、ログと scheduler の記録（PBS Pro は qstat -x、Slurm は sacct。NEC NQSV の qstat には -x が無く、終わった request は qstat -f で `Batch Request: <id> does not exist` になり終了コードも出ないので、job の出力・ログと必要なら racctreq）で原因を確認し、再投入・資源指定の緩和や解除・qdel（Slurm は scancel）を自分で判断すること。node-h の上限など人の承認が必要な場合だけ質問すること。待ち直すときは、調べ終えた終了済みの job を外し、まだ Q/R の job と再投入した job だけを wait に書くこと。失敗済みの job を残しても、その失敗で再び起こされることはありません（Q/R/H を経て同じ id で再び失敗したときだけ起こされます）。\n";
 
 pub fn cluster_job_wait_instructions(settings: &SshSettings) -> String {
     format!(
@@ -720,8 +720,10 @@ pub fn cluster_job_wait_instructions(settings: &SshSettings) -> String {
          `artifacts/result.json` に `{{\"type\": \"wait\", \"kind\": \"cluster_job\", \"cluster\": \"{cluster}\", \
          \"scheduler\": \"pbs\", \"jobs\": [\"<job id>\", ...], \"checkpoint\": {{\"completed\": [...], \
          \"remaining\": [...], \"next_action\": \"...\"}}, \"summary\": \"...\"}}` を書いて終えてください\
-         （`scheduler` は `pbs` か `slurm`、`poll_secs` / `timeout_secs` は任意）。celeris が job の終了を待ち、\
-         終わったら job の最終状態と終了コードを前置きに入れた続きの run を起こします。job が Q / R の間に完了を申告しない\
+         （`scheduler` は PBS Pro が `pbs`、Slurm が `slurm`、NEC NQSV が `nqsv`。NQSV は `qstat` が \
+         `/opt/nec/nqsv/bin` にあり、`qstat -x` が `invalid option` になり、request id が `<番号>.nqsv` の形のクラスタ。\
+         `poll_secs` / `timeout_secs` は任意）。celeris が job の終了を待ち、\
+         終わったら job の最終状態と終了コード（NQSV は終了コードが分からない）を前置きに入れた続きの run を起こします。job が Q / R の間に完了を申告しない\
          こと（`summary` だけの result.json は完了の申告です）。結果の回収・受け入れ条件の確認は続きの run で行います。\
          job の終了を poll して run を引き延ばさないこと。{CLUSTER_JOB_RECOVERY_GUIDANCE}",
         cluster = settings.cluster,

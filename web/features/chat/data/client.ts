@@ -33,6 +33,7 @@ import type {
   OverrideBody,
   OverrideResponse,
   PlanGateRequest,
+  ProposalReviewRequest,
   TransitionResult,
 } from "../../../api/generated/types";
 
@@ -57,6 +58,7 @@ export const chatPaths = {
   message: (t: string, m: string) => `${API}/chat/threads/${seg(t)}/messages/${seg(m)}`,
   messageRetract: (t: string, m: string) => `${API}/chat/threads/${seg(t)}/messages/${seg(m)}/retract`,
   messageRevisions: (t: string, m: string) => `${API}/chat/threads/${seg(t)}/messages/${seg(m)}/revisions`,
+  messageReview: (t: string, m: string) => `${API}/chat/threads/${seg(t)}/messages/${seg(m)}/review`,
   read: (t: string) => `${API}/chat/threads/${seg(t)}/read`,
   stop: (t: string) => `${API}/chat/threads/${seg(t)}/stop`,
   resumeQueue: (t: string) => `${API}/chat/threads/${seg(t)}/resume-queue`,
@@ -143,6 +145,15 @@ export function retractMessage(
 /** D5.1: 発言の前の版（`message_revised` の event を古い順）。読む権限は thread の読み出しと同じ。 */
 export function listMessageRevisions(threadId: string, messageId: string, signal?: AbortSignal) {
   return apiGet<ChatEventListResponse>(chatPaths.messageRevisions(threadId, messageId), signal);
+}
+
+/**
+ * ADR 2026-11-23-project-observability-publish D2.1: 人が案（外部 LLM の案・人の取り込み・CoS の戦略の版）を採用・却下・
+ * コメントする。202 の本文は人の送信と同じ形（採否の message 1 件）。人の token だけが通り、他は 403
+ * `proposal_verdict_requires_human`。見た版と今の案が違えば 409 `proposal_review_stale`。採用は承認ではない。
+ */
+export function reviewProposal(threadId: string, messageId: string, body: ProposalReviewRequest, signal?: AbortSignal) {
+  return apiMutate<ChatPostMessageResponse>("POST", chatPaths.messageReview(threadId, messageId), body, signal);
 }
 
 // ---- run ----

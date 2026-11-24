@@ -957,15 +957,14 @@ impl Dispatcher {
             events.push(quota_event);
         }
         if let Some(reason) = failure_reason {
-            match (&account, account_adapter) {
-                // ADR-0024 D4: アカウントの cooldown として記録する（`ProviderThrottled` イベントは出さない）。
-                (Some(acct), Some(adapter)) if reason != "spawn" => {
-                    self.record_account_failure(adapter, acct, reason, &provider_outcome)
-                }
-                // ADR-0013 D9 / ADR 2026-10-08 §(e): プールを使わない、または Spawn 失敗（アカウント非依存）は
-                // source の暗黙アカウントの cooldown として、遷移と同じトランザクションで記録する。
-                _ => events.push(self.record_source_failure(&provider, reason, &provider_outcome)),
-            }
+            // ADR-0024 D4 / ADR-0013 D9: アカウント（または source の暗黙アカウント）の cooldown。source の記録は
+            // 遷移と同じトランザクションで残す。
+            events.extend(self.record_supply_failure(
+                (account.as_deref(), account_adapter),
+                &provider,
+                reason,
+                &provider_outcome,
+            ));
         }
         // ADR-0033 D5（Phase 26 / Phase 27）: `Question` で終わった run（部をまたぐ委譲の質問への置き換えも
         // 含む）は、既存の `answers[]` の経路（`Status::Blocked`）に加えて `approvals` にも 1 件ずつ残す

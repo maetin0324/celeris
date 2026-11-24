@@ -31,6 +31,18 @@ impl Dispatcher {
         let now = OffsetDateTime::now_utc();
 
         let (run_end, describe, usage) = design_gate::run_end_of(&result, "planner");
+        // ADR 2026-11-24-planner-supply-failure-cooldown D1・D3: 供給側の失敗（認証の失敗・枠切れ・throttle・起動の失敗）は
+        // worker の run と同じ分類（`provider_failure_outcome`）と同じ関数（`record_supply_failure`）で account か source を
+        // cooldown にする（AuthFailed は再ログインまで保持し、人に通知する）。
+        let supply = match result.as_ref().err() {
+            Some(e) => provider_failure_reason(e)
+                .zip(provider_failure_outcome(e))
+                .map(|(reason, outcome)| (reason, outcome, e.to_string())),
+            None => None,
+        };
+        let source_cooldown = supply.as_ref().and_then(|(reason, outcome, _)| {
+            self.record_supply_failure((account, account_adapter), &provider, reason, outcome)
+        });
 
         // ADR-0076: planner run の quota 消費も worker と同じ `RoutingRuntime::settle_quota` で見積もる。以降の `?` で抜けても
         // `QuotaActivity` が閉じているよう、分岐より前に一度だけ求め、`WorkerFinished` を保存するすべての分岐で同じトランザクションに添える。
@@ -66,7 +78,68 @@ impl Dispatcher {
         // 1 回目は従来どおり不正な試行（planner に理由を渡して再試行）、最後の試行では上限を緩めて採用し、超えた分の unit を
         // `kind: limit` の決定の要求で止める（黙って切らない・atomic に倒さない）。採用に使う上限を `adopt_limits` に返す。
         let mut adopt_limits = self.config.execution.limits;
-        let validation: Result<_, String> = if design_gate::plan_file_checked(&result) {
+        let metrics = run_since.map(|since| task_core::RunMetrics {
+            wall_ms: wall_ms_since(since),
+            retries: task.attempts,
+            ..Default::default()
+        });
+        // D2: AuthFailed は回数によらず、Throttled・Exhausted は続いた requeue が `max_requeues` 未満の間は計画の試行に
+        // 数えず（worker の `settle_adapter_failure` と同じ規則）、`end = HarnessError{Supply}` で閉じて requeue する。
+        // 次の planner run は cooldown の外れた別の account に回る（`planner_retry_pending`・`planner_attempts_in_window`
+        // がこの `end` を読む）。上限に達した Throttled・Exhausted は下の不正な試行の経路に合流する。
+        let supply_limit_reached = match &supply {
+            Some((_, outcome, message)) => {
+                let below_requeue_limit =
+                    task_ops::derive::consecutive_requeues(&self.store.events_for(task_id)?)
+                        < self.config.max_requeues;
+                if matches!(outcome, ProviderOutcome::AuthFailed) || below_requeue_limit {
+                    let end = task_core::RunEnd::HarnessError {
+                        class: task_core::HarnessErrorClass::Supply,
+                    };
+                    if let Err(e) = self.store.run_index_finish(
+                        &run_id,
+                        task_core::RunIndexStatus::from_run_end(end),
+                        None,
+                        usage,
+                        metrics,
+                        now,
+                    ) {
+                        tracing::warn!(%task_id, %run_id, error = %e, "failed to finish the runs index row for the planner run");
+                    }
+                    let finished = run_end_record(
+                        &run_id,
+                        format!("requeue: adapter: {message}"),
+                        usage,
+                        Some(RunRole::Planner),
+                        metrics,
+                        Some(end),
+                    );
+                    let progress = Event::worker_progress(
+                        run_id.clone(),
+                        planner_supply_requeue_message(message),
+                    );
+                    tracing::warn!(%task_id, %run_id, account = ?account, reason = %message, "the planner run hit a supply-side failure; not counted as a plan attempt, requeued (ADR 2026-11-24-planner-supply-failure-cooldown D2)");
+                    self.store.apply_transition_with_events(
+                        task_id,
+                        Trigger::Requeue,
+                        [finished, quota_event]
+                            .into_iter()
+                            .chain(source_cooldown)
+                            .chain([progress])
+                            .collect(),
+                    )?;
+                    return Ok(());
+                }
+                Some(format!(
+                    "requeue limit ({}) reached: adapter: {message}",
+                    self.config.max_requeues
+                ))
+            }
+            None => None,
+        };
+        let validation: Result<_, String> = if let Some(reason) = supply_limit_reached {
+            Err(reason)
+        } else if design_gate::plan_file_checked(&result) {
             let workspace_dir = self.task_dir(task);
             let artifacts_dir = workspace_dir.as_ref().map(|d| self.artifacts_dir(task, d));
             match artifacts_dir
@@ -156,11 +229,6 @@ impl Dispatcher {
         // ADR 2026-11-07-health-review-integration D3.3: 高 risk の class の path を書く planner の計画に brief が無ければ再試行に回す。
         let validation = self.design_brief_gate(task, &run_id, validation);
 
-        let metrics = run_since.map(|since| task_core::RunMetrics {
-            wall_ms: wall_ms_since(since),
-            retries: task.attempts,
-            ..Default::default()
-        });
         let index_status = run_end
             .map(task_core::RunIndexStatus::from_run_end)
             .unwrap_or(task_core::RunIndexStatus::HarnessError);
@@ -284,7 +352,10 @@ impl Dispatcher {
                     task_id,
                     task,
                     &run_id,
-                    vec![finished, quota_event],
+                    [finished, quota_event]
+                        .into_iter()
+                        .chain(source_cooldown)
+                        .collect(),
                     reason,
                     now,
                 )?;
@@ -496,7 +567,8 @@ impl Dispatcher {
     }
 
     /// ADR-0072 D14: 直近の `ExecutionPlanned`（無ければ Task の最初）から数えた planner run の試行
-    /// （`WorkerStarted{role: Planner}` の件数。この run 自身を含む。人の comment の割り込みで止まった run は除く）。
+    /// （`WorkerStarted{role: Planner}` の件数。この run 自身を含む。人の comment の割り込みで止まった run と、供給側の
+    /// 失敗で終わり試行に数えなかった run〈ADR 2026-11-24-planner-supply-failure-cooldown D2〉は除く）。
     pub(super) fn planner_attempts_in_window(
         &self,
         task_id: TaskId,
@@ -522,6 +594,7 @@ impl Dispatcher {
                             role: Some(RunRole::Planner),
                             ..
                         } if !continuation_session::interrupted_by_comment(&events, run_id)
+                            && !task_ops::tree::planner_run_supply_failed(&events, run_id)
                     )
             })
             .count())
@@ -918,6 +991,14 @@ pub(super) const PLANNER_BLOCKED_SUFFIX: &str = "）。予算を増やして続�
 
 pub(super) fn planner_retry_message(reason: &str) -> String {
     format!("{PLANNER_RETRY_PREFIX}{reason}{PLANNER_RETRY_SUFFIX}")
+}
+
+/// ADR 2026-11-24-planner-supply-failure-cooldown D2: 供給側の失敗で終わった planner run の進捗の文（計画の拒否の理由
+/// ではないので `PLANNER_RETRY_PREFIX` を使わない。次の planner の「前の試行の拒否の理由」に入れない）。
+pub(super) fn planner_supply_requeue_message(message: &str) -> String {
+    format!(
+        "planner の run が供給側の失敗で終わりました（{message}）。計画の試行には数えず、使える account で planner を起こし直します。"
+    )
 }
 
 pub(super) fn planner_blocked_question(reason: &str) -> String {

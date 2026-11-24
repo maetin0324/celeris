@@ -550,10 +550,37 @@ pub fn planner_retry_pending(events: &[(u64, task_core::Event)]) -> bool {
             } if msg.starts_with(PLANNER_RETRY_PREFIX) && msg.ends_with(PLANNER_RETRY_SUFFIX) => {
                 return true;
             }
+            // ADR 2026-11-24-planner-supply-failure-cooldown D2: 供給側の失敗で終わった planner run は試行に数えず、
+            // 次の run で planner を起こし直す（replan の依頼は 1 回目の dispatch で消費済み）。
+            e if is_supply_failed_planner_finish(e) => return true,
             _ => {}
         }
     }
     false
+}
+
+/// ADR 2026-11-24-planner-supply-failure-cooldown D2: 供給側の失敗（認証の失敗・枠切れ・throttle）で終わり、計画の試行に
+/// 数えなかった planner run の `WorkerFinished`（`end` が `HarnessError{Supply}`）か。上限に達して不正な試行に数えた
+/// 供給側の失敗は `end` を `Supply` にしないので、ここに入らない。
+pub fn is_supply_failed_planner_finish(e: &task_core::Event) -> bool {
+    matches!(
+        e,
+        task_core::Event::WorkerFinished {
+            role: Some(task_core::RunRole::Planner),
+            end: Some(task_core::RunEnd::HarnessError {
+                class: task_core::HarnessErrorClass::Supply
+            }),
+            ..
+        }
+    )
+}
+
+/// [`is_supply_failed_planner_finish`] の run を `run_id` で引く（計画の試行の数から外す）。
+pub fn planner_run_supply_failed(events: &[(u64, task_core::Event)], run_id: &str) -> bool {
+    events.iter().any(|(_, e)| {
+        is_supply_failed_planner_finish(e)
+            && matches!(e, task_core::Event::WorkerFinished { run_id: r, .. } if r == run_id)
+    })
 }
 
 /// ADR-0079 D10（Phase R3b）: 計画を持つ節点の次の run が planner になるか（人の replan の依頼・途中確認の

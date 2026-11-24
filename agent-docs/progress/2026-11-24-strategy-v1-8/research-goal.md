@@ -1,8 +1,8 @@
 ---
 tasks: [01M7XQA74FP70G3T3KSTP02S0W]
 wu: research-goal
-status: done
-completed: 2026-11-24
+status: blocked
+updated: 2026-11-24
 ---
 # 戦略層 v1 子 8 research-goal: 研究ケースの goal と Outcome を 11.15 より前に書かれた task C の問いから作る
 
@@ -70,6 +70,20 @@ exit 0
 - `cargo fmt --all -- --check` → exit 0。
 - 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` の path は上の「変えた file」と同じ。評価器の prompt（`crates/task-worker/src/change_rules/`）・control-ts・web・task の進捗 `agent-docs/progress/2026-11-24-strategy-v1-8.md` は変えていない。
 - 研究ケースの本文が repo に無いこと: 実データの出典の問い・判定方法・背景の先頭 40 字を `git grep -F` → 0 / 3 件。
+
+## 計画の check の食い違い（2 回目の run。計画の問題として申告した）
+前回の run は done を返したが、範囲の check（`"scope": true`）が exit 1 で落ちた。2 回目の run で原因を確かめた。
+
+- 範囲の check が許す path は `research.py`・`test_research.py`・`testdata/research/`・ADR・この進捗だけで、次の 2 つが範囲の外に出た。
+  - `scripts/dev/parent-eval-blind/testdata/pilot-runs/` と `testdata/pilot-runs-leak/` の研究ケースの 16 file と 4 file（`testdata/make_pilot_runs.py` が `research.files` と合成の `testdata/research/c-results.md` から生成する goal.md・results-slice.md・slice.json・files.json）。
+  - `crates/task-api/tests/parent_checkpoint_live.rs` の `seed_research` の doc comment の 1 行（旧い規則の説明）。
+- 同じ WU の check `python3 -I -m unittest discover -s scripts/dev/parent-eval-blind -p 'test_*.py'` は `test_pilot_compare.py` の `test_testdata_is_what_the_generator_writes` を含む。この試験は生成器の出力と commit した testdata の一致を見る。
+- 提出時の HEAD で両方を確かめた:
+  - 生成し直した testdata のまま: unittest は `Ran 55 tests` OK。範囲の check は exit 1。
+  - testdata を範囲の基点の版に戻す: unittest は `FAILED (failures=1)`（`test_testdata_is_what_the_generator_writes` の digest の不一致）。範囲の check は Rust の 1 行を除けば通る。
+- goal と Outcome の作り方を変えると、生成器の研究ケースの出力は必ず変わる（goal.md に 11.15 節の見出しを入れないことが受け入れ条件 0 だから）。研究ケースの出力を変えずに直す方法は無い。2 つの check は同時に通らない。
+- ほかの check（check-goal の実データと合成の 11.16・11.17・11.20、sha256・doc-links・adr-numbers、進捗と ADR の grep）は提出時の HEAD で exit 0。
+- 申告した直し方: この WU の範囲の check の正規表現に `scripts/dev/parent-eval-blind/testdata/`（生成した testdata を含む）と `crates/task-api/tests/parent_checkpoint_live\.rs`（doc comment の 1 行）を足す。後続の compare-leak は research-goal に依存し、範囲に `testdata/` を含むので、書く場所は重ならない。Rust の file を範囲に入れないなら、次の run がその 1 行を戻し、未確認に書く。
 
 ## 未確認
 - 実データで作った goal と Outcome が、評価器にとって研究ケースの問いと判定方法として十分かは、人と operator が読んで確かめていない（この WU の worker は実データの goal を手元で読んだだけで、repo にも進捗にも写していない）。operator は実 LLM の前に `check-goal` を流し、stub の 1 回の `research/<時点>/b/input/tree/goal.md` を読むとよい。

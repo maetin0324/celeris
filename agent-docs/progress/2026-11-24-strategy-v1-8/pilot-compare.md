@@ -57,11 +57,15 @@ completed: 2026-11-24
 - 子 6 の比較（受け入れ条件 3）: `test_child6_compare_without_pilot_is_unchanged` が fixture の `replay/` を写した dir で `--pilot` なしの compare を走らせ、exit 0 と commit した `compare.json` と同じ byte を確かめる。
 
 ## 検査（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
-- 下の「検査の結果」に書く。
+- `bash scripts/dev/test-affected.sh` → exit 0。crate の試験の対象は無し（「試験対象の変更なし」。変えたのは scripts/dev と進捗だけ）。script の試験 `Ran 126 tests` OK、repo_health_gate: all checks passed。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo fmt --all -- --check` → exit 0。
+- `git diff --stat "$CELERIS_WU_BASE" -- 'crates/*/src' control-ts web` → 差分 0。
+- 範囲（`sh "$CELERIS_WU_SCOPE_PATHS"`）: 変えた path は `scripts/dev/parent-eval-blind-compare.py`・`scripts/dev/parent-eval-blind/{pilot_score,test_pilot_compare,test_pilot_score}.py`・`scripts/dev/parent-eval-blind/testdata/{make_pilot_runs.py,pilot-runs/,pilot-runs-leak/}`・この進捗。
 
 ## LoC（`git diff --numstat "$CELERIS_WU_BASE"`）
 - production（`crates/*/src`・control-ts・web）: 0。
-- 道具の script: `parent-eval-blind-compare.py` +361・−3（`--pilot`）、`pilot_score.py` +428（新規）。
+- 道具の script: `parent-eval-blind-compare.py` +363・−2（`--pilot`）、`pilot_score.py` +428（新規）。
 - 試験: `test_pilot_compare.py` +237、`test_pilot_score.py` +214、`testdata/make_pilot_runs.py` +209（すべて新規）。生成した testdata（JSON・Markdown、163 file、約 41 KB）。
 - 純増の理由: 指標・漏れ・secret・mutation の比較（ADR D6 の表のうち決定的な欄）と、盲検の採点材料・開封の道具を足した。新しい Manager・trait・状態機械・DB 表・Agent サービスは無い。
 

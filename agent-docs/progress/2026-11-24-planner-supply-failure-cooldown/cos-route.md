@@ -1,9 +1,13 @@
 ---
+title: CoS の代替経路が同じ source の別の account に移れない不具合を直す（WorkUnit cos-route）
 tasks: [01M87M20BAB5C21EVARQ7BWCCN]
 wu: cos-route
-status: blocked
+status: done
+updated: 2026-11-24
 ---
 # CoS の代替経路が同じ source の別の account に移れない不具合を直す（WorkUnit cos-route）
+
+完了日: 2026-11-24
 
 ## 結論
 
@@ -115,3 +119,19 @@ exit 1 で落ちた。範囲外と出た path は次の 7 つで、この run �
 
 この run の時点で planner-supply のブランチには差分が無かった。planner-supply が `tests/mod.rs` に試験の module を足すと、
 統合で `mod` 行が衝突する可能性がある。衝突したら両方の行を残す。
+
+## 範囲を広げた後の再検査（3 回目の run、2026-11-24、提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+
+replan で cos-route の範囲 check が上の正規表現に広がった。コードは変えず、計画の check と検査を提出時の HEAD で再実行した。
+
+- 範囲 check（replan 後の計画の cmd をそのまま。`sh "$CELERIS_WU_SCOPE_PATHS"` の 14 path に当てる）→ exit 0（範囲外 0 件）。
+- `git diff --quiet "$CELERIS_WU_BASE" HEAD -- <path>` → planner-supply が触る `planner_flow.rs`・`worker_finish.rs`・`route_failure.rs`・
+  `health_review/design_gate.rs` はどれも exit 0（差分なし）。
+- `bash scripts/dev/test-affected.sh` → exit 0。対象 crate は celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。
+  4007 tests run: 4007 passed（13 slow）・11 skipped。repo-health は verdict=pass、new=0・worsened=0。script bundle の SKIP は 0 件。
+  終わりに scratch の `.trash-*` の削除で `rm: Permission denied` が 3 行出たが、exit code には影響しない。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo fmt --all -- --check` → exit 0（差分の出力 0 行）。
+- `sh scripts/dev/progress-index.sh --check` → exit 0（`progress-index --check: ok`）。
+
+この run の commit（件名）: progress: cos-route の範囲を広げた後の再検査

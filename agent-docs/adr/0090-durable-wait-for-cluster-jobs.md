@@ -124,3 +124,5 @@ task が終端（中止・連鎖の中止・失敗）になったら、同じト
 > 付記（2026-10-20）: 本文の `max_continuations_per_work_unit` は `agent-docs/adr/2026-10-20-continuation-limit-by-progress.md` で `continuation_hard_limit` に置き換えた（旧欄は読み込みエラー）。
 
 > 付記（2026-11-11）: D2 の再開条件は [失敗・長い Q/H での早期起床](2026-11-11-cluster-job-early-wakeup.md) で拡張した。D1 の計数除外・D6 の自動取消禁止は維持する。
+
+> 付記（2026-11-24）: NEC NQSV（Pegasus）を [NQSV の wait](2026-11-24-cluster-job-wait-nqsv.md) で足した。`scheduler` は `pbs | slurm | nqsv`。NQSV の poll は `bash -lc` の中で `qstat -f` を流し、`Batch Request: <id> does not exist on <server>.` を `gone`（終了コード不明）として読む。D2「読み方」の PBS・Slurm と、「残したもの」の `gone` の扱いは変えない。NQSV では終わった request が常に `gone` になる。

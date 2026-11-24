@@ -1,12 +1,14 @@
 ---
 title: cluster job の wait を NQSV（Pegasus）でも job の終了で解く
 tasks: [01M86R8E4JRK12W0PKPQR7FAWZ]
-status: running
+status: done
 updated: 2026-11-24
 ---
 # cluster job の wait を NQSV（Pegasus）でも job の終了で解く
 
-状態: running（実装・試験・失敗注入は済んだ。最後の修正の後の HEAD での `test-affected.sh` の全体の再実行が残っている）。
+完了日: 2026-11-24
+
+状態: done（実装・試験・失敗注入は済んだ。release gate の差し戻し（web の生成型の再生成漏れ）を直した）。
 基準は `git merge-base HEAD main`。
 
 ## commit（件名）
@@ -14,6 +16,8 @@ updated: 2026-11-24
 - adr: cluster job の wait を NQSV（Pegasus）でも job の終了で解く
 - cluster job wait: NQSV の poll をログインシェルの qstat -f で流し、does not exist を終わりとして読む
 - cluster job wait: schema 127 を ops-r1 の対応版数・migration の版数の試験に足し、schema を再生成する
+- progress: cluster job の wait の NQSV 対応の証拠と残り
+- cluster job wait: web の生成型を schema の nqsv に合わせて再生成する（release gate の差し戻しの修正）
 
 ## 実機の確認（読み取りだけ）
 
@@ -48,6 +52,29 @@ updated: 2026-11-24
    - 3 つ目の commit の後: `cargo fmt --all -- --check` exit 0、`cargo clippy --workspace -- -D warnings` exit 0。
    - **未実行**: 3 つ目の commit の後の `bash scripts/dev/test-affected.sh` の全体の再実行（この run の壁時計が足りなかった）。
 
+## release gate の差し戻しと修正（2026-11-24）
+
+- 事象: 部署内の release 準備（prepare.log）が step `web-pnpm-e2e` で落ちた。`e2e/parity/gateway.spec.ts` の
+  「parity-x: 型の再生成差分ゼロ・server/client 境界」が `node scripts/gen-types.mjs --check` で
+  `web/api/generated/types.ts`・`schema.json` を stale と判定した（1 failed、308 passed、8 skipped）。他の step は exit 0。
+- 原因: 3 つ目の commit で `docs/api/v1/api-v1.schema.json`（`ClusterScheduler` に `nqsv`、`ClusterJobState` の説明）を再生成したが、
+  そこから作る web の生成型（`node web/scripts/gen-types.mjs`）を再生成しなかった。`test-affected.sh` の web の段は
+  typecheck と unit だけで、`gen-types --check` は e2e にしか無いので、提出前の検査では見つからなかった。
+- 修正: `node web/scripts/gen-types.mjs` で再生成した（`ClusterScheduler = "pbs" | "slurm" | "nqsv"` と schema.json の説明 13 行）。
+  web の画面・API client に `ClusterScheduler` を使う所は無い（`grep -rn "slurm\|ClusterScheduler" web` で生成物と無関係の e2e の skill 名だけ）。
+
+## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
+
+- `node web/scripts/gen-types.mjs --check` → exit 0（再生成前は exit 1、stale 2 件）。
+- `node web/scripts/check-boundaries.mjs` → exit 0（parity-x の残りの検査）。
+- `bash scripts/dev/test-affected.sh` → exit 0（対象は web: typecheck（tsc -b）、vitest 108 files・773 tests passed、node test 110 passed）。
+  基準が main のため、Rust の crate は対象外（Rust の変更は main に入っている前の 3 commit で、celeris の決定的 check で test-affected は pass）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo nextest run -p task-core -p task-dispatch -E 'test(/nqsv|cluster_job|cluster_wait|job_poll|migration_0127|committed_schema_matches_generated|event_row_schema_matches_committed/)'`
+  → exit 0、48 passed（3451 skipped）。
+- web e2e は release gate だけで走らせる規則なので走らせていない（parity-x の中身の 2 コマンドは上で直接実行した）。
+
 ## 本番への移行
 
 - config の書き換えは要らない（クラスタの設定は変えない）。
@@ -61,6 +88,9 @@ updated: 2026-11-24
 - 続きの run の前置きの `gone` の行は「no longer known to the scheduler (history expired?; exit status unknown)」のまま（PBS の期待値を変えないため）。NQSV の説明は案内の段落に書いた。
 
 ## 提案
+
+- `test-affected.sh` の web の段（`docs/api/` の変更でも走る）に `node web/scripts/gen-types.mjs --check` を足す。今回の再生成漏れは
+  release gate の e2e まで見つからなかった。数秒で済む検査なので、提出前に落とせる（ADR 2026-10-23-test-affected-web-typecheck の付記で決める）。
 
 - scheduler をクラスタの設定（`[[clusters]] scheduler`）に移し、wait の申告から `scheduler` を消す（worker が誤った scheduler を書く余地を無くす）。protocol・DB・campaign の wait の組み立てを一度に変えるので、別の task にする。
 - 終了コードが要るなら、`racctreq` の出力の書式と反映の遅れを実機で確かめてから、poll の後段で読む案を ADR で決める。

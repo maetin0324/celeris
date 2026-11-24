@@ -99,3 +99,5 @@ completed: 2026-11-24
 - commit 件名: `strategy-v1 8 pilot-compare: runs の親ディレクトリを比較と採点で共通に解決する`。
 - 再提出の検査（提出時の HEAD、最後の同期なし。基準は `$CELERIS_WU_BASE`）: `test_driver.py` 16 tests・`test_research.py` 10 tests が OK、`cargo clippy --workspace -- -D warnings` exit 0（依存 deno_core の既存 deprecated 警告あり）、`cargo fmt --all -- --check` exit 0、`sh scripts/dev/progress-index.sh --check` exit 0。`test-affected.sh --list` は対象 crate 無し。
 - 今回の差分: 道具の script +38/−8 行（新規 `pilot_runs.py` 26 行を含む）、試験 +30/−0 行、production 0。範囲検査は WU の既存成果と今回の比較・採点・試験・進捗だけ。
+- `bash scripts/dev/test-affected.sh`: 初回は前段 source-size の60試験中1件が失敗（詳細の原因は未確認）。同じ source-size 試験の単独再実行は60件 OK。提出用の再実行は exit 0、repo-health fail_grade=0、126 tests OK、repo_health_gate all checks passed、crate の試験対象無し。検査結果の追記後にも提出時の HEAD で再実行する。
+- 検査の記録の commit 件名: `strategy-v1 8 pilot-compare: 再提出の健全性検査の結果を記録する`。

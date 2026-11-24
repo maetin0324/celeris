@@ -3,11 +3,16 @@
 #
 #   bash scripts/dev/parent-eval-blind.sh --harness stub --arms a,b,c --case replay --points C-mid,D-done,F-done --out <dir>
 #   bash scripts/dev/parent-eval-blind.sh --harness config --arms a,b,c --case replay --points C-mid,D-done,F-done --out <dir> --approval <人の承認の json> --llm-config <toml>
+#   bash scripts/dev/parent-eval-blind.sh --harness stub|config --arms a,b,c --case research --research-src <c-results.md> --points 11.17,11.20 --out <dir> [...]
+#
+# 研究ケース（ADR D2.2）は --research-src の c-results.md から、子 0 の research_case.py（path で import）で時点の slice を切る
+# （parent-eval-blind/research.py）。時点は 11.16・11.17・11.20、版 v1 の段は 11.15 節。`--harness config` では --research-src の
+# sha256 が research_case.SHA と一致しなければ exit 2。承認の scope.cases の名は research-<時点>。本文は repo に写さない。
 #
 # 時点・方式ごとに一時 home（$TMPDIR か --state-root の下）に worktree の build の daemon（一時 DB・loopback）を起こし、slice から
 # 使い捨ての案件・承認済み Roadmap・strategy root・子を seed する。方式 a は controller を mode shadow にし（evaluate は suppressed、
 # reviewer run 0）、方式 b は mode enabled で evaluate が start_side_review で reviewer run を起こし、最終の記録が載るまで待つ
-# （scripts/dev/parent-eval-blind/driver.py）。方式 c は、最初の時点より前の slice（replay は A-mid）で版 v1 を書く段を事例ごとに
+# （scripts/dev/parent-eval-blind/driver.py）。方式 c は、最初の時点より前の slice（replay は A-mid、研究ケースは 11.15 節）で版 v1 を書く段を事例ごとに
 # 1 回流し（worker run と、Critic を兼ねる final review。出力は <out>/<case>/strategy-v1/）、各時点で b と同じ評価を、版 v1 を
 # 参照する strategy root と作業 tree で流す。
 # 出力は <out>/<case>/<point>/<arm>/ の output.json・reads.json・run.json・input/。
@@ -25,9 +30,9 @@ for a in "$@"; do
         exit 2
     fi
 done
-usage() { sed -n '4,5p' "$0" >&2; exit 2; }
+usage() { sed -n '4,6p' "$0" >&2; exit 2; }
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-harness="" out="" arms="" case="" points="" llm_config="" approval="" state_root="" max_wall="600" max_usd="1"
+harness="" out="" arms="" case="" points="" llm_config="" approval="" state_root="" max_wall="600" max_usd="1" research_src=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --harness) harness="$2"; shift 2 ;;
@@ -35,6 +40,7 @@ while [ $# -gt 0 ]; do
         --arms) arms="$2"; shift 2 ;;
         --case) case="$2"; shift 2 ;;
         --points) points="$2"; shift 2 ;;
+        --research-src) research_src="$2"; shift 2 ;;
         --llm-config) llm_config="$2"; shift 2 ;;
         --approval) approval="$2"; shift 2 ;;
         --state-root) state_root="$2"; shift 2 ;;
@@ -45,9 +51,18 @@ done
 fail() { echo "parent-eval-blind: FAIL: $*" >&2; exit 1; }
 [ -n "$out" ] && [ -n "$arms" ] && [ -n "$case" ] && [ -n "$points" ] || usage
 case "$case" in
-    replay) known_points="C-mid D-done F-done" ;;
-    *) echo "parent-eval-blind: unknown case $case (replay)" >&2; exit 2 ;;
+    replay) known_points="C-mid D-done F-done" strategy_point="A-mid" ;;
+    research) known_points="11.16 11.17 11.20" strategy_point="11.15" ;;
+    *) echo "parent-eval-blind: unknown case $case (replay, research)" >&2; exit 2 ;;
 esac
+scope_cases="$points"
+if [ "$case" = research ]; then
+    [ -f "$research_src" ] || { echo "parent-eval-blind: --case research needs --research-src <c-results.md>" >&2; exit 2; }
+    research_src="$(cd "$(dirname "$research_src")" && pwd)/$(basename "$research_src")"
+    scope_cases="$(printf %s "$points" | tr , '\n' | sed 's/^/research-/' | paste -sd, -)"
+elif [ -n "$research_src" ]; then
+    echo "parent-eval-blind: --research-src is only for --case research" >&2; exit 2
+fi
 for p in $(printf %s "$points" | tr , " "); do
     case " $known_points " in *" $p "*) ;; *) echo "parent-eval-blind: unknown point $p for case $case ($known_points)" >&2; exit 2 ;; esac
 done
@@ -62,9 +77,12 @@ case "$harness" in
     config)
         [ -f "$approval" ] || { echo "parent-eval-blind: the real LLM evaluation needs a person's approval record (--approval <json>)" >&2; exit 2; }
         check="$(python3 -I "$root/scripts/dev/long-horizon-pilot/pilot_gate.py" check-approval --approval "$approval" \
-            --cases "$points" --arms "$arms" --max-wall-secs "$max_wall")" || {
+            --cases "$scope_cases" --arms "$arms" --max-wall-secs "$max_wall")" || {
             echo "parent-eval-blind: the approval does not allow this evaluation: $check" >&2; exit 2; }
         [ -f "$llm_config" ] || { echo "parent-eval-blind: --llm-config <toml> is required" >&2; exit 2; }
+        if [ "$case" = research ]; then
+            python3 -I "$root/scripts/dev/parent-eval-blind/research.py" check-sha --src "$research_src" || exit 2
+        fi
         max_usd="$(printf %s "$check" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["max_usd"])')"
         ;;
     *) usage ;;
@@ -96,6 +114,7 @@ fi
     node --input-type=module -e 'const { buildBundle } = await import(process.env.SC_BUILD); await buildBundle({ outDir: process.env.SC_OUT });' >/dev/null) \
     || fail "control-ts bundle failed"
 set -- --harness "$harness"
+[ "$case" = research ] && set -- "$@" --research-src "$research_src"
 [ "$harness" = stub ] && set -- "$@" --stub "$root/scripts/dev/parent-eval-blind/stub_reviewer.py"
 [ "$harness" = config ] && set -- "$@" --llm-config "$llm_config" --max-usd "$max_usd"
 drive() {
@@ -107,7 +126,7 @@ case ",$arms," in
     *,c,*)
         echo "parent-eval-blind: case $case strategy v1 (arm c)" >&2
         rm -rf "${out:?}/$case/strategy-v1"
-        drive --stage strategy-v1 --point A-mid --arm c --skill "$root/config/skills/cos-operator/strategy-review.md" \
+        drive --stage strategy-v1 --point "$strategy_point" --arm c --skill "$root/config/skills/cos-operator/strategy-review.md" \
             --state "$work/$case-strategy-v1" --out "$out" "$@" >"$work/$case-strategy-v1.log" 2>&1 ||
             { tail -40 "$work/$case-strategy-v1.log" >&2; fail "case $case strategy v1 failed"; }
         ;;

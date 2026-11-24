@@ -168,7 +168,7 @@ class Output(unittest.TestCase):
         self.assertEqual(len(files[1]["sha256"]), 64)
 
     def test_driver_cases_and_arms_match_the_shell(self):
-        self.assertEqual(driver.CASES, {"replay": ("C-mid", "D-done", "F-done")})
+        self.assertEqual(driver.CASES["replay"], ("C-mid", "D-done", "F-done"))
         self.assertEqual(driver.ARMS, ("a", "b", "c"))
         sh = SH.read_text()
         self.assertIn('replay) known_points="C-mid D-done F-done"', sh)

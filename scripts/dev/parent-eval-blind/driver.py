@@ -39,11 +39,14 @@ import urllib.error
 import urllib.request
 from datetime import datetime
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import research  # noqa: E402
+
 SLICE_FILES = ("goal.md", "reports.json", "slice.json")
 ARMS = ("a", "b", "c")
-CASES = {"replay": ("C-mid", "D-done", "F-done")}
+CASES = {"replay": ("C-mid", "D-done", "F-done"), "research": research.POINTS}
 # 方式 c の版 v1 を書く段の slice（事例の最初の時点より前の時点。ADR D1.3）。
-STRATEGY_POINT = {"replay": "A-mid"}
+STRATEGY_POINT = {"replay": "A-mid", "research": research.STRATEGY_POINT}
 STRATEGY_STAGE = "strategy-v1"
 STRATEGY_FILE = "strategy-v1.json"
 CRITIC_FILE = "strategy-v1.critic.json"
@@ -225,7 +228,16 @@ class Point:
         self.proc = None
 
     # ---- slice と seed ----
+    def research_slice(self):
+        """研究ケースの時点の作業 tree の file と seed の spec（research.py。漏れがあれば run の前に止める。ADR D2.2・D4.3）。"""
+        try:
+            return research.files(self.a.research_src, self.a.point)
+        except research.Leak as e:
+            die(f"research slice {self.a.point} leaks the future: {e}")
+
     def slice_files(self):
+        if self.a.case == "research":
+            return self.research_slice()[0]
         shadow = pathlib.Path(self.a.shadow)
         meta = json.loads((shadow / self.a.point / "slice.json").read_text())
         cut = ts(meta["cutoff"])
@@ -243,6 +255,9 @@ class Point:
         return files
 
     def slice_rows(self):
+        if self.a.case == "research":
+            # 研究ケースの子（節）には局所の review の記録が無い（c-results.md は判定の event を持たない）。
+            return []
         files = self.slice_files()
         return [json.loads(line) for line in files["events.jsonl"].decode().splitlines() if line.strip()]
 
@@ -259,8 +274,10 @@ class Point:
         git_seed(files, self.repo)
         spec = self.home / "seed-spec.json"
         out = self.home / "seed.json"
-        spec.write_text(json.dumps({"db": str(self.db), "repo": str(self.repo), "point": self.a.point, "out": str(out),
-                                    "strategy": strategy}))
+        body = {"db": str(self.db), "repo": str(self.repo), "point": self.a.point, "out": str(out), "strategy": strategy}
+        if self.a.case == "research":
+            body["research"] = self.research_slice()[1]
+        spec.write_text(json.dumps(body, ensure_ascii=False))
         r = subprocess.run([self.a.seed_bin, "--ignored", "--exact", "parent_checkpoint_blind_seed", "--nocapture"],
                            env={**self.clean_env(), "PARENT_EVAL_BLIND_SEED": str(spec)}, capture_output=True, text=True)
         if r.returncode != 0:
@@ -314,8 +331,19 @@ max_usd_per_day = {min(self.a.max_usd, MAX_USD_PER_POINT)}
 
 [project_controller.checkpoint]
 max_evaluation_attempts = 1
+{self.checkpoint_children()}
 {harness}
 """)
+
+    def checkpoint_children(self):
+        """研究ケースは時点の終端の子（節）の数を children_per_checkpoint にし、checkpoint を時点で 1 回だけ発火させる（ADR D2.2。
+        trigger は children:<節の数>）。replay は既定（2）のまま。"""
+        if self.a.case != "research" or not self.seeded:
+            return ""
+        n = len(self.seeded["children"])
+        if not 1 <= n <= 8:
+            die(f"research point {self.a.point}: {n} children is outside children_per_checkpoint 1..8")
+        return f"children_per_checkpoint = {n}"
 
     def start(self):
         fd = os.open(self.token_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -560,7 +588,8 @@ class StrategyStage(Point):
 
     def objective(self, name):
         skill = pathlib.Path(self.a.skill).read_text()
-        return (f"戦略の版 v1 を書く。作業 tree の goal.md（親の目的）と events.jsonl・slice.json（{self.a.point} の時点までの記録）"
+        records = "・".join(n for n in sorted(self.slice_files()) if n != "goal.md")
+        return (f"戦略の版 v1 を書く。作業 tree の goal.md（親の目的）と {records}（{self.a.point} の時点までの記録）"
                 f"だけを読み、下の Strategy Review の手順で `celeris.strategy/1` の文書（根本原因の仮説・候補 2〜3・識別実験・"
                 f"反証条件・保留する前提・期待情報価値・予算・停止条件）を書き、成果物 `{name}` にする（artifacts の下）。"
                 "作業 tree の外の file を読まない。\n\n" + skill)
@@ -645,6 +674,7 @@ def main():
               "harness"):
         p.add_argument(f"--{k}", required=True)
     p.add_argument("--stub")
+    p.add_argument("--research-src")
     p.add_argument("--stage", choices=(STRATEGY_STAGE,))
     p.add_argument("--strategy-dir")
     p.add_argument("--skill")
@@ -661,6 +691,8 @@ def main():
         die(f"--case {a.case} --point {a.point} is not a pilot point")
     if a.arm not in ARMS:
         die(f"--arm {a.arm} is not an arm ({','.join(ARMS)})")
+    if a.case == "research" and not a.research_src:
+        die("--case research needs --research-src <c-results.md>")
     if a.arm == "c" and not a.stage and not a.strategy_dir:
         die("--arm c needs --strategy-dir (the output of --stage strategy-v1)")
     pt = StrategyStage(a) if a.stage else Point(a)

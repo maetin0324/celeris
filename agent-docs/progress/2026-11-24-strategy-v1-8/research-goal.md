@@ -48,6 +48,7 @@ completed: 2026-11-24
 変更後（提出時の HEAD で実行）:
 - `python3 -I scripts/dev/parent-eval-blind/test_research.py` → `Ran 16 tests` OK。
 - `python3 -I scripts/dev/parent-eval-blind/test_driver.py` → OK。`test_pilot_compare.py` → `Ran 13 tests` OK。`test_pilot_score.py` → OK。
+- 合成の testdata の判定方法の箇条は作り物の語と数（実データの語・値を写さない）。
 
 実データでの check-goal（提出時の HEAD で実行。本文は出していない）:
 ```
@@ -63,7 +64,12 @@ exit 0
 ```
 
 ## 検査
-CHECKS_PLACEHOLDER
+提出時の HEAD で実行（基準は `$CELERIS_WU_BASE`）:
+- `bash scripts/dev/test-affected.sh` → exit 0。対象は celeris・celeris-campaign・celerisctl・llm-proxy・task-api・task-dispatch・task-worker と web（`parent_checkpoint_live.rs` の comment の 1 行で task-api が入った）。nextest `6377 tests run: 6377 passed (13 slow), 32 skipped`、web の unit `773 passed (773)`、tsc -b は通った。終わりに scratch の trash の消し残しの `rm: Permission denied` が 3 行出た（exit は 0）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo fmt --all -- --check` → exit 0。
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` の path は上の「変えた file」と同じ。評価器の prompt（`crates/task-worker/src/change_rules/`）・control-ts・web・task の進捗 `agent-docs/progress/2026-11-24-strategy-v1-8.md` は変えていない。
+- 研究ケースの本文が repo に無いこと: 実データの出典の問い・判定方法・背景の先頭 40 字を `git grep -F` → 0 / 3 件。
 
 ## 未確認
 - 実データで作った goal と Outcome が、評価器にとって研究ケースの問いと判定方法として十分かは、人と operator が読んで確かめていない（この WU の worker は実データの goal を手元で読んだだけで、repo にも進捗にも写していない）。operator は実 LLM の前に `check-goal` を流し、stub の 1 回の `research/<時点>/b/input/tree/goal.md` を読むとよい。

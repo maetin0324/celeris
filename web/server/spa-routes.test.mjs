@@ -23,6 +23,13 @@ test("isSpaRoute accepts declared paths and rejects the rest", () => {
     "/projects/p/docs/maintenance",
   ])
     assert.equal(isSpaRoute(ok), true, ok);
-  for (const ng of ["/no-such-page", "/tasks/T1/unknown", "/tasks/T1/runs", "/tasks/T1/publish", "/org/a/b", "/tasks/.."])
+  for (const ng of [
+    "/no-such-page",
+    "/tasks/T1/unknown",
+    "/tasks/T1/runs",
+    "/tasks/T1/publish",
+    "/org/a/b",
+    "/tasks/..",
+  ])
     assert.equal(isSpaRoute(ng), false, ng);
 });

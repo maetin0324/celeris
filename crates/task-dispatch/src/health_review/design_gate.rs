@@ -431,7 +431,8 @@ impl Dispatcher {
             .err()
             .and_then(|e| provider_failure_reason(e).zip(provider_failure_outcome(e)));
         let source_cooldown = supply.as_ref().and_then(|(reason, outcome)| {
-            self.record_supply_failure(
+            record_supply_failure(
+                self,
                 (account.as_deref(), account_adapter),
                 &end.provider,
                 reason,

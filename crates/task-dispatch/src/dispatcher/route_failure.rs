@@ -69,28 +69,27 @@ pub fn provider_failure_outcome(e: &AdapterError) -> Option<ProviderOutcome> {
     }
 }
 
-impl Dispatcher {
-    /// ADR-0024 D4 / ADR-0013 D9 / ADR 2026-11-24-planner-supply-failure-cooldown D3: run の供給側失敗を、その run の
-    /// account（pool）か source の cooldown にする。worker・planner・side review の run が同じこの関数を通る。
-    /// pool の account の失敗は台帳に記録して `None`（`ProviderThrottled` は出さない）。pool を使わない source と
-    /// 起動の失敗（`spawn`。account に依らない）は source の暗黙の account の cooldown にし、遷移と同じ
-    /// トランザクションで残す `ProviderThrottled` を返す。`reason` は [`provider_failure_reason`] の語彙。
-    pub(super) fn record_supply_failure(
-        &mut self,
-        (account, adapter): (Option<&str>, Option<AccountAdapter>),
-        source: &str,
-        reason: &str,
-        outcome: &ProviderOutcome,
-    ) -> Option<Event> {
-        match (account, adapter) {
-            (Some(account), Some(adapter)) if reason != "spawn" => {
-                self.record_account_failure(adapter, account, reason, outcome);
-                None
-            }
-            _ => Some(self.record_source_failure(source, reason, outcome)),
+/// ADR-0024 D4 / ADR-0013 D9 / ADR 2026-11-24-planner-supply-failure-cooldown D3: run の供給側失敗を、その run の
+/// account（pool）か source の cooldown にする。worker・planner・side review・final review の run が同じこの関数を通る。
+/// pool の account は台帳に記録して `None`。pool を使わない source と起動の失敗（`spawn`。account に依らない）は source の
+/// 暗黙の account の cooldown にし、遷移と同じトランザクションで残す `ProviderThrottled` を返す。
+pub(super) fn record_supply_failure(
+    d: &mut Dispatcher,
+    (account, adapter): (Option<&str>, Option<AccountAdapter>),
+    source: &str,
+    reason: &str,
+    outcome: &ProviderOutcome,
+) -> Option<Event> {
+    match (account, adapter) {
+        (Some(account), Some(adapter)) if reason != "spawn" => {
+            d.record_account_failure(adapter, account, reason, outcome);
+            None
         }
+        _ => Some(d.record_source_failure(source, reason, outcome)),
     }
+}
 
+impl Dispatcher {
     /// ADR-0013 D9 / ADR 2026-10-08 §(e): a supply-side failure on a source without an account
     /// pool cools down the source's implicit account (id = source id) and returns the
     /// `ProviderThrottled` event recorded with the transition.

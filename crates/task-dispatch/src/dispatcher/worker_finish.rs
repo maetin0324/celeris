@@ -959,7 +959,8 @@ impl Dispatcher {
         if let Some(reason) = failure_reason {
             // ADR-0024 D4 / ADR-0013 D9: アカウント（または source の暗黙アカウント）の cooldown。source の記録は
             // 遷移と同じトランザクションで残す。
-            events.extend(self.record_supply_failure(
+            events.extend(record_supply_failure(
+                self,
                 (account.as_deref(), account_adapter),
                 &provider,
                 reason,

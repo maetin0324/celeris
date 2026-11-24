@@ -31,18 +31,16 @@ impl Dispatcher {
         let now = OffsetDateTime::now_utc();
 
         let (run_end, describe, usage) = design_gate::run_end_of(&result, "planner");
-        // ADR 2026-11-24-planner-supply-failure-cooldown D1・D3: 供給側の失敗（認証の失敗・枠切れ・throttle・起動の失敗）は
-        // worker の run と同じ分類（`provider_failure_outcome`）と同じ関数（`record_supply_failure`）で account か source を
-        // cooldown にする（AuthFailed は再ログインまで保持し、人に通知する）。
-        let supply = match result.as_ref().err() {
-            Some(e) => provider_failure_reason(e)
-                .zip(provider_failure_outcome(e))
-                .map(|(reason, outcome)| (reason, outcome, e.to_string())),
-            None => None,
-        };
-        let source_cooldown = supply.as_ref().and_then(|(reason, outcome, _)| {
-            self.record_supply_failure((account, account_adapter), &provider, reason, outcome)
-        });
+        // ADR 2026-11-24-planner-supply-failure-cooldown D1–D3: 供給側の失敗は worker と同じ関数で cooldown にし、数えない
+        // ものは `end = HarnessError{Supply}` で閉じる（`planner_attempts_in_window`・`planner_retry_pending` が読む）。
+        let supply = planner_supply_failure(
+            self,
+            task_id,
+            (account, account_adapter),
+            &provider,
+            &result,
+        )?;
+        let run_end = supply.as_ref().and_then(PlannerSupply::run_end).or(run_end);
 
         // ADR-0076: planner run の quota 消費も worker と同じ `RoutingRuntime::settle_quota` で見積もる。以降の `?` で抜けても
         // `QuotaActivity` が閉じているよう、分岐より前に一度だけ求め、`WorkerFinished` を保存するすべての分岐で同じトランザクションに添える。
@@ -78,133 +76,16 @@ impl Dispatcher {
         // 1 回目は従来どおり不正な試行（planner に理由を渡して再試行）、最後の試行では上限を緩めて採用し、超えた分の unit を
         // `kind: limit` の決定の要求で止める（黙って切らない・atomic に倒さない）。採用に使う上限を `adopt_limits` に返す。
         let mut adopt_limits = self.config.execution.limits;
-        let metrics = run_since.map(|since| task_core::RunMetrics {
-            wall_ms: wall_ms_since(since),
-            retries: task.attempts,
-            ..Default::default()
-        });
-        // D2: AuthFailed は回数によらず、Throttled・Exhausted は続いた requeue が `max_requeues` 未満の間は計画の試行に
-        // 数えず（worker の `settle_adapter_failure` と同じ規則）、`end = HarnessError{Supply}` で閉じて requeue する。
-        // 次の planner run は cooldown の外れた別の account に回る（`planner_retry_pending`・`planner_attempts_in_window`
-        // がこの `end` を読む）。上限に達した Throttled・Exhausted は下の不正な試行の経路に合流する。
-        let supply_limit_reached = match &supply {
-            Some((_, outcome, message)) => {
-                let below_requeue_limit =
-                    task_ops::derive::consecutive_requeues(&self.store.events_for(task_id)?)
-                        < self.config.max_requeues;
-                if matches!(outcome, ProviderOutcome::AuthFailed) || below_requeue_limit {
-                    let end = task_core::RunEnd::HarnessError {
-                        class: task_core::HarnessErrorClass::Supply,
-                    };
-                    if let Err(e) = self.store.run_index_finish(
-                        &run_id,
-                        task_core::RunIndexStatus::from_run_end(end),
-                        None,
-                        usage,
-                        metrics,
-                        now,
-                    ) {
-                        tracing::warn!(%task_id, %run_id, error = %e, "failed to finish the runs index row for the planner run");
-                    }
-                    let finished = run_end_record(
-                        &run_id,
-                        format!("requeue: adapter: {message}"),
-                        usage,
-                        Some(RunRole::Planner),
-                        metrics,
-                        Some(end),
-                    );
-                    let progress = Event::worker_progress(
-                        run_id.clone(),
-                        planner_supply_requeue_message(message),
-                    );
-                    tracing::warn!(%task_id, %run_id, account = ?account, reason = %message, "the planner run hit a supply-side failure; not counted as a plan attempt, requeued (ADR 2026-11-24-planner-supply-failure-cooldown D2)");
-                    self.store.apply_transition_with_events(
-                        task_id,
-                        Trigger::Requeue,
-                        [finished, quota_event]
-                            .into_iter()
-                            .chain(source_cooldown)
-                            .chain([progress])
-                            .collect(),
-                    )?;
-                    return Ok(());
-                }
-                Some(format!(
-                    "requeue limit ({}) reached: adapter: {message}",
-                    self.config.max_requeues
-                ))
-            }
-            None => None,
-        };
-        let validation: Result<_, String> = if let Some(reason) = supply_limit_reached {
-            Err(reason)
-        } else if design_gate::plan_file_checked(&result) {
-            let workspace_dir = self.task_dir(task);
-            let artifacts_dir = workspace_dir.as_ref().map(|d| self.artifacts_dir(task, d));
-            match artifacts_dir
-                .as_deref()
-                .map(|d| d.join("execution-plan.json"))
-                .and_then(|p| std::fs::read_to_string(p).ok())
-            {
-                // D1: run の終わり方（turn の上限か）を理由に添え、次の planner に渡す。
-                None => Err(format!(
-                    "artifacts/execution-plan.json が見つからない（{describe}）"
-                )),
-                Some(text) => match parse_planner_output(
-                    &text,
-                    active_plan.as_ref(),
-                    &done_work_units.iter().map(|(k, _)| k.clone()).collect(),
-                ) {
-                    Err(e) => Err(e),
-                    Ok(spec) => match plan_preflight(self, task, &spec)? {
-                        Err(e) => Err(e),
-                        Ok(()) => {
-                            let ctx = task_core::PlanContext {
-                                origin: task_core::PlanOrigin::Planner,
-                                depth: task_core::tree::depth_of(task),
-                            };
-                            match task_core::execution_plan::validate_with(
-                                &spec,
-                                self.config.execution.limits,
-                                &done_work_units,
-                                ctx,
-                            ) {
-                                Ok(v) => Ok(v),
-                                Err(errors)
-                                    if spec.schema == task_core::EXECUTION_PLAN_SCHEMA_V3
-                                        && errors.iter().all(is_tree_plan_limit_error)
-                                        && self.planner_attempts_in_window(task_id)?
-                                            >= MAX_PLANNER_ATTEMPTS =>
-                                {
-                                    let relaxed =
-                                        relaxed_tree_plan_limits(self.config.execution.limits);
-                                    match task_core::execution_plan::validate_with(
-                                        &spec,
-                                        relaxed,
-                                        &done_work_units,
-                                        ctx,
-                                    ) {
-                                        Ok(v) => {
-                                            tracing::warn!(%task_id, %run_id, errors = %task_ops::execution::describe_validation_errors(&errors), "the /3 plan breaches only the plan limits on the last attempt; adopting it and holding the excess units for a limit decision (ADR-0079 D3)");
-                                            adopt_limits = relaxed;
-                                            Ok(v)
-                                        }
-                                        Err(e) => {
-                                            Err(task_ops::execution::describe_validation_errors(&e))
-                                        }
-                                    }
-                                }
-                                Err(errors) => {
-                                    Err(task_ops::execution::describe_validation_errors(&errors))
-                                }
-                            }
-                        }
-                    },
-                },
-            }
-        } else {
-            Err(format!("planner run did not finish cleanly: {describe}"))
+        let validation: Result<_, String> = match &supply {
+            Some(supply) => Err(supply.reason.clone()),
+            None => planner_plan_validation(
+                self,
+                task,
+                &result,
+                &describe,
+                (active_plan.as_ref(), &done_work_units),
+                &mut adopt_limits,
+            )?,
         };
         // ADR-0079 付記「R7-3」D3: replan の計画が退役した（superseded / cancelled の）行の key を再利用していれば、採用の前に検証の理由として
         // planner に返す（再試行・`plan_invalid` の経路）。以前は段階の統合 WU の key の重なりが採用の中で sqlite の `UNIQUE constraint failed: work_units.task_id, key` に落ちていた（08:15Z）。
@@ -229,6 +110,11 @@ impl Dispatcher {
         // ADR 2026-11-07-health-review-integration D3.3: 高 risk の class の path を書く planner の計画に brief が無ければ再試行に回す。
         let validation = self.design_brief_gate(task, &run_id, validation);
 
+        let metrics = run_since.map(|since| task_core::RunMetrics {
+            wall_ms: wall_ms_since(since),
+            retries: task.attempts,
+            ..Default::default()
+        });
         let index_status = run_end
             .map(task_core::RunIndexStatus::from_run_end)
             .unwrap_or(task_core::RunIndexStatus::HarnessError);
@@ -344,6 +230,30 @@ impl Dispatcher {
                     }
                 }
             }
+            Err(reason) if supply.as_ref().is_some_and(|s| s.requeue) => {
+                let outcome = format!("requeue: adapter: {reason}");
+                let finished = run_end_record(
+                    &run_id,
+                    outcome,
+                    usage,
+                    Some(RunRole::Planner),
+                    metrics,
+                    run_end,
+                );
+                let progress =
+                    Event::worker_progress(run_id.clone(), planner_supply_requeue_message(&reason));
+                tracing::warn!(%task_id, %run_id, ?account, %reason, "the planner run hit a supply-side failure; not counted as a plan attempt, requeued (ADR 2026-11-24-planner-supply-failure-cooldown D2)");
+                let cooldown = supply.and_then(|s| s.cooldown);
+                let events = [finished, quota_event]
+                    .into_iter()
+                    .chain(cooldown)
+                    .chain([progress]);
+                self.store.apply_transition_with_events(
+                    task_id,
+                    Trigger::Requeue,
+                    events.collect(),
+                )?;
+            }
             Err(reason) => {
                 let outcome = format!("error(retryable=true): invalid execution plan: {reason}");
                 let role = Some(RunRole::Planner);
@@ -354,7 +264,7 @@ impl Dispatcher {
                     &run_id,
                     [finished, quota_event]
                         .into_iter()
-                        .chain(source_cooldown)
+                        .chain(supply.and_then(|s| s.cooldown))
                         .collect(),
                     reason,
                     now,
@@ -1171,4 +1081,145 @@ pub(super) fn validate_plan_harnesses(
         }
     }
     Ok(())
+}
+
+/// ADR 2026-11-24-planner-supply-failure-cooldown D2: 供給側の失敗（認証の失敗・枠切れ・throttle・起動の失敗）で終わった
+/// planner run の扱い。
+pub(super) struct PlannerSupply {
+    /// 計画の試行に数えず requeue する（AuthFailed は常に。Throttled・Exhausted は続いた requeue が `max_requeues` 未満の間。
+    /// worker の `settle_adapter_failure` と同じ規則）。
+    requeue: bool,
+    /// requeue なら adapter の文、上限に達したなら不正な試行の理由。
+    reason: String,
+    /// source の cooldown（`record_supply_failure`）。遷移と同じトランザクションで残す。
+    cooldown: Option<Event>,
+}
+
+impl PlannerSupply {
+    /// 試行に数えない run の `WorkerFinished.end`（上限に達した run は不正な試行なので `None`）。
+    fn run_end(&self) -> Option<task_core::RunEnd> {
+        self.requeue.then_some(task_core::RunEnd::HarnessError {
+            class: task_core::HarnessErrorClass::Supply,
+        })
+    }
+}
+
+/// D1・D3: run の結果が供給側の失敗（`provider_failure_outcome`）なら、worker と同じ `record_supply_failure` で account
+/// （AuthFailed は再ログインまで保持し人に通知）か source を cooldown にし、数え方を決める。供給側でなければ `None`。
+fn planner_supply_failure(
+    d: &mut Dispatcher,
+    task_id: TaskId,
+    account: (Option<&str>, Option<AccountAdapter>),
+    provider: &str,
+    result: &Result<RunOutcome, AdapterError>,
+) -> Result<Option<PlannerSupply>, DispatchError> {
+    let Some(e) = result.as_ref().err() else {
+        return Ok(None);
+    };
+    let (Some(reason), Some(outcome)) = (provider_failure_reason(e), provider_failure_outcome(e))
+    else {
+        return Ok(None);
+    };
+    let cooldown = record_supply_failure(d, account, provider, reason, &outcome);
+    let max = d.config.max_requeues;
+    let requeue = matches!(outcome, ProviderOutcome::AuthFailed)
+        || task_ops::derive::consecutive_requeues(&d.store.events_for(task_id)?) < max;
+    let reason = if requeue {
+        e.to_string()
+    } else {
+        format!("requeue limit ({max}) reached: adapter: {e}")
+    };
+    Ok(Some(PlannerSupply {
+        requeue,
+        reason,
+        cooldown,
+    }))
+}
+
+/// ADR-0072 D14: planner の `artifacts/execution-plan.json` の検証。run が `Terminal::Done` か turn の上限で終わったときだけ
+/// 試みる（ADR 2026-11-09-planner-turn-limit-and-comment-interrupt D1。それ以外は「不正な試行」）。
+/// ADR-0079 D3 / D4 (3)（Phase R2a）: /3 の計画が計画の上限（段階の数・段階あたりの unit・子 task・`max_depth`）だけで不正なら、
+/// 1 回目は従来どおり不正な試行（planner に理由を渡して再試行）、最後の試行では上限を緩めて採用し、超えた分の unit を
+/// `kind: limit` の決定の要求で止める（黙って切らない・atomic に倒さない）。採用に使う上限を `adopt_limits` に返す。
+fn planner_plan_validation(
+    d: &Dispatcher,
+    task: &Task,
+    result: &Result<RunOutcome, AdapterError>,
+    describe: &str,
+    (active_plan, done_work_units): (
+        Option<&task_core::ExecutionPlanRow>,
+        &[(String, task_core::WorkUnitSpec)],
+    ),
+    adopt_limits: &mut task_core::ExecutionLimits,
+) -> Result<Result<task_core::execution_plan::ValidatedPlan, String>, DispatchError> {
+    if !design_gate::plan_file_checked(result) {
+        return Ok(Err(format!(
+            "planner run did not finish cleanly: {describe}"
+        )));
+    }
+
+    let workspace_dir = d.task_dir(task);
+    let artifacts_dir = workspace_dir.as_ref().map(|dir| d.artifacts_dir(task, dir));
+    Ok(
+        match artifacts_dir
+            .as_deref()
+            .map(|dir| dir.join("execution-plan.json"))
+            .and_then(|p| std::fs::read_to_string(p).ok())
+        {
+            // D1: run の終わり方（turn の上限か）を理由に添え、次の planner に渡す。
+            None => Err(format!(
+                "artifacts/execution-plan.json が見つからない（{describe}）"
+            )),
+            Some(text) => match parse_planner_output(
+                &text,
+                active_plan,
+                &done_work_units.iter().map(|(k, _)| k.clone()).collect(),
+            ) {
+                Err(e) => Err(e),
+                Ok(spec) => match plan_preflight(d, task, &spec)? {
+                    Err(e) => Err(e),
+                    Ok(()) => {
+                        let ctx = task_core::PlanContext {
+                            origin: task_core::PlanOrigin::Planner,
+                            depth: task_core::tree::depth_of(task),
+                        };
+                        match task_core::execution_plan::validate_with(
+                            &spec,
+                            d.config.execution.limits,
+                            done_work_units,
+                            ctx,
+                        ) {
+                            Ok(v) => Ok(v),
+                            Err(errors)
+                                if spec.schema == task_core::EXECUTION_PLAN_SCHEMA_V3
+                                    && errors.iter().all(is_tree_plan_limit_error)
+                                    && d.planner_attempts_in_window(task.id)?
+                                        >= MAX_PLANNER_ATTEMPTS =>
+                            {
+                                let relaxed = relaxed_tree_plan_limits(d.config.execution.limits);
+                                match task_core::execution_plan::validate_with(
+                                    &spec,
+                                    relaxed,
+                                    done_work_units,
+                                    ctx,
+                                ) {
+                                    Ok(v) => {
+                                        tracing::warn!(task_id = %task.id, errors = %task_ops::execution::describe_validation_errors(&errors), "the /3 plan breaches only the plan limits on the last attempt; adopting it and holding the excess units for a limit decision (ADR-0079 D3)");
+                                        *adopt_limits = relaxed;
+                                        Ok(v)
+                                    }
+                                    Err(e) => {
+                                        Err(task_ops::execution::describe_validation_errors(&e))
+                                    }
+                                }
+                            }
+                            Err(errors) => {
+                                Err(task_ops::execution::describe_validation_errors(&errors))
+                            }
+                        }
+                    }
+                },
+            },
+        },
+    )
 }

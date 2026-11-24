@@ -202,7 +202,7 @@ use planner_flow::{
 };
 use route_failure::{
     account_cooldown_reason_name, cooldown_reason_name, excluded_reason_name,
-    provider_failure_reason,
+    provider_failure_reason, record_supply_failure,
 };
 use worker_finish::{
     build_continuation_context, finish_reviewer_run_index, set_worker_finished_end,

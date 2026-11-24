@@ -3,6 +3,15 @@
 実行・計画・木・決定の要求のエンドポイントは §3.125 にある。
 
 - 状態: **Accepted**（人間の決定 H1 / H5〜H7。celeris 側の ADR-0013、GUI 側の ADR-GUI-0001）。改訂日 2026-09-14
+- 改訂: 2026-11-24（ADR 2026-11-23-project-observability-publish）— **追加。v1 のまま**。エンドポイント 246〜248（§3.135）を足した:
+  246 `GET /projects/{id}/overview`（`ProjectOverview`。14 項目・印 4 語〈`confirmed`・`estimated`・`needs_decision`・`contradicted`〉・強い警告・
+  drill-down の link 7 種 `ProjectOverviewLink`。読むだけ）、247 `POST /chat/threads/{t}/messages/{m}/review`（人の token だけが chat の案を
+  `adopt`・`reject`・`comment` する。他の主体は 403 `proposal_verdict_requires_human`、見た版と違えば 409 `proposal_review_stale`）、
+  248 `GET /tasks/{id}/publish/{manifest_id}`（`ManifestView`。claims → evidence → 再現条件 → limitations・未解決 → 人の署名。無ければ 404
+  `publish_manifest_not_found`）。`ChatMessage` に `proposal`（`ChatMessageProposal`）・`external`（`ChatMessageExternal`）を足した。
+  `POST /decisions/{id}/answer`・`revise` は、署名の決定（key `publish-signoff-v<n>`）への人以外の回答を 403 `publication_requires_human`、
+  人の `sign` で manifest の検査の違反を 422 `publish_manifest_invalid`、file の今の sha256 が問いと違えば 409 `publish_manifest_stale` で拒む
+  （§3.125.13。CoS の operation `decision.answer`・`decision.revise` と MCP の `decision_answer` も同じ owner の主体の拒否を通る）。
 - 改訂: 2026-11-10（ADR 2026-11-08-health-enforcement-loop D7.3）— **追加。v1 のまま**。task の event に `dependents_reopened`
   （`restored[]`（`task_id`・`depends_on`）・`kept[]`（`task_id`・`why`（`{reason: retried, successor}` か `{reason: other_dependency, unresolved}`）））
   を足した。追記先は終端から戻った依存先の task で、戻した後続と、依存先の失敗で cancel されたが戻さなかった後続を記録する。
@@ -623,6 +632,9 @@ token_file = "api.token"
 | 243 | POST | `/chat/threads/{t}/exchange/shares/{share_id}/revoke` | 共有を取り消す（`exchange_share_revoked` を追記。人の token だけ。D2.1） | `ChatExchangeShareResponse` | `crate::chat::exchange` + `task_core::discussion_exchange` |
 | 244 | GET | `/chat/threads/{t}/exchange/export` | 共有の範囲を `celeris.discussion-snapshot/1` の JSON か Markdown で書き出す（読むだけ。人の token だけ。D1.4・D4.1） | `celeris.discussion-snapshot/1`（JSON・Markdown） | `crate::chat::exchange` + `task_core::discussion_exchange` |
 | 245 | POST | `/chat/threads/{t}/exchange/imports` | 人が外部 LLM との議論から選んだ要約・引用を 1 件、`discuss` の発言として取り込む（人の token だけ。D4.2・D4.3） | 201・200 `ChatExchangeImportResponse` | `crate::chat::exchange` + `task_core::discussion_exchange` |
+| 246 | GET | `/projects/{id}/overview` | 案件の概要（14 項目・印・強い警告・drill-down の link。読むだけで何も書かない。ADR 2026-11-23-project-observability-publish D1。§3.135.1） | `ProjectOverview` | `handlers/project_overview.rs` + `task_ops::project_overview` |
+| 247 | POST | `/chat/threads/{t}/messages/{m}/review` | chat の案を人が採用・却下・コメントする（`adopt`・`reject`・`comment`。人の token だけ、他は 403 `proposal_verdict_requires_human`。D2.1。§3.135.2） | 202 `ChatPostMessageResponse` | `crate::chat::proposal_review` + `task_core::proposal_review` |
+| 248 | GET | `/tasks/{id}/publish/{manifest_id}` | publish manifest の表示（claims → evidence → 再現条件 → limitations・未解決 → 人の署名。検査と署名の状態は読むたびに導く。D3。§3.135.3） | `ManifestView` | `decisions.rs` + `crate::publish` + `task_core::publish` |
 
 browser の制御（`crate::browser_control`）の 6 本は、route を定数 `BASE`（`/api/v1/tasks/{id}/browser/control/{run}/{session}`）と `format!` で組み立てて登録している（`browser_control.rs` の `routes()`）。詳細は `docs/guides/browser-capability.md`。
 
@@ -3207,6 +3219,16 @@ continuation が各設定閾値（既定はともに 2、超過は 3 回目）�
 
 本文は `DecisionAnswerBody`: `option?`（決定の `options[].key` のどれか）、`note?`（2,000 文字まで。依存する仕事の入力に固定の書式で入る）。`kind = choice` の決定だけ `option` を省いて `note` に自由記述で答えられる（記録される `option` は `other`）。1 トランザクションで `DecisionAnswered{by: "human"}`、表の更新、待っていた unit の再評価（`blocked(decision)` → `pending` / `ready`、取り下げなら `cancelled`）、効き目の event（replan の依頼 = `ExecutionHintSet{replan: true}`、atomic の run の `self` への答え = `Answered`）を書く。`needed_before: [self]` の取り下げは続けて節点を中止する。応答は `decision`（回答後の `DecisionView`）、`effect`、`resumed[]`、`cancelled[]`（unit の key）、`replan_requested`、`cancelled_task?`。管理トークンが無ければ 401、JSON が不正なら 400、無い id は 404 `decision_not_found`、`open` でない・決定を出した節点が終端なら 409 `decision_not_open`（`decision_status` を添える）、選択肢の外・daemon の決定で `option` 無し・note が長すぎるなら 422。
 
+署名の決定（key `publish-signoff-v<n>`。ADR 2026-11-23-project-observability-publish D3.3）には人だけが答える。主体の規則は
+`task_core::publish::is_signoff_actor`（`human:<名前>` で `human:local`〈token の無い構成〉でないもの）で、operator・`mcp:`・`cos:`・接頭辞の無い
+`human`・worker の run は 403 `publication_requires_human`（決定の行も event も書かない）。判定は `task_ops::decision::plan_answer`・`plan_revise` の
+`signoff_actor` が持ち、CoS の operation `decision.answer`・`decision.revise`（`/cos/operations`）と MCP の `decision_answer`（`ToolError::rejected`、
+文は `publication_requires_human` で始まる）も同じ関数を通る。
+人の HTTP の回答で `sign` を選ぶと、回答の前に `crate::publish::check_before_sign` が manifest を検査する: 問いに manifest の name と sha256 が
+1 回ずつ無い、または検査の違反があれば 422 `publish_manifest_invalid`（違反は `violations[]`〈`ManifestViolation`: `rule`・`code`・`path`・`detail`〉）、
+file の今の byte 列の sha256 が問いの sha256 と違えば 409 `publish_manifest_stale`（`current_sha256` を添える）。`reject` の回答は検査しない。
+署名は記録だけで、Celeris は外へ何も送らない（D3.5）。
+
 ##### `POST /decisions/{id}/withdraw` → 200 `DecisionOutcome`（管理系）
 
 人が決定を取り下げる（`DecisionWithdrawn`）。本文は省略可能な `DecisionWithdrawBody`（`reason?`）。効き目は選択肢の `withdraw` と同じ（止めていた unit〈`needed_before` の unit・`stage:<key>` の unit・その決定を `needs_decisions` に持つ unit〉と、それに依存する未着手の unit を `cancelled`。`needed_before: [self]` なら節点を中止）。`open` でなければ 409、無い id は 404。
@@ -3214,6 +3236,9 @@ continuation が各設定閾値（既定はともに 2、超過は 3 回目）�
 ##### `POST /decisions/{id}/revise` → 200 `DecisionOutcome`（管理系）
 
 回答済みの `choice` の決定の答えを変える（新しい `DecisionAnswered`。最後の回答が有効）。本文は `DecisionAnswerBody`。これから作られる子・これから走る leaf は新しい答えを読む。既に作られた非終端の子は作り直さず、node のコメント（人を起こさない）で新しい答えを届け、応答の `notified_children[]` に並ぶ。未回答・取り下げ済み・daemon の決定（回答の時点で効き目を当てたもの）は 409。
+
+署名の決定（`publish-signoff-v<n>`）の答えの改めも answer と同じ: 人以外は 403 `publication_requires_human`（`plan_revise` の `signoff_actor`。
+CoS の operation `decision.revise` も同じ）、人の `sign` は `check_before_sign` で 422 `publish_manifest_invalid`・409 `publish_manifest_stale`。
 
 ##### `GET /inbox` の `decisions` と `counts.decisions`
 
@@ -3510,6 +3535,7 @@ REST の旧 Console エンドポイントは 2026-11-17 に消した（ADR 2026-
 | POST `/chat/threads/{t}/exchange/shares/{share_id}/revoke` | なし | 200 `ChatExchangeShareResponse {share_id, revoked:true}`。無い共有は 404、取り消し済みは 409。主体の制限は共有と同じ |
 | GET `/chat/threads/{t}/exchange/export` | `format=json\|markdown`（既定 `json`）、`share_id`（1 つの共有に絞る）、`after_seq`、`limit`（既定 50、上限 200） | 200。`application/json` か `text/markdown` の `celeris.discussion-snapshot/1`（ADR 2026-11-22-external-llm-discussion-exchange D1.4）。共有の有効な発言だけで、撤回・共有の後の編集は `omitted`。本文の秘密の形は `[masked]`。要約・戦略の文書（`ExchangeDocument`）はまだ出さない。人の token だけ（他は 403 `exchange_forbidden`）。記録は作らない |
 | POST `/chat/threads/{t}/exchange/imports` | `{"format":"json\|markdown","client_message_id","envelope"?,"content"?}`（`json` は `envelope`、`markdown` は `content` に front matter と本文の全文。`actor`・`consent`・`approval` を書いた文書は 422） | 新しい発言は 201、同じ `client_message_id` と本文は 200 `duplicate:true`（`ChatExchangeImportResponse`）。違う本文は 409 `R7:idempotency_conflict`。別案件の envelope・秘密・注入文で `discussion`・`proposed` から進めない状態・上限超えは 422。発言は `role=user`・author は呼んだ人・`discussion_mode=discuss`・`metadata_json.exchange`。人の token だけ（他は 403 `exchange_forbidden`） |
+| POST `/chat/threads/{t}/messages/{m}/review` | `{"verdict":"adopt\|reject\|comment","expected_revision","sha256","attachment"?,"note"?,"client_message_id"?}`（未知の欄は 400） | 202 `ChatPostMessageResponse`。人の token だけ（§3.135.2） |
 | POST `/chat/threads/{t}/stop` | `{"run_id"}` | 202 `ChatStopResponse`。終端への再送は 200、現在の run と違えば 409 |
 | POST `/chat/threads/{t}/resume-queue` | `{"expected_revision"}` | 200 `ChatThreadResponse` |
 | GET `/chat/threads/{t}/runs` | `before`（前ページの `next_before`）、`limit`（既定 50、最大 200） | 200 `ChatRunListResponse` |
@@ -3939,6 +3965,84 @@ config の欄は無い（mode は DB の表が持つ）。CLI は `celerisctl sc
 - CoS の operation には無い（EXCLUDED `script_api_only`。包むと 422 `cos_operation_not_allowed`）。昇格（`→canary`・`→ts`）は今までどおり
   人の token だけで、`lane_rules` は `standing` が `passed` のとき連続 100 件・窓の timeout と失敗 0 件で通る（§3.134.2 の 422 の
   `readiness.exhaustive`・`readiness.required` が読み取り口）。
+
+### 3.135 案件の概要・chat の案の採否・publish manifest（ADR 2026-11-23-project-observability-publish）
+
+3 つの口（エンドポイント 246〜248）を足した。新しい表・migration・event の種類は無い。概要と manifest の状態は読むたびに既存の行・event・成果物から導き、保存しない。
+採否は同じ thread の人の message 1 件として書く。Celeris は署名を受けても外へ何も送らない（D3.5）。
+
+#### 3.135.1 `GET /projects/{id}/overview` → 200 `ProjectOverview`
+
+案件の概要（`celeris.project-overview/1`）。読むだけで、どの表にも書かず、cache も持たない（D1・D5）。読める主体は `GET /projects/{id}` と同じ。MCP の道具は無い。
+導出は `task_ops::project_overview::overview`、handler は `crates/task-api/src/handlers/project_overview.rs`。O14 の manifest の状態は §3.135.3 と同じ関数 `crate::publish::manifest_status` から写す。
+
+- 応答 `ProjectOverview`: `schema`（`celeris.project-overview/1`）、`project_id`、`generated_at`（RFC 3339）、`request_sha256`（`Project.request` の sha256。本文は `GET /projects/{id}`）、
+  `items[]`（14 件、下の順）、`warnings[]`、`truncated[]`（`entries` が上限 50 件で切れた項目の key）。
+- `ProjectOverviewItem`: `key`、`recorded`（記録が無ければ `false` で `mark` を省く）、`mark?`、`entries[]`。`ProjectOverviewEntry`: `id`、`mark`、`detail`（項目ごとの JSON）、`links[]`。
+- 印 `ProjectOverviewMark` は 4 語: `confirmed`（確認済み）・`estimated`（推定）・`needs_decision`（要判断）・`contradicted`（矛盾・反証）。子 2 の `confidence` と同じ語。
+  `needs_decision` と `contradicted` の entry は強い警告になる（O3 は回答待ちの版の候補だけ、O13 は対象外）。
+- `ProjectOverviewWarning`: `code`、`item`（項目の key）、`strong`、`entry?`、`links[]`。文は Web が `code` から組む。code は印の `needs_decision`・`contradicted` と、
+  `strategy_stale`・`refute_unapplied`・`evaluation_invalid`・`evaluation_unsupported`・`citation_stale`・`budget_exceeded`・`cost_unknown`・`controller_blocked`・
+  `manifest_invalid`・`signoff_stale`、manifest の強い警告 `manifest_confidential`・`manifest_blocking_question`。
+
+14 項目（`items[].key`。この順）:
+
+| # | key | 導く元 | entry の link |
+|---|---|---|---|
+| O1 | `original_goal` | `Project.request` の sha256 だけ | — |
+| O2 | `approved_strategy` | 決定 `strategy-approve-v<n>` から系列ごとの承認済みの最新の版と回答待ちの版 | `artifact`・`task` |
+| O3 | `candidates` | 戦略の文書の候補の比較。回答待ちの版の候補は `needs_decision` | 文書の参照 |
+| O4 | `hypotheses` | 戦略の文書の仮説の `confidence` | 文書の参照 |
+| O5 | `verification` | 仮説を識別する候補の実験の task と、その証拠の件数（support・refute・unknown） | 実験の task ごとに `task`・`notebook`・`log` |
+| O6 | `refutations` | 文書の refute の証拠と評価の記録の `refuted[]` | 文書の参照 |
+| O7 | `latest_findings` | strategy root の最新の評価の記録（3 軸と `negative_result` を別の entry にする） | 評価の参照 |
+| O8 | `discussion_sources` | 案件 thread の新しい 50 件の message のうち、外部の文・案・引用を持つもの | `chat`（`state` 付き） |
+| O9 | `experiments_and_tasks` | 戦略を付けた `task.create` で作られた実験の task（X(v)） | `task`・`log`・`git`（`task_id` 付き） |
+| O10 | `budget_spent` | X(v) の task の木の消費（`project_root_totals`）と候補の予算の和。超過は `contradicted` | 実験の task ごとに `task`・`log` |
+| O11 | `next_verification` | task の無い open の候補の実験、保留した前提の再検討の条件、評価の `next` | 文書・評価の参照 |
+| O12 | `pending_human_decisions` | 案件の task の未回答の決定と、採否の無い chat の案。1 件以上なら `needs_decision` | `task`・`chat` |
+| O13 | `risks` | 警告の code ごとの件数。強い警告があれば `contradicted` | 警告の link |
+| O14 | `publish_readiness` | 決定 `publish-signoff-v<n>` から manifest ごとの最新の版。違反・file の上書きは `manifest_invalid`、`stale`・`superseded` の署名は `signoff_stale` | `artifact`・`task` |
+
+drill-down の link `ProjectOverviewLink`（`kind` で区別する 7 種。D1.4）:
+
+- `task {task_id}`、`artifact {task_id, name, sha256}`、`notebook {task_id, name}`（name が `.ipynb` で終わる成果物）、`log {task_id, run_id}`、
+  `git {repo, sha, task_id?}`、`literature {url?, path?, sha256?}`（`https://` の URL か Knowledge の path）、`chat {thread_id, message_id, revision, sha256, state?}`。
+- 実験の task（O9 の X(v)）の drill-down は、その task の `runs` の索引と event から読む: `log` は最後の run（`runs` の索引の `started_at` の順）、
+  `notebook` は `ArtifactProduced` のうち name が `.ipynb` で終わるもの、`git` は最後の `IntegrationMerged` の repo の名前と head の sha（`task_id` はその実験の task）。
+  `log` は O5・O9・O10、`notebook` は O5、`git`（`task_id` 付き）は O9 に出る。文書の参照の `commit` も、実験の task の取り込みの sha と一致すれば `git` に `task_id` が付く。
+- 別の案件の task・thread と `https://` でない URL は link にしない。
+
+エラー: 不明・不正な id は 404 `project_not_found`、クエリは受け付けない（400）。
+
+#### 3.135.2 `POST /chat/threads/{t}/messages/{m}/review` → 202 `ChatPostMessageResponse`
+
+人が chat の案を採用・却下・コメントする（D2.1〜D2.3）。案は、author が `mcp:` で始まる外部 LLM の案、人の取り込み（`human_paste`・`markdown_import`）、CoS の戦略の添付の 3 種
+（`ChatMessageProposal.kind`: `external_llm`・`human_import`・`cos_strategy`）。handler は `crate::chat::proposal_review`、記録は `task_core::proposal_review`。
+
+- 本文 `ProposalReviewRequest`: `verdict`（`adopt`・`reject`・`comment`）、`expected_revision`・`sha256`（人が見た案の revision と本文の sha256。CoS の案は `attachment` で添付を指し、`sha256` はその添付の sha256）、
+  `attachment?`、`note?`（2,000 文字まで。`comment` では 1 文字以上が要る）、`client_message_id?`（同じ key と本文は前に書いた採否を返す）。未知の欄は 400。
+- 採否は同じ thread の人の message 1 件として `metadata_json.proposal_review` 付きで書く（案の本文は写さない）。`adopt` は子 2 の経路（task の成果物と決定 `strategy-approve-v<n>`）に進めという人の指示で、承認ではない。
+- 案の状態は保存せず、読むたびに導く: `ChatMessage.proposal`（`ChatMessageProposal`: `kind`、`review_state`〈`pending`・`adopted`・`rejected`・`commented`・`stale`〉、`review_message_id?`、`reviewed_by?`、`reviewed_at?`）。
+  外部の文には `ChatMessage.external`（`ChatMessageExternal`: `source_kind`、`source_label`、`untrusted`）が付く。
+- 権限: `Principal::Human` だけ。operator（relay を含む）・MCP の client・CoS の run・認証の無い呼び出しは 403 `proposal_verdict_requires_human`。
+  CoS の operation に無い（registry の EXCLUDED `human_proposal_verdict`）。MCP の道具も無い。
+- エラー: 403 `proposal_verdict_requires_human`、409 `proposal_review_stale`（見た revision・本文・添付と違う、撤回済み）、422 `proposal_review_not_a_proposal`（案でない message）、
+  422 `validation`（note・要求の形）、503 `cos_unavailable`（CoS chat が無効）、thread・message の誤りは chat の共通の code。
+
+#### 3.135.3 `GET /tasks/{id}/publish/{manifest_id}?version=` → 200 `ManifestView`
+
+publish manifest（`celeris.publish-manifest/1`、task の成果物 `publish/<manifest_id>/v<n>.json`）の 1 版を表示する（D3）。`version` を省けば最新の版。読むだけで、検査の違反と署名の状態は読むたびに導く（D3.4）。
+route は `crates/task-api/src/decisions.rs`、導出は `crate::publish::manifest_status` と `task_core::publish`。
+
+- 応答 `ManifestView`（欄の順は人が読む順）: `task_id`、`project_id?`、`manifest_id`、`version`、`versions[]`（同じ id の版、昇順）、`name`、`recorded_sha256`（`ArtifactProduced` の値）、
+  `current_sha256?`（file の今の byte 列）、`file_matches_record`、`violations[]`（`ManifestViolation`: `rule`・`code`・`path`・`detail`）、`unsupported_claims[]`、`strong_warnings[]`、`target?`、
+  `claims[]` → `evidence[]` → `reproduction[]` → `limitations[]`・`open_questions[]` → `signoff`。
+- `signoff`（`ManifestSignoffView`）: `state`（`unsigned`・`signed`・`rejected`・`stale`・`superseded`）、`key`（`publish-signoff-v<n>`）、`decision_id?`、`decision_status?`、`answered_by?`、`answered_at?`。
+  署名は §3.125.13 の `POST /decisions/{id}/answer` で人が `sign` を選ぶことだけ（人以外は 403 `publication_requires_human`）。
+- 違反の code: `publish_manifest_invalid`（形・根拠の無い claim・解決しない参照・矛盾・不確実性の隠し、file が読めない）、`publish_manifest_stale`（file の上書き）、
+  `publish_manifest_refute_removed`、`publish_manifest_secret`、`publish_manifest_other_project`、`publish_manifest_idempotency_conflict`、`publish_manifest_id_conflict`。
+- エラー: 404 `task_not_found`、404 `publish_manifest_not_found`（その task にその manifest・版が無い。`manifest_id` を添える）、`version` が正の整数でなければ 400。
 
 ---
 

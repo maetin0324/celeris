@@ -10,7 +10,21 @@
     ],
     "goal": {
       "request_sha256": "sha256:ba0f77dd1490c837f38c42172e7a7b1a0ae26d86abca0f9bfd5e25e32cd0270b",
-      "outcomes": []
+      "outcomes": [
+        {
+          "id": "arch-v4",
+          "title": "エージェントによる今後の機能追加・修正を、安全で速く局所的にするため、現存のCelerisアーキテクチャの実際の責務境界と疎結合性を改善し、通常のGitプロジェクト一般にも適用できる健全性検査で維持する",
+          "acceptance": [
+            "baseline SHAと同じルールでbefore/afterの(1)実際のimport/dependency/循環内辺、(2)直接共有状態・SQLite参照のある実装ファイル数、(3)互いのHTTP/CoS module importとSQL公開面、(4)変更波及のmodule/ファイル数、(5)incremental build・test-affected・review/health時間と費用、(6)productionとtest LoCの差分を記録。",
+            "機能追加の通常タスクに一律LoC削減を強制しないが、単なる新しい抽象化の追加だけでは達成にしない。",
+            "前後比較できない場合は未達/要判断。",
+            "SQLite正本・append-only events・lease/atomicity・replay・ACL・credential・CoS監査・project controllerの安全停止・selfdeploy本番権限・Rust/TS canaryを維持。",
+            "旧実装と新実装を並存させるなら撤去条件と期限を残す。",
+            "政策変更は既存policy.changedの別reviewを守り、Worker・Reviewerの実プロンプトへの目的/受入条件伝達を検証。"
+          ],
+          "reached": false
+        }
+      ]
     },
     "strategy": {
       "task_id": "01M7MZT8KX547464YYS76QNP4G",
@@ -23,7 +37,33 @@
         "title": "[アーキv4 A] 基準の確定・責務境界監査（before の実測と 2 シナリオの固定、source 改変 0）",
         "status": "done",
         "reviewer_passed": true,
-        "criteria": [],
+        "criteria": [
+          {
+            "text": "（条件の本文は slice に無い）",
+            "kind": "reviewer",
+            "result": "pass"
+          },
+          {
+            "text": "（条件の本文は slice に無い）",
+            "kind": "reviewer",
+            "result": "pass"
+          },
+          {
+            "text": "（条件の本文は slice に無い）",
+            "kind": "reviewer",
+            "result": "pass"
+          },
+          {
+            "text": "（条件の本文は slice に無い）",
+            "kind": "command",
+            "result": "pass"
+          },
+          {
+            "text": "（条件の本文は slice に無い）",
+            "kind": "artifact_exists",
+            "result": "pass"
+          }
+        ],
         "reports": [
           {
             "seq": 265,
@@ -56,7 +96,38 @@
         "title": "[アーキv4 B] repo-health の deps.cycle・size・lang_deps を既存 SCC 内の新しい辺と #[path] のすり抜けにも効かせる",
         "status": "done",
         "reviewer_passed": true,
-        "criteria": [],
+        "criteria": [
+          {
+            "text": "（条件の本文は slice に無い）",
+            "kind": "reviewer",
+            "result": "pass"
+          },
+          {
+            "text": "（条件の本文は slice に無い）",
+            "kind": "reviewer",
+            "result": "pass"
+          },
+          {
+            "text": "（条件の本文は slice に無い）",
+            "kind": "reviewer",
+            "result": "pass"
+          },
+          {
+            "text": "（条件の本文は slice に無い）",
+            "kind": "reviewer",
+            "result": "pass"
+          },
+          {
+            "text": "（条件の本文は slice に無い）",
+            "kind": "reviewer",
+            "result": "pass"
+          },
+          {
+            "text": "（条件の本文は slice に無い）",
+            "kind": "reviewer",
+            "result": "pass"
+          }
+        ],
         "reports": [
           {
             "seq": 758,
@@ -89,7 +160,38 @@
         "title": "[アーキv4 C] 設計リスクと reviewer の判定を、既存の安全境界の意味を変える改修にも効かせる（6 ケースの実証）",
         "status": "done",
         "reviewer_passed": true,
-        "criteria": [],
+        "criteria": [
+          {
+            "text": "（条件の本文は slice に無い）",
+            "kind": "reviewer",
+            "result": "pass"
+          },
+          {
+            "text": "（条件の本文は slice に無い）",
+            "kind": "reviewer",
+            "result": "pass"
+          },
+          {
+            "text": "（条件の本文は slice に無い）",
+            "kind": "reviewer",
+            "result": "pass"
+          },
+          {
+            "text": "（条件の本文は slice に無い）",
+            "kind": "reviewer",
+            "result": "pass"
+          },
+          {
+            "text": "（条件の本文は slice に無い）",
+            "kind": "reviewer",
+            "result": "pass"
+          },
+          {
+            "text": "（条件の本文は slice に無い）",
+            "kind": "reviewer",
+            "result": "pass"
+          }
+        ],
         "reports": [
           {
             "seq": 3157,

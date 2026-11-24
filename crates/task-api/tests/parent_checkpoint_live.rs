@@ -5,15 +5,26 @@
 //!   `result_section`）で request と prompt を出し、commit した `fixtures/parent_checkpoint_live/<時点>.request.json`・`<時点>.prompt.md` と
 //!   `fixtures/parent_checkpoint_shadow/<時点>/reports.json` と byte 単位で一致することを確かめる。子の報告は本番と同じ
 //!   `task_core::parent_checkpoint::child_reports`（D3.1.1）で選ぶ。他の欄は dispatcher の `review::parent_evaluation::request`
-//!   （task-api から呼べない private の関数）と同じ出どころで、id は固定の値。`PARENT_CHECKPOINT_LIVE_WRITE=1` のときだけ書き直す。
-//! - `parent_checkpoint_blind_`: commit した入力に D#1446 の本文が入る・answer key の印と時点より後の記録が無い・出力の欄と axes の
-//!   定義がある・上限で切る、を確かめる。
+//!   （task-api から呼べない private の関数）と同じ出どころで、id は固定の値。`goal.outcomes` と子の `criteria` は、盲検の seed と
+//!   同じ [`seed`] で一時 DB に置いた案件から、dispatcher の `goal` と同じ D6 の読み口（`project_controller_view::reach`・
+//!   `unverified_outcomes`）と `project_snapshot::acceptance_criteria` で読む（WU eval-seed）。`PARENT_CHECKPOINT_LIVE_WRITE=1` の
+//!   ときだけ書き直す。
+//! - `parent_checkpoint_blind_`: commit した入力に D#1446 の本文が入る・承認済み Roadmap の Outcome と子の criteria が入る・answer key
+//!   の印と時点より後の記録（時刻・報告の本文・未来にだけ現れる語）が無い・出力の欄と axes の定義がある・上限で切る、を確かめる。
 //! - `parent_checkpoint_live_sample_checks`（`#[ignore]`）: live-evaluator-sample の WU が書いた `E-mid.evaluation.json` を
 //!   `check_evaluation` に通し、形・規則・全参照が slice の中で cutoff 以前かを検査し、answer key との一致を出力する。
 //!
 //! 守る不変条件: 評価器の入力（request・prompt・slice）に子の報告の本文が時点まで入り、answer key の印と時点より後の記録が入らない。
 //! 既存の試験で検出できない理由: `parent_checkpoint_live_request_renders` の前の形は報告の欄を持たず、E-mid の入力に本文が無いこと
 //! （D#1446 を読めないこと）と、prompt に出力の形が無いことを見なかった。
+//!
+//! 守る不変条件（WU eval-seed。ADR 2026-11-24-strategy-pilot-ablation D8）: 盲検の seed は承認済み Roadmap の Outcome（goal.md の
+//! 共通受入条件の文。status・evidence は cutoff 以前の記録だけから決める）と、cutoff 以前に review の記録がある子の受け入れ条件を置き、
+//! E-mid・D-done の request・prompt に Outcome と criteria が出て「（Outcome の記録は無い）」が出ない。Outcome にも criteria にも
+//! cutoff より後の値（未来にだけ現れる語）が入らない。
+//! 既存の試験で検出できない理由: 前の写しは `goal.outcomes` と `criteria` を空で組み立て、commit した fixture（空の入力）と byte で
+//! 比べるだけだった。seed は Roadmap も子の受け入れ条件も置かず、dispatcher の `request` を直しても盲検の入力は空のままで、どの試験も
+//! 落ちない。否定対照は時点より後の時刻と 40 字を超える報告の本文だけを見て、Outcome の文に入りうる最終の値（`17 → 17` など）を見なかった。
 
 mod common;
 
@@ -23,12 +34,15 @@ use std::path::Path;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use task_core::parent_checkpoint as pc;
+use task_core::project_proposal::{self as pp, SnapshotCriterion};
+use task_core::roadmap::{RoadmapOutcomeSpec, RoadmapProposalInput};
+use task_core::store::SqliteStore;
 use task_core::strategy::Reference;
 use task_core::strategy_ref::StrategyRef;
-use task_core::{Event, RunRole, Status, TaskId};
+use task_core::{Check, Criterion, Event, ProjectId, RunRole, Status, TaskId};
 use task_worker::protocol::{
-    ParentCheckpointChild, ParentCheckpointGoal, ParentCheckpointMetrics, ParentCheckpointRequest,
-    ReviewRequest,
+    ParentCheckpointChild, ParentCheckpointGoal, ParentCheckpointMetrics, ParentCheckpointOutcome,
+    ParentCheckpointRequest, ReviewRequest,
 };
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -56,6 +70,17 @@ const CASES: [(&str, &str); 2] = [("E-mid", "children:2"), ("D-done", "children:
 const ROOT_ID: &str = "01M7MZT8KX547464YYS76QNP4G";
 /// prompt の Result 節の成果物の dir（固定）。
 const ARTIFACTS: &str = "<artifacts>";
+/// 未来にだけ現れる語（子 0 の replay の sentinels。`first_seen` が時点より後の語は入力に入らない）。
+const SENTINELS: &str =
+    include_str!("../../../agent-docs/progress/2026-11-21-strategy-v1-0/replay/sentinels.json");
+/// 使い捨ての案件の承認済み Roadmap の Outcome の id（版 1 の 1 件）。
+const OUTCOME_ID: &str = "arch-v4";
+/// 子の受け入れ条件の本文（slice は条件の本文を持たない。replay の export が task の acceptance を落とす）。
+const NO_TEXT: &str = "（条件の本文は slice に無い）";
+/// 使い捨ての DB の Roadmap の提案と承認の actor。人の承認ではなく、一時 DB の中の段取り（ADR 2026-11-24-strategy-pilot-ablation）。
+const SEED_ACTOR: &str = "human:blind-seed";
+/// 評価器の prompt が Outcome の無い request に出す行（eval-input の前の盲検の入力にあった）。
+const ABSENT: &str = "（Outcome の記録は無い）";
 
 fn sha_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
@@ -129,9 +154,332 @@ fn worker_finished(row: &Value) -> Option<Event> {
     })
 }
 
-/// D3.1 の入力を時点の slice から作る（dispatcher の `request` と同じ出どころ。報告は本番の `child_reports`）。
+fn status_of(v: &Value) -> Status {
+    serde_json::from_value(v.clone()).expect("status")
+}
+
+/// 承認済み Roadmap の Outcome（D8）: title は goal.md の「目的：」の最初の文、acceptance は「共通受入条件：」の文（。で区切る）。
+/// どちらも goal.md（親の起票の時点の目的）の文字どおりで、cutoff より後の値（v4 の最終の結果）は入らない。
+fn outcome_spec(goal: &str) -> RoadmapOutcomeSpec {
+    let line = |head: &str| {
+        goal.lines()
+            .find_map(|l| l.strip_prefix(head))
+            .unwrap_or_else(|| panic!("goal.md に {head} の行が無い"))
+    };
+    let sentences = |text: &str| -> Vec<String> {
+        text.split_inclusive('。')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .collect()
+    };
+    let title = sentences(line("目的："))
+        .into_iter()
+        .next()
+        .expect("目的の文")
+        .trim_end_matches('。')
+        .to_string();
+    RoadmapOutcomeSpec {
+        id: OUTCOME_ID.into(),
+        title,
+        acceptance: sentences(line("共通受入条件：")),
+        priority: 0,
+        depends_on: Vec::new(),
+        dropped: false,
+        checks: Vec::new(),
+    }
+}
+
+/// 子 `key` の slice の行（cutoff 以前）。
+fn rows_of<'a>(rows: &'a [Value], key: &str) -> Vec<&'a Value> {
+    rows.iter().filter(|r| r["task"] == key).collect()
+}
+
+/// 子の受け入れ条件（cutoff 以前の記録から。本文は [`NO_TEXT`]）。最後の `reviewer_passed` の `criteria`（`Check::Reviewer` の
+/// 条件の index）と、判定の理由が `cmd=`（`Check::Command`。workspace の検査は `workspace.toml check: ` が付く）・`path=`
+/// （`Check::ArtifactExists`）で始まる index を自分の条件とし、0 から隙間なく並ぶときだけ置く。`reviewer_passed` の無い子
+/// （review の前・不合格だけ）は条件の数と種類が slice から決まらないので置かない。
+fn child_criteria(rows: &[&Value]) -> Vec<Criterion> {
+    let Some(passed) = rows.iter().rfind(|r| r["type"] == "reviewer_passed") else {
+        return Vec::new();
+    };
+    let reviewer: Vec<usize> =
+        serde_json::from_value(passed["criteria"].clone()).expect("reviewer_passed criteria");
+    let mut checks: BTreeMap<usize, Check> =
+        reviewer.into_iter().map(|i| (i, Check::Reviewer)).collect();
+    for r in rows.iter().filter(|r| r["type"] == "review_verdict") {
+        let idx = r["criterion_idx"].as_u64().expect("criterion_idx") as usize;
+        let reason = r["reason"].as_str().unwrap_or_default();
+        if let Some(rest) = reason.strip_prefix("cmd=") {
+            let cmd = serde_json::Deserializer::from_str(rest)
+                .into_iter::<String>()
+                .next()
+                .and_then(Result::ok)
+                .expect("cmd の文字列");
+            let expect_exit = reason
+                .split(" expected=")
+                .nth(1)
+                .and_then(|s| s.split(' ').next())
+                .and_then(|s| s.parse().ok())
+                .expect("expected の値");
+            checks.insert(idx, Check::Command { cmd, expect_exit });
+        } else if let Some(rest) = reason.strip_prefix("path=") {
+            let path = rest.split(' ').next().unwrap_or_default();
+            let name = path.strip_prefix("artifacts/").unwrap_or(path).to_string();
+            checks.insert(idx, Check::ArtifactExists { name });
+        }
+    }
+    let n = checks.keys().next_back().map_or(0, |i| i + 1);
+    assert_eq!(
+        checks.len(),
+        n,
+        "条件の index に隙間がある: {:?}",
+        checks.keys()
+    );
+    checks
+        .into_values()
+        .map(|check| Criterion {
+            text: NO_TEXT.into(),
+            check,
+        })
+        .collect()
+}
+
+/// 子の slice の行を本番の event にする（遷移・`WorkerFinished`（報告の本文）・review の判定・`ReviewerPassed`）。
+fn child_events(rows: &[&Value]) -> Vec<Event> {
+    rows.iter()
+        .filter_map(|row| {
+            let run = format!(
+                "replay-{}-{}",
+                row["task"].as_str().unwrap_or("-"),
+                row["seq"]
+            );
+            Some(match row["type"].as_str()? {
+                "transitioned" => Event::Transitioned {
+                    from: status_of(&row["from"]),
+                    to: status_of(&row["to"]),
+                    reason: row["reason"].as_str().unwrap_or_default().to_string(),
+                },
+                "worker_finished" => worker_finished(row)?,
+                "review_verdict" => Event::ReviewVerdict {
+                    run_id: run,
+                    criterion_idx: row["criterion_idx"].as_u64()? as usize,
+                    pass: row["pass"].as_bool()?,
+                    reason: row["reason"].as_str().unwrap_or_default().to_string(),
+                },
+                "reviewer_passed" => Event::ReviewerPassed {
+                    review_run: run,
+                    repo_id: task_core::repos::RepoId::new(),
+                    target_sha: String::new(),
+                    reviewed_sha: String::new(),
+                    criteria: serde_json::from_value(row["criteria"].clone()).unwrap_or_default(),
+                },
+                _ => return None,
+            })
+        })
+        .collect()
+}
+
+/// [`seed`] が置いた案件の id。
+struct Seeded {
+    project_id: ProjectId,
+    root_id: TaskId,
+    children: BTreeMap<String, TaskId>,
+}
+
+/// 時点 `point` の slice から、使い捨ての `store` に案件・承認済み Roadmap・strategy root・子を store の公開の関数で置く
+/// （盲検の seed と、写しの `goal.outcomes`・`criteria` の出どころ）。
+///
+/// - 案件の request と root の objective は slice の goal.md。Roadmap の版 1 は [`outcome_spec`] の Outcome 1 件を [`SEED_ACTOR`] が
+///   提案して承認する。Outcome の status・evidence は cutoff 以前の記録だけから決める: slice に親（P）の到達の記録（done への遷移・
+///   `ReviewerPassed`）は無いので Outcome の event を書かない（status は承認の時点の open、evidence は空、D6 の到達は偽）。
+/// - 子の行の status は cutoff の時点の値。時点で ready の子は案件の外の draft の task に依存させ、daemon が起こさない。子は slice の
+///   title と、[`child_criteria`] の受け入れ条件と、[`child_events`] の events を持つ。root と子の作業場所は `repo`（mode shared）。
+/// - strategy root の正本（ADR 2026-11-22-parent-checkpoint-evaluator D1.1）は gate と同じ `task.create` の操作の記録。
+fn seed(store: &SqliteStore, point: &str, repo: &Path) -> Seeded {
+    use task_core::chat::{AuditContext, ChatActor};
+    use task_core::{Project, Task, TaskKind, WorkspaceMode, WorkspaceSpec};
+
+    let (rows, goal, _) = slice(point);
+    let now = OffsetDateTime::now_utc();
+    let project = Project {
+        id: ProjectId::new(),
+        title: format!("blind:{point}"),
+        request: goal.clone(),
+        status: task_core::ProjectStatus::Active,
+        workspace: None,
+        archived_at: None,
+        paused_from: None,
+        auto_advance: false,
+        slug: None,
+        created_at: now,
+        updated_at: now,
+    };
+    store.project_create(&project).expect("project");
+    let pid = project.id.to_string();
+    assert!(
+        !rows
+            .iter()
+            .any(|r| r["task"] == "P" && (r["type"] == "reviewer_passed" || r["to"] == "done")),
+        "{point}: cutoff 以前に親の到達の記録がある（Outcome の status を決め直す）"
+    );
+    let input = RoadmapProposalInput {
+        base_version: None,
+        change_reason: format!("盲検の評価の seed（{point}）: goal.md の共通受入条件"),
+        outcomes: vec![outcome_spec(&goal)],
+    };
+    let version = store
+        .write_tx(|tx| {
+            SqliteStore::roadmap_propose_tx(
+                tx,
+                &pid,
+                &input,
+                &pp::sha256_hex(&goal),
+                SEED_ACTOR,
+                now,
+            )
+        })
+        .expect("roadmap propose");
+    store
+        .write_tx(|tx| {
+            SqliteStore::roadmap_decide_tx(tx, &pid, version.version, true, None, SEED_ACTOR, now)
+        })
+        .expect("roadmap approve");
+    let workspace = WorkspaceSpec::Local {
+        path: repo.to_path_buf(),
+        mode: Some(WorkspaceMode::Shared),
+    };
+    let task = |status: Status, title: String, objective: String, parent: Option<TaskId>| Task {
+        title,
+        objective,
+        project_id: Some(project.id),
+        parent_id: parent,
+        workspace: workspace.clone(),
+        ..common::new_task(TaskKind::Execute, status)
+    };
+    let root = task(Status::Running, "[アーキv4 親]".into(), goal.clone(), None);
+    store.create_task(&root, vec![]).expect("root");
+    // 時点で ready の子を daemon が起こさないように、案件の外の draft の task に依存させる（評価器の入力に依存は入らない）。
+    let mut holder = common::new_task(TaskKind::Execute, Status::Draft);
+    holder.title = "blind: hold".into();
+    store.create_task(&holder, vec![]).expect("holder");
+    let mut children = BTreeMap::new();
+    for key in CHILDREN {
+        let mine = rows_of(&rows, key);
+        let Some(title) = mine.iter().find_map(|r| r["title"].as_str()) else {
+            continue;
+        };
+        // 子の行の status は cutoff の時点の値（遷移の events を足しても行の status は変わらない）。
+        let last = mine
+            .iter()
+            .filter(|r| r["type"] == "transitioned")
+            .map(|r| status_of(&r["to"]))
+            .next_back()
+            .unwrap_or(Status::Draft);
+        let mut t = task(last, title.to_string(), String::new(), Some(root.id));
+        t.acceptance = child_criteria(&mine);
+        if last == Status::Ready {
+            t.depends_on = vec![holder.id];
+        }
+        store.create_task(&t, vec![]).expect("child");
+        for event in child_events(&mine) {
+            store.append_event(t.id, &event).expect("append");
+        }
+        children.insert(key.to_string(), t.id);
+    }
+    let op = ulid::Ulid::new().to_string();
+    let strategy = serde_json::json!({
+        "task_id": root.id.to_string(),
+        "name": "strategy/arch-v4-cycle/v1.json",
+        "sha256": format!("sha256:{}", "a".repeat(64)),
+    });
+    store
+        .cos_operation_apply_at(
+            &AuditContext {
+                actor: ChatActor::Cos,
+                thread_id: "blind-seed".into(),
+                run_id: "blind-seed".into(),
+                operation_id: op.clone(),
+                reason: "盲検の評価の seed（アーキv4 の親）".into(),
+                policy_version: "v1".into(),
+            },
+            &op,
+            "blind-seed",
+            "task",
+            &root.id.to_string(),
+            None,
+            "task.create",
+            &serde_json::json!({"method": "POST", "path": "/api/v1/tasks",
+                                "body": {"title": root.title}, "strategy": strategy}),
+            now,
+            |_, _| Ok(serde_json::json!({})),
+        )
+        .expect("root operation");
+    Seeded {
+        project_id: project.id,
+        root_id: root.id,
+        children,
+    }
+}
+
+/// 写しの `goal.outcomes` と子の `criteria`（letter ごと）: [`seed`] で一時 DB に置いた案件から、dispatcher の
+/// `review::parent_evaluation::goal` と同じ D6 の読み口（`reach`・`unverified_outcomes`）と、`request` と同じ
+/// `project_snapshot::acceptance_criteria` で読む。
+fn seeded_inputs(
+    case: &str,
+) -> (
+    Vec<ParentCheckpointOutcome>,
+    BTreeMap<String, Vec<SnapshotCriterion>>,
+) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = SqliteStore::open(&dir.path().join("celeris.db")).expect("store");
+    let seeded = seed(&store, case, dir.path());
+    let pid = seeded.project_id.to_string();
+    let now = OffsetDateTime::now_utc();
+    let state = store
+        .project_controller_state(&pid)
+        .expect("state")
+        .unwrap_or_else(|| {
+            task_core::store::project_controller_default_state(
+                &pid,
+                &now.format(&Rfc3339).expect("now"),
+            )
+        });
+    let (snapshot, recorded) =
+        task_ops::project_controller_view::reach(&store, seeded.project_id, &state, now)
+            .expect("reach");
+    let unverified = pp::unverified_outcomes(&snapshot, &recorded);
+    let outcomes = snapshot
+        .outcomes
+        .iter()
+        .map(|o| ParentCheckpointOutcome {
+            id: o.id.clone(),
+            title: o.title.clone(),
+            acceptance: o.acceptance.clone(),
+            reached: !unverified.contains(&o.id),
+        })
+        .collect();
+    let criteria = seeded
+        .children
+        .iter()
+        .map(|(key, id)| {
+            let child = store.get(*id).expect("get").expect("child");
+            let events = store.events_for(*id).expect("events");
+            let criteria = task_ops::project_snapshot::acceptance_criteria(
+                &child,
+                events.iter().map(|(_, e)| e),
+            );
+            (key.clone(), criteria)
+        })
+        .collect();
+    (outcomes, criteria)
+}
+
+/// D3.1 の入力を時点の slice から作る（dispatcher の `request` と同じ出どころ。報告は本番の `child_reports`、Outcome と criteria
+/// は [`seeded_inputs`]）。
 fn request(case: &str, trigger: &str) -> (ParentCheckpointRequest, BTreeMap<String, TaskId>) {
     let (rows, goal, cutoff) = slice(case);
+    let (outcomes, mut criteria) = seeded_inputs(case);
     let ids: BTreeMap<String, TaskId> = CHILDREN
         .iter()
         .enumerate()
@@ -175,7 +523,7 @@ fn request(case: &str, trigger: &str) -> (ParentCheckpointRequest, BTreeMap<Stri
             title: title.to_string(),
             status,
             reviewer_passed: mine().any(|r| r["type"] == "reviewer_passed"),
-            criteria: Vec::new(),
+            criteria: criteria.remove(*key).unwrap_or_default(),
             reports,
         });
     }
@@ -191,7 +539,7 @@ fn request(case: &str, trigger: &str) -> (ParentCheckpointRequest, BTreeMap<Stri
         triggers: vec![trigger.into()],
         goal: ParentCheckpointGoal {
             request_sha256: format!("sha256:{}", sha_hex(goal.as_bytes())),
-            outcomes: Vec::new(),
+            outcomes,
         },
         strategy: StrategyRef {
             task_id: ROOT_ID.into(),
@@ -319,8 +667,85 @@ fn parent_checkpoint_blind_request_has_d1446_body() {
     }
 }
 
+/// D8（WU eval-seed）: commit した E-mid・D-done の request と prompt に、承認済み Roadmap の Outcome（goal.md の共通受入条件の文。
+/// D6 の到達は偽）と、cutoff 以前に `reviewer_passed` のある子の criteria（全部 pass）が入り、「（Outcome の記録は無い）」が出ない。
+/// review の記録の無い子は criteria を持たない（slice に無い条件を作らない）。
+#[test]
+fn parent_checkpoint_blind_request_has_outcome_and_criteria() {
+    for (case, _) in CASES {
+        let (rows, goal, _) = slice(case);
+        let spec = outcome_spec(&goal);
+        assert_eq!(spec.acceptance.len(), 6, "{case}: 共通受入条件の文の数");
+        let [(_, req), (_, prompt), _] = committed(case);
+        assert!(!prompt.contains(ABSENT), "{case}.prompt.md に {ABSENT}");
+        assert!(
+            prompt.contains(&format!(
+                "- outcome `{OUTCOME_ID}`: {}（reached=false）\n",
+                spec.title
+            )),
+            "{case}.prompt.md に Outcome の行が無い"
+        );
+        for a in &spec.acceptance {
+            assert!(
+                goal.contains(a.as_str()),
+                "acceptance が goal.md の文でない: {a}"
+            );
+            assert!(
+                prompt.contains(&format!("  - acceptance: {a}\n")),
+                "{case}.prompt.md に acceptance が無い: {a}"
+            );
+        }
+        let req: Value = serde_json::from_str(&req).expect("request");
+        let pc = &req["parent_checkpoint"];
+        let outcomes = pc["goal"]["outcomes"].as_array().expect("outcomes");
+        assert_eq!(outcomes.len(), 1, "{case}: Outcome の数");
+        assert_eq!(outcomes[0]["id"], OUTCOME_ID);
+        assert_eq!(
+            outcomes[0]["reached"], false,
+            "{case}: cutoff 以前に到達の記録は無い"
+        );
+        let children = pc["children"].as_array().expect("children");
+        for (key, child) in CHILDREN.iter().zip(children) {
+            let criteria = child["criteria"].as_array().expect("criteria");
+            let passed = rows_of(&rows, key)
+                .iter()
+                .any(|r| r["type"] == "reviewer_passed");
+            assert_eq!(
+                !criteria.is_empty(),
+                passed,
+                "{case} {key}: criteria の有無"
+            );
+            for c in criteria {
+                assert_eq!(c["result"], "pass", "{case} {key}: {c}");
+                assert_eq!(c["text"], NO_TEXT);
+            }
+        }
+        let a: Vec<&str> = children[0]["criteria"]
+            .as_array()
+            .expect("A")
+            .iter()
+            .filter_map(|c| c["kind"].as_str())
+            .collect();
+        assert_eq!(
+            a,
+            [
+                "reviewer",
+                "reviewer",
+                "reviewer",
+                "command",
+                "artifact_exists"
+            ],
+            "{case}: A の条件の種類"
+        );
+        assert!(
+            prompt.contains(&format!("  - [command] pass: {NO_TEXT}\n")),
+            "{case}.prompt.md に子の criteria の行が無い"
+        );
+    }
+}
+
 /// D8.3: request・prompt・slice（reports.json と slice.json）・ADR・この WU の進捗に answer key の印・理由の文・期待の組が無く、
-/// request・prompt・reports に時点より後の seq・時刻・本文が無い。
+/// request・prompt・reports に時点より後の seq・時刻・本文と、未来にだけ現れる語（`first_seen` が時点より後の sentinel）が無い。
 #[test]
 fn parent_checkpoint_blind_no_answer_key_or_future() {
     let key: Value = serde_json::from_str(ANSWER_KEY).expect("key");
@@ -341,6 +766,19 @@ fn parent_checkpoint_blind_no_answer_key_or_future() {
         .iter()
         .flat_map(|v| nexts.iter().map(move |n| format!("{v}・{n}")))
         .collect();
+    let sentinels: Vec<(String, OffsetDateTime)> = serde_json::from_str::<Value>(SENTINELS)
+        .expect("sentinels")["sentinels"]
+        .as_array()
+        .expect("sentinels")
+        .iter()
+        .map(|s| {
+            (
+                s["text"].as_str().expect("text").to_string(),
+                ts(s["first_seen"].as_str().expect("first_seen")),
+            )
+        })
+        .collect();
+    assert!(!sentinels.is_empty());
     let all: Vec<Value> = std::fs::read_to_string(Path::new(SHADOW).join("G-done/events.jsonl"))
         .expect("all")
         .lines()
@@ -364,6 +802,15 @@ fn parent_checkpoint_blind_no_answer_key_or_future() {
             }
             for pair in &pairs {
                 assert!(!text.contains(pair.as_str()), "{name} に期待の組 {pair}");
+            }
+        }
+        for s in sentinels.iter().filter(|(_, first)| *first > cut) {
+            for (name, text) in &files {
+                assert!(
+                    !text.contains(s.0.as_str()),
+                    "{name} に未来にだけ現れる語 {}",
+                    s.0
+                );
             }
         }
         let (req, _) = request(case, "-");
@@ -569,20 +1016,13 @@ fn parent_checkpoint_live_sample_checks() {
 // ---- 本番の起動口での盲検の評価（WU blind-eval-runs。`scripts/dev/parent-eval-blind.sh`） ----
 
 /// `scripts/dev/parent-eval-blind/driver.py` の seed: 使い捨ての一時 DB（`PARENT_EVAL_BLIND_SEED` の spec の `db`）に、時点
-/// （`point`）の slice から案件・strategy root・子を store の公開の関数で置く（`#[ignore]`: driver だけが走らせる）。
+/// （`point`）の slice から案件・承認済み Roadmap・strategy root・子を [`seed`] で置く（`#[ignore]`: driver だけが走らせる）。
 ///
-/// - 案件の request と root の objective は slice の goal.md。子の行の status は cutoff の時点の値。時点で ready の子は案件の外の draft の task に依存させ、daemon が起こさない。
-///   root と子の作業場所は spec の `repo`（slice だけの seed の git repo、
-///   mode shared）。子は slice の title と cutoff までの遷移・`WorkerFinished`（報告の本文）・`ReviewerPassed` を持つ。
-/// - strategy root の正本（ADR 2026-11-22-parent-checkpoint-evaluator D1.1）は gate と同じ `task.create` の操作の記録。
+/// - root と子の作業場所は spec の `repo`（slice だけの seed の git repo、mode shared）。
 /// - spec の `out` に `{project_id, root_id, children: {letter: id}}` を書く。本番の DB には触れない（spec の db が無い path なら作る）。
 #[test]
 #[ignore = "scripts/dev/parent-eval-blind/driver.py が一時 DB を seed するときだけ走らせる"]
 fn parent_checkpoint_blind_seed() {
-    use task_core::chat::{AuditContext, ChatActor};
-    use task_core::store::SqliteStore;
-    use task_core::{Project, ProjectId, Task, TaskKind, WorkspaceMode, WorkspaceSpec};
-
     let spec_path = std::env::var("PARENT_EVAL_BLIND_SEED").expect("PARENT_EVAL_BLIND_SEED");
     let spec: Value =
         serde_json::from_slice(&std::fs::read(&spec_path).expect("spec")).expect("spec json");
@@ -593,125 +1033,11 @@ fn parent_checkpoint_blind_seed() {
         "point {point} は E-mid・D-done のどれでもない"
     );
     let store = SqliteStore::open(Path::new(&field("db"))).expect("store");
-    let (rows, goal, _) = slice(&point);
-    let now = OffsetDateTime::now_utc();
-    let project = Project {
-        id: ProjectId::new(),
-        title: format!("blind:{point}"),
-        request: goal.clone(),
-        status: task_core::ProjectStatus::Active,
-        workspace: None,
-        archived_at: None,
-        paused_from: None,
-        auto_advance: false,
-        slug: None,
-        created_at: now,
-        updated_at: now,
-    };
-    store.project_create(&project).expect("project");
-    let workspace = WorkspaceSpec::Local {
-        path: repo.clone(),
-        mode: Some(WorkspaceMode::Shared),
-    };
-    let task = |status: Status, title: String, objective: String, parent: Option<TaskId>| Task {
-        title,
-        objective,
-        project_id: Some(project.id),
-        parent_id: parent,
-        workspace: workspace.clone(),
-        ..common::new_task(TaskKind::Execute, status)
-    };
-    let root = task(Status::Running, "[アーキv4 親]".into(), goal.clone(), None);
-    store.create_task(&root, vec![]).expect("root");
-    // 時点で ready の子を daemon が起こさないように、案件の外の draft の task に依存させる（評価器の入力に依存は入らない）。
-    let mut holder = common::new_task(TaskKind::Execute, Status::Draft);
-    holder.title = "blind: hold".into();
-    store.create_task(&holder, vec![]).expect("holder");
-    let status = |v: &Value| -> Status { serde_json::from_value(v.clone()).expect("status") };
-    let mut children = BTreeMap::new();
-    for key in CHILDREN {
-        let Some(title) = rows
-            .iter()
-            .find(|r| r["task"] == key && r["title"].is_string())
-            .and_then(|r| r["title"].as_str())
-        else {
-            continue;
-        };
-        // 子の行の status は cutoff の時点の値（遷移の events を足しても行の status は変わらない）。
-        let last = rows
-            .iter()
-            .filter(|r| r["task"] == key && r["type"] == "transitioned")
-            .map(|r| status(&r["to"]))
-            .last()
-            .unwrap_or(Status::Draft);
-        let mut t = task(last, title.to_string(), String::new(), Some(root.id));
-        if last == Status::Ready {
-            t.depends_on = vec![holder.id];
-        }
-        store.create_task(&t, vec![]).expect("child");
-        children.insert(key.to_string(), t.id);
-    }
-    for row in &rows {
-        let Some(id) = row["task"].as_str().and_then(|k| children.get(k)) else {
-            continue;
-        };
-        let event = match row["type"].as_str() {
-            Some("transitioned") => Event::Transitioned {
-                from: status(&row["from"]),
-                to: status(&row["to"]),
-                reason: row["reason"].as_str().unwrap_or_default().to_string(),
-            },
-            Some("worker_finished") => match worker_finished(row) {
-                Some(e) => e,
-                None => continue,
-            },
-            Some("reviewer_passed") => Event::ReviewerPassed {
-                review_run: format!(
-                    "replay-{}-{}",
-                    row["task"].as_str().unwrap_or("-"),
-                    row["seq"]
-                ),
-                repo_id: task_core::repos::RepoId::new(),
-                target_sha: String::new(),
-                reviewed_sha: String::new(),
-                criteria: Vec::new(),
-            },
-            _ => continue,
-        };
-        store.append_event(*id, &event).expect("append");
-    }
-    let op = ulid::Ulid::new().to_string();
-    let strategy = serde_json::json!({
-        "task_id": root.id.to_string(),
-        "name": "strategy/arch-v4-cycle/v1.json",
-        "sha256": format!("sha256:{}", "a".repeat(64)),
-    });
-    store
-        .cos_operation_apply_at(
-            &AuditContext {
-                actor: ChatActor::Cos,
-                thread_id: "blind-seed".into(),
-                run_id: "blind-seed".into(),
-                operation_id: op.clone(),
-                reason: "盲検の評価の seed（アーキv4 の親）".into(),
-                policy_version: "v1".into(),
-            },
-            &op,
-            "blind-seed",
-            "task",
-            &root.id.to_string(),
-            None,
-            "task.create",
-            &serde_json::json!({"method": "POST", "path": "/api/v1/tasks",
-                                "body": {"title": root.title}, "strategy": strategy}),
-            now,
-            |_, _| Ok(serde_json::json!({})),
-        )
-        .expect("root operation");
+    let seeded = seed(&store, &point, &repo);
     let out = serde_json::json!({
-        "project_id": project.id.to_string(),
-        "root_id": root.id.to_string(),
-        "children": children.iter().map(|(k, v)| (k.clone(), v.to_string())).collect::<BTreeMap<_, _>>(),
+        "project_id": seeded.project_id.to_string(),
+        "root_id": seeded.root_id.to_string(),
+        "children": seeded.children.iter().map(|(k, v)| (k.clone(), v.to_string())).collect::<BTreeMap<_, _>>(),
     });
     std::fs::write(field("out"), serde_json::to_vec_pretty(&out).expect("out")).expect("write out");
 }

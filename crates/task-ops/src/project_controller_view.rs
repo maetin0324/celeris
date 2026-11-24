@@ -82,6 +82,38 @@ pub fn recorded_outcomes(
     Ok(out)
 }
 
+/// D6 の到達の読み口: 今の store の snapshot（判断・wake は空。Outcome・root・Roadmap は判定と同じ）と、到達を記録済みの
+/// Outcome の id（[`recorded_outcomes`]）。Outcome ごとの到達は、記録があり `root_satisfies` を満たす root があること
+/// （`pp::unverified_outcomes` に入らないこと）。[`summary`] と親の途中評価の入力（`task_dispatch::review::parent_evaluation`
+/// の `request`・`facts`）が同じ値を読む。
+pub fn reach(
+    store: &SqliteStore,
+    project_id: ProjectId,
+    state: &ProjectControllerState,
+    now: OffsetDateTime,
+) -> Result<(ProjectSnapshot, BTreeSet<String>), OpsError> {
+    let snapshot = ps::build(
+        store,
+        project_id,
+        SnapshotContext {
+            controller: SnapshotController {
+                mode: state.mode.as_str().to_owned(),
+                phase: state.phase.as_str().to_owned(),
+                revision: u64::try_from(state.revision).unwrap_or(0),
+                human_epoch: u64::try_from(state.human_epoch).unwrap_or(0),
+                retry_count: state.retry_count,
+                progress_epoch: u64::try_from(state.progress_epoch).unwrap_or(0),
+            },
+            decisions: Vec::new(),
+            wakes: Vec::new(),
+            limits: SnapshotLimits::default(),
+            now,
+        },
+    )?;
+    let recorded = recorded_outcomes(store, state.mode, &snapshot).map_err(OpsError::Validation)?;
+    Ok((snapshot, recorded))
+}
+
 /// 効果 `{"kind":"record_outcome","outcome_id":…}`（`task_dispatch::ProjectEffect::RecordOutcome`）の id。
 fn record_outcome_id(effect_json: &str) -> Option<String> {
     let v: Value = serde_json::from_str(effect_json).ok()?;
@@ -245,25 +277,7 @@ pub fn summary(
     limits: &BudgetLimits,
     now: OffsetDateTime,
 ) -> Result<ProjectControllerSummary, OpsError> {
-    let snapshot = ps::build(
-        store,
-        project_id,
-        SnapshotContext {
-            controller: SnapshotController {
-                mode: state.mode.as_str().to_owned(),
-                phase: state.phase.as_str().to_owned(),
-                revision: u64::try_from(state.revision).unwrap_or(0),
-                human_epoch: u64::try_from(state.human_epoch).unwrap_or(0),
-                retry_count: state.retry_count,
-                progress_epoch: u64::try_from(state.progress_epoch).unwrap_or(0),
-            },
-            decisions: Vec::new(),
-            wakes: Vec::new(),
-            limits: SnapshotLimits::default(),
-            now,
-        },
-    )?;
-    let recorded = recorded_outcomes(store, state.mode, &snapshot).map_err(OpsError::Validation)?;
+    let (snapshot, recorded) = reach(store, project_id, state, now)?;
     let outcomes = snapshot
         .outcomes
         .iter()

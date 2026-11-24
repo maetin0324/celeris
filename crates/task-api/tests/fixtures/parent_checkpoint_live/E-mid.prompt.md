@@ -7,13 +7,24 @@
 
 ### 親の Outcome（`reached` は celeris の Rust の判定。評価は到達を書かない）
 - Project.request の sha256: `sha256:ba0f77dd1490c837f38c42172e7a7b1a0ae26d86abca0f9bfd5e25e32cd0270b`
-- （Outcome の記録は無い）
+- outcome `arch-v4`: エージェントによる今後の機能追加・修正を、安全で速く局所的にするため、現存のCelerisアーキテクチャの実際の責務境界と疎結合性を改善し、通常のGitプロジェクト一般にも適用できる健全性検査で維持する（reached=false）
+  - acceptance: baseline SHAと同じルールでbefore/afterの(1)実際のimport/dependency/循環内辺、(2)直接共有状態・SQLite参照のある実装ファイル数、(3)互いのHTTP/CoS module importとSQL公開面、(4)変更波及のmodule/ファイル数、(5)incremental build・test-affected・review/health時間と費用、(6)productionとtest LoCの差分を記録。
+  - acceptance: 機能追加の通常タスクに一律LoC削減を強制しないが、単なる新しい抽象化の追加だけでは達成にしない。
+  - acceptance: 前後比較できない場合は未達/要判断。
+  - acceptance: SQLite正本・append-only events・lease/atomicity・replay・ACL・credential・CoS監査・project controllerの安全停止・selfdeploy本番権限・Rust/TS canaryを維持。
+  - acceptance: 旧実装と新実装を並存させるなら撤去条件と期限を残す。
+  - acceptance: 政策変更は既存policy.changedの別reviewを守り、Worker・Reviewerの実プロンプトへの目的/受入条件伝達を検証。
 
 ### 戦略の今の版
 - `strategy/arch-v4-cycle/v1.json` (sha256=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, task 01M7MZT8KX547464YYS76QNP4G)
 
 ### 子（root の直下）
 - `01M7MZT8KX5474640000000001` [アーキv4 A] 基準の確定・責務境界監査（before の実測と 2 シナリオの固定、source 改変 0）（status=done, reviewer_passed=true）
+  - [reviewer] pass: （条件の本文は slice に無い）
+  - [reviewer] pass: （条件の本文は slice に無い）
+  - [reviewer] pass: （条件の本文は slice に無い）
+  - [command] pass: （条件の本文は slice に無い）
+  - [artifact_exists] pass: （条件の本文は slice に無い）
   - 報告（worker の結果、seq 265、2026-11-17T16:55:44.889457059Z）:
     > done: アーキ v4 A を完了した。source の改変は 0（main との差分は agent-docs/progress/2026-11-17-arch-v4-a.md だけ）。ベースラインと計測コマンド・誤検出の扱いは artifacts/baseline.md、要点は進捗ファイル（status: done）にある。条件 0: 監査根拠を main bc665168 で既存の道具（re
   - 報告（review の報告、seq 337、2026-11-17T17:06:58.152916587Z）:
@@ -23,6 +34,12 @@
   - 報告（review の報告、seq 537、2026-11-17T18:45:41.030955139Z）:
     > done: アーキ v4 A（task 01M7MZTKAXM8GJGK8BPE13CQRM）の再レビュー結果: 合格（criterion 0・1・2・5）。人が決めること・やることは無い。前回の差し戻し 2 点は直っていた。(1) baseline.md §7 の C7b と C10 を文面のまま実行すると、記載どおりの値が出た。S1 は 92/369/12、S2 は 6/14/4。C10 は 
 - `01M7MZT8KX5474640000000002` [アーキv4 B] repo-health の deps.cycle・size・lang_deps を既存 SCC 内の新しい辺と #[path] のすり抜けにも効かせる（status=done, reviewer_passed=true）
+  - [reviewer] pass: （条件の本文は slice に無い）
+  - [reviewer] pass: （条件の本文は slice に無い）
+  - [reviewer] pass: （条件の本文は slice に無い）
+  - [reviewer] pass: （条件の本文は slice に無い）
+  - [reviewer] pass: （条件の本文は slice に無い）
+  - [reviewer] pass: （条件の本文は slice に無い）
   - 報告（worker の結果、seq 758、2026-11-17T21:15:35.255858107Z）:
     > done: WU metrics を完了した。共通受入条件 (1)〜(6) を A の baseline の規則で測り、WU 進捗 agent-docs/progress/2026-11-17-arch-v4-b/metrics.md に書いた（commit「arch-v4 B metrics: 共通受入条件 (1)〜(6) を A の baseline の規則で旧と新の検査器の before/a
   - 報告（worker の結果、seq 932、2026-11-17T21:32:53.828921754Z）:
@@ -32,6 +49,12 @@
   - 報告（review の報告、seq 1114、2026-11-17T21:55:57.422618478Z）:
     > done: アーキ v4 B（task 01M7MZTKAZQY72EX2R4RQ1WVWF）のレビュー結果: 合格（criterion 0〜6）。人が決めることは 2 つあり、どちらも B の取り込みは止めない。(1) health の時間の悪化（S1 86.56→92.81 s、S2 81.92→88.68 s）を受け入れるか。(2) #[path] の宣言の行を数え過ぎる既知の限界を直す p
 - `01M7MZT8KX5474640000000003` [アーキv4 C] 設計リスクと reviewer の判定を、既存の安全境界の意味を変える改修にも効かせる（6 ケースの実証）（status=done, reviewer_passed=true）
+  - [reviewer] pass: （条件の本文は slice に無い）
+  - [reviewer] pass: （条件の本文は slice に無い）
+  - [reviewer] pass: （条件の本文は slice に無い）
+  - [reviewer] pass: （条件の本文は slice に無い）
+  - [reviewer] pass: （条件の本文は slice に無い）
+  - [reviewer] pass: （条件の本文は slice に無い）
   - 報告（review の報告、seq 3157、2026-11-18T09:52:25.783812415Z）:
     > done: C の final review は不合格（criterion 3 と 6）。理由は文書の数値の誤り 1 件だけで、部署内の文書の修正（local repair）で直る。完了報告と ADR の LoC の after は cases の commit が入る前の値で、提出した差分の正しい値は production +664・production Rust +664・own_total_
   - 報告（review の報告、seq 3233、2026-11-18T09:59:00.537496225Z）:

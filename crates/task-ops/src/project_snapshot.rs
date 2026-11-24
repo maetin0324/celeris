@@ -138,6 +138,54 @@ const MACHINE_ARTIFACTS: [&str; 4] = [
     "followups.json",
 ];
 
+/// 今の試行の review の判定（criterion ごとに最新）。終端でも `reviewing` でもない状態への遷移（reopen・retry）で
+/// 前の判定を捨てる（I3(b)）。
+fn review_verdicts<'a>(events: impl IntoIterator<Item = &'a Event>) -> BTreeMap<usize, bool> {
+    let mut verdicts = BTreeMap::new();
+    for e in events {
+        match e {
+            Event::ReviewVerdict {
+                criterion_idx,
+                pass,
+                ..
+            } => {
+                verdicts.insert(*criterion_idx, *pass);
+            }
+            Event::Transitioned { to, .. } if !to.is_terminal() && *to != Status::Reviewing => {
+                verdicts.clear();
+            }
+            _ => {}
+        }
+    }
+    verdicts
+}
+
+fn criteria_of(task: &Task, verdicts: &BTreeMap<usize, bool>) -> Vec<SnapshotCriterion> {
+    task.acceptance
+        .iter()
+        .enumerate()
+        .map(|(i, c)| SnapshotCriterion {
+            text: c.text.clone(),
+            kind: check_kind(&c.check).to_owned(),
+            result: match verdicts.get(&i) {
+                Some(true) => "pass",
+                Some(false) => "fail",
+                None => "unknown",
+            }
+            .to_owned(),
+        })
+        .collect()
+}
+
+/// task の受け入れ条件と、今の試行の review の判定（`pass`・`fail`・`unknown`）。snapshot の root の行（`acceptance`）と
+/// 親の途中評価の入力の子の `criteria`（`task_dispatch::review::parent_evaluation`）が同じ組み立てを使う。
+pub fn acceptance_criteria<'a>(
+    task: &Task,
+    events: impl IntoIterator<Item = &'a Event>,
+) -> Vec<SnapshotCriterion> {
+    criteria_of(task, &review_verdicts(events))
+}
+
 /// root の progress ledger の 1 行を events から作る。
 ///
 /// 第 3 フェーズ I3（ADR 2026-11-05-phase3-achievement-invariants、付記 P0-B）:
@@ -154,8 +202,7 @@ fn root_row(
     waits: &mut Vec<SnapshotWait>,
 ) -> Result<SnapshotRoot, OpsError> {
     let events = store.events_for(task.id)?;
-    // 今の試行の review の判定（criterion ごとに最新）。非終端への遷移（reopen・retry）で捨てる。
-    let mut verdicts: BTreeMap<usize, bool> = BTreeMap::new();
+    let verdicts = review_verdicts(events.iter().map(|(_, e)| e));
     let mut passed_by_review = false;
     let mut merged = false;
     let mut produced = false;
@@ -164,13 +211,6 @@ fn root_row(
     let mut open_questions: Vec<(String, &'static str)> = Vec::new();
     for (seq, e) in &events {
         match e {
-            Event::ReviewVerdict {
-                criterion_idx,
-                pass,
-                ..
-            } => {
-                verdicts.insert(*criterion_idx, *pass);
-            }
             // A9 D1: repo を持つ案件で取り込み済みと数えるのは IntegrationMerged だけ。見送り（NotGit・NoCommits）や
             // IntegrationNotApplicable は、成果が案件の tree に載ったことを示さない。
             Event::IntegrationMerged { .. } => merged = true,
@@ -187,7 +227,6 @@ fn root_row(
                     passed_by_review = *to == Status::Done && reason == "review_pass";
                 } else if *to != Status::Reviewing {
                     passed_by_review = false;
-                    verdicts.clear();
                 }
                 if *to == Status::Failed {
                     last_fail_reason = Some(reason.clone());
@@ -235,21 +274,7 @@ fn root_row(
         Status::Cancelled => Some("cancelled".to_owned()),
         _ => None,
     };
-    let acceptance = task
-        .acceptance
-        .iter()
-        .enumerate()
-        .map(|(i, c)| SnapshotCriterion {
-            text: c.text.clone(),
-            kind: check_kind(&c.check).to_owned(),
-            result: match verdicts.get(&i) {
-                Some(true) => "pass",
-                Some(false) => "fail",
-                None => "unknown",
-            }
-            .to_owned(),
-        })
-        .collect();
+    let acceptance = criteria_of(task, &verdicts);
     let children = store.children(task.id)?;
     let (leaf_done, leaf_total) = if children.is_empty() {
         (u32::from(task.status == Status::Done), 1)

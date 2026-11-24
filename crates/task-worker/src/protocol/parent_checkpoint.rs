@@ -9,6 +9,7 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use task_core::project_proposal::SnapshotCriterion;
 use task_core::strategy_ref::StrategyRef;
 use task_core::{Status, TaskId};
 
@@ -75,21 +76,13 @@ pub struct ParentCheckpointChild {
     pub status: Status,
     /// 子の reviewer の判定が合格か（子の done は親の進捗ではない）。
     pub reviewer_passed: bool,
+    /// 子の受け入れ条件と今の試行の review の判定（`pass`・`fail`・`unknown`）。型と組み立ては snapshot の root の行と
+    /// 同じ（`task_ops::project_snapshot::acceptance_criteria`）。
     #[serde(default)]
-    pub criteria: Vec<ParentCheckpointCriterion>,
+    pub criteria: Vec<SnapshotCriterion>,
     /// checkpoint の時点以前の子の報告の本文（seq の昇順。無ければ省略）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reports: Vec<task_core::parent_checkpoint::ChildReport>,
-}
-
-/// 子の受け入れ条件 1 件と、その判定の結果。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ParentCheckpointCriterion {
-    pub text: String,
-    /// check の種類（`command`・`artifact_exists`・`reviewer`・`human` など）。
-    pub kind: String,
-    /// 判定の結果（`pass`・`fail`・`not_run`）。
-    pub result: String,
 }
 
 /// 決定的なメトリクス（D1.2 の trigger と同じ値）。

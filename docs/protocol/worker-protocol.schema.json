@@ -866,7 +866,8 @@
       "description": "job scheduler の種類。",
       "enum": [
         "pbs",
-        "slurm"
+        "slurm",
+        "nqsv"
       ],
       "type": "string"
     },

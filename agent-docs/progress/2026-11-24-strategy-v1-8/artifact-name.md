@@ -64,11 +64,13 @@ Summary 5 tests run: 1 passed, 4 failed
 
 変更後: 同じコマンド → exit 0、5 tests run: 5 passed。`-E 'test(/undeclared/) | test(/root_review_artifact/) | test(/artifact_exists/)'` → 38 tests run: 38 passed。
 
-## 証拠（基準は `$CELERIS_WU_BASE`）
-- `bash scripts/dev/test-affected.sh` → exit 0。対象 crate: celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。nextest 4011 tests run: 4011 passed、11 skipped。repo-health verdict=pass（fail_grade=0）。script bundle SKIP 0 件。commit 前の作業ツリーで実行した。その後の変更は、`cargo fmt --all` による新しい試験の 1 行の折り返しと、この進捗の追加だけ。
-- `cargo clippy --workspace -- -D warnings` → exit 0（fmt の前の作業ツリー。fmt の差は空白だけ）。
-- `cargo fmt --all -- --check` → exit 0（1 回目は新しい試験の 1 行の折り返しで exit 1。`cargo fmt --all` で直して再実行。commit 後にも exit 0）。
-- commit 後の HEAD で: `cargo nextest run -p task-dispatch --lib -E 'test(/undeclared_nested_name_/)'` → 5 passed、`bash scripts/dev/check-health.sh` → exit 0（`repo_health_gate: all checks passed`）、`sh scripts/dev/progress-index.sh --check` → ok。
+## 証拠（基準は `$CELERIS_WU_BASE`。Run #2 で、実装の commit の後の HEAD で再実行した。その後の commit はこの節の書き換えだけ）
+- `bash scripts/dev/test-affected.sh` → exit 0。対象 crate: celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。nextest 4011 tests run: 4011 passed、11 skipped。repo-health verdict=pass（fail_grade=0）。script bundle SKIP 0 件。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo fmt --all -- --check` → exit 0（Run #1 の 1 回目は新しい試験の 1 行の折り返しで exit 1。`cargo fmt --all` で直した）。
+- `cargo nextest run -p task-dispatch --lib -E 'test(/undeclared_nested_name_/)'` → exit 0、5 passed。
+- 変更前の再現: `undeclared_artifacts.rs` だけを `$CELERIS_WU_BASE` の版に戻して同じ試験 → exit 100、5 件のうち 4 件が落ちた（上の出力と同じ）。戻した file は `git checkout` で元に戻した。
+- `sh scripts/dev/progress-index.sh --check` → ok。`sh "$CELERIS_WU_SCOPE_PATHS"` → この WU の 5 file だけ。
 - `git diff "$CELERIS_WU_BASE" -- crates/task-worker/src/change_rules control-ts web | wc -l` → 0。
 
 ## LoC（`git diff --numstat "$CELERIS_WU_BASE"`）

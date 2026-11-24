@@ -59,7 +59,13 @@ Summary [1.000s] 6 tests run: 4 passed, 2 failed, 3 skipped
 - seed の経路: `PARENT_EVAL_BLIND_SEED=<spec>` で `--run-ignored only parent_checkpoint_blind_seed` を E-mid・D-done について一時 dir の DB に実行 → 両方 pass。DB の `project_roadmap_versions` に版 1（`approved`、`human:blind-seed`）がある。
 
 ## 検査（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
-検査の結果は下の「検査の結果」節に書く。
+- `bash scripts/dev/test-affected.sh` → exit 0。対象は celeris・celeris-campaign・celerisctl・llm-proxy・task-api・task-dispatch・task-worker と web（typecheck+unit。task-api の変更のため）。nextest 6377 passed・31 skipped、web の vitest 108 files・773 tests passed、repo_health_gate: all checks passed。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo nextest run -p task-api --test parent_checkpoint_live` → 6 passed、3 skipped（`#[ignore]`）。
+- fixture の check（plan の check と同じ command）: E-mid・D-done の prompt に「（Outcome の記録は無い）」が無い、D-done の prompt に `outcome \`` がある、`git diff --quiet $(git merge-base HEAD main) -- fixtures/parent_checkpoint_live/blind/ fixtures/parent_checkpoint_shadow/` → exit 0。
+- 範囲の check（`sh "$CELERIS_WU_SCOPE_PATHS"` の path を plan の正規表現で絞る）→ 範囲の外 0 件。変えた path は `parent_checkpoint_live.rs`、E-mid・D-done の `request.json`・`prompt.md`、この進捗の 5 件。
+- `git diff --stat "$CELERIS_WU_BASE" -- crates/task-dispatch/src crates/task-ops/src crates/task-core/src crates/task-worker/src crates/task-api/src` → 差分 0。
 
 ## LoC（`git diff --numstat "$CELERIS_WU_BASE"`）
 - production: 0（`crates/*/src` の差分 0）。
@@ -82,3 +88,4 @@ Summary [1.000s] 6 tests run: 4 passed, 2 failed, 3 skipped
 
 ## commit
 - strategy-v1 8 eval-seed: 盲検の seed と live の入力に承認済み Roadmap の Outcome と子の criteria を入れる
+- strategy-v1 8 eval-seed: WU の進捗に提出時の検査の結果を書く

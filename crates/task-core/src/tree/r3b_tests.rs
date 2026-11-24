@@ -290,11 +290,12 @@ fn ready_task_unit_waits_on_a_child_slot_only_when_the_slots_are_full() {
     // 今回の事象の形: 枠を占めていた 2 件の子は自分で一時停止 → 枠の待ちに入らない → 次の tick で子を作る。
     let units = vec![paused_child("e2"), paused_child("e3"), ready.clone()];
     assert_eq!(
-        class(node(units.clone())),
+        class(node(units)),
         (LivenessClass::Runnable, "child_creation".to_string())
     );
-    // 枠が埋まっている（止まっていない子 2 件）: 名指しの待ち（StallDetected にしない）。
-    let mut full = node(units);
+    // 枠が埋まっている（止まっていない子 2 件）: 名指しの待ち（StallDetected にしない）。名指しの待ちは最初の 1 件が理由に
+    // なるので、枠を待つ unit を先に並べて `child_slot` の分類そのものを見る。
+    let mut full = node(vec![ready.clone(), paused_child("e2"), paused_child("e3")]);
     full.child_slot_waiting = vec!["e1b".into()];
     assert_eq!(
         class(full),

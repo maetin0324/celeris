@@ -1,13 +1,15 @@
 ---
 title: planner の run の供給側の失敗を計画の不採用に数えず account を cooldown にする（WorkUnit planner-supply）
 tasks: [01M87M20BAB5C21EVARQ7BWCCN]
-status: blocked
+status: done
 updated: 2026-11-24
 ---
 # planner の run の供給側の失敗を計画の不採用に数えず account を cooldown にする（WorkUnit planner-supply）
 
-状態: blocked（WorkUnit の範囲の check が `crates/task-ops/src/tree.rs` を許さない。下の「未解決」の 1 つめ。計画の直しを
-plan_issue で申告した）。設計は [ADR 2026-11-24-planner-supply-failure-cooldown](../../adr/2026-11-24-planner-supply-failure-cooldown.md)
+完了日: 2026-11-24
+
+状態: done。計画の直しで WorkUnit の範囲の check が `^crates/task-ops/src/tree\.rs$` を許すようになり、
+3 回目の run で範囲外の path が無いこと（旧い範囲の外は `crates/task-ops/src/tree.rs` の 1 件だけ）と検査を確かめた。設計は [ADR 2026-11-24-planner-supply-failure-cooldown](../../adr/2026-11-24-planner-supply-failure-cooldown.md)
 の D1〜D4・D7（1〜5）。基準は `$CELERIS_WU_BASE`（この WorkUnit の base）。
 
 ## commit（件名）
@@ -18,6 +20,8 @@ plan_issue で申告した）。設計は [ADR 2026-11-24-planner-supply-failure
 - 試験: 設計 review の run の認証の失敗は cooldown にし判定に流さない
 - planner: planner の出力の読み取りを task_core::execution_plan に移し、task_ops::execution を base に戻す
 - progress: planner-supply の WorkUnit の結果
+- progress: planner-supply の範囲の check と 2 回目の run の検査の結果
+- progress: planner-supply を done にし、3 回目の run の検査の結果を書く
 
 ## 変えたこと
 
@@ -76,14 +80,22 @@ plan_issue で申告した）。設計は [ADR 2026-11-24-planner-supply-failure
 5. `reviewer_side_run_supply_failure_cools_down_and_reads_no_verdict`: 設計 review の run が `AuthFailed` → `DesignReviewed`
    なし、`WorkerFinished.end = Supply`、source の cooldown（`ProviderThrottled{reason: auth_failed}`）。
 
-## 証拠（2 回目の run の提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+## 証拠（3 回目の run の提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 
-- `bash scripts/dev/test-affected.sh` → exit 0。cargo nextest 8912 passed（34 skipped）、web の tsc -b と vitest 108 files /
-  773 tests passed、test-ts-verify 20 passed、repo-health verdict=pass（fail_grade=0・new=0・worsened=0）。
-- `cargo clippy --workspace -- -D warnings` → exit 0。
+コードはこの run で変えていない（進捗ファイルだけ）。検査は進捗ファイルの commit の前の HEAD で実行し、commit の後に
+fmt・範囲の check・`progress-index.sh --check` を再実行した。
+
+- WorkUnit の範囲の check（計画の `"scope": true` の command。`sh "$CELERIS_WU_SCOPE_PATHS"` の path を
+  `^(crates/task-dispatch/|crates/task-core/src/|crates/task-ops/src/tree\.rs$|docs/api/v1/|docs/protocol/|web/src/|agent-docs/progress/|agent-docs/adr/)`
+  で絞る）→ exit 0、範囲外 0 件。`crates/task-ops/src/tree.rs` の許可を外した接頭辞で絞ると残るのは
+  `crates/task-ops/src/tree.rs` の 1 件だけ（2 回目の run は範囲 check が exit 1、1 回目は `execution.rs` と `tree.rs` の 2 件）。
+- `cargo test -p task-dispatch planner` → exit 0、34 passed。追加した 5 件（`planner_supply` の 4 件・
+  `reviewer_side_run_supply_failure_cools_down_and_reads_no_verdict`）も名前を指定して実行し ok。
+- `bash scripts/dev/test-affected.sh` → exit 0（22 分）。cargo nextest 8912 passed（34 skipped）、web の tsc -b と vitest
+  108 files / 773 tests passed、test-ts-verify 20 passed、repo-health verdict=pass（fail_grade=0・new=0・worsened=0）。
+  末尾の `rm: cannot remove … own-eval: Permission denied` は scratch の後片付けの出力で、exit code に影響しない。
+- `cargo clippy --workspace -- -D warnings` → exit 0（依存 crate の deno_core の deprecated の警告 1 件だけ）。
 - `cargo fmt --all -- --check` → exit 0。
-- WorkUnit の範囲の check（`sh "$CELERIS_WU_SCOPE_PATHS"` の path を許す接頭辞で絞る command）→ exit 1、範囲外は
-  `crates/task-ops/src/tree.rs` の 1 件（1 回目の run は `execution.rs` と `tree.rs` の 2 件）。
 
 ## ADR の Context の訂正
 
@@ -92,12 +104,13 @@ plan_issue で申告した）。設計は [ADR 2026-11-24-planner-supply-failure
 
 ## 未解決
 
-- WorkUnit の範囲の check が `crates/task-ops/src/tree.rs` を許さない。replan の planner run は起動の時点で replan の依頼
+- （解決済み）WorkUnit の範囲の check が `crates/task-ops/src/tree.rs` を許さなかった。計画の直しで範囲に
+  `^crates/task-ops/src/tree\.rs$` が入った。理由: replan の planner run は起動の時点で replan の依頼
   （`ExecutionHintSet{replan}`・途中確認の replan・「もう一度だけ試します」の印）を消費するので、供給側の失敗で終わった run の
   後に planner を起こし直すには `task_ops::tree::planner_retry_pending` が `end = HarnessError{Supply}` の planner の
   `WorkerFinished` を見て真を返す必要がある。この関数は dispatch（`wu_dispatch_gate`）と生存確認（`node_liveness_facts` の
   `planner_pending`）の両方が読む owner で、task-dispatch に同じ判定を別に書くと、再ログイン待ちの間に生存確認が節点を
-  停滞と誤って分類する。範囲に `^crates/task-ops/src/tree\.rs$` を足すよう plan_issue で申告した。
+  停滞と誤って分類する。
 - 親の途中評価（`parent_evaluation`）の試行の数え方は確かめていない（未確認）。供給側の失敗では `settle` を呼ばない形にした。
 - 使える account が無いとき、`task_waits`（GUI の待ちの理由）には理由が出ない。人に見えるのは bad_news・account の一覧・
   task の timeline の「route refused」。待ちの理由に出すかは提案に書く。

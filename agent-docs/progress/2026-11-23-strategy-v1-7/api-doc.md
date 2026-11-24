@@ -28,10 +28,13 @@ completed: 2026-11-24
 - 403（`problem.rs` の `PublicationRequiresHuman` → `StatusCode::FORBIDDEN`、`proposal_review.rs` の `reviewer`）、422・409（`publish.rs` の `check_before_sign`）、409・422（`proposal_review.rs` の `review_problem`）、404（`manifest_status` の `not_found`）、503 `cos_unavailable`（`chat/mod.rs` の `require_cos_enabled`）を実装で確かめた。
 - `grep -qF` で 3 つの口・`| 246 |`〜`| 248 |`・改訂の記録の項 → すべて ok。
 - `git diff --quiet "$CELERIS_WU_BASE" -- crates/` → exit 0。
-- `bash scripts/dev/check-doc-links.sh` → exit 0（`check-doc-links: ok`）。`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` → exit 0。
+- `bash scripts/dev/check-doc-links.sh` → exit 0（`check-doc-links: ok`）。`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` → exit 0。`sh scripts/dev/progress-index.sh --check` → exit 0。
+- `bash scripts/dev/test-affected.sh`（基点 `$CELERIS_WU_BASE`。対象は docs/api/ の変更による web の typecheck と unit だけ）→ exit 0（tsc -b 通過、vitest 108 file・771 passed、node --test 110 pass・0 fail、repo_health_gate all checks passed）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
 
 ## commit
 - 「strategy-v1 7 api-doc: API 仕様に概要・案の採否・manifest の口と署名の拒否を書く」
+- 「strategy-v1 7 api-doc: 提出時の HEAD の検査の結果を進捗に書く」
 
 ## 未確認
 - 受信箱の answer が `POST /decisions/{id}/answer` に委ねる経路は、この WU では grep で確かめられなかったので文書に書いていない。

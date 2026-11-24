@@ -1,13 +1,13 @@
 ---
 title: planner の run の供給側の失敗を計画の不採用に数えず account を cooldown にする（WorkUnit planner-supply）
 tasks: [01M87M20BAB5C21EVARQ7BWCCN]
-status: done
+status: blocked
 updated: 2026-11-24
-completed: 2026-11-24
 ---
 # planner の run の供給側の失敗を計画の不採用に数えず account を cooldown にする（WorkUnit planner-supply）
 
-状態: done。設計は [ADR 2026-11-24-planner-supply-failure-cooldown](../../adr/2026-11-24-planner-supply-failure-cooldown.md)
+状態: blocked（WorkUnit の範囲の check が `crates/task-ops/src/tree.rs` を許さない。下の「未解決」の 1 つめ。計画の直しを
+plan_issue で申告した）。設計は [ADR 2026-11-24-planner-supply-failure-cooldown](../../adr/2026-11-24-planner-supply-failure-cooldown.md)
 の D1〜D4・D7（1〜5）。基準は `$CELERIS_WU_BASE`（この WorkUnit の base）。
 
 ## commit（件名）
@@ -16,6 +16,7 @@ completed: 2026-11-24
 - planner: 供給側の失敗の扱いを free 関数に寄せ、計画の検証を on_planner_finished の外に出す
 - planner: 計画の再試行の文面と planner の出力の読み取りを task_ops に移し、供給側の失敗の扱いを詰める
 - 試験: 設計 review の run の認証の失敗は cooldown にし判定に流さない
+- planner: planner の出力の読み取りを task_core::execution_plan に移し、task_ops::execution を base に戻す
 - progress: planner-supply の WorkUnit の結果
 
 ## 変えたこと
@@ -43,7 +44,9 @@ completed: 2026-11-24
     `planner_rejections_since_last_plan`・`plan_invalid_answer_position`・`plan_invalid_replan_note`、`PLANNER_BLOCKED_*`）を
     `task_ops::tree` に移した。同じ文面を読む `planner_retry_pending` と `PLANNER_RETRY_*` は元からここにある。
     dispatcher 側の別名の定数（`planner_flow::PLANNER_RETRY_PREFIX/SUFFIX`）は消した。
-  - `parse_planner_output`（planner の出力を `task_core::execution_plan` の関数で読む純関数）を `task_ops::execution` に移した。
+  - `parse_planner_output`（planner の出力を `apply_delta`・`carry_done_units_v3` で読む純関数）を `task_core::execution_plan`
+    に移した（差分の schema を持つ module。2 回目の run で `task_ops::execution` から移し直し、`crates/task-ops/src/execution.rs` は
+    base に戻した）。
   - 計画の file の検証を `planner_plan_validation`（free 関数）に出した。`record_supply_failure` は free 関数にした。
   - dispatcher module の本体の行: base 32202 → HEAD で base より 9 行少ない（`check-health.sh` の verdict=pass、worsened=0）。
 
@@ -73,14 +76,14 @@ completed: 2026-11-24
 5. `reviewer_side_run_supply_failure_cools_down_and_reads_no_verdict`: 設計 review の run が `AuthFailed` → `DesignReviewed`
    なし、`WorkerFinished.end = Supply`、source の cooldown（`ProviderThrottled{reason: auth_failed}`）。
 
-## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+## 証拠（2 回目の run の提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 
-- `bash scripts/dev/test-affected.sh` → exit 0。cargo nextest 7142 passed（32 skipped）、web の tsc -b と vitest 108 files /
-  773 tests passed、repo-health verdict=pass（new=0・worsened=0）。
+- `bash scripts/dev/test-affected.sh` → exit 0。cargo nextest 8912 passed（34 skipped）、web の tsc -b と vitest 108 files /
+  773 tests passed、test-ts-verify 20 passed、repo-health verdict=pass（fail_grade=0・new=0・worsened=0）。
 - `cargo clippy --workspace -- -D warnings` → exit 0。
 - `cargo fmt --all -- --check` → exit 0。
-- `cargo nextest run -p task-dispatch -p task-ops -E 'test(planner) | test(account_auth_failure) | test(review) | test(health_review_design) | test(tree) | test(planning_and_gate) | test(plan_invalid) | package(task-ops)'` → 1198 passed。
-- 進捗ファイルの commit の後に `sh scripts/dev/progress-index.sh --check` と `sh "$CELERIS_WU_SCOPE_PATHS"` を実行した（結果は報告に書く）。
+- WorkUnit の範囲の check（`sh "$CELERIS_WU_SCOPE_PATHS"` の path を許す接頭辞で絞る command）→ exit 1、範囲外は
+  `crates/task-ops/src/tree.rs` の 1 件（1 回目の run は `execution.rs` と `tree.rs` の 2 件）。
 
 ## ADR の Context の訂正
 
@@ -89,6 +92,12 @@ completed: 2026-11-24
 
 ## 未解決
 
+- WorkUnit の範囲の check が `crates/task-ops/src/tree.rs` を許さない。replan の planner run は起動の時点で replan の依頼
+  （`ExecutionHintSet{replan}`・途中確認の replan・「もう一度だけ試します」の印）を消費するので、供給側の失敗で終わった run の
+  後に planner を起こし直すには `task_ops::tree::planner_retry_pending` が `end = HarnessError{Supply}` の planner の
+  `WorkerFinished` を見て真を返す必要がある。この関数は dispatch（`wu_dispatch_gate`）と生存確認（`node_liveness_facts` の
+  `planner_pending`）の両方が読む owner で、task-dispatch に同じ判定を別に書くと、再ログイン待ちの間に生存確認が節点を
+  停滞と誤って分類する。範囲に `^crates/task-ops/src/tree\.rs$` を足すよう plan_issue で申告した。
 - 親の途中評価（`parent_evaluation`）の試行の数え方は確かめていない（未確認）。供給側の失敗では `settle` を呼ばない形にした。
 - 使える account が無いとき、`task_waits`（GUI の待ちの理由）には理由が出ない。人に見えるのは bad_news・account の一覧・
   task の timeline の「route refused」。待ちの理由に出すかは提案に書く。

@@ -13,9 +13,9 @@ completed: 2026-11-24
 
 ## したこと
 
-- close-audit の後の HEAD で (a)〜(f) を foreground で実行した。すべて exit 0。
+- close-audit の後の HEAD で (a)〜(f) と補足の (e')（task 全体の差分の test-affected）を foreground で実行した。すべて exit 0。
 - task の進捗の「## 測定」「## 試験」（提出時の HEAD の全試験）「## 回帰」「## 受け入れ条件ごとの証拠」に結果を書き足し、front matter を `status: done`・`completed: 2026-11-24` にした。
-- commit: `strategy-v1 7 close: 提出時の HEAD で全試験を再実行し、task の進捗を done にする`。
+- commit: `strategy-v1 7 close: 提出時の HEAD で全試験を再実行し、task の進捗を done にする`、`strategy-v1 7 close: task 全体の差分の test-affected の結果を進捗に書く`。
 
 ## 実行した command と結果（提出時の HEAD で実行）
 
@@ -25,10 +25,11 @@ completed: 2026-11-24
 - (b) `corepack pnpm@12.6.0 -C web install --frozen-lockfile --offline && corepack pnpm@12.6.0 -C web exec playwright test e2e/work/project-overview.spec.ts e2e/chat/proposal-review.spec.ts e2e/work/publish-manifest.spec.ts`
   → exit 0、`14 passed`（project-overview 2・proposal-review 7・publish-manifest 5）、failed 0・skipped 0。偽 daemon に対する実行。
 - (c) `cargo fmt --all -- --check` → exit 0、出力 0 行。
-- (d) `cargo clippy --workspace -- -D warnings` → exit 0。warning は依存 crate `deno_core` の deprecated（`TcpStream::set_linger`）1 件だけ（workspace の外）。
+- (d) `cargo clippy --workspace -- -D warnings` → exit 0。warning は vendor の `deno_core`（`crates/script-runtime/vendor/deno_core`。workspace の member でない）の deprecated（`TcpStream::set_linger`）1 件だけ。
 - (e) `bash scripts/dev/test-affected.sh` → exit 0、`test-affected: 試験対象の変更なし（docs のみ等）`。repo-health は `mode=full`・基点 `git merge-base HEAD main` で
   `verdict=pass exit=0 fail_grade=0`（findings 727: new 5・worsened 2・existing 720。required 15 項目・optional 6 項目すべて pass）。
   `repo_health_gate: all checks passed`、repo-health の自己試験 126 件 OK。
+- (e') 補足: `CELERIS_WU_BASE= bash scripts/dev/test-affected.sh`（基点を `git merge-base HEAD main` にした task 全体の差分。final review の条件 4 と同じ基点）→ exit 0、Rust は 14 crate（celeris・celeris-campaign・celeris-credentiald・celeris-mcp・celeris-script・celerisctl・e2e・llm-proxy・routing-eval・task-api・task-core・task-dispatch・task-ops・task-worker）で `8897 tests run: 8897 passed (9 slow), 34 skipped`、doc test 14 個の `test result: ok`（FAILED 0）、web は `tsc -b` exit 0・vitest `Test Files 108 passed`・`Tests 771 passed`・`node --test` `pass 110`・`fail 0`、`test-ts-verify: 20 passed, 0 failed`、script bundle の SKIP 0 件、repo-health `verdict=pass`。log の `Terminated` 1 行は型検査が終わった後に watchdog の `sleep` を止めた印で、`終わらない`・`失敗した` の行は 0 件。
 - (f) `sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check`
   → exit 0（`check-doc-links: ok`・`check-adr-numbers: ok (481 files)`・`progress-index --check: ok`）。commit の後にも実行した。
 - task の受け入れ条件 1 の式（ADR の保証の表の試験名・3 つの spec・migration の差分 0）→ exit 0、名前 74 件、欠け 0。
@@ -40,8 +41,8 @@ completed: 2026-11-24
 
 ## 未確認・引き継ぎ
 
-- (e) はこの WU の差分（進捗だけ）を基点にするので、task 全体の差分の Rust・web の試験は流していない。task 全体の差分の試験は各 WU の test-affected
-  （task の進捗の「## 回帰」）と final review の再実行に任せる。
+- (e) はこの WU の差分（進捗だけ）を基点にするので試験対象 0 だった。task 全体の差分の試験は補足の (e') で流した（exit 0）。
+- web の e2e は偽 daemon に対して流した。本物の daemon・gateway での画面は未確認（task の進捗の「## 未確認」）。
 - ほかは task の進捗の「## 未確認」。
 
 ## 提案

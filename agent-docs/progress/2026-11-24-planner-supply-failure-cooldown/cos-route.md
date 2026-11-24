@@ -1,8 +1,7 @@
 ---
 tasks: [01M87M20BAB5C21EVARQ7BWCCN]
 wu: cos-route
-status: done
-completed: 2026-11-24
+status: blocked
 ---
 # CoS の代替経路が同じ source の別の account に移れない不具合を直す（WorkUnit cos-route）
 
@@ -88,3 +87,31 @@ completed: 2026-11-24
 - integrate-build の後（planner-supply が `route_failure.rs` 周りを変え終えた後）に、`worker_finish.rs`・`review_verdict.rs`・`cos_chat/routes.rs` の
   「pool の account なら `record_account_failure`、それ以外か spawn なら `record_source_failure`」を `route_failure.rs` の 1 つの関数にまとめる。
   この WorkUnit では planner-supply と同じ file を避けるため、まとめていない。
+
+## 範囲 check の不合格と計画の問題（2 回目の run、2026-11-24）
+
+前回の run の後、計画の範囲 check（許す path は `crates/task-dispatch/src/dispatcher/cos_chat/`・`agent-docs/progress/`・`agent-docs/adr/`）が
+exit 1 で落ちた。範囲外と出た path は次の 7 つで、この run で同じ command を走らせても同じ結果だった。
+
+- `crates/task-dispatch/src/dispatcher/route_select.rs`
+- `crates/task-dispatch/src/dispatcher/tests/{cos_chat_launch,cos_launch_cross,cos_launch_wire,cos_route_failover,cos_slot_wait}.rs`、`tests/mod.rs`
+
+この check は、同じ計画の ADR（D1・D5・D7）を満たす修正では通らない。理由は次の 3 つ。
+
+1. ADR D5 は `select_cos_route_from` の `skip(start)` を消すと決めている。この関数の定義は `route_select.rs` にしか無い。
+   cos_chat から呼ばなくすると関数は dead code になり、`cargo clippy -- -D warnings` が落ちる。`start = 0` で呼び続けると番号で読み飛ばす旧い仕組みが残る。
+2. ADR D1 は起動の失敗（`AdapterError::Spawn`）も供給側の失敗とする。既存の試験 `tests/cos_launch_wire.rs::a_spawn_failure_keeps_launched_at` と
+   `tests/cos_launch_cross.rs::spawn_failure_after_the_notice_and_usage_null_stop_the_budget` は、起動の失敗で run が再試行せずに failed で閉じることを確かめている。
+   再試行の 1 tick を足す変更が要る。`cos_launch_wire.rs` は `ChatFinish` を struct literal で組むので、分類の欄を足すとこの試験の compile が通らない。
+3. D7 の 6・7 の試験は CoS の起動の fixture（`tests/cos_chat_launch.rs`。`tests/mod.rs` の private な module）と、`tests/mod.rs` の private な
+   `pool_dispatcher`・`accounts_fixture`・`done_outcome` を使う。`cos_chat/` の下には置けない。置くなら fixture を写す重複になる。
+
+コードは変えず、`result.json` に `yield.plan_issue` を書いて replan を求めた。提案する範囲 check の正規表現は次のとおり。
+この run で、変えた path にこの正規表現を当てて範囲外が 0 件になることを確かめた（`grep -vE` の exit 1）。
+
+```
+^(crates/task-dispatch/src/dispatcher/(cos_chat/|route_select\.rs$|tests/(mod\.rs|cos_[a-z_]+\.rs)$)|agent-docs/progress/|agent-docs/adr/)
+```
+
+この run の時点で planner-supply のブランチには差分が無かった。planner-supply が `tests/mod.rs` に試験の module を足すと、
+統合で `mod` 行が衝突する可能性がある。衝突したら両方の行を残す。

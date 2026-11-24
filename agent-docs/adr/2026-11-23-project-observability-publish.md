@@ -15,7 +15,8 @@ tasks: [01M7XQ9R1EHA8GQ0TZVRM4FBVX]
   [ADR 2026-10-27-api-principals](2026-10-27-api-principals.md)（`Principal`）、
   [ADR 2026-10-09-cos-operations-all-mutations](2026-10-09-cos-operations-all-mutations.md)（書き込みの route の登録）、
   [ADR-0079](0079-recursive-task-decomposition.md) D7（人への決定）。
-- この ADR は設計だけを固定する。source の変更は後の WorkUnit（下の「WorkUnit への割り当て」）が行う。
+- この ADR は設計を固定した。source の変更は下の「WorkUnit への割り当て」の 6 つの WorkUnit が行った。設計どおりに実装していない点は
+  本文のその場所に「未実装」と書き、「未確認」と末尾の「付記（close-audit、2026-11-24）」にまとめた。
 
 ## 背景
 
@@ -73,12 +74,12 @@ tasks: [01M7XQ9R1EHA8GQ0TZVRM4FBVX]
 | O2 | `approved_strategy` | 承認戦略 | 決定 `strategy-approve-v<n>`（子 2 D2.2）と成果物 `strategy/<id>/v<n>.json` | 戦略の系列ごとに承認済みの最新の版 `{task_id, name, sha256, version, approved_by, approved_at}` と、回答待ちの版 | 承認が有効で鮮度も合う: `confirmed`。回答待ちだけ: `needs_decision`。request の sha256・Roadmap の版の不一致、より新しい承認、file の上書き: `contradicted` | `strategy_stale` | artifact・task |
 | O3 | `candidates` | 候補の比較 | O2 の版の文書の `candidates[]`（子 5 D1.1） | 候補ごとの `{id, title, state, selected, cost, experiment.budget, rejected_by}` と X(v) の task の id | 承認済みの版の `selected`: `confirmed`。`open`: `estimated`。`rejected`: `contradicted`（`rejected_by` の反証を持つ）。回答待ちの版の候補: `needs_decision` | 無し（却下は反証の反映で、危険ではない） | artifact・task |
 | O4 | `hypotheses` | 仮説 | 同じ文書の `hypotheses[]` | `{id, statement, confidence}` | 文書の `confidence` をそのまま使う（子 2 D2.3 で `confirmed` は内部の参照を要し、支持と反証の両方があれば `confirmed` にできない） | 無し（`contradicted`・`needs_decision` は規則 1 で強い警告） | artifact |
-| O5 | `verification` | 検証の状況 | 候補の `experiment.discriminates`、X(v) の task の status、`evidence[]` | 仮説ごとに識別実験の task の id と、stance ごとの証拠の数 | 実験の task が `done` で、その task を `task`・`artifact` で引く証拠がある: `confirmed`。実験の task が走っている: `estimated`。実験の task が無い・`failed`・`cancelled`: `needs_decision` | 無し | task・log・notebook |
+| O5 | `verification` | 検証の状況 | 候補の `experiment.discriminates`、X(v) の task の status、`evidence[]` | 仮説ごとに識別実験の task の id と、stance ごとの証拠の数 | 実験の task が `done` で、その task を `task`・`artifact` で引く証拠がある: `confirmed`。実験の task が走っている: `estimated`。実験の task が無い・`failed`・`cancelled`: `needs_decision` | 無し | task・notebook（`log` は未実装。D1.4） |
 | O6 | `refutations` | 反証 | 文書の `stance: refute` の証拠（子 2 D2.3 で版を進めても残る）、評価の記録の `refuted[]` | `{evidence_id, hypothesis, statement, references}` | 内部の参照（`commit`・`artifact`・`task`）を持つ: `confirmed`。外部の参照だけ: `estimated`。反証された仮説が `confirmed` のまま、または `selected` の候補の仮説のまま: `contradicted` | `refute_unapplied` | artifact・git・literature |
-| O7 | `latest_findings` | 最新に得た知見 | strategy root の最新の評価の記録 `parent-evaluation/<判断 id>.json`（子 6 D3.4。判断の行 `project_controller_decisions` から name を引く） | `effective.{verdict, next, axes, negative_result, unsupported}` と `measured[]`・`learned[]` | supported の項目（子 6 D4 R2）: `confirmed`。unsupported の項目: `estimated`。`status: invalid`・verdict `unknown`: `needs_decision`。verdict `off_track`: `contradicted`。3 軸（execution・epistemic・goal）は分けて返す（子 6 D7） | `evaluation_unsupported`・`evaluation_off_track`・`evaluation_invalid` | artifact・task・log |
+| O7 | `latest_findings` | 最新に得た知見 | strategy root の最新の評価の記録 `parent-evaluation/<判断 id>.json`（子 6 D3.4。判断の行 `project_controller_decisions` から name を引く） | `effective.{verdict, next, axes, negative_result, unsupported}` と `measured[]`・`learned[]` | supported の項目（子 6 D4 R2）: `confirmed`。unsupported の項目: `estimated`。`status: invalid`・verdict `unknown`: `needs_decision`。verdict `off_track`: `contradicted`。3 軸（execution・epistemic・goal）は分けて返す（子 6 D7） | `evaluation_unsupported`・`evaluation_off_track`・`evaluation_invalid` | artifact・task（`log` は未実装。D1.4） |
 | O8 | `discussion_sources` | 議論の出典 | 案件 thread の message の `metadata_json.exchange`（子 4）・`citations`（子 3 D6）、案の添付 | 出典ごとに `{message_id, revision, sha256, source_kind, source_label, author, review_state}` | 議論は検証済みの主張でないので `estimated`（子 4 D1.4 と同じ）。引用の状態が `current` でない: `contradicted` | `citation_stale` | chat・artifact |
 | O9 | `experiments_and_tasks` | 現在の実験と Task | `cos_operations` の strategy 付きの `task.create`（`task_core::strategy_reads::strategy_task_creates`） | strategy root と実験の task の `{task_id, strategy name, version, candidate}`（status は D1.1 の表のとおり `GET /projects/{id}` の `tasks[]` から Web が引く） | 記録の事実なので `confirmed` | 無し | task・log・git |
-| O10 | `budget_spent` | 予算と spent | 候補の `experiment.budget`・`cost`（子 5）と、X(v) の task の subtree の消費（`root_totals` を作る既存の集計 `task_ops::tree_view::project_root_totals` と同じ関数） | 版ごとの `{usd_max, wall_hours_max}` と `{tokens, list_price_usd, wall_secs}` | token・壁時計（実測）: `confirmed`。USD（定価の換算）: `estimated`。消費が予算を超えた: `contradicted`。単価の無い model の run がある: `needs_decision` | `budget_exceeded`・`cost_unknown` | task・log |
+| O10 | `budget_spent` | 予算と spent | 候補の `experiment.budget`・`cost`（子 5）と、X(v) の task の subtree の消費（`root_totals` を作る既存の集計 `task_ops::tree_view::project_root_totals` と同じ関数） | 版ごとの `{usd_max, wall_hours_max}` と `{tokens, list_price_usd}`（`wall_secs` は未実装: `RollupMetrics` に壁時計の合計が無い） | token（実測）: `confirmed`。USD（定価の換算）: `estimated`。消費が予算を超えた: `contradicted`。単価の無い model の run がある: `needs_decision` | `budget_exceeded`・`cost_unknown` | task・log |
 | O11 | `next_verification` | 次の検証 | X(v) にまだ task の無い `open` の候補の `experiment`、最新の評価の `next`・`uncertainty[].resolve_by`、文書の `held_assumptions[].revisit_when` | `{source, statement}` の列 | 計画なので `estimated`。評価の `next` が `ask_human`: `needs_decision` | 無し | artifact・task |
 | O12 | `pending_human_decisions` | 人の判断待ち | 案件の task の `decisions`（`status = 'open'`）、採否の無い chat の案（D2.4） | 決定の `{decision_id, task_id, key の種類}`（`strategy-approve`・`publish-signoff`・その他）と案の message の id | 1 件以上なら `needs_decision` | 無し（規則 1 で強い警告） | task・chat |
 | O13 | `risks` | 危険 | O2〜O12・O14 の警告と、controller の phase が `blocked`（`GET /projects/{id}/controller` の行を参照する） | `warnings[]` の要約（code ごとの件数） | 強い警告が 1 件以上: `contradicted`。通常の警告だけ: `estimated`。警告が 0 件で記録がある: `confirmed` | 各項目の code | 各項目の link |
@@ -96,12 +97,12 @@ link は `{kind, …}` の 7 種だけである。Web は kind ごとに既存�
 | kind | 欄 | Web の移り先（既存） | 備考 |
 |---|---|---|---|
 | `task` | `task_id` | `/tasks/{task_id}` | 案件の task だけ（他の案件の task は概要に出さない） |
-| `artifact` | `task_id`・`name`・`sha256` | `/tasks/{task_id}?tab=artifacts` と成果物の viewer | sha256 が今の file と違えば Web は「上書きされた」と出す |
-| `notebook` | `task_id`・`name` | `artifact` と同じ viewer | 実験の task の成果物のうち name が `.ipynb` で終わるもの。Celeris に Notebook の正本は無く、成果物の file を指すだけ |
-| `log` | `task_id`・`run_id` | `/tasks/{task_id}/runs/{run_id}` | run の log |
-| `git` | `repo`・`sha`・`task_id?` | `task_id` があれば `/tasks/{task_id}/changes`、無ければ repo 名と 40 桁の sha を写せる文字で出す | 子 2 の `commit` の参照。存在は reviewer が確かめる（gate は形だけ） |
-| `literature` | `url` か `path`・`sha256` | `url` は新しい tab（`rel="noopener noreferrer"`）、`path` は knowledge の page | `url` は `https://` だけ（子 2 の参照の規則）。外部の資料は untrusted と出す |
-| `chat` | `thread_id`・`message_id`・`revision`・`sha256` | `/?thread={thread_id}&message={message_id}` | 引用の状態（current・edited・retracted・missing）を添える |
+| `artifact` | `task_id`・`name`・`sha256` | `/tasks/{task_id}?tab=artifacts` と成果物の viewer | 未実装: 概要の panel は link の sha256 と今の file を照合せず、「上書きされた」を出さない（成果物の viewer の `sha256_matches` で読める）。戦略の文書の link の `sha256` は空文字（承認済みの版は O2 の link が sha256 を持つ） |
+| `notebook` | `task_id`・`name` | `artifact` と同じ viewer と `/tasks/{task_id}/files` | 実験の task の成果物のうち name が `.ipynb` で終わるもの。Celeris に Notebook の正本は無く、成果物の file を指すだけ |
+| `log` | `task_id`・`run_id` | `/tasks/{task_id}/runs/{run_id}` | 未実装: backend はこの kind の link をどの項目にも出さない（wire の enum `ProjectOverviewLink` に型があり、Web の移り先は fixture の e2e で確かめた） |
+| `git` | `repo`・`sha`・`task_id?` | `task_id` があれば `/tasks/{task_id}/changes`、無ければ repo 名と 40 桁の sha を写せる文字で出す | 子 2 の `commit` の参照。存在は reviewer が確かめる（gate は形だけ）。backend は `task_id` を付けない（子 2 の `commit` の参照が task を持たない）ので、今の Web は repo 名と sha を文字で出す |
+| `literature` | `url` か `path`・`sha256` | `url` は新しい tab（`rel="noopener noreferrer"`）。`path` は写せる文字で出し、`/knowledge` の検索の画面へ移す | `url` は `https://` だけ（子 2 の参照の規則）。外部の資料は「外部・untrusted」と出す。knowledge の page へ path で直接移る口は未実装（「未確認」） |
+| `chat` | `thread_id`・`message_id`・`revision`・`sha256` | `/?thread={thread_id}`（概要と manifest の画面の link は `message` を付けない。chat の route の `/?thread=&message=` の強調は D4 で実装したが、概要の link からは使っていない） | 引用の状態（current・edited・retracted・missing）は O8 の引用の link だけが添える。案の message と戦略の文書の chat の参照の link は状態を持たない |
 
 #### D1.5 戦略の版の一覧の速さ
 
@@ -148,7 +149,7 @@ link は `{kind, …}` の 7 種だけである。Web は kind ごとに既存�
 
 #### D2.3 記録は既存の chat message
 
-- 採否は同じ thread の新しい message 1 件として、既存の人の送信の tx（`task_core::chat::human_post`）で書く。`role='user'`、`author` は呼んだ人の `caller.actor()`。
+- 採否は同じ thread の新しい message 1 件として、既存の人の送信の tx（`task_core::chat::human_post` の `chat_message_post_as_also`）で書く。`role='user'`、`author` は呼んだ人の `caller.actor()`。
   `metadata_json.proposal_review = {verdict, target: {thread_id, message_id, revision, sha256}, attachment?}`。新しい表・列・migration・`chat_events` の type は足さない。
 - 本文は Rust の固定の文で組み、案の本文を写さない（外部の文の中の指示を人の指示の本文に入れない）。`note` は人の文としてその後に付ける。
 - mode（子 3 D1）は verdict で決める。
@@ -210,6 +211,8 @@ link は `{kind, …}` の 7 種だけである。Web は kind ごとに既存�
 #### D3.3 署名は sha256 に対する人だけの回答
 
 - 署名は既存の決定（ADR-0079 D7）で行う。manifest を作った task の run が `result.json` の `decisions` で次の決定を出す。
+  未実装: run に manifest と署名の決定を出させる prompt・計画は作っていない。試験は成果物と決定の行を直接作って確かめた（「未確認」）。
+  run が `task_core::publish::signoff_question` と違う文で出した決定は、署名に数えない（`signoff_state` が `unsigned`）。
   - `key`: `publish-signoff-v<version>`（決定の key の上限 32 文字に収まる。`task_core::publish::signoff_decision_key` の 1 か所で組む）。
   - `question`: `publish/<manifest_id>/v<version>.json`（`sha256:<64 桁 hex>`）に署名するかを問う文。sha256 は 1 回だけ書く。
   - `options`: `sign`（署名する）と `reject`（署名しない）。
@@ -255,6 +258,10 @@ link は `{kind, …}` の 7 種だけである。Web は kind ごとに既存�
 | manifest | 新しい route `/tasks/$id/publish/$manifestId` | claims → evidence → 再現条件 → limitations・未解決 → 人の署名 の順に出す。署名の操作は人の login のときだけ出し、`sign` は既存の決定の回答を呼ぶ |
 
 - 画面は daemon の API を通して読み、状態を自分で持たない（既存の方針）。強い警告は色だけでなく文字で出す（a11y）。
+- 実装（WU web-publish）: 「人の login」は gateway の session（`GET /api/session` の `authenticated`）で判定する。Web は BFF の token の daemon の主体
+  （`human:web` か、token の無い構成の `human:local`）を読めないので、`human:local` の拒否は daemon だけが行う。gateway（`web/server/relay.js`）は daemon の
+  401・403 を 502 `daemon_auth` に置き換えるので、本物の gateway を通すと画面は `publication_requires_human`・`proposal_verdict_requires_human` の理由を出さず
+  `daemon_auth` の文を出す（「未確認」）。gateway の SPA の path（`web/server/spa-routes.js`）に manifest の route を足した。
 
 ### D5: 足さないもの
 
@@ -265,7 +272,7 @@ link は `{kind, …}` の 7 種だけである。Web は kind ごとに既存�
 
 ## 保証の表
 
-| 守る不変条件 | 予定の試験（正式名） | 変更前に落ちるか |
+| 守る不変条件 | 試験（正式名。close-audit で 74 件すべてが crates に `fn` として実在することを確かめた） | 変更前に落ちるか |
 |---|---|---|
 | 非人の主体は publish manifest に署名できない（operator・CoS・MCP・token の無い構成） | `publish_signoff_operator_answer_is_403_and_records_nothing`・`publish_signoff_cos_operation_decision_answer_is_403_and_audited`・`publish_signoff_mcp_decision_answer_is_refused`（celeris-mcp）・`publish_signoff_unauthenticated_local_is_refused`（HTTP は管理系の入口で 401、共有の owner も `human:local` を拒む） | 落ちる（base はどの主体の回答も受ける） |
 | 人の発言の引用でも CoS は署名できない | `publish_signoff_cos_instructed_by_human_message_cannot_sign` | 落ちる |
@@ -345,7 +352,14 @@ link は `{kind, …}` の 7 種だけである。Web は kind ごとに既存�
 | web-overview | `web/features/projects/project-overview-panel.tsx`（と unit 試験）、`project-detail-view.tsx`、`project-queries.ts`、`web/e2e/work/project-overview.spec.ts` | D1 の画面 |
 | web-proposals | `web/features/chat/messages/`、`web/features/chat/data/client.ts`、`web/routes/index.tsx`（`message` の search の欄）、`web/e2e/chat/proposal-review.spec.ts` | D2 の画面 |
 | web-publish | `web/routes/tasks.$id.publish.$manifestId.tsx`、`web/features/publish/`、`web/routeTree.gen.ts`、`web/e2e/work/publish-manifest.spec.ts` | D3 の画面 |
-| close | この ADR の末尾の付記、進捗 | 試験の再実行・LoC の測定・保証の表の試験名の実在の確認（`git grep -nE 'fn <名前>\('`） |
+| close（close-audit・close-verify） | この ADR の文と末尾の付記、進捗 | close-audit: 保証の表の試験名の実在の確認（`git grep -qE 'fn <名前>\('`）・ADR の文の監査・LoC の測定・負の試験の再現（結果は付記）。close-verify: 提出時の HEAD での試験の再実行 |
+
+- 結果: 6 つの実装の WU はすべて完了した（各 WU の進捗は [2026-11-23-strategy-v1-7](../progress/2026-11-23-strategy-v1-7/)）。上の表の外に書いた file:
+  publish-api は `crates/task-api/src/files.rs`（成果物の読み方 `produced_artifacts`・`artifact_bytes` を移した）、proposal-api は
+  `crates/task-core/src/proposal_review_wire.rs`（採否の状態と外部の印の導出。`chat` の wire の型がこれを使う）・`crates/task-core/src/strategy_ref.rs`
+  （循環を広げないため `artifact_name`・`strategy_artifact` を移した）・`crates/task-core/src/chat/store.rs` などの `Box` 化、web-proposals は
+  `web/lib/sha256.ts`・`web/features/chat/data/problem.ts`・`data/proposal.ts`、web-publish は `web/server/spa-routes.js` と `project-overview-panel.tsx`
+  （O14 から manifest への link）、web の 3 つの WU は `web/e2e/support/fake-daemon.mjs` の fixture。
 
 - 3 つの backend の WU は `crates/task-api/src/schema.rs`・`docs/api/v1`・`web/api/generated` を同じ段で変える。生成物の衝突は段の統合で再生成して解く
   （各 WU は自分の型の登録の行だけを足す）。
@@ -356,11 +370,13 @@ link は `{kind, …}` の 7 種だけである。Web は kind ごとに既存�
 
 ## 未確認
 
-- 概要の応答の時間を本番の大きさ（task 1,715 件・decisions 473 行・案件 thread の message 数千件）で測っていない。目標は 1 秒未満で、測定は close の WU か人が
-  読み取り専用で行う。
+- 概要の応答の時間を本番の大きさ（task 1,715 件・decisions 473 行・案件 thread の message 数千件）で測っていない。目標は 1 秒未満。
+  fixture の案件（戦略 1 件・決定 1 件）では 2.60 ms と 2.65 ms（WU overview-api）。close の WU も本番の DB を読まないので測っていない。
+  測るなら人が読み取り専用で行う。
 - O7 の goal の軸: 子 6 の評価器の入力の欠け（`goal.outcomes`・`children[].criteria` が空、`goal_reached` が `false` 固定）は直っていない。直すのは子 8 の測定の前
   （子 6 の引き継ぎ）。それまで概要の goal の軸は Outcome の到達を表さない。
-- knowledge の page へ path で直接移る Web の口（`/knowledge` の search の欄）は今の route に無い。literature の `path` の link をどの画面へ移すかは web-overview の WU が確かめる。
+- knowledge の page へ path で直接移る Web の口（`/knowledge` の search の欄）は今の route に無い。WU web-overview の結果: literature の `path` の link は
+  path を写せる文字で出し、`/knowledge` の検索の画面へ移す。page へ直接移る口は未実装。
 - `notebook` の link は成果物の file を指すだけで、`.ipynb` を描画する viewer は無い。描画が要るかは人の判断待ち。
 - 採用（`adopt`）の message を受けた CoS の execute の run は、外部の案の本文を thread で読む。本文の中の指示が CoS の行動を誘う余地は prompt の段に残る。
   backend の保証は、どの operation も goal_guard・strategy_gate・authority_gate を通ること、戦略の実行には人の承認が要ることまでである。
@@ -370,3 +386,24 @@ link は `{kind, …}` の 7 種だけである。Web は kind ごとに既存�
 - overview-api の WU（2026-11-23）: 失効した引用（`citation_stale`）・予算の超過（`budget_exceeded`）・単価の不明（`cost_unknown`）は導出を実装したが
   試験が無い。`log` の link（run の id）はまだ出さない。O10 の `wall_secs` は返さない（`RollupMetrics` に壁時計の合計が無い）。
   O3 の却下の候補（`contradicted`）は規則 1 の強い警告から外した（D1.3 の表の「無し」に合わせた）。
+- close-audit（2026-11-24）が本文と WU の進捗から足した未確認と未実装:
+  - 概要と manifest の画面の chat の link は `/?thread=` だけで、`message` を付けない（D1.4）。
+  - 概要の panel は artifact の link の sha256 と今の file を照合しない（D1.4）。
+  - run に `publish/<manifest_id>/v<n>.json` と決定 `publish-signoff-v<n>` を出させる prompt・計画は無い（D3.3）。署名の流れは試験の fixture でしか通っていない。
+  - 本物の gateway は daemon の 403 を 502 `daemon_auth` に置き換え、画面に拒否の code が届かない（D4）。gateway を変えるかは人が決める。
+  - Web の e2e は偽 daemon（`web/e2e/support/fake-daemon.mjs`）に対して流した。本物の daemon・本物のデータに対する画面の確認はしていない。password 付きの gateway の e2e も無い。
+  - CoS の案が戦略の添付を 2 つ以上持つとき、Web は最初の 1 件で採否する。daemon がどの添付を照合するかは確かめていない。
+
+## 付記（close-audit、2026-11-24）
+
+- 保証の表の試験名: 節を `awk '/^## 保証の表/{p=1;next} /^## /{p=0} p'` で切り出し、4 つの接頭辞の backtick の名前 74 件（重複を除く）を
+  `git grep -qE "fn <名前>\(" -- crates` で 1 件ずつ確かめた。74 件すべてが crates の 1 file に定義されていた。略記（`…`・`...`）は 0 件。
+  3 つの spec（`web/e2e/work/project-overview.spec.ts`・`web/e2e/chat/proposal-review.spec.ts`・`web/e2e/work/publish-manifest.spec.ts`）は表にあり、file も在る。
+  crates にあって表に無い同じ接頭辞の `fn` は `proposal_review_state`（試験でない導出の関数）だけ。
+- 本文の直し: 実装していない挙動を実装済みと書いていた所を「未実装」に直した（D1.3 の O5・O7 の `log`、O10 の `wall_secs`、D1.4 の `artifact` の上書きの表示・
+  `log`・`literature` の `path`・`chat` の `message`、D3.3 の run が manifest と決定を出す流れ）。予定の文（冒頭の「後の WorkUnit が行う」、保証の表の「予定の試験」、
+  未確認の「close の WU か人が測る」「web-overview の WU が確かめる」、WorkUnit の表の close の行）を結果か未確認に直した。
+- 負の試験の再現: `task_ops::decision` の `plan_answer`・`plan_revise` の `signoff_actor(&row, by)?;` 2 行と、`task_api::chat::proposal_review::reviewer` の
+  `Principal::Human` の照合を一時的に外し、`cargo nextest run -p task-api -p celeris-mcp -E 'test(/publish_signoff_|proposal_review_/)' --no-fail-fast` を流すと
+  35 件のうち 11 件が落ちた（`publish_signoff_` 8 件・`proposal_review_` 3 件。名前は task の進捗の「試験」）。`git checkout --` で戻すと 35 件が通った。
+- LoC と試験の結果は task の進捗 [2026-11-23-strategy-v1-7](../progress/2026-11-23-strategy-v1-7.md) に書いた。

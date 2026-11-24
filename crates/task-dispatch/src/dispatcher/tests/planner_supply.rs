@@ -205,7 +205,7 @@ fn plan_rejections(store: &Arc<SqliteStore>, id: TaskId) -> usize {
         .iter()
         .filter(|(_, e)| {
             matches!(e, Event::WorkerProgress { msg, kind: None, .. }
-                if msg.starts_with(planner_flow::PLANNER_RETRY_PREFIX))
+                if msg.starts_with(task_ops::tree::PLANNER_RETRY_PREFIX))
         })
         .count()
 }
@@ -242,9 +242,7 @@ fn auth_notices(store: &Arc<SqliteStore>) -> Vec<task_core::Notice> {
         .items
 }
 
-const SUPPLY_END: Option<task_core::RunEnd> = Some(task_core::RunEnd::HarnessError {
-    class: task_core::HarnessErrorClass::Supply,
-});
+const SUPPLY_END: Option<task_core::RunEnd> = Some(task_ops::tree::SUPPLY_FAILED_END);
 
 /// 受け入れ 0・1（本番の再現）: account `a` の認証が切れている。1 本目の planner run は `a` で認証の失敗に終わり、
 /// 試行に数えず（`end = HarnessError{Supply}`・計画の拒否の進捗なし）、`a` は AuthFailed の cooldown（再ログインまで

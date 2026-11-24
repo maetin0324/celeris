@@ -7,7 +7,7 @@
     python3 -I pilot_score.py check-scored <md>      # 全欄が 0〜2、根拠が空でない、採点者が human: で始まる
     python3 -I pilot_score.py tally --scoring <md> [--scoring <md> ...] --key <pilot-key.json> [--metrics <json>] [--out <json>]
 
-blind: --runs（driver の出力。反復ごとに 1 つ、dir の名が反復の名）と --metrics（parent-eval-blind-compare.py --pilot の出力）から、
+blind: --runs（driver の出力。反復ごとの dir またはその親 dir。dir の名が反復の名）と --metrics（parent-eval-blind-compare.py --pilot の出力）から、
 事例ごとに方式を乱数の id（8 文字）に替えた記録（時点ごとの判定・根拠・次の手・費用と、answer key に依らない指標）と、
 rubric の 6 軸 × 0〜2 点と根拠の空欄・採点者・レビュー時間（分）の欄、rubric.md の採点の手順・軸と基準・合格線の節（そのまま）、
 pilot-key.json の sha256 を書く。方式の名・run id・判断 id・harness の名・史実の参照の点・answer key の値は書かない。
@@ -28,6 +28,7 @@ import sys
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import driver  # noqa: E402
+from pilot_runs import iteration_roots  # noqa: E402
 
 RUBRIC = HERE.parents[2] / "agent-docs/progress/2026-11-21-strategy-v1-0/rubric.md"
 MARK = "<!-- pilot-scoring: celeris.pilot-scoring/1"
@@ -78,7 +79,7 @@ def one_line(text, redact=True):
 def load_runs(runs, metrics):
     """{(iteration, case, point, arm): (output, metrics の行)} と {(iteration, case): 版の段の出力}。"""
     records, stages = {}, {}
-    for root in (pathlib.Path(r) for r in runs):
+    for root in iteration_roots(runs):
         it = root.resolve().name
         if it not in metrics["iterations"]:
             raise ValueError(f"metrics.json has no iteration {it}（compare --pilot に同じ --runs を渡す）")

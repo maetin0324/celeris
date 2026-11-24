@@ -13,7 +13,7 @@ exit: 0 = 方式 b・c の全評価が checked で禁じた読みが無い（不
   python3 -I scripts/dev/parent-eval-blind-compare.py --pilot --runs <dir> [--runs <dir> ...] --answer-key <answer_key.json> --out <dir>
       [--research-src <c-results.md>]
 
---runs は driver の出力（<dir>/<case>/<point>/<arm>/ と <dir>/<case>/strategy-v1/）。反復ごとに 1 つ渡し、dir の名を反復の名にする。
+--runs は driver の出力（<dir>/<case>/<point>/<arm>/ と <dir>/<case>/strategy-v1/）。反復ごとの dir または反復を含む親 dir を渡す。dir の名を反復の名にする。
 方式ごとに verdict・next と answer key の一致（replay）、誤った pivot と見逃し、根拠の参照が slice の外か無い claim の数、
 未達発見までの task 数、検知の後の worker run と USD（replay の events.jsonl から）、usage（run 数・USD）、secret の形の検出数
 （task_core::strategy::contains_secret の正規表現を Rust の source から読む）、run の記録の mutation の有無を <out>/metrics.json に
@@ -388,11 +388,14 @@ def pilot_main(a):
     if not a.runs:
         print("parent-eval-blind-compare: --pilot needs --runs <dir>", file=sys.stderr)
         return 2
-    names = [pathlib.Path(r).resolve().name for r in a.runs]
-    if len(set(names)) != len(names):
-        print(f"parent-eval-blind-compare: --runs dirs need distinct names: {names}", file=sys.stderr)
-        return 2
     replay, research, driver = pilot_modules()
+    from pilot_runs import iteration_roots
+    try:
+        roots = iteration_roots(a.runs)
+    except ValueError as e:
+        print(f"parent-eval-blind-compare: {e}", file=sys.stderr)
+        return 2
+    names = [root.resolve().name for root in roots]
     key = json.loads(pathlib.Path(a.answer_key).read_text())
     rules = Rules(replay, research, key, a.research_src)
     pattern = secret_pattern()
@@ -400,7 +403,7 @@ def pilot_main(a):
            "history": {"first_detectable": key["first_detectable"]["checkpoint"],
                        **rules.worker_runs(rules.cutoffs[key["first_detectable"]["checkpoint"]], rules.h_done())},
            "iterations": {}, "agreement": {}, "leaks": [], "excluded": [], "failed": []}
-    for name, root in zip(names, (pathlib.Path(r) for r in a.runs)):
+    for name, root in zip(names, roots):
         it = {"points": {}, "strategy": {}, "arms": {}}
         found = sorted(p.parent.relative_to(root) for p in root.glob("*/*/*/run.json")) if root.is_dir() else []
         found += sorted(p.parent.relative_to(root) for p in root.glob(f"*/{driver.STRATEGY_STAGE}/run.json"))

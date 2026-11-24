@@ -78,6 +78,14 @@ class Score(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         return d
 
+    def test_blind_accepts_runs_container(self):
+        d = self.dir / "container"
+        d.mkdir(exist_ok=True)
+        r = score("blind", "--runs", CLEAN.parent, "--metrics", self.metrics,
+                  "--out", d / "scoring.md", "--key-out", d / "key.json", "--seed", 1)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(score("check-blank", d / "scoring.md").returncode, 0)
+
     def test_blind_hides_the_arms_and_passes_check_blank(self):
         d = self.blind("b1")
         md = (d / "pilot-scoring.md").read_text()

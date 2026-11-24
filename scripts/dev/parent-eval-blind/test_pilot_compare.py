@@ -66,6 +66,28 @@ def tree_digest(root):
 
 
 class Pilot(unittest.TestCase):
+    def test_runs_container_matches_direct_iteration(self):
+        direct, expected = compare(self.dir / "direct", CLEAN)
+        container, actual = compare(self.dir / "container", CLEAN.parent)
+        self.assertEqual(direct.returncode, 0, direct.stderr)
+        self.assertEqual(container.returncode, 0, container.stderr)
+        self.assertEqual(actual, expected)
+        leaked, _ = compare(self.dir / "leaked", LEAK.parent)
+        self.assertEqual(leaked.returncode, 1, leaked.stderr)
+
+    def test_container_with_two_iterations_matches_explicit_roots(self):
+        root = self.dir / "runs"
+        for name in ("iter-1", "iter-2"):
+            shutil.copytree(CLEAN, root / name)
+        a, expected = compare(self.dir / "explicit", root / "iter-1", root / "iter-2")
+        b, actual = compare(self.dir / "parent", root)
+        self.assertEqual(a.returncode, 0, a.stderr)
+        self.assertEqual(b.returncode, 0, b.stderr)
+        self.assertEqual(actual, expected)
+        duplicate, _ = compare(self.dir / "duplicate", root, root / "iter-1")
+        self.assertEqual(duplicate.returncode, 2, duplicate.stderr)
+        self.assertIn("distinct names", duplicate.stderr)
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.dir = pathlib.Path(self.tmp.name)

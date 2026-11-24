@@ -83,3 +83,19 @@ completed: 2026-11-24
 - 盲検は名前だけを伏せる。内容から方式を推測できるか（ADR D5）。
 - `unneeded_after_first_detectable` と `after_detection` のどちらを rubric のコストの軸に使うかは人の採点で決まる（材料には両方を書いた。rubric の史実 137 run・264.25 USD は前者の方式 a の値と一致する）。
 - 合格線の「合計点が (a) を 3 点以上上回る」は両事例の合計で判定した（事例ごとの差は tally の出力に無い。人が別の読みを取るなら close-audit で直す）。
+
+## 再提出: runs の親ディレクトリ指定（2026-11-24）
+
+- 原因: 前回の計画 check は `--runs testdata/pilot-runs` を渡すが、実装と試験は反復の `iter-1` を直接渡す形しか扱わなかった。比較は `iter-1/replay/strategy-v1` を case/point/arm と誤認し、採点は metrics に `pilot-runs` という反復を探して失敗した。
+- 実装前 brief: owner は比較・採点の入力探索。両者の同じ入出力を `pilot_runs.iteration_roots` に集約する案を採用し、反復の直接指定と反復を含む親の指定を受ける。production の状態・分岐・fallback・port の追加と撤去対象は無し。漏れ検出・子6の呼び方・反復名の一意性を維持する。
+- 変更前に新設した `Pilot.test_runs_container_matches_direct_iteration` と `Score.test_blind_accepts_runs_container` を実行し、各1件が FAIL（exit 1）。前者は計画 check と同じ `not a pilot point or arm: iter-1/replay/strategy-v1`、後者は `metrics.json has no iteration pilot-runs` を再現した。
+- 修正: 共通の `pilot_runs.py` が case ディレクトリの有無で反復の root を解決し、親なら直下を名前順に読む。空・存在しない dir と反復名の重複は拒否する。比較と採点が共通処理を呼ぶ。既存の指標・漏れの規則は変えていない。
+- 追加試験の不変条件: 親指定と直接指定の metrics は同じ。2反復でも同じ。漏れ入りの親指定は exit 1。親指定と直接指定で同じ反復を二重に渡すと exit 2。既存試験は直接指定だけで、この不具合を検出できなかった。
+- 受け入れ条件0・3: `python3 -I scripts/dev/parent-eval-blind/test_pilot_compare.py` → exit 0、13 tests OK（漏れの否定対照・子6の byte 一致を含む）。
+- 受け入れ条件1・2: `python3 -I scripts/dev/parent-eval-blind/test_pilot_score.py` → exit 0、10 tests OK（方式の混入、空欄、key の sha256 不一致の拒否を含む）。
+- 前回不合格の check（`mktemp -d` → compare `--pilot --runs testdata/pilot-runs` → blind に同じ `--runs` → `check-blank`）を同じ cwd からそのまま再実行し exit 0。metrics と空欄の採点材料を作成できた。
+- 今回の修正の LoC: production Rust・control-ts・web は変更0。道具の script と回帰試験は純増（共通の入力探索と指定方法の回帰を保証するため）。前回の実装・testdata は維持。
+- 親目的への寄与（確認済み）: A〜D の比較と人の採点の材料を、計画にあるコマンドから再現できるようにした。実 LLM の質・人の採点・親目標の達成は未確認のまま。rollout・canary・HPC・本番昇格・公開は行っていない。
+- commit 件名: `strategy-v1 8 pilot-compare: runs の親ディレクトリを比較と採点で共通に解決する`。
+- 再提出の検査（提出時の HEAD、最後の同期なし。基準は `$CELERIS_WU_BASE`）: `test_driver.py` 16 tests・`test_research.py` 10 tests が OK、`cargo clippy --workspace -- -D warnings` exit 0（依存 deno_core の既存 deprecated 警告あり）、`cargo fmt --all -- --check` exit 0、`sh scripts/dev/progress-index.sh --check` exit 0。`test-affected.sh --list` は対象 crate 無し。
+- 今回の差分: 道具の script +38/−8 行（新規 `pilot_runs.py` 26 行を含む）、試験 +30/−0 行、production 0。範囲検査は WU の既存成果と今回の比較・採点・試験・進捗だけ。

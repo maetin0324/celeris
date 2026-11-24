@@ -131,6 +131,32 @@ fn request(kind: DecisionKind, options: &[&str], recommended: &str) -> DecisionR
     }
 }
 
+/// 最後の回答の唯一の照会（`DecisionRow::last_answer`）は、畳み込んだ最後の `DecisionAnswered` を返す。revise の回答で
+/// 上書きされ、取り下げの後も残る。`DecisionRecord::from_row` は同じ値を持つ。戦略の承認・概要の O2・publish の署名は
+/// event を走査せずにこの行を読むので、行と最後の event が食い違わないことをここで固定する（既存の
+/// `row_folds_answer_and_withdrawal` は 1 回目の回答の option しか見ず、主体・revise・取り下げの後を見ない）。
+#[test]
+fn row_last_answer_is_the_latest_answer_and_survives_withdrawal() {
+    let mut row = DecisionRow::from_request(
+        TaskId::new(),
+        &request(DecisionKind::Choice, &["a", "b"], "a"),
+        "t0",
+    );
+    assert_eq!(row.last_answer(), None);
+    row.apply_answer("a", None, "human:alice", "t1");
+    row.apply_answer("b", Some("revised"), "human:bob", "t2");
+    let latest = Some(("b".to_string(), "human:bob".to_string()));
+    assert_eq!(row.last_answer(), latest);
+    assert_eq!(DecisionRecord::from_row(&row).last_answer, latest);
+    row.apply_withdrawal("superseded");
+    assert_eq!(row.last_answer(), latest);
+    let record = DecisionRecord::from_row(&row);
+    assert_eq!(
+        (record.key.as_str(), record.question.as_str(), record.status),
+        ("h1", "which backend", DecisionStatus::Withdrawn)
+    );
+}
+
 /// R3a: 選択肢 → 効き目の表（ADR-0079 付記 R3a の表と同じ）。
 #[test]
 fn answer_effect_table() {

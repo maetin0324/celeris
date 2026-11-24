@@ -179,6 +179,43 @@ async fn root_review_artifact_finds_work_unit_run_artifact() {
     );
 }
 
+/// ADR-0067 付記 2026-11-24: WU の run が `artifacts/` の中に申告なしで書いた入れ子の版
+/// （`wu/<key>/artifacts/strategy/s1/v1.json`）を、root の最終 review の `ArtifactExists` が版の名
+/// `strategy/s1/v1.json` で見つける。候補の `ArtifactProduced` は run 後の走査と同じ関数
+/// （`scan_undeclared_artifacts_in_dir`）で作る。変更前は名が `v1.json` で照合できず、既定の
+/// `artifacts/strategy/s1/v1.json` を探して落ちた（子 8 の方式 c の版の段と同じ）。
+#[tokio::test]
+async fn undeclared_nested_name_root_review_finds_the_work_unit_strategy_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = SqliteStore::open_in_memory().unwrap();
+    let task = new_task(
+        dir.path(),
+        Check::ArtifactExists {
+            name: task_core::strategy_ref::artifact_name("s1", 1),
+        },
+        0,
+    );
+    store.insert(&task).unwrap();
+    let units = adopt_units(&store, task.id, &["version"]);
+    write(dir.path(), "wu/version/artifacts/strategy/s1/v1.json", "{}");
+    let scanned = crate::undeclared_artifacts::scan_undeclared_artifacts_in_dir(
+        dir.path(),
+        &dir.path().join("wu/version/artifacts"),
+        &std::collections::HashSet::new(),
+    );
+    unit_run_produced(&store, task.id, &units[0], "run-wu-version", &scanned);
+    unit_run_produced(&store, task.id, &units[0], REVIEWED_RUN, &[]);
+
+    let v = artifact_verdict(&task, dir.path(), &candidates(&store, task.id)).await;
+    assert!(v.pass, "{}", v.reason);
+    assert!(
+        v.reason
+            .starts_with("path=wu/version/artifacts/strategy/s1/v1.json sha256="),
+        "{}",
+        v.reason
+    );
+}
+
 /// 名前が重なれば、review する run の成果物 → WU の run の新しい順で選ぶ。
 #[tokio::test]
 async fn root_review_artifact_prefers_reviewed_run_then_newest_work_unit() {

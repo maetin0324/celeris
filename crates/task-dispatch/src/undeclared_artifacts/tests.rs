@@ -279,6 +279,88 @@ fn in_dir_scan_respects_depth_and_count_limits() {
     );
 }
 
+// ---- ADR-0067 付記 2026-11-24: `artifacts_dir` 走査の名は `artifacts_dir` からの相対 path ----
+//
+// 守る不変条件: `scan_undeclared_artifacts_in_dir` が返す `ArtifactRef.name` は `artifacts_dir` からの相対 path
+// （区切り `/`）。深さ 1 の file の名は file 名のまま。前の試験は入れ子の file の `path` と `kind` だけを見て、
+// `name` が basename になって版の名（`task_core::strategy_ref::artifact_name`）や `ArtifactExists` の既定 path
+// `{artifacts_rel}/{name}` と食い違うことを検出しなかった（子 8 の方式 c の版の段が実 LLM で止まった）。
+
+/// (1) `artifacts/strategy/s1/v1.json` の名は `strategy/s1/v1.json`（変更前は `v1.json`）。
+#[test]
+fn undeclared_nested_name_is_relative_to_the_artifacts_dir() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path();
+    write(ws, "artifacts/strategy/s1/v1.json", "{}");
+    write(ws, "artifacts/cmp4/final/report.md", "# report");
+
+    let found = scan_undeclared_artifacts_in_dir(ws, &ws.join("artifacts"), &HashSet::new());
+    let pairs: Vec<(&str, &str)> = found
+        .iter()
+        .map(|a| (a.name.as_str(), a.path.as_str()))
+        .collect();
+    assert_eq!(
+        pairs,
+        vec![
+            ("cmp4/final/report.md", "artifacts/cmp4/final/report.md"),
+            ("strategy/s1/v1.json", "artifacts/strategy/s1/v1.json"),
+        ],
+        "{found:?}"
+    );
+}
+
+/// (2) その名は戦略の版の名（`strategy/<id>/v<n>.json`）として読める。
+#[test]
+fn undeclared_nested_name_reads_as_a_strategy_version() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path();
+    write(ws, "artifacts/strategy/s1/v1.json", "{}");
+
+    let found = scan_undeclared_artifacts_in_dir(ws, &ws.join("artifacts"), &HashSet::new());
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(
+        found[0].name,
+        task_core::strategy_ref::artifact_name("s1", 1)
+    );
+    assert_eq!(
+        task_core::strategy_ref::strategy_artifact(&found[0].name),
+        Some(("s1".to_string(), 1))
+    );
+}
+
+/// (3) 深さ 1 の名は file 名のまま。作業場所全体の `*.md` 走査の名（file 名）も変わらない。
+#[test]
+fn undeclared_nested_name_keeps_depth_one_and_markdown_scan_names() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path();
+    write(ws, "artifacts/report.md", "# report");
+    write(ws, "artifacts/data.csv", "a,b");
+    write(ws, "artifacts/manifest.json", "{}");
+    write(ws, "docs/paper/notes.md", "# notes");
+
+    let found = scan_undeclared_artifacts_in_dir(ws, &ws.join("artifacts"), &HashSet::new());
+    let pairs: Vec<(&str, &str)> = found
+        .iter()
+        .map(|a| (a.name.as_str(), a.path.as_str()))
+        .collect();
+    assert_eq!(
+        pairs,
+        vec![
+            ("report.md", "artifacts/report.md"),
+            ("data.csv", "artifacts/data.csv"),
+            ("manifest.json", "artifacts/manifest.json"),
+        ],
+        "{found:?}"
+    );
+
+    let md = scan_undeclared_markdown_artifacts(ws, &ws.join("artifacts"), &HashSet::new());
+    let pairs: Vec<(&str, &str)> = md
+        .iter()
+        .map(|a| (a.name.as_str(), a.path.as_str()))
+        .collect();
+    assert_eq!(pairs, vec![("notes.md", "docs/paper/notes.md")], "{md:?}");
+}
+
 // ---- ADR-0067 付記 2026-10-07 D3-d: 既存 task の補完 ----
 
 mod backfill_tests {
@@ -466,6 +548,51 @@ mod backfill_tests {
         let paths: Vec<&str> = changed.artifacts.iter().map(|a| a.path.as_str()).collect();
         assert_eq!(paths, vec!["artifacts/cmp4/final/report.md"]);
         assert_eq!(produced(&store, t.id).len(), 4);
+    }
+
+    /// ADR-0067 付記 2026-11-24: 補完も run 後の走査と同じ関数を使うので、入れ子の成果物の名は `artifacts_dir`
+    /// からの相対 path になる（深さ 1 は file 名）。補完の結果は同じ写しへの走査の結果と同じ。
+    #[test]
+    fn undeclared_nested_name_backfill_registers_the_same_relative_name() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let t = task(remote());
+        store.insert(&t).unwrap();
+        let mirror = root.path().join(t.id.to_string());
+        write(&mirror, "artifacts/strategy/s1/v1.json", "{}");
+        write(&mirror, "artifacts/report.md", "# report\n");
+
+        let report = backfill_task(
+            &store,
+            &t,
+            &task_core::local_machine::WorkspaceRoots::new(root.path().to_path_buf(), None),
+            false,
+        )
+        .unwrap();
+        let pairs: Vec<(&str, &str)> = report
+            .artifacts
+            .iter()
+            .map(|a| (a.name.as_str(), a.path.as_str()))
+            .collect();
+        assert_eq!(
+            pairs,
+            vec![
+                ("report.md", "artifacts/report.md"),
+                ("strategy/s1/v1.json", "artifacts/strategy/s1/v1.json"),
+            ],
+            "{report:?}"
+        );
+        let names: Vec<String> = produced(&store, t.id)
+            .into_iter()
+            .map(|(_, a)| a.name)
+            .collect();
+        assert_eq!(names, vec!["report.md", "strategy/s1/v1.json"]);
+
+        // 同じ写しへの走査（run 後の走査と同じ関数）と同じ結果。
+        let canon = mirror.canonicalize().unwrap();
+        let scanned =
+            scan_undeclared_artifacts_in_dir(&canon, &canon.join("artifacts"), &HashSet::new());
+        assert_eq!(report.artifacts, scanned);
     }
 
     /// 写しが無い task は空（エラーにしない）。`runs` 索引が無ければ `WorkerStarted` の最後の run id、それも無ければ空文字。

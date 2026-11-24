@@ -324,7 +324,7 @@ link は `{kind, …}` の 7 種だけである。Web は kind ごとに既存�
 | 取り込まれた実験の task の O9 の `git` は `task_id` を持ち、戦略の文書の `commit` の参照も取り込みの repo と sha に一致すれば `task_id` を持つ（一致しない参照は持たない） | `project_overview_drilldown_git_link_carries_task_id_from_integration` | 落ちる（`git` がいつも `task_id` 無しで、O9 に `git` が無い） |
 | 本物の route の drill-down の形を fixture `crates/task-api/tests/fixtures/project_overview_drilldown.json` に固定する（`log`・`notebook`・`task_id` 付きの `git` を含む。id は初出順の記号、`generated_at`・`approved_at` は固定。`UPDATE_FIXTURE=1` で書き直す） | `project_overview_drilldown_fixture_matches_generated` | 落ちる（fixture が無く、link も出ない） |
 | 別の案件の記録を出さず、記録の無い項目に印を付けない | `project_overview_other_project_data_excluded`・`project_overview_empty_project_items_absent` | 落ちる |
-| 人が概要で 14 項目・印・強い警告を読み、各 link で移れる | `web/e2e/work/project-overview.spec.ts` | 落ちる（画面が無い） |
+| 人が概要で 14 項目・印・強い警告を読み、各 link で移れる（drill-down の試験は、偽 daemon が上の golden をそのまま返す構成で golden の link を押す。WU drilldown-e2e） | `web/e2e/work/project-overview.spec.ts` | 落ちる（画面が無い） |
 | 人が chat の案を採用・却下・コメントでき、外部の文に印が付く | `web/e2e/chat/proposal-review.spec.ts` | 落ちる |
 | 人が manifest を順に読み、人の login のときだけ署名の操作が出る | `web/e2e/work/publish-manifest.spec.ts` | 落ちる |
 
@@ -402,7 +402,8 @@ link は `{kind, …}` の 7 種だけである。Web は kind ごとに既存�
 - WU drilldown-api（2026-11-24）が残した未実装と未確認:
   - `git` の `task_id` は X(v) の task の取り込みとだけ照合する。X(v) でない案件の task が取り込んだ commit を戦略の文書が引いても `task_id` は付かない。
   - O7 の評価の記録を作った run の `log` は出さない。`log` は最後の run で、役割（worker・reviewer・planner）で選ばない。
-  - 概要の drill-down の e2e は、この WU の時点では偽 daemon の fixture の link を押す。本物の route が出した fixture の JSON で流すのは WU drilldown-e2e の仕事。
+  - 概要の drill-down の e2e は、この WU の時点では偽 daemon の fixture の link を押す。本物の route が出した fixture の JSON で流すのは WU drilldown-e2e の仕事
+    （WU drilldown-e2e が直した。下の「付記（reclose-audit、2026-11-24）」）。
   - X(v) の task ごとに増えた読み取り（`runs_for_task`・`events_for`）の時間を本番の大きさで測っていない。
 
 ## 付記（close-audit、2026-11-24）
@@ -427,3 +428,27 @@ link は `{kind, …}` の 7 種だけである。Web は kind ごとに既存�
 - 本文の直し: D1.3 の O5・O9・O10 の drill-down の列、O7 の未実装の範囲、D1.4 の `notebook`・`log`・`git` の備考、D1.5 の読み取り、保証の表の 4 行。
   O7 の `log` は未実装のまま残した。
 - 変更前の再現と試験の結果は WU の進捗 [drilldown-api](../progress/2026-11-23-strategy-v1-7/drilldown-api.md) に書いた。
+
+## 付記（reclose-audit、2026-11-24）
+
+- final review（v3）の不合格の 2 点は修正の段で直した。(1) 本物の backend が drill-down の `log`・`notebook`・task 付きの `git` を出さず、e2e が偽 daemon の
+  手書きの link を押していた → WU drilldown-api（backend と golden。上の付記）と WU drilldown-e2e（e2e）。(2) `docs/api/v1/api.md` が子 7 の口を書いていなかった
+  → WU api-doc。助言（規約 2 `duplicate_implementation`）の 3 件は WU dedup-api が直した。
+- WU drilldown-e2e: 偽 daemon の構成 `projectOverview: "drilldown"` が golden `crates/task-api/tests/fixtures/project_overview_drilldown.json` を書き換えずに返し、
+  `web/e2e/work/project-overview.spec.ts` の drill-down の試験が golden の link で log・Notebook・作業ツリー・task 付きの Git・文献・chat の thread・task の画面へ移る。
+  手書きの fixture（14 項目・印・強い警告の試験に使う）の link は golden にある (項目, kind) だけにした。この 2 つの整合は vitest
+  `project_overview_fixture_links_are_kinds_the_golden_has_for_the_same_item`・`project_overview_drilldown_daemon_serves_the_golden_and_every_link_target` が守る。
+  golden に知識の path の `literature` は無く、その link の e2e は手書きの fixture に対するもののまま残る。
+- WU dedup-api: 本文の型と関数の名前の読み替え。挙動は同じである。
+  - 決定の行と最後の回答の型は `task_core::decision::DecisionRecord` の 1 つ（子 2 の `strategy::ApprovalRecord` と D3.3 の署名の型 `publish::SignoffRecord` を消した。
+    子 4 の ADR [2026-11-22-external-llm-discussion-exchange](2026-11-22-external-llm-discussion-exchange.md) の `ApprovalRecord` も同じ型を指す）。
+  - D3.3 の 3・4 の「最後の `DecisionAnswered`」は `task_core::decision::DecisionRow::last_answer` で読む（store が回答と同じトランザクションで行に写した値。正本は event のまま）。
+  - O2 の承認の照合（option が `approve` で主体が人）は子 2 D2.2 と同じ `task_core::strategy::approving_human` を呼ぶ。
+  - manifest の検査の違反の wire の型は `task_core::publish::ManifestViolation`（`task_api::publish::ManifestViolationView` を消した）。
+  - D3.3 の 4 の署名できる主体の判定 `task_core::publish::is_signoff_actor` はそのまま残る。
+- 保証の表の試験名: 節を `awk '/^## 保証の表/{p=1;next} /^## /{p=0} p'` で切り出し、4 つの接頭辞の backtick の名前 78 件（`publish_manifest_` 15・`publish_signoff_` 17・
+  `proposal_review_` 23・`project_overview_` 23。重複を除く）を `git grep -qE "fn <名前>\(" -- crates` で 1 件ずつ確かめた。78 件すべてが実在した（missing 0）。
+  略記（`…`・`...`）は 0 件。3 つの spec は表にあり、file も在る（修正後の HEAD で実行）。
+- 修正後の HEAD で `cargo nextest run -p task-core -p task-ops -p task-api -p celeris-mcp -E 'test(/publish_manifest_|publish_signoff_|proposal_review_|project_overview_|cos_ops_registry_/)' --no-tests=fail`
+  → exit 0、83 passed。LoC と結果は task の進捗 [2026-11-23-strategy-v1-7](../progress/2026-11-23-strategy-v1-7.md) と WU の進捗
+  [reclose-audit](../progress/2026-11-23-strategy-v1-7/reclose-audit.md) に書いた。

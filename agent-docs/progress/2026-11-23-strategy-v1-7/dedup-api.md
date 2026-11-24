@@ -62,7 +62,7 @@ completed: 2026-11-24
 ## 検査（提出時の HEAD で実行）
 - `cargo fmt --all -- --check` → exit 0。
 - `cargo clippy --workspace -- -D warnings` → exit 0。
-- `bash scripts/dev/test-affected.sh`（基点 `$CELERIS_WU_BASE`）→ exit 0。Rust 8,901 passed・34 skipped、web の tsc -b exit 0・vitest 771 passed・
+- `bash scripts/dev/test-affected.sh`（基点 `$CELERIS_WU_BASE`）→ exit 0。Rust 8,902 passed・34 skipped、web の tsc -b exit 0・vitest 771 passed・
   node --test 110 passed、ts-verify 20 passed。repo-health は verdict=pass・fail_grade 0（基点 merge-base main）。
 - repo-health の `dup.contract`・`dup.public-surface` に `ApprovalRecord`・`SignoffRecord`・`ManifestViolationView`・`last_answer` の finding は無い
   （drilldown-api の時点では新しい finding として出ていた）。残る new・worsened の 5 件は名前だけが同じ別の意味の型・関数

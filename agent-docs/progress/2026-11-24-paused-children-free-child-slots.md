@@ -31,9 +31,9 @@ updated: 2026-11-24
 
 ## 証拠（提出時の HEAD で実行）
 
-- `bash scripts/dev/test-affected.sh`: 報告本文に結果を書く（最初の実行は 8913 件中 8912 件が通り、新しい生存確認の試験 1 件が名指しの
-  待ちの並び〈最初の 1 件が理由になる〉を見落として落ちた。試験の並びを直した後に再実行した）。web の tsc -b と vitest（108 files / 774 件）、
-  node --test（110 件）は通った。
+- `bash scripts/dev/test-affected.sh`: exit 0。nextest 8913 件が通った（34 skipped）。web の tsc -b、vitest（108 files / 774 件）、
+  node --test（110 件、fail 0）、test-ts-verify（20 件）が通った。最初の実行（試験の修正前の commit）は 8912/8913 で、新しい生存確認の試験 1 件が
+  名指しの待ちの並び（最初の 1 件が理由になる）を見落として落ちた。試験の並びを直して再実行した。
 - `cargo clippy --workspace -- -D warnings`: exit 0。
 - `cargo fmt --all -- --check`: exit 0。
 - 新しい試験:

@@ -44,7 +44,16 @@ completed: 2026-11-24
 
 ## 提出時の HEAD の検査
 
-（commit の前に書き、commit の後に同じ結果であることを確かめた。）
+提出時の HEAD で実行した。最後の commit（この節を書いた commit）は進捗の file だけを変えるので、code の検査はその前の HEAD と同じ対象である。
+doc-links と progress-index は最後の commit の後にも実行した。
+
+- `sh scripts/dev/check-doc-links.sh` → `check-doc-links: ok`、exit 0。
+- `sh scripts/dev/check-adr-numbers.sh` → `check-adr-numbers: ok (481 files)`、exit 0。
+- `sh scripts/dev/progress-index.sh --check` → `progress-index --check: ok`、exit 0。
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `bash scripts/dev/test-affected.sh` → exit 0（`test-affected: 試験対象の変更なし（docs のみ等）`、`repo_health_gate: all checks passed`、repo-health の自己試験 126 件 OK）。
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` → 変えた path は ADR・task の進捗・この file の 3 件だけ。
 
 ## 範囲
 

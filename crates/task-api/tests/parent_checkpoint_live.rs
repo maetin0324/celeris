@@ -64,8 +64,14 @@ const PROGRESS: &str =
     include_str!("../../../agent-docs/progress/2026-11-22-strategy-v1-6/blind-eval-input.md");
 const ANSWER_MARKS: [&str; 3] = ["ideal_verdict", "ideal_action", "answer_key"];
 const CHILDREN: [&str; 8] = ["A", "B", "C", "D", "E", "F", "G", "H"];
-/// 盲検の評価の時点（D8.3）と、その判断の trigger。
+/// 盲検の評価の時点（D8.3）と、その判断の trigger（commit した request・prompt の時点）。
 const CASES: [(&str, &str); 2] = [("E-mid", "children:2"), ("D-done", "children:4")];
+/// 対照 pilot の replay の時点（ADR 2026-11-24-strategy-pilot-ablation D2.1）と trigger。盲検の seed はこの時点と [`CASES`] を受ける。
+const PILOT_POINTS: [(&str, &str); 3] = [
+    ("C-mid", "children:2"),
+    ("D-done", "children:4"),
+    ("F-done", "children:6"),
+];
 /// fixture の固定の id（root はアーキv4 の親の実 id、子は letter の順の固定 ULID）。
 const ROOT_ID: &str = "01M7MZT8KX547464YYS76QNP4G";
 /// prompt の Result 節の成果物の dir（固定）。
@@ -1029,8 +1035,8 @@ fn parent_checkpoint_blind_seed() {
     let field = |k: &str| spec[k].as_str().expect(k).to_string();
     let (point, repo) = (field("point"), std::path::PathBuf::from(field("repo")));
     assert!(
-        CASES.iter().any(|(c, _)| *c == point),
-        "point {point} は E-mid・D-done のどれでもない"
+        CASES.iter().chain(&PILOT_POINTS).any(|(c, _)| *c == point),
+        "point {point} は盲検の時点（E-mid・C-mid・D-done・F-done）のどれでもない"
     );
     let store = SqliteStore::open(Path::new(&field("db"))).expect("store");
     let seeded = seed(&store, &point, &repo);
@@ -1042,11 +1048,37 @@ fn parent_checkpoint_blind_seed() {
     std::fs::write(field("out"), serde_json::to_vec_pretty(&out).expect("out")).expect("write out");
 }
 
-/// 盲検の評価の出力（`PARENT_CHECKPOINT_BLIND_DIR`、無ければ `fixtures/parent_checkpoint_live/blind/`）の E-mid・D-done を検査する。
+/// `scripts/dev/parent-eval-blind/driver.py` の prompt の写し: fake の harness（stub）は prompt を書かないので、run の dir の
+/// `request.json`（`PARENT_EVAL_BLIND_RENDER` の spec の `request`）の `context.review` から、claude-code と同じ本物の関数
+/// （`parent_checkpoint_section`・`result_section`）で評価の prompt を描き、spec の `out` に書く（`#[ignore]`: driver だけが走らせる）。
+#[test]
+#[ignore = "scripts/dev/parent-eval-blind/driver.py が stub の run の prompt を描くときだけ走らせる"]
+fn parent_checkpoint_blind_render() {
+    let spec_path = std::env::var("PARENT_EVAL_BLIND_RENDER").expect("PARENT_EVAL_BLIND_RENDER");
+    let spec: Value =
+        serde_json::from_slice(&std::fs::read(&spec_path).expect("spec")).expect("spec json");
+    let field = |k: &str| spec[k].as_str().expect(k).to_string();
+    let run: Value = serde_json::from_slice(&std::fs::read(field("request")).expect("request"))
+        .expect("request json");
+    let review: ReviewRequest =
+        serde_json::from_value(run["context"]["review"].clone()).expect("context.review");
+    assert!(
+        review.parent_checkpoint.is_some(),
+        "run の request に parent_checkpoint が無い"
+    );
+    let artifacts = run["artifacts_dir"].as_str().unwrap_or(ARTIFACTS);
+    let prompt = task_worker::change_rules::review::parent_checkpoint_section(Some(&review))
+        + &task_worker::change_rules::review::result_section(Some(&review), artifacts);
+    std::fs::write(field("out"), prompt).expect("write prompt");
+}
+
+/// 盲検の評価の出力（`PARENT_CHECKPOINT_BLIND_DIR`、無ければ `fixtures/parent_checkpoint_live/blind/`）の
+/// `replay/<時点>/<方式>/`（driver の出力の配置。ADR 2026-11-24-strategy-pilot-ablation）のうち、評価器を起こす方式 b・c の記録を検査する。
 ///
-/// 守る不変条件: 本番の起動口の評価（`<dir>/<時点>/evaluation.json` の最終の記録）が `check_evaluation` を `checked` で通り、全参照が
-/// slice の中（その run の案件の root・子の id、cutoff 以前の replay の成果物の name・commit）にある。commit した既定の dir では
-/// stub の出力（`run.json` の `harness` が `stub`）を拒む（LLM の評価だけを証拠に数える）。file が無ければ落ちる。
+/// 守る不変条件: 本番の起動口の評価（`output.json` の `record` の最終の記録）が `check_evaluation` を `checked` で通り、全参照が
+/// slice の中（その run の案件の root・子の id、cutoff 以前の replay の成果物の name・commit）にある。`output.json` の verdict・next
+/// は記録の effective と同じ。commit した既定の dir では stub の出力（`run.json` の `harness` が `stub`）を拒む（LLM の評価だけを
+/// 証拠に数える）。記録が 1 件も無ければ落ちる。
 /// 既存の試験で検出できない理由: `parent_checkpoint_live_sample_checks` は WU の run が手で書いた E-mid の 1 件だけを見て、本番の起動口
 /// （controller の evaluate → `start_side_review`）の出力も D-done も見なかった。
 #[test]
@@ -1057,16 +1089,51 @@ fn parent_checkpoint_blind_live_checks() {
         .clone()
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| Path::new(LIVE).join("blind"));
-    for (case, trigger) in CASES {
+    let mut seen: Vec<&str> = Vec::new();
+    for (case, trigger) in CASES.iter().chain(&PILOT_POINTS) {
+        for arm in ["b", "c"] {
+            let at = dir.join("replay").join(case).join(arm);
+            if seen.contains(case) || !at.join("run.json").is_file() {
+                continue;
+            }
+            blind_live_check(&at, case, trigger, env_dir.is_none());
+        }
+        seen.push(case);
+    }
+    let checked = CASES
+        .iter()
+        .chain(&PILOT_POINTS)
+        .flat_map(|(case, _)| ["b", "c"].map(|arm| dir.join("replay").join(case).join(arm)))
+        .filter(|at| at.join("run.json").is_file())
+        .count();
+    assert!(
+        checked > 0,
+        "{}: replay/<時点>/<b|c>/ の記録が無い",
+        dir.display()
+    );
+}
+
+/// 1 時点・1 方式の記録（`output.json`・`run.json`）を検査する（[`parent_checkpoint_blind_live_checks`]）。
+fn blind_live_check(at: &Path, case: &str, trigger: &str, committed: bool) {
+    {
         let read = |name: &str| -> Value {
-            let p = dir.join(case).join(name);
+            let p = at.join(name);
             serde_json::from_slice(
                 &std::fs::read(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display())),
             )
             .unwrap_or_else(|e| panic!("{}: {e}", p.display()))
         };
-        let (record, run) = (read("evaluation.json"), read("run.json"));
-        if env_dir.is_none() {
+        let (output, run) = (read("output.json"), read("run.json"));
+        let record = output["record"].clone();
+        assert_eq!(
+            (&output["verdict"], &output["next"]),
+            (
+                &record["effective"]["verdict"],
+                &record["effective"]["next"]
+            ),
+            "{case}: output.json の verdict・next が記録の effective と違う"
+        );
+        if committed {
             assert_ne!(
                 run["harness"], "stub",
                 "{case}: 既定の dir に stub の出力がある（LLM の評価だけを置く）"

@@ -2,7 +2,7 @@
   "failed": [],
   "pass": true,
   "points": {
-    "D-done": {
+    "replay/D-done/b": {
       "expected_next": "pivot",
       "expected_verdict": "off_track",
       "forbidden_reads": [],
@@ -28,7 +28,7 @@
       "verdict_match": false,
       "violations": []
     },
-    "E-mid": {
+    "replay/E-mid/b": {
       "expected_next": "discriminating_experiment",
       "expected_verdict": "off_track",
       "forbidden_reads": [],

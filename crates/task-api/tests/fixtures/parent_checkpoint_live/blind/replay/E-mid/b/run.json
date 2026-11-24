@@ -1,5 +1,7 @@
 {
   "adapter": "claude-code",
+  "arm": "b",
+  "case": "replay",
   "children": {
     "A": "01M843BWNZJKXQ4Y7PM11SVMCQ",
     "B": "01M843BWP0PA89BH83WNS72CNK",
@@ -11,9 +13,11 @@
     "H": "01M843BWP4JCNM1VPCFQ6RNVF2"
   },
   "harness": "config",
+  "llm_runs": 1,
   "model": "claude-sonnet-5-5",
   "point": "E-mid",
   "project_id": "01M843BWMJDNV2TK61WPJKGS12",
+  "prompt_source": "harness",
   "root_id": "01M843BWMJ8YQNAX0WH4T7GJAG",
   "run_id": "01M843CV83KGRTAQH7QGP6Q1PV",
   "status": "completed",

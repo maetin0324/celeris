@@ -3,10 +3,10 @@
 
   python3 -I scripts/dev/parent-eval-blind-compare.py --out <dir> --answer-key <answer key の json>
 
-<dir>/<point>/evaluation.json（最終の記録）・reads.json・run.json を読み、時点ごとに記録の status・verdict・next と、answer key
-の期待との一致を出す。reads に作業 tree・一時 home の外の path、または禁じた名前（評価器に見せない文書の印）があれば
+<dir>/<case>/<point>/<arm>/output.json（verdict・next と、方式 b・c は最終の記録 record）・reads.json・run.json を読み、
+時点・方式ごとに記録の status・verdict・next と、answer key の期待との一致を出す（方式 a は評価器を起こさないので status を見ない）。reads に作業 tree・一時 home の外の path、または禁じた名前（評価器に見せない文書の印）があれば
 不合格。結果を <dir>/compare.json に書く（同じ入力で同じ byte。時刻を書かない）。
-exit: 0 = 全時点の評価が checked で禁じた読みが無い（不一致でも 0）、1 = 評価が無い・checked でない・禁じた読み、2 = 使い方の誤り。
+exit: 0 = 方式 b・c の全評価が checked で禁じた読みが無い（不一致でも 0）、1 = 記録が無い・checked でない・禁じた読み、2 = 使い方の誤り。
 """
 import argparse
 import json
@@ -51,24 +51,26 @@ def main():
     a = ap.parse_args()
     out = pathlib.Path(a.out)
     key = json.loads(pathlib.Path(a.answer_key).read_text())["checkpoints"]
-    points = sorted(p.name for p in out.iterdir() if p.is_dir() and (p / "run.json").exists()) if out.is_dir() else []
+    points = sorted(str(p.parent.relative_to(out)) for p in out.glob("*/*/*/run.json")) if out.is_dir() else []
     if not points:
-        print(f"parent-eval-blind-compare: no <point>/run.json under {out}", file=sys.stderr)
+        print(f"parent-eval-blind-compare: no <case>/<point>/<arm>/run.json under {out}", file=sys.stderr)
         return 1
     result, failed = {}, []
     for point in points:
         d = out / point
         row = {}
         try:
-            record = json.loads((d / "evaluation.json").read_text())
+            output = json.loads((d / "output.json").read_text())
             reads = json.loads((d / "reads.json").read_text())
             run = json.loads((d / "run.json").read_text())
         except (OSError, ValueError) as e:
             failed.append(f"{point}: {e.__class__.__name__}")
-            result[point] = {"error": "evaluation.json・reads.json・run.json を読めない"}
+            result[point] = {"error": "output.json・reads.json・run.json を読めない"}
             continue
+        record = output.get("record") or {"status": output.get("status"),
+                                          "effective": {"verdict": output.get("verdict"), "next": output.get("next")}}
         eff = record.get("effective") or {}
-        ideal = key.get(point) or {}
+        ideal = key.get(output.get("point")) or {}
         forbidden, outside = check_reads(reads)
         row.update({
             "harness": run.get("harness"), "model": run.get("model"), "usage": run.get("usage"), "usd": run.get("usd"),
@@ -79,7 +81,7 @@ def main():
         })
         row["verdict_match"] = row["verdict"] is not None and row["verdict"] == row["expected_verdict"]
         row["next_match"] = row["next"] is not None and row["next"] == row["expected_next"]
-        if record.get("status") != "checked":
+        if output.get("arm") != "a" and record.get("status") != "checked":
             failed.append(f"{point}: status {record.get('status')}")
         if forbidden or outside:
             failed.append(f"{point}: forbidden or outside reads")

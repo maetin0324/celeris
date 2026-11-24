@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
-"""盲検の評価の driver（1 時点）。scripts/dev/parent-eval-blind.sh から呼ぶ（ADR 2026-11-22-parent-checkpoint-evaluator D8.3）。
+"""対照 pilot の driver（1 事例・1 時点・1 方式）。scripts/dev/parent-eval-blind.sh から呼ぶ（ADR 2026-11-24-strategy-pilot-ablation
+D1、ADR 2026-11-22-parent-checkpoint-evaluator D8.3）。
 
-一時 home に worktree の build の daemon（一時 DB・loopback）を起こし、時点（E-mid・D-done）の slice から使い捨ての案件・
-strategy root・子を store の公開の関数（task-api の試験 `parent_checkpoint_blind_seed`）で seed し、controller を enabled に
-する。controller の evaluate が start_side_review（SideReviewKind::ParentEvaluation）で reviewer run を起こし、root に最終の
-記録 `parent-evaluation/<判断 id>.json` の ArtifactProduced が載るまで待つ。reviewer の作業 tree は slice の file だけを置いた
-seed の git repo。出力は <out>/<point>/evaluation.json（最終の記録）・reads.json（読んだ path）・run.json（run id・harness・
-model・usage・USD・案件の id）。本番の DB・daemon・config に触れない。LLM を呼ぶかは harness の設定だけで決まる。
+一時 home に worktree の build の daemon（一時 DB・loopback）を起こし、時点の slice から使い捨ての案件・承認済み Roadmap・
+strategy root・子を store の公開の関数（task-api の試験 `parent_checkpoint_blind_seed`）で seed する。方式の違いは controller の
+mode だけで作る:
+- 方式 a（旧の固定 Task tree）: mode shadow。evaluate の判断は effect_state suppressed で記録され、reviewer run は起きない（LLM 0）。
+  子の局所の review は slice の史実の記録（reviewer_passed）を使い、流し直さない（ADR D1.1）。
+- 方式 b（途中の親 Evaluator）: mode enabled。evaluate が start_side_review（SideReviewKind::ParentEvaluation）で reviewer run を
+  起こし、root に最終の記録 `parent-evaluation/<判断 id>.json` の ArtifactProduced が載るまで待つ。
+- 方式 c（Evidence + 複数戦略）: b の評価に、版 v1 を書く run と Critic を足す（ADR D1.3）。版を書く段は未実装で、この driver は
+  方式 c を断る（arm-driver の進捗の「欠け」）。
+reviewer の作業 tree は slice の file だけを置いた seed の git repo。出力は <out>/<case>/<point>/<arm>/ の output.json（verdict・
+next・claims〈根拠の参照つき〉・usage）・reads.json（読んだ path）・run.json（run id・harness・model・usage・USD・案件の id）と、
+方式に渡した入力の写し input/（request.json・prompt.md・files.json と tree/ の本文）。本番の DB・daemon・config に触れない。
+LLM を呼ぶかは harness の設定だけで決まる。
 """
 import argparse
 import hashlib
@@ -28,6 +36,14 @@ import urllib.request
 from datetime import datetime
 
 SLICE_FILES = ("goal.md", "reports.json", "slice.json")
+ARMS = ("a", "b", "c")
+# 方式 c の版を書く run と Critic の段（ADR D1.3）はまだ driver に無い。手で書いた版で代えない（ADR D1.5）。
+ARMS_RUNNABLE = ("a", "b")
+CASES = {"replay": ("C-mid", "D-done", "F-done")}
+# 1 run の上限（ADR D3.1。3 方式で同じ値）と 1 時点の費用の上限。
+MAX_USD_PER_POINT = 3.0
+OUTPUT_SCHEMA = "celeris.pilot-arm-output/1"
+CLAIM_KINDS = ("measured", "learned", "refuted", "uncertainty")
 STUB_HARNESS = """
 [adapters.fake]
 command = {cmd}
@@ -113,6 +129,64 @@ def reads_from_log(text):
     return out
 
 
+def claims_of(evaluation):
+    """評価の本文（`parent_evaluation`）から主張の一覧を出す。各主張は種類・文・根拠の参照（evaluation の refs そのまま）。"""
+    out = []
+    for kind in CLAIM_KINDS:
+        for item in (evaluation or {}).get(kind) or []:
+            if not isinstance(item, dict):
+                continue
+            text = item.get("statement") or item.get("claim") or ""
+            refs = item.get("references") or []
+            out.append({"kind": kind, "statement": text, "refs": refs if isinstance(refs, list) else [refs]})
+    return out
+
+
+def output_from_record(record, usage, case, point, arm):
+    """方式 b・c の output.json: 本番の起動口の最終の記録から verdict・next（Rust の検査の後の effective）・claims・usage を出す。
+    record（最終の記録の全文）も残す（試験 parent_checkpoint_blind_live_checks が check_evaluation に通す）。"""
+    eff = (record or {}).get("effective") or {}
+    return {"schema": OUTPUT_SCHEMA, "case": case, "point": point, "arm": arm,
+            "verdict": eff.get("verdict"), "next": eff.get("next"),
+            "status": (record or {}).get("status"),
+            "claims": claims_of((record or {}).get("evaluation")),
+            "usage": usage, "record": record}
+
+
+def output_fixed_plan(decision, rows, children, case, point):
+    """方式 a の output.json: 親の途中評価は無い（verdict は無し）。固定の計画は次の子へ進む（next は continue）。claims は
+    cutoff 以前の子の局所の review の合格（史実の reviewer_passed）で、根拠は子の task。usage は無し（LLM 0）。"""
+    claims = []
+    for key, tid in sorted(children.items()):
+        passed = [r for r in rows if r.get("task") == key and r.get("type") == "reviewer_passed"]
+        if passed:
+            claims.append({"kind": "local_review", "statement": f"子 {key} の局所の review が合格（史実の記録）",
+                           "refs": [{"kind": "task", "task_id": tid}]})
+    return {"schema": OUTPUT_SCHEMA, "case": case, "point": point, "arm": "a",
+            "verdict": None, "next": "continue", "status": "fixed_plan",
+            "claims": claims, "usage": None,
+            "controller_decision": decision}
+
+
+def tree_listing(root):
+    """作業 tree の file（.git を除く）の一覧: path・bytes・sha256。"""
+    files = []
+    for p in sorted(pathlib.Path(root).rglob("*")):
+        rel = p.relative_to(root)
+        if p.is_file() and rel.parts[0] != ".git":
+            data = p.read_bytes()
+            files.append({"path": rel.as_posix(), "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()})
+    return files
+
+
+def suppressed_evaluate(rows):
+    """controller の判断の行（id, proposal_json, effect_state）から、evaluate の判断で effect_state が suppressed のものを返す。"""
+    for did, proposal, state in rows:
+        if state == "suppressed" and '"evaluate"' in proposal:
+            return {"id": did, "effect_state": state, "proposal": json.loads(proposal)}
+    return None
+
+
 class Point:
     def __init__(self, a):
         self.a = a
@@ -143,8 +217,17 @@ class Point:
         files = {"events.jsonl": events}
         for name in SLICE_FILES:
             src = shadow / self.a.point / name
-            files[name] = (src if src.exists() else shadow / "E-mid" / name).read_bytes()
+            if src.exists():
+                files[name] = src.read_bytes()
+            elif name == "goal.md":
+                # goal.md は全時点で同じ（子 0 の manifest の sha256 が同じ）。fixture は E-mid にだけ置く。
+                files[name] = (shadow / "E-mid" / name).read_bytes()
+            # reports.json は時点の file だけを使う。他の時点の写しは cutoff の後の報告を含みうる（C-mid に E-mid の報告）。
         return files
+
+    def slice_rows(self):
+        files = self.slice_files()
+        return [json.loads(line) for line in files["events.jsonl"].decode().splitlines() if line.strip()]
 
     def seed(self):
         git_seed(self.slice_files(), self.repo)
@@ -200,7 +283,10 @@ coalesce_secs = 1
 
 [project_controller.budget]
 max_roots_per_day = 1
-max_usd_per_day = {self.a.max_usd}
+max_usd_per_day = {min(self.a.max_usd, MAX_USD_PER_POINT)}
+
+[project_controller.checkpoint]
+max_evaluation_attempts = 1
 {harness}
 """)
 
@@ -288,6 +374,30 @@ max_usd_per_day = {self.a.max_usd}
         print((self.home / "daemon.log").read_text()[-4000:], file=sys.stderr)
         die(f"no parent-evaluation record on the root in {self.a.max_wall_secs} s")
 
+    def wait_suppressed(self):
+        """方式 a: evaluate の判断が suppressed で記録されるまで待つ（reviewer run は起きない）。"""
+        deadline = time.time() + self.a.max_wall_secs
+        while time.time() < deadline:
+            if self.proc.poll() is not None:
+                die("the daemon exited during the shadow evaluation")
+            conn = sqlite3.connect(f"file:{self.db}?mode=ro", uri=True)
+            rows = conn.execute("SELECT id, proposal_json, effect_state FROM project_controller_decisions "
+                                "WHERE project_id = ? ORDER BY created_at, id", (self.seeded["project_id"],)).fetchall()
+            conn.close()
+            found = suppressed_evaluate(rows)
+            if found:
+                return found
+            time.sleep(1)
+        print((self.home / "daemon.log").read_text()[-4000:], file=sys.stderr)
+        die(f"no suppressed evaluate decision in {self.a.max_wall_secs} s")
+
+    def reviewer_runs(self):
+        conn = sqlite3.connect(f"file:{self.db}?mode=ro", uri=True)
+        n = conn.execute("SELECT COUNT(*) FROM runs WHERE role = 'reviewer' AND task_id = ?",
+                         (self.seeded["root_id"],)).fetchone()[0]
+        conn.close()
+        return n
+
     def artifact_body(self, event):
         """最終の記録の本文（一時 home の下の file。ArtifactProduced の sha256 と一致を確かめる）。"""
         name, want = event["artifact"]["name"], event["artifact"]["sha256"]
@@ -299,23 +409,30 @@ max_usd_per_day = {self.a.max_usd}
 
     def run(self):
         self.seed()
+        # input/ の作業 tree は seed の直後（daemon と run が artifacts/・runs/ を書く前）に写す。
+        self.inp = self.copy_tree(self.out_dir())
         self.write_config()
         self.start()
         self.deploy_ts()
         self.start()
         pid = self.seeded["project_id"]
-        # 人が承認した Roadmap（版 1。Outcome が無い案件では controller が pc/no-outcomes で人に返す）。既存の API で置く。
-        base = f"/api/v1/projects/{pid}/roadmap"
-        self.api("POST", f"{base}/proposals", {
-            "base_version": None, "change_reason": "盲検の評価の案件（一時 DB）",
-            "outcomes": [{"id": "o1", "title": "循環の削減", "acceptance": ["既存の module 循環の数が base より減る"],
-                          "priority": 1, "depends_on": []}]})
-        self.api("POST", f"{base}/proposals/1/decide", {"decision": "approve", "note": "一時 DB の seed"})
+        # 承認済み Roadmap（版 1）は seed が置く（WU eval-seed）。方式の違いは controller の mode だけ（ADR D1）。
+        mode = "shadow" if self.a.arm == "a" else "enabled"
         rev = self.api("GET", f"/api/v1/projects/{pid}/controller")["state"]["revision"]
         self.api("PUT", f"/api/v1/projects/{pid}/controller",
-                 {"mode": "enabled", "expected_revision": rev, "reason": "盲検の評価（一時 DB）"})
+                 {"mode": mode, "expected_revision": rev, "reason": f"対照 pilot の方式 {self.a.arm}（一時 DB）"})
         self.api("POST", f"/api/v1/projects/{pid}/controller/wake",
                  {"external_ref": "blind-start", "note": "開始", "idempotency_key": "blind-start"})
+        if self.a.arm == "a":
+            decision = self.wait_suppressed()
+            # suppressed の後に reviewer run が起きないことを数秒見てから止める。
+            time.sleep(3)
+            runs = self.reviewer_runs()
+            self.stop()
+            if runs:
+                die(f"arm a started {runs} reviewer run(s)")
+            self.collect_fixed_plan(decision)
+            return
         final = self.wait_record()
         name = final["artifact"]["name"]
         record = self.artifact_body(final)
@@ -323,6 +440,59 @@ max_usd_per_day = {self.a.max_usd}
         run_id = attempts[-1]["run_id"] if attempts else final.get("run_id")
         self.stop()
         self.collect(record, run_id)
+
+    def out_dir(self):
+        out = pathlib.Path(self.a.out) / self.a.case / self.a.point / self.a.arm
+        out.mkdir(parents=True, exist_ok=True)
+        return out
+
+    def copy_tree(self, out):
+        """input/: 方式に渡した作業 tree（seed の commit）の file の一覧（files.json）と本文（tree/）。"""
+        inp = out / "input"
+        (inp / "tree").mkdir(parents=True, exist_ok=True)
+        files = tree_listing(self.repo)
+        for f in files:
+            dest = inp / "tree" / f["path"]
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(self.repo / f["path"], dest)
+        dump(inp / "files.json", {"work_tree": str(self.repo), "files": files})
+        return inp
+
+    def copy_request(self, inp, run_id):
+        """input/request.json・prompt.md: run の dir（runs/<run_id>/）の request.json と、harness が書いた prompt.txt。
+        fake の harness（stub）は prompt を書かないので、本物の prompt の関数（parent_checkpoint_section・result_section）で
+        request から描く（task-api の試験 `parent_checkpoint_blind_render`）。"""
+        run_dirs = [p for p in self.home.rglob(run_id) if p.is_dir() and (p / "request.json").is_file()] if run_id else []
+        if not run_dirs:
+            die(f"no runs/{run_id}/request.json under {self.home}")
+        run_dir = run_dirs[0]
+        shutil.copy(run_dir / "request.json", inp / "request.json")
+        if (run_dir / "prompt.txt").is_file():
+            shutil.copy(run_dir / "prompt.txt", inp / "prompt.md")
+            return "harness"
+        spec = self.home / "render-spec.json"
+        spec.write_text(json.dumps({"request": str(run_dir / "request.json"), "out": str(inp / "prompt.md")}))
+        r = subprocess.run([self.a.seed_bin, "--ignored", "--exact", "parent_checkpoint_blind_render", "--nocapture"],
+                           env={**self.clean_env(), "PARENT_EVAL_BLIND_RENDER": str(spec)}, capture_output=True, text=True)
+        if r.returncode != 0:
+            die(f"render failed: {r.stdout[-2000:]} {r.stderr[-2000:]}")
+        return "rendered"
+
+    def run_json(self, run_id, row, usage, prompt_source):
+        return {"case": self.a.case, "point": self.a.point, "arm": self.a.arm, "run_id": run_id,
+                "harness": self.a.harness, "adapter": row[0] if row else None, "model": row[1] if row else None,
+                "status": row[3] if row else None, "usage": usage, "usd": (usage or {}).get("cost_usd"),
+                "llm_runs": 1 if run_id else 0, "prompt_source": prompt_source,
+                "project_id": self.seeded["project_id"], "root_id": self.seeded["root_id"],
+                "children": self.seeded["children"]}
+
+    def collect_fixed_plan(self, decision):
+        out = self.out_dir()
+        dump(self.inp / "request.json", {"arm": "a", "llm_runs": 0, "controller_decision": decision})
+        dump(out / "output.json", output_fixed_plan(decision, self.slice_rows(), self.seeded["children"],
+                                                    self.a.case, self.a.point))
+        dump(out / "reads.json", {"work_tree": str(self.repo), "home": str(self.home), "logs": [], "reads": []})
+        dump(out / "run.json", self.run_json(None, None, None, None))
 
     def collect(self, record, run_id):
         conn = sqlite3.connect(f"file:{self.db}?mode=ro", uri=True)
@@ -334,24 +504,24 @@ max_usd_per_day = {self.a.max_usd}
         reads = []
         for p in sorted(logs):
             reads += reads_from_log(p.read_text(errors="replace"))
-        out = pathlib.Path(self.a.out) / self.a.point
-        out.mkdir(parents=True, exist_ok=True)
-        dump = lambda name, v: (out / name).write_text(json.dumps(v, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
-        dump("evaluation.json", record)
-        dump("reads.json", {"work_tree": str(self.repo), "home": str(self.home), "logs": [str(p) for p in logs],
-                            "reads": reads})
-        dump("run.json", {"point": self.a.point, "run_id": run_id, "harness": self.a.harness,
-                          "adapter": row[0] if row else None, "model": row[1] if row else None,
-                          "status": row[3] if row else None, "usage": usage,
-                          "usd": (usage or {}).get("cost_usd"), "project_id": self.seeded["project_id"],
-                          "root_id": self.seeded["root_id"], "children": self.seeded["children"]})
+        out = self.out_dir()
+        prompt_source = self.copy_request(self.inp, run_id)
+        dump(out / "output.json", output_from_record(record, usage, self.a.case, self.a.point, self.a.arm))
+        dump(out / "reads.json", {"work_tree": str(self.repo), "home": str(self.home), "logs": [str(p) for p in logs],
+                                  "reads": reads})
+        dump(out / "run.json", self.run_json(run_id, row, usage, prompt_source))
         if not logs:
             die(f"no stdout log for run {run_id} (reads.json is empty)")
 
 
+def dump(path, value):
+    pathlib.Path(path).write_text(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+
+
 def main():
     p = argparse.ArgumentParser()
-    for k in ("point", "state", "out", "celeris", "script-deploy", "bundle", "seed-bin", "shadow", "harness"):
+    for k in ("case", "point", "arm", "state", "out", "celeris", "script-deploy", "bundle", "seed-bin", "shadow",
+              "harness"):
         p.add_argument(f"--{k}", required=True)
     p.add_argument("--stub")
     p.add_argument("--llm-config")
@@ -360,6 +530,10 @@ def main():
     a = p.parse_args()
     if a.harness not in ("stub", "config"):
         die("--harness must be stub or config")
+    if a.point not in CASES.get(a.case, ()):
+        die(f"--case {a.case} --point {a.point} is not a pilot point")
+    if a.arm not in ARMS_RUNNABLE:
+        die(f"--arm {a.arm} is not runnable (arms {','.join(ARMS_RUNNABLE)})")
     pt = Point(a)
     try:
         pt.run()
@@ -367,7 +541,7 @@ def main():
         pt.stop()
         log = pt.home / "daemon.log"
         if log.exists():
-            dest = pathlib.Path(a.out) / a.point
+            dest = pathlib.Path(a.out) / a.case / a.point / a.arm
             dest.mkdir(parents=True, exist_ok=True)
             shutil.copy(log, dest / "daemon.log")
         shutil.rmtree(pt.secret_dir, ignore_errors=True)

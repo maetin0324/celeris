@@ -1,0 +1,32 @@
+{
+  "arm": "a",
+  "case": "replay",
+  "claims": [
+    {
+      "kind": "local_review",
+      "refs": [
+        {
+          "kind": "task",
+          "task_id": "01SYNCHILDAREPLAYCMIDA0000"
+        }
+      ],
+      "statement": "子 A の局所の review が合格（合成）"
+    },
+    {
+      "kind": "local_review",
+      "refs": [
+        {
+          "kind": "task",
+          "task_id": "01SYNCHILDBREPLAYCMIDA0000"
+        }
+      ],
+      "statement": "子 B の局所の review が合格（合成）"
+    }
+  ],
+  "next": "continue",
+  "point": "C-mid",
+  "schema": "celeris.pilot-arm-output/1",
+  "status": "fixed_plan",
+  "usage": null,
+  "verdict": null
+}

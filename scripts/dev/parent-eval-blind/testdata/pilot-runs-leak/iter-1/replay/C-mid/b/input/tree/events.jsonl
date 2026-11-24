@@ -1,0 +1,3 @@
+{"seq": 0, "task": "A", "ts": "2026-11-18T00:00:00.000000000Z", "type": "reviewer_passed"}
+{"seq": 1, "task": "B", "ts": "2026-11-18T00:00:01.000000000Z", "type": "reviewer_passed"}
+{"cost_usd": 2.2228288000000003, "outcome": "done: agent-docs/progress/2026-11-18-arch-v4-f/metrics.md（status: done）を書いた。crates/・web/ の差分は 0。before は git merge-base HEAD main、after は HEAD（tree は「integrate wu/knowledge-pin (phase impl)」と同じ）で、adr.", "role": null, "seq": 920, "task": "F", "ts": "2026-11-19T03:54:21.167946414Z", "type": "worker_finished", "wall_ms": 1518269}

@@ -1,0 +1,21 @@
+{
+  "arm": "b",
+  "case": "research",
+  "children": {
+    "A": "01SYNCHILDARESEARCH1117B00",
+    "B": "01SYNCHILDBRESEARCH1117B00",
+    "C": "01SYNCHILDCRESEARCH1117B00",
+    "D": "01SYNCHILDDRESEARCH1117B00",
+    "E": "01SYNCHILDERESEARCH1117B00",
+    "F": "01SYNCHILDFRESEARCH1117B00",
+    "G": "01SYNCHILDGRESEARCH1117B00",
+    "H": "01SYNCHILDHRESEARCH1117B00"
+  },
+  "harness": "stub",
+  "llm_runs": 1,
+  "point": "11.17",
+  "project_id": "01SYNPROJECT",
+  "root_id": "01SYNROOTRESEARCH1117B0000",
+  "run_id": "01SYNRUNB",
+  "usd": 0.125
+}

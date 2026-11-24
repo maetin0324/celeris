@@ -1,0 +1,13 @@
+{
+  "case": "research",
+  "harness": "stub",
+  "llm_runs": 2,
+  "slice_point": "11.15",
+  "stage": "strategy-v1",
+  "strategy": {
+    "name": "strategy/pilot-research/v1.json",
+    "sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "task_status": "done",
+  "usd": 0.25
+}

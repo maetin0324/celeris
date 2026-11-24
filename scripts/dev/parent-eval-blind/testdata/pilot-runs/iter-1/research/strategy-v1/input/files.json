@@ -1,0 +1,20 @@
+{
+  "files": [
+    {
+      "bytes": 269,
+      "path": "goal.md",
+      "sha256": "4e3da1b78b890357f52e3a01cb50f0be97eeb29f7d82af19cbf535eb9de35c3a"
+    },
+    {
+      "bytes": 282,
+      "path": "results-slice.md",
+      "sha256": "c01882af9901ee6db3dc2b5a4e7fafd08928baec692effb29aa9825b90e6e76d"
+    },
+    {
+      "bytes": 164,
+      "path": "slice.json",
+      "sha256": "6fc22a465c1bb8ca9fe1f16b73ec90f5053bdb86541bfd073525d752b609b9e3"
+    }
+  ],
+  "work_tree": "/synthetic/home/slice-repo"
+}

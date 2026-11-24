@@ -1,0 +1,72 @@
+{
+  "arm": "a",
+  "case": "replay",
+  "claims": [
+    {
+      "kind": "local_review",
+      "refs": [
+        {
+          "kind": "task",
+          "task_id": "01SYNCHILDAREPLAYFDONEA000"
+        }
+      ],
+      "statement": "子 A の局所の review が合格（合成）"
+    },
+    {
+      "kind": "local_review",
+      "refs": [
+        {
+          "kind": "task",
+          "task_id": "01SYNCHILDBREPLAYFDONEA000"
+        }
+      ],
+      "statement": "子 B の局所の review が合格（合成）"
+    },
+    {
+      "kind": "local_review",
+      "refs": [
+        {
+          "kind": "task",
+          "task_id": "01SYNCHILDCREPLAYFDONEA000"
+        }
+      ],
+      "statement": "子 C の局所の review が合格（合成）"
+    },
+    {
+      "kind": "local_review",
+      "refs": [
+        {
+          "kind": "task",
+          "task_id": "01SYNCHILDDREPLAYFDONEA000"
+        }
+      ],
+      "statement": "子 D の局所の review が合格（合成）"
+    },
+    {
+      "kind": "local_review",
+      "refs": [
+        {
+          "kind": "task",
+          "task_id": "01SYNCHILDEREPLAYFDONEA000"
+        }
+      ],
+      "statement": "子 E の局所の review が合格（合成）"
+    },
+    {
+      "kind": "local_review",
+      "refs": [
+        {
+          "kind": "task",
+          "task_id": "01SYNCHILDFREPLAYFDONEA000"
+        }
+      ],
+      "statement": "子 F の局所の review が合格（合成）"
+    }
+  ],
+  "next": "continue",
+  "point": "F-done",
+  "schema": "celeris.pilot-arm-output/1",
+  "status": "fixed_plan",
+  "usage": null,
+  "verdict": null
+}

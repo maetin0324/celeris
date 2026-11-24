@@ -1,0 +1,20 @@
+{
+  "arm": "a",
+  "case": "replay",
+  "children": {
+    "A": "01SYNCHILDAREPLAYFDONEA000",
+    "B": "01SYNCHILDBREPLAYFDONEA000",
+    "C": "01SYNCHILDCREPLAYFDONEA000",
+    "D": "01SYNCHILDDREPLAYFDONEA000",
+    "E": "01SYNCHILDEREPLAYFDONEA000",
+    "F": "01SYNCHILDFREPLAYFDONEA000",
+    "G": "01SYNCHILDGREPLAYFDONEA000",
+    "H": "01SYNCHILDHREPLAYFDONEA000"
+  },
+  "harness": "stub",
+  "llm_runs": 0,
+  "point": "F-done",
+  "project_id": "01SYNPROJECT",
+  "root_id": "01SYNROOTREPLAYFDONEA00000",
+  "usd": null
+}

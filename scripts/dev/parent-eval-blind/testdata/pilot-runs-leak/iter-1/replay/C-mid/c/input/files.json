@@ -1,0 +1,25 @@
+{
+  "files": [
+    {
+      "bytes": 182,
+      "path": "events.jsonl",
+      "sha256": "91fa3dd7d5d1a03360d21153a981bb626643e2cb0915b5a03015896d6cea138b"
+    },
+    {
+      "bytes": 81,
+      "path": "goal.md",
+      "sha256": "787ec2520e8fdade437295b5807d7fd85230963980a65ba399c0d76ec01bcc66"
+    },
+    {
+      "bytes": 74,
+      "path": "slice.json",
+      "sha256": "acec86e78b4efde48ffc40db7d524863ce2633ef39eb85d789bf5f4b687f98c7"
+    },
+    {
+      "bytes": 342,
+      "path": "strategy-v1.json",
+      "sha256": "81fb863eb548eaecc32e998ea608db9f72835ca1df03bd78e20e1f39a224a2c6"
+    }
+  ],
+  "work_tree": "/synthetic/home/slice-repo"
+}

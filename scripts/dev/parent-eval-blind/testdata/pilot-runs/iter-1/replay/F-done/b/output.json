@@ -1,0 +1,64 @@
+{
+  "arm": "b",
+  "case": "replay",
+  "claims": [
+    {
+      "kind": "measured",
+      "refs": [
+        {
+          "kind": "task",
+          "task_id": "01SYNCHILDAREPLAYFDONEB000"
+        }
+      ],
+      "statement": "合成の指標は F-done の時点で変わっていない"
+    },
+    {
+      "kind": "learned",
+      "refs": [],
+      "statement": "合成の仮説は支持されていない"
+    },
+    {
+      "kind": "refuted",
+      "refs": [
+        {
+          "kind": "url",
+          "url": "https://example.invalid/outside"
+        }
+      ],
+      "statement": "合成の外の資料による主張"
+    },
+    {
+      "kind": "uncertainty",
+      "refs": [],
+      "statement": "合成の残りの不確実性"
+    }
+  ],
+  "next": "ask_human",
+  "point": "F-done",
+  "record": {
+    "decision_id": "01SYNDECISION",
+    "effective": {
+      "next": "ask_human",
+      "verdict": "off_track"
+    },
+    "evaluation": {
+      "axes": {
+        "epistemic": "advanced",
+        "execution": "succeeded",
+        "goal": "not_met"
+      },
+      "reason": "合成の理由（F-done）"
+    },
+    "status": "checked"
+  },
+  "schema": "celeris.pilot-arm-output/1",
+  "status": "checked",
+  "usage": {
+    "cache_creation_tokens": 2000,
+    "cache_read_tokens": 1000,
+    "cost_usd": 0.125,
+    "input_tokens": 4,
+    "output_tokens": 900
+  },
+  "verdict": "off_track"
+}

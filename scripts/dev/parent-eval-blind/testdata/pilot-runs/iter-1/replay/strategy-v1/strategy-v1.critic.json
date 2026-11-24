@@ -1,0 +1,11 @@
+{
+  "review_events": [
+    {
+      "pass": true,
+      "reason": "合成の Critic",
+      "type": "review_verdict"
+    }
+  ],
+  "review_json": null,
+  "task_status": "done"
+}

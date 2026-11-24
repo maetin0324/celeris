@@ -243,6 +243,26 @@ function Links({ links }: { links: ProjectOverviewLink[] }) {
   );
 }
 
+/** O14 の entry から manifest の画面（/tasks/:id/publish/:manifestId、D4）へ移る。版は entry の版に固定する。 */
+function ManifestLink({ detail }: { detail: Detail }) {
+  const taskId = text(detail.task_id);
+  const manifestId = text(detail.manifest_id);
+  const version = typeof detail.version === "number" ? detail.version : undefined;
+  if (!taskId || !manifestId) return null;
+  return (
+    <Link
+      className={linkClass}
+      to="/tasks/$id/publish/$manifestId"
+      params={{ id: taskId, manifestId }}
+      search={{ version }}
+      data-link="manifest"
+    >
+      manifest {manifestId}
+      {version === undefined ? "" : ` v${version}`} を読む
+    </Link>
+  );
+}
+
 function EntryRow({
   itemKey,
   entry,
@@ -262,6 +282,7 @@ function EntryRow({
         <span>{entrySummary(itemKey, entry.detail)}</span>
       </p>
       <Links links={entry.links} />
+      {itemKey === "publish_readiness" ? <ManifestLink detail={asDetail(entry.detail)} /> : null}
     </li>
   );
 }

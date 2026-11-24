@@ -1017,6 +1017,276 @@ export function projectOverviewFixture() {
   return value;
 }
 
+// ADR 2026-11-23-project-observability-publish D3・D4: publish manifest の画面の fixture（createFakeDaemon({ publishManifest: true }) の
+// ときだけ）。task T1 の `publish/io-paper/v<n>.json` と署名の決定 `publish-signoff-v<n>`。署名の状態は本物の daemon と同じく保存せず、
+// 版・file の変化・最後の回答から読むたびに導く（unsigned・signed・rejected・stale・superseded）。
+// - GET /api/v1/tasks/T1/publish/io-paper?version= は ManifestView。GET /api/v1/projects/P1/overview の O14 はこの状態から組む。
+// - POST /api/v1/decisions/{id}/answer（署名の決定だけ）: 主体が人でなければ 403 publication_requires_human で何も記録しない。
+//   file が記録と違えば 409 publish_manifest_stale、回答済みなら 409。人なら 200 で DecisionOutcome を返し回答を記録する。
+// - 制御（daemon を直接、fixture の token で）: POST /__fixture/publish/principal {principal: "human" | "operator" | "cos" | "mcp"}、
+//   POST /__fixture/publish/modify {version}（file の byte 列を変える）、POST /__fixture/publish/new-version（次の版と決定を足す）、
+//   GET /__fixture/publish/answer-log（受けた回答の {decision_id, principal, body, status, code?}）。
+export const PUBLISH_MANIFEST_ID = "io-paper";
+export const PUBLISH_MANIFEST_NAME = (version) => `publish/${PUBLISH_MANIFEST_ID}/v${version}.json`;
+export const PUBLISH_DECISION_ID = (version) => `DPUB${version}`;
+export const PUBLISH_MANIFEST_SHA = (version) => String(version % 10).repeat(64);
+
+export function publishManifestDocument() {
+  const sha = (c) => c.repeat(64);
+  return {
+    target: { kind: "paper", venue: "IEEE Access（投稿は人が行う）" },
+    claims: [
+      {
+        id: "c1",
+        statement: "io_uring の 1 core で 4 KiB の read が 2.1 GB/s に達する",
+        confidence: "confirmed",
+        evidence: ["e1", "e2"],
+      },
+      { id: "c2", statement: "UnifyFS より 30% 速い", confidence: "estimated", evidence: ["e3"] },
+      { id: "c3", statement: "metadata の負荷でも性能が落ちない", confidence: "contradicted", evidence: ["e4"] },
+    ],
+    evidence: [
+      {
+        id: "e1",
+        stance: "support",
+        statement: "測定の commit と結果の成果物",
+        references: [
+          { kind: "commit", repo: "benchfs", sha: "b".repeat(40) },
+          { kind: "artifact", task_id: "T1", name: "report-0.md", sha256: sha("0") },
+        ],
+      },
+      { id: "e2", stance: "support", statement: "測定を行った task", references: [{ kind: "task", task_id: "T1" }] },
+      {
+        id: "e3",
+        stance: "unknown",
+        statement: "比較の値は外部の文献と知識の page だけ",
+        references: [
+          { kind: "url", url: "https://example.org/papers/unifyfs" },
+          { kind: "knowledge", path: "projects/demo.md", sha256: sha("c") },
+        ],
+      },
+      {
+        id: "e4",
+        stance: "refute",
+        statement: "chat の議論で metadata の負荷の反例が出た",
+        references: [
+          { kind: "chat", thread_id: "chat-history", message_id: "chat-history-2", revision: 1, sha256: sha("d") },
+        ],
+      },
+    ],
+    reproduction: [
+      {
+        id: "r1",
+        claims: ["c1"],
+        commands: ["cargo run --release -p bench -- --io-uring --cores 1 --block 4KiB"],
+        environment: { repo: "benchfs", commit: "b".repeat(40), host_class: "pegasus-compute" },
+        data: ["runs/io-sweep.csv"],
+        expected: "read の帯域が 2.0 GB/s 以上",
+      },
+    ],
+    limitations: [
+      { id: "l1", statement: "UnifyFS との比較は文献の値で、同じ機械で測っていない", claims: ["c2"] },
+      { id: "l2", statement: "metadata の負荷の反例が未解決", claims: ["c3"] },
+    ],
+    open_questions: [{ id: "q1", statement: "metadata の負荷の反例を論文でどう扱うか", blocking: true }],
+  };
+}
+
+function createPublishFixture() {
+  const doc = publishManifestDocument();
+  const state = { principal: "human", versions: [1], modified: new Set(), answers: new Map(), log: [] };
+  const signoffOf = (version) => {
+    const answer = state.answers.get(version);
+    const newer = state.versions.some((v) => v > version);
+    const signed = answer?.option === "sign";
+    // task_core::publish::signoff_state と同じ順: より新しい版 → 回答無し → reject → file の変化 → 署名済み。
+    const stateName = newer
+      ? "superseded"
+      : !answer
+        ? "unsigned"
+        : !signed
+          ? "rejected"
+          : state.modified.has(version)
+            ? "stale"
+            : "signed";
+    return {
+      state: stateName,
+      key: `publish-signoff-v${version}`,
+      decision_id: PUBLISH_DECISION_ID(version),
+      decision_status: answer ? "answered" : "open",
+      answered_by: answer?.by ?? null,
+      answered_at: answer?.at ?? null,
+    };
+  };
+  const view = (version) => {
+    const modified = state.modified.has(version);
+    return {
+      task_id: "T1",
+      project_id: "P1",
+      manifest_id: PUBLISH_MANIFEST_ID,
+      version,
+      versions: [...state.versions],
+      name: PUBLISH_MANIFEST_NAME(version),
+      recorded_sha256: PUBLISH_MANIFEST_SHA(version),
+      current_sha256: modified ? "f".repeat(64) : PUBLISH_MANIFEST_SHA(version),
+      file_matches_record: !modified,
+      violations: modified
+        ? [
+            {
+              rule: "shape",
+              code: "publish_manifest_stale",
+              path: "",
+              detail: "成果物の file が記録の後に書き換えられた",
+            },
+          ]
+        : [],
+      unsupported_claims: ["c2"],
+      strong_warnings: ["manifest_blocking_question"],
+      ...doc,
+      signoff: signoffOf(version),
+    };
+  };
+  const decisionView = (version) => {
+    const answer = state.answers.get(version);
+    return {
+      task_id: "T1",
+      root_id: "T1",
+      created_at: richNow,
+      answered_at: answer?.at ?? null,
+      effect: answer ? "resume" : null,
+      decision: {
+        id: PUBLISH_DECISION_ID(version),
+        key: `publish-signoff-v${version}`,
+        kind: "choice",
+        question: `${PUBLISH_MANIFEST_NAME(version)}（sha256:${PUBLISH_MANIFEST_SHA(version)}）に署名しますか`,
+        options: [
+          { key: "sign", label: "署名する" },
+          { key: "reject", label: "署名しない" },
+        ],
+        recommended: "sign",
+        cost_of_reversal: "high",
+        needed_before: [],
+        path: [{ task_id: "T1", title: "論文の manifest を作る" }],
+        raised_by: { origin: "worker", task_id: "T1", run_id: "R1" },
+        status: answer ? "answered" : "open",
+        answer: answer ? { option: answer.option, by: answer.by, note: null } : null,
+      },
+    };
+  };
+  const overview = () => {
+    const value = projectOverviewFixture();
+    const version = state.versions.at(-1);
+    const v = view(version);
+    const id = `T1/${PUBLISH_MANIFEST_ID}`;
+    const links = [
+      { kind: "artifact", task_id: "T1", name: v.name, sha256: v.recorded_sha256 },
+      { kind: "task", task_id: "T1" },
+    ];
+    const invalid = v.violations.length > 0 || !v.file_matches_record;
+    const mark = invalid
+      ? "contradicted"
+      : ({ signed: "confirmed", unsigned: "needs_decision" }[v.signoff.state] ?? "contradicted");
+    const detail = {
+      task_id: "T1",
+      manifest_id: PUBLISH_MANIFEST_ID,
+      version,
+      name: v.name,
+      sha256: v.recorded_sha256,
+      signoff: v.signoff.state,
+      violations: v.violations.map((row) => row.code),
+    };
+    value.items[13] = { key: "publish_readiness", recorded: true, mark, entries: [{ id, mark, detail, links }] };
+    const warn = (code) => ({ code, item: "publish_readiness", strong: true, entry: id, links });
+    if (invalid) value.warnings.push(warn("manifest_invalid"));
+    else if (v.signoff.state === "stale" || v.signoff.state === "superseded")
+      value.warnings.push(warn("signoff_stale"));
+    for (const code of v.strong_warnings) value.warnings.push(warn(code));
+    if (mark === "needs_decision" || mark === "contradicted") value.warnings.push(warn(mark));
+    return value;
+  };
+  const versionOfDecision = (decisionId) => state.versions.find((v) => PUBLISH_DECISION_ID(v) === decisionId);
+  const answer = (decisionId, body) => {
+    const version = versionOfDecision(decisionId);
+    const principal = state.principal;
+    const by = principal === "human" ? "human:web" : `${principal}:fixture`;
+    const record = (status, code) => state.log.push({ decision_id: decisionId, principal, body, status, code });
+    if (principal !== "human") {
+      record(403, "publication_requires_human");
+      return [
+        403,
+        {
+          code: "publication_requires_human",
+          title: "Forbidden",
+          detail: `${by} cannot answer a publish-signoff decision; only a human signs`,
+        },
+      ];
+    }
+    if (state.answers.has(version)) {
+      record(409, "decision_not_open");
+      return [409, { code: "decision_not_open", decision_status: "answered", detail: "already answered" }];
+    }
+    if (body?.option === "sign" && state.modified.has(version)) {
+      record(409, "publish_manifest_stale");
+      return [409, { code: "publish_manifest_stale", detail: "file sha256 differs from the decision question" }];
+    }
+    if (!["sign", "reject"].includes(body?.option)) {
+      record(422, "invalid_option");
+      return [422, { code: "invalid_option", detail: "option must be sign or reject" }];
+    }
+    state.answers.set(version, { option: body.option, by, at: richNow });
+    record(200);
+    return [
+      200,
+      { decision: decisionView(version), effect: "resume", resumed: [], cancelled: [], replan_requested: false },
+    ];
+  };
+  return {
+    // 扱ったら true。扱わない path は false（既定の fixture へ回す）。
+    handle(req, url, readBody, json) {
+      const { pathname } = url;
+      const manifest = pathname.match(/^\/api\/v1\/tasks\/T1\/publish\/([^/]+)$/);
+      if (manifest && req.method === "GET") {
+        const raw = url.searchParams.get("version");
+        const version = raw === null ? state.versions.at(-1) : Number(raw);
+        if (decodeURIComponent(manifest[1]) !== PUBLISH_MANIFEST_ID || !state.versions.includes(version)) {
+          json(404, { code: "publish_manifest_not_found", detail: "no such manifest" });
+          return true;
+        }
+        json(200, view(version));
+        return true;
+      }
+      if (pathname === "/api/v1/projects/P1/overview" && req.method === "GET") {
+        json(200, overview());
+        return true;
+      }
+      if (pathname === "/api/v1/tasks/T1/decisions" && req.method === "GET") {
+        json(200, { items: state.versions.map(decisionView) });
+        return true;
+      }
+      const decision = pathname.match(/^\/api\/v1\/decisions\/([^/]+)\/answer$/);
+      if (decision && req.method === "POST" && versionOfDecision(decodeURIComponent(decision[1])) !== undefined) {
+        readBody((body) => json(...answer(decodeURIComponent(decision[1]), body)));
+        return true;
+      }
+      if (!pathname.startsWith("/__fixture/publish/")) return false;
+      const tail = pathname.slice("/__fixture/publish/".length);
+      if (tail === "answer-log" && req.method === "GET") {
+        json(200, { answers: state.log });
+        return true;
+      }
+      if (req.method !== "POST") return false;
+      readBody((body) => {
+        if (tail === "principal") state.principal = String(body?.principal ?? "human");
+        else if (tail === "modify") state.modified.add(Number(body?.version ?? state.versions.at(-1)));
+        else if (tail === "new-version") state.versions.push(state.versions.at(-1) + 1);
+        else return json(404, { error: "unknown publish control" });
+        json(200, { ok: true, versions: state.versions, principal: state.principal });
+      });
+      return true;
+    },
+  };
+}
+
 export function richFiles() {
   return {
     "/api/v1/tasks/T1/runs/R1/stdout": {
@@ -2910,6 +3180,8 @@ export function createFakeDaemon({
   browser = null,
   // 案の採否の thread（chatProposalFixture）を chat の一覧に足す。
   chatProposals = false,
+  // publish manifest と署名の決定（createPublishFixture）を T1・P1 に足す。
+  publishManifest = false,
 } = {}) {
   if (host !== "127.0.0.1" && host !== "::1" && host !== "localhost") throw new Error("fake daemon requires loopback");
   if (!Number.isInteger(port) || port < 0 || port > 65535 || reservedPorts.has(port))
@@ -3041,6 +3313,7 @@ export function createFakeDaemon({
     answers: [],
   };
   const chat = createChatFixture({ proposals: chatProposals });
+  const publish = publishManifest ? createPublishFixture() : null;
   const streamPaths = new Set(["/events", "/api/v1/events", "/api/v1/stream"]);
   const matches = (rule, pathname) =>
     rule !== null &&
@@ -3108,6 +3381,26 @@ export function createFakeDaemon({
       res.writeHead(streamStatus, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "too_many_streams" }));
       return;
+    }
+    if (publish) {
+      const json = (status, value) => {
+        res.writeHead(status, { "content-type": "application/json" });
+        res.end(JSON.stringify(value));
+      };
+      const readBody = (done) => {
+        const chunks = [];
+        req.on("data", (chunk) => chunks.push(chunk));
+        req.on("end", () => {
+          let body = null;
+          try {
+            body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : null;
+          } catch {
+            return json(400, { error: "invalid json" });
+          }
+          done(body);
+        });
+      };
+      if (publish.handle(req, new URL(req.url ?? "/", "http://x"), readBody, json)) return;
     }
     if (
       pathname.startsWith("/api/v1/chat/") ||

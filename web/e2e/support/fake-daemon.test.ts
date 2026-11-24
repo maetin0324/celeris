@@ -11,6 +11,8 @@ import {
   createFakeDaemon,
   defaultFixtures,
   type FakeDaemonOptions,
+  PUBLISH_DECISION_ID,
+  PUBLISH_MANIFEST_ID,
   richFixtures,
   validateFixture,
 } from "./fake-daemon.mjs";
@@ -773,4 +775,41 @@ describe("browser backend", () => {
       "/api/v1/browser/identities/ID2",
     ]);
   });
+});
+
+// ADR 2026-11-23-project-observability-publish D3: publish manifest の fixture は schema に合い、署名の状態を本物と同じ順で導く
+// （より新しい版 → 回答無し → reject → file の変化 → 署名済み）。人以外の主体の回答は 403 publication_requires_human で何も記録しない。
+// web/e2e/work/publish-manifest.spec.ts はこの fixture に頼るので、形と状態の導出が崩れたら画面の試験より先にここで落ちる。
+it("publish_manifest_ui_fixture_is_schema_valid_and_derives_signoff_like_the_daemon", async () => {
+  daemon = createFakeDaemon({ profile: "rich", publishManifest: true });
+  const root = await daemon.start();
+  const get = async (path: string) => (await fetch(`${root}${path}`)).json();
+  const post = (path: string, body: unknown) =>
+    fetch(`${root}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  const manifest = () => get(`/api/v1/tasks/T1/publish/${PUBLISH_MANIFEST_ID}?version=1`);
+  expect(validateFixture(await manifest(), schema.$defs.ManifestView)).toEqual([]);
+  expect(validateFixture(await get("/api/v1/tasks/T1/decisions"), schema.$defs.DecisionList)).toEqual([]);
+  expect(validateFixture(await get("/api/v1/projects/P1/overview"), schema.$defs.ProjectOverview)).toEqual([]);
+  expect((await manifest()).signoff.state).toBe("unsigned");
+
+  await post("/__fixture/publish/principal", { principal: "cos" });
+  const forbidden = await post(`/api/v1/decisions/${PUBLISH_DECISION_ID(1)}/answer`, { option: "sign" });
+  expect([forbidden.status, (await forbidden.json()).code]).toEqual([403, "publication_requires_human"]);
+  expect((await manifest()).signoff.state).toBe("unsigned");
+
+  await post("/__fixture/publish/principal", { principal: "human" });
+  const signed = await post(`/api/v1/decisions/${PUBLISH_DECISION_ID(1)}/answer`, { option: "sign" });
+  expect(signed.status).toBe(200);
+  expect(validateFixture(await signed.json(), schema.$defs.DecisionOutcome)).toEqual([]);
+  expect((await manifest()).signoff).toMatchObject({ state: "signed", answered_by: "human:web" });
+  await post("/__fixture/publish/modify", { version: 1 });
+  expect((await manifest()).signoff.state).toBe("stale");
+  expect((await manifest()).file_matches_record).toBe(false);
+  await post("/__fixture/publish/new-version", {});
+  expect((await manifest()).signoff.state).toBe("superseded");
+  expect((await get(`/api/v1/tasks/T1/publish/${PUBLISH_MANIFEST_ID}`)).version).toBe(2);
 });

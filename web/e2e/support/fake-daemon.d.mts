@@ -17,6 +17,21 @@ export function chatSeedFixture(): Array<{
   thread: import("../../api/generated/types").ChatThread;
   messages: import("../../api/generated/types").ChatMessage[];
 }>;
+// publish manifest の fixture（createFakeDaemon({ publishManifest: true }) のときだけ。ADR 2026-11-23-project-observability-publish D3）。
+// 制御口: POST /__fixture/publish/principal {principal}・POST /__fixture/publish/modify {version}・POST /__fixture/publish/new-version・
+// GET /__fixture/publish/answer-log。
+export const PUBLISH_MANIFEST_ID: "io-paper";
+export function PUBLISH_MANIFEST_NAME(version: number): string;
+export function PUBLISH_DECISION_ID(version: number): string;
+export function PUBLISH_MANIFEST_SHA(version: number): string;
+export function publishManifestDocument(): {
+  target: unknown;
+  claims: Array<{ id: string; statement: string; confidence: string; evidence: string[] }>;
+  evidence: Array<{ id: string; stance: string; statement: string; references: unknown[] }>;
+  reproduction: Array<{ id: string; claims: string[]; commands: string[] }>;
+  limitations: Array<{ id: string; statement: string; claims: string[] }>;
+  open_questions: Array<{ id: string; statement: string; blocking: boolean }>;
+};
 // 案の採否の thread（createFakeDaemon({ chatProposals: true }) のときだけ一覧に入る。ADR 2026-11-23-project-observability-publish D2）。
 export const CHAT_PROPOSAL_THREAD: "chat-proposals";
 export function chatProposalFixture(): {
@@ -145,6 +160,8 @@ export type FakeDaemonOptions = {
   notices?: import("../../api/generated/types").Notice[] | null;
   browser?: boolean | BrowserBackendOptions | null;
   chatProposals?: boolean;
+  // publish manifest（task T1 の publish/io-paper/v<n>.json）と署名の決定 publish-signoff-v<n> を足す（ADR 2026-11-23-project-observability-publish D3）。
+  publishManifest?: boolean;
 };
 /** `GET /api/v1/tasks` の 1 頁を本物の daemon と同じ意味（status・order・limit・cursor）で作る。 */
 export function taskListPage(

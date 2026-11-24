@@ -49,6 +49,7 @@ import { Route as TasksIdFilesRouteImport } from './routes/tasks.$id.files'
 import { Route as BrowserRunsTaskIdRunIdRouteImport } from './routes/browser.runs.$taskId.$runId'
 import { Route as ProjectsIdDocsIndexRouteImport } from './routes/projects.$id.docs.index'
 import { Route as ProjectsIdDocsMaintenanceRouteImport } from './routes/projects.$id.docs.maintenance'
+import { Route as TasksIdPublishManifestIdRouteImport } from './routes/tasks.$id.publish.$manifestId'
 import { Route as TasksIdRunsRunIdRouteImport } from './routes/tasks.$id.runs.$runId'
 
 const IndexRoute = IndexRouteImport.update({
@@ -253,6 +254,12 @@ const ProjectsIdDocsMaintenanceRoute =
     path: '/projects/$id/docs/maintenance',
     getParentRoute: () => rootRouteImport,
   } as any)
+const TasksIdPublishManifestIdRoute =
+  TasksIdPublishManifestIdRouteImport.update({
+    id: '/tasks/$id/publish/$manifestId',
+    path: '/tasks/$id/publish/$manifestId',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const TasksIdRunsRunIdRoute = TasksIdRunsRunIdRouteImport.update({
   id: '/tasks/$id/runs/$runId',
   path: '/tasks/$id/runs/$runId',
@@ -299,6 +306,7 @@ export interface FileRoutesByFullPath {
   '/tasks/$id/': typeof TasksIdIndexRoute
   '/browser/runs/$taskId/$runId': typeof BrowserRunsTaskIdRunIdRoute
   '/projects/$id/docs/maintenance': typeof ProjectsIdDocsMaintenanceRoute
+  '/tasks/$id/publish/$manifestId': typeof TasksIdPublishManifestIdRoute
   '/tasks/$id/runs/$runId': typeof TasksIdRunsRunIdRoute
   '/projects/$id/docs/': typeof ProjectsIdDocsIndexRoute
 }
@@ -342,6 +350,7 @@ export interface FileRoutesByTo {
   '/tasks/$id': typeof TasksIdIndexRoute
   '/browser/runs/$taskId/$runId': typeof BrowserRunsTaskIdRunIdRoute
   '/projects/$id/docs/maintenance': typeof ProjectsIdDocsMaintenanceRoute
+  '/tasks/$id/publish/$manifestId': typeof TasksIdPublishManifestIdRoute
   '/tasks/$id/runs/$runId': typeof TasksIdRunsRunIdRoute
   '/projects/$id/docs': typeof ProjectsIdDocsIndexRoute
 }
@@ -386,6 +395,7 @@ export interface FileRoutesById {
   '/tasks/$id/': typeof TasksIdIndexRoute
   '/browser/runs/$taskId/$runId': typeof BrowserRunsTaskIdRunIdRoute
   '/projects/$id/docs/maintenance': typeof ProjectsIdDocsMaintenanceRoute
+  '/tasks/$id/publish/$manifestId': typeof TasksIdPublishManifestIdRoute
   '/tasks/$id/runs/$runId': typeof TasksIdRunsRunIdRoute
   '/projects/$id/docs/': typeof ProjectsIdDocsIndexRoute
 }
@@ -431,6 +441,7 @@ export interface FileRouteTypes {
     | '/tasks/$id/'
     | '/browser/runs/$taskId/$runId'
     | '/projects/$id/docs/maintenance'
+    | '/tasks/$id/publish/$manifestId'
     | '/tasks/$id/runs/$runId'
     | '/projects/$id/docs/'
   fileRoutesByTo: FileRoutesByTo
@@ -474,6 +485,7 @@ export interface FileRouteTypes {
     | '/tasks/$id'
     | '/browser/runs/$taskId/$runId'
     | '/projects/$id/docs/maintenance'
+    | '/tasks/$id/publish/$manifestId'
     | '/tasks/$id/runs/$runId'
     | '/projects/$id/docs'
   id:
@@ -517,6 +529,7 @@ export interface FileRouteTypes {
     | '/tasks/$id/'
     | '/browser/runs/$taskId/$runId'
     | '/projects/$id/docs/maintenance'
+    | '/tasks/$id/publish/$manifestId'
     | '/tasks/$id/runs/$runId'
     | '/projects/$id/docs/'
   fileRoutesById: FileRoutesById
@@ -561,6 +574,7 @@ export interface RootRouteChildren {
   TasksIdIndexRoute: typeof TasksIdIndexRoute
   BrowserRunsTaskIdRunIdRoute: typeof BrowserRunsTaskIdRunIdRoute
   ProjectsIdDocsMaintenanceRoute: typeof ProjectsIdDocsMaintenanceRoute
+  TasksIdPublishManifestIdRoute: typeof TasksIdPublishManifestIdRoute
   TasksIdRunsRunIdRoute: typeof TasksIdRunsRunIdRoute
   ProjectsIdDocsIndexRoute: typeof ProjectsIdDocsIndexRoute
 }
@@ -847,6 +861,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProjectsIdDocsMaintenanceRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/tasks/$id/publish/$manifestId': {
+      id: '/tasks/$id/publish/$manifestId'
+      path: '/tasks/$id/publish/$manifestId'
+      fullPath: '/tasks/$id/publish/$manifestId'
+      preLoaderRoute: typeof TasksIdPublishManifestIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/tasks/$id/runs/$runId': {
       id: '/tasks/$id/runs/$runId'
       path: '/tasks/$id/runs/$runId'
@@ -897,6 +918,7 @@ const rootRouteChildren: RootRouteChildren = {
   TasksIdIndexRoute: TasksIdIndexRoute,
   BrowserRunsTaskIdRunIdRoute: BrowserRunsTaskIdRunIdRoute,
   ProjectsIdDocsMaintenanceRoute: ProjectsIdDocsMaintenanceRoute,
+  TasksIdPublishManifestIdRoute: TasksIdPublishManifestIdRoute,
   TasksIdRunsRunIdRoute: TasksIdRunsRunIdRoute,
   ProjectsIdDocsIndexRoute: ProjectsIdDocsIndexRoute,
 }

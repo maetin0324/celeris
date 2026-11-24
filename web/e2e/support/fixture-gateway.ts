@@ -12,9 +12,12 @@ export async function startFixtureGateway(options: FakeDaemonOptions = {}) {
   const tokenFile = path.join(dir, "token");
   writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);
   const daemon = createFakeDaemon({ profile: "rich", ...options, token: FIXTURE_TOKEN });
-  const gateway = await startGateway({ daemonUrl: await daemon.start(), daemonTokenFile: tokenFile });
+  const daemonUrl = await daemon.start();
+  const gateway = await startGateway({ daemonUrl, daemonTokenFile: tokenFile });
   return {
     base: gateway.base,
+    // 偽 daemon の URL（制御口と、gateway の 401・403 の置き換えを通さない要求に使う。FIXTURE_TOKEN が要る）。
+    daemonUrl,
     daemon,
     async close() {
       await gateway.close();

@@ -1,7 +1,7 @@
 ---
 tasks: [01M7XQA74FP70G3T3KSTP02S0W]
 wu: research-goal
-status: blocked
+status: done
 updated: 2026-11-24
 ---
 # 戦略層 v1 子 8 research-goal: 研究ケースの goal と Outcome を 11.15 より前に書かれた task C の問いから作る
@@ -64,29 +64,28 @@ exit 0
 ```
 
 ## 検査
-提出時の HEAD で実行（基準は `$CELERIS_WU_BASE`）:
-- `bash scripts/dev/test-affected.sh` → exit 0。対象は celeris・celeris-campaign・celerisctl・llm-proxy・task-api・task-dispatch・task-worker と web（`parent_checkpoint_live.rs` の comment の 1 行で task-api が入った）。nextest `6377 tests run: 6377 passed (13 slow), 32 skipped`、web の unit `773 passed (773)`、tsc -b は通った。終わりに scratch の trash の消し残しの `rm: Permission denied` が 3 行出た（exit は 0）。
+提出時の HEAD で実行（3 回目の run。基準は `$CELERIS_WU_BASE`、範囲は `sh "$CELERIS_WU_SCOPE_PATHS"`）:
+- 範囲の check（計画 v4 の正規表現。`testdata/` と `parent_checkpoint_live.rs` を含む）→ exit 0。変えた path は 26 件で、すべて上の「変えた file」の中。
+- `python3 -I -m unittest discover -s scripts/dev/parent-eval-blind -p 'test_*.py'` → `Ran 55 tests` OK（`test_pilot_compare.py` の `test_testdata_is_what_the_generator_writes` を含む）。
+- `research.py check-goal --points 11.16,11.17,11.20` → 実データ（task C の `artifacts/c-results.md`）と合成（`testdata/research/c-results.md`）の両方で exit 0。3 時点とも leak 0 件、11.15 節の見出し・最初の段落 0 件。
+- 同じ実データに `--written-before <root の artifacts の research-evidence/c-results.pre-r25.md>` を付けて → 「前の版と同じ文の出典: 3 / 3 節」、exit 0。
+- 研究ケースの本文が repo に無いこと: `git ls-files` の sha256 に実データ（`2830ce82…`）も run 25 の前の写し（`baa2a185…`）も無い。`sh scripts/dev/check-doc-links.sh` → ok、`sh scripts/dev/check-adr-numbers.sh` → ok（482 files）。
+- `cargo fmt --all -- --check` → exit 0。`cargo check -p task-api --test parent_checkpoint_live` → exit 0。
+- `bash scripts/dev/test-affected.sh` → exit 0。対象は celeris・celeris-campaign・celerisctl・llm-proxy・task-api・task-dispatch・task-worker と web。nextest `6377 tests run: 6377 passed (11 slow), 32 skipped`、web の unit `773 passed (773)`（108 files）、tsc -b の error 0。終わりに scratch の trash の消し残しの `rm: Permission denied` が 3 行出た（exit は 0）。
 - `cargo clippy --workspace -- -D warnings` → exit 0。
-- `cargo fmt --all -- --check` → exit 0。
-- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` の path は上の「変えた file」と同じ。評価器の prompt（`crates/task-worker/src/change_rules/`）・control-ts・web・task の進捗 `agent-docs/progress/2026-11-24-strategy-v1-8.md` は変えていない。
-- 研究ケースの本文が repo に無いこと: 実データの出典の問い・判定方法・背景の先頭 40 字を `git grep -F` → 0 / 3 件。
+- 評価器の prompt（`crates/task-worker/src/change_rules/`）・control-ts・web・task の進捗 `agent-docs/progress/2026-11-24-strategy-v1-8.md` は変えていない（範囲の check の path に無い）。
 
-## 計画の check の食い違い（2 回目の run。計画の問題として申告した）
-前回の run は done を返したが、範囲の check（`"scope": true`）が exit 1 で落ちた。2 回目の run で原因を確かめた。
+## 根拠の写し（repo には入れない）
+- task C の作業場所の `target/.ctmp/c-results.pre-r25.md` は 3 回目の run の時点で残っていた。子 8 の root の artifacts の `research-evidence/c-results.pre-r25.md` に写し、同じ dir に `SHA256SUMS` を置いた。
+- sha256 `baa2a1858f04844330593fccd57e1380f4d1b8c75e910f8e253c5d8d59b0f8a0`（元の file と写しで同じ。ADR D2.2 付記 1 の値と同じ）。186,289 byte、mtime 2026-11-16 08:42Z。
+- ADR D2.2 付記 1 に写しの置き場所を 1 行足した。
 
-- 範囲の check が許す path は `research.py`・`test_research.py`・`testdata/research/`・ADR・この進捗だけで、次の 2 つが範囲の外に出た。
-  - `scripts/dev/parent-eval-blind/testdata/pilot-runs/` と `testdata/pilot-runs-leak/` の研究ケースの 16 file と 4 file（`testdata/make_pilot_runs.py` が `research.files` と合成の `testdata/research/c-results.md` から生成する goal.md・results-slice.md・slice.json・files.json）。
-  - `crates/task-api/tests/parent_checkpoint_live.rs` の `seed_research` の doc comment の 1 行（旧い規則の説明）。
-- 同じ WU の check `python3 -I -m unittest discover -s scripts/dev/parent-eval-blind -p 'test_*.py'` は `test_pilot_compare.py` の `test_testdata_is_what_the_generator_writes` を含む。この試験は生成器の出力と commit した testdata の一致を見る。
-- 提出時の HEAD で両方を確かめた:
-  - 生成し直した testdata のまま: unittest は `Ran 55 tests` OK。範囲の check は exit 1。
-  - testdata を範囲の基点の版に戻す: unittest は `FAILED (failures=1)`（`test_testdata_is_what_the_generator_writes` の digest の不一致）。範囲の check は Rust の 1 行を除けば通る。
-- goal と Outcome の作り方を変えると、生成器の研究ケースの出力は必ず変わる（goal.md に 11.15 節の見出しを入れないことが受け入れ条件 0 だから）。研究ケースの出力を変えずに直す方法は無い。2 つの check は同時に通らない。
-- ほかの check（check-goal の実データと合成の 11.16・11.17・11.20、sha256・doc-links・adr-numbers、進捗と ADR の grep）は提出時の HEAD で exit 0。
-- 申告した直し方: この WU の範囲の check の正規表現に `scripts/dev/parent-eval-blind/testdata/`（生成した testdata を含む）と `crates/task-api/tests/parent_checkpoint_live\.rs`（doc comment の 1 行）を足す。後続の compare-leak は research-goal に依存し、範囲に `testdata/` を含むので、書く場所は重ならない。Rust の file を範囲に入れないなら、次の run がその 1 行を戻し、未確認に書く。
+## 計画の check の食い違い（解決の記録）
+- 2 回目の run で、計画 v3 の範囲の check と unittest の check が同時に通らないことを申告した。範囲の check は生成した testdata（`testdata/pilot-runs/`・`testdata/pilot-runs-leak/` の研究ケースの goal.md・results-slice.md・slice.json・files.json）と `parent_checkpoint_live.rs` の doc comment の 1 行を許さず、unittest の `test_testdata_is_what_the_generator_writes` は生成し直した testdata を要る。
+- 計画 v4 は範囲の check を `scripts/dev/parent-eval-blind/testdata/` 全体と `crates/task-api/tests/parent_checkpoint_live.rs` に広げた。生成し直した testdata と doc comment の直しは残した（戻していない）。
+- 3 回目の run の提出時の HEAD で、範囲の check と unittest の check はどちらも exit 0（上の「検査」）。食い違いは解消した。
 
 ## 未確認
 - 実データで作った goal と Outcome が、評価器にとって研究ケースの問いと判定方法として十分かは、人と operator が読んで確かめていない（この WU の worker は実データの goal を手元で読んだだけで、repo にも進捗にも写していない）。operator は実 LLM の前に `check-goal` を流し、stub の 1 回の `research/<時点>/b/input/tree/goal.md` を読むとよい。
-- 根拠に使った run 25 の前の写しは task C の作業場所の `target/.ctmp/` の下にあり、掃除で消える恐れがある。sha256 は ADR の付記 1 に書いた。残すなら人か operator が root の artifacts に写す。
 - 並行の WU compare-leak が `make_pilot_runs.py` か pilot-compare の testdata を変えると、統合の後に testdata の生成し直しが要るかもしれない（integrate-fix の段で `test_pilot_compare.py` を流して確かめる）。
 - 研究ケースの子は引き続き review の記録を持たない（research-driver の未確認のまま）。

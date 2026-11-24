@@ -114,6 +114,7 @@ driver・比較・採点材料の script（`scripts/dev/` の下）と task-api 
   （sha256 `baa2a1858f04844330593fccd57e1380f4d1b8c75e910f8e253c5d8d59b0f8a0`、mtime 2026-11-16 08:42Z、最後の節は 11.13）がある。11.15 節は run 26（2026-11-16 10:3xZ）である。
   出典の 3 節（11.1・11.2・11.5）は、この写しと最終の c-results.md（`research_case.SHA`）で同じ文である（`check-goal --written-before` が「前の版と同じ文の出典: 3 / 3 節」）。
   9.8・9.9 節も同じ文だが、9.10 節は 2 行が違う。節の見出しの時刻は 11.1 が 2026-11-15 12:20Z、11.2 が run 14（2026-11-15 12:1x〜12:3xZ）、11.5 が run 17（2026-11-15 13:30Z）。
+  task C の `target/` は掃除で消えうるので、同じ sha256 の写しを子 8 の root の artifacts の `research-evidence/c-results.pre-r25.md`（`SHA256SUMS` 付き）に置いた。repo には入れない。
 - 検査: `python3 -I scripts/dev/parent-eval-blind/research.py check-goal --src <c-results.md> --points 11.16,11.17,11.20 [--written-before <前の版>]`。
   各時点の build の `Leak`、または goal・Outcome に 11.15 節の見出し（番号の有無とも）か最初の段落があれば exit 1。出力は節の番号と件数だけで、本文を出さない。
   実 LLM の run の前に実データで流す。

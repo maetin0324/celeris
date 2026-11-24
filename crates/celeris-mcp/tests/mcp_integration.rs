@@ -2495,9 +2495,9 @@ async fn mcp_external_scope_discussion_only_cannot_read_db_api_or_instruct() {
 /// answer it. Base let `chatgpt-rdc-2` answer the decision; no existing test fed an MCP-recorded answer to R10.
 #[tokio::test]
 async fn mcp_external_scope_mcp_answer_not_strategy_approval() {
+    use task_core::decision::DecisionRecord;
     use task_core::strategy::{
-        APPROVE_OPTION, ApprovalRecord, REJECT_OPTION, approval_decision_key, approval_question,
-        envelope,
+        APPROVE_OPTION, REJECT_OPTION, approval_decision_key, approval_question, envelope,
     };
     let server = spawn_token_server(60).await;
     create_client(
@@ -2578,7 +2578,7 @@ async fn mcp_external_scope_mcp_answer_not_strategy_approval() {
         last_answer,
         Some((APPROVE_OPTION.to_string(), "mcp:ops-bot".to_string()))
     );
-    let record = ApprovalRecord {
+    let record = DecisionRecord {
         key: row.key.clone(),
         question: row.request.question.clone(),
         status: row.status,
@@ -2587,7 +2587,7 @@ async fn mcp_external_scope_mcp_answer_not_strategy_approval() {
     let hash = format!("sha256:{sha}");
     assert!(!envelope::human_approved(Some(&record), &hash));
     // Control: the same row answered by a person is an approval, so the refusal above is the actor's.
-    let human = ApprovalRecord {
+    let human = DecisionRecord {
         last_answer: Some((APPROVE_OPTION.to_string(), "human:alice".to_string())),
         ..record
     };

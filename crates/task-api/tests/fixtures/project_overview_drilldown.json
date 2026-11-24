@@ -1,0 +1,506 @@
+{
+  "generated_at": "2026-11-24T00:00:00Z",
+  "items": [
+    {
+      "entries": [
+        {
+          "detail": {
+            "request_sha256": "de1a28d8b371845e4169d5e3686efc6058874fbfe73223ec08290ca4a872c98e"
+          },
+          "id": "goal",
+          "links": [],
+          "mark": "confirmed"
+        }
+      ],
+      "key": "original_goal",
+      "mark": "confirmed",
+      "recorded": true
+    },
+    {
+      "entries": [
+        {
+          "detail": {
+            "approved": {
+              "approved_at": "2026-11-24T00:00:00Z",
+              "approved_by": "human:web",
+              "decision_id": "dec-s",
+              "name": "strategy/arch-v4-cycle/v1.json",
+              "sha256": "339ae6c1921ee648ec7028de47b7a113410696809529b56afae7f37cf4fa5371",
+              "version": 1
+            },
+            "pending_versions": [],
+            "stale": [],
+            "strategy_id": "arch-v4-cycle",
+            "task_id": "T1"
+          },
+          "id": "T1/arch-v4-cycle",
+          "links": [
+            {
+              "kind": "artifact",
+              "name": "strategy/arch-v4-cycle/v1.json",
+              "sha256": "339ae6c1921ee648ec7028de47b7a113410696809529b56afae7f37cf4fa5371",
+              "task_id": "T1"
+            },
+            {
+              "kind": "task",
+              "task_id": "T1"
+            }
+          ],
+          "mark": "confirmed"
+        }
+      ],
+      "key": "approved_strategy",
+      "mark": "confirmed",
+      "recorded": true
+    },
+    {
+      "entries": [
+        {
+          "detail": {
+            "cost": {
+              "note": "pilot 1 件と測定だけ",
+              "usd_max": 40.0,
+              "wall_hours_max": 6.0
+            },
+            "experiment_budget": {
+              "usd_max": 40.0,
+              "wall_hours_max": 6.0
+            },
+            "experiment_tasks": [
+              "T2"
+            ],
+            "id": "cut-min-edges",
+            "rejected_by": [],
+            "selected": false,
+            "state": "open",
+            "strategy_id": "arch-v4-cycle",
+            "title": "循環を切る最小の辺の集合を測ってから切る",
+            "version": 1
+          },
+          "id": "arch-v4-cycle/v1/cut-min-edges",
+          "links": [
+            {
+              "kind": "artifact",
+              "name": "strategy/arch-v4-cycle/v1.json",
+              "sha256": "",
+              "task_id": "T1"
+            },
+            {
+              "kind": "task",
+              "task_id": "T2"
+            }
+          ],
+          "mark": "estimated"
+        },
+        {
+          "detail": {
+            "cost": {
+              "usd_max": 120.0,
+              "wall_hours_max": 20.0
+            },
+            "experiment_budget": {
+              "usd_max": 30.0,
+              "wall_hours_max": 8.0
+            },
+            "experiment_tasks": [
+              "T3"
+            ],
+            "id": "continue-pilots",
+            "rejected_by": [],
+            "selected": false,
+            "state": "open",
+            "strategy_id": "arch-v4-cycle",
+            "title": "狭い pilot を E・F と続ける",
+            "version": 1
+          },
+          "id": "arch-v4-cycle/v1/continue-pilots",
+          "links": [
+            {
+              "kind": "artifact",
+              "name": "strategy/arch-v4-cycle/v1.json",
+              "sha256": "",
+              "task_id": "T1"
+            },
+            {
+              "kind": "task",
+              "task_id": "T3"
+            }
+          ],
+          "mark": "estimated"
+        }
+      ],
+      "key": "candidates",
+      "mark": "estimated",
+      "recorded": true
+    },
+    {
+      "entries": [
+        {
+          "detail": {
+            "confidence": "estimated",
+            "id": "h-cycle-edges",
+            "statement": "少数の辺が task-core の循環の大半を作っている",
+            "strategy_id": "arch-v4-cycle",
+            "version": 1
+          },
+          "id": "arch-v4-cycle/v1/h-cycle-edges",
+          "links": [
+            {
+              "kind": "artifact",
+              "name": "strategy/arch-v4-cycle/v1.json",
+              "sha256": "",
+              "task_id": "T1"
+            }
+          ],
+          "mark": "estimated"
+        },
+        {
+          "detail": {
+            "confidence": "contradicted",
+            "id": "h-pilots-enough",
+            "statement": "狭い pilot を重ねれば循環は減る",
+            "strategy_id": "arch-v4-cycle",
+            "version": 1
+          },
+          "id": "arch-v4-cycle/v1/h-pilots-enough",
+          "links": [
+            {
+              "kind": "artifact",
+              "name": "strategy/arch-v4-cycle/v1.json",
+              "sha256": "",
+              "task_id": "T1"
+            }
+          ],
+          "mark": "contradicted"
+        }
+      ],
+      "key": "hypotheses",
+      "mark": "contradicted",
+      "recorded": true
+    },
+    {
+      "entries": [
+        {
+          "detail": {
+            "experiment_tasks": [
+              "T2"
+            ],
+            "hypothesis": "h-cycle-edges",
+            "refute": 0,
+            "support": 1,
+            "unknown": 1
+          },
+          "id": "arch-v4-cycle/v1/h-cycle-edges",
+          "links": [
+            {
+              "kind": "task",
+              "task_id": "T2"
+            },
+            {
+              "kind": "notebook",
+              "name": "analysis/scc.ipynb",
+              "task_id": "T2"
+            },
+            {
+              "kind": "log",
+              "run_id": "R1",
+              "task_id": "T2"
+            }
+          ],
+          "mark": "estimated"
+        },
+        {
+          "detail": {
+            "experiment_tasks": [
+              "T3"
+            ],
+            "hypothesis": "h-pilots-enough",
+            "refute": 1,
+            "support": 0,
+            "unknown": 0
+          },
+          "id": "arch-v4-cycle/v1/h-pilots-enough",
+          "links": [
+            {
+              "kind": "task",
+              "task_id": "T3"
+            }
+          ],
+          "mark": "estimated"
+        }
+      ],
+      "key": "verification",
+      "mark": "estimated",
+      "recorded": true
+    },
+    {
+      "entries": [
+        {
+          "detail": {
+            "evidence_id": "arch-v4-cycle/v1/e-pilot-refute",
+            "hypothesis": "h-pilots-enough",
+            "references": 3,
+            "statement": "A〜H を終えても SCC 17→17 で、pilot を重ねた効果は無かった"
+          },
+          "id": "arch-v4-cycle/v1/e-pilot-refute",
+          "links": [
+            {
+              "kind": "literature",
+              "url": "https://arxiv.org/abs/2401.00001"
+            },
+            {
+              "kind": "git",
+              "repo": "agent-platform",
+              "sha": "4a7c0d5e9b1f2a3c4d5e6f708192a3b4c5d6e7f8",
+              "task_id": "T2"
+            }
+          ],
+          "mark": "confirmed"
+        }
+      ],
+      "key": "refutations",
+      "mark": "confirmed",
+      "recorded": true
+    },
+    {
+      "entries": [],
+      "key": "latest_findings",
+      "recorded": false
+    },
+    {
+      "entries": [
+        {
+          "detail": {
+            "author": "mcp:chatgpt",
+            "message_id": "M1",
+            "review_state": "pending",
+            "revision": 1,
+            "sha256": "e0b2850c264122f26ae98f3fb53a1b8dd1d9403a2b9f32d1d4aca4606e55fba4",
+            "source_kind": "mcp_client",
+            "source_label": "chatgpt",
+            "thread_id": "TH1",
+            "untrusted": true
+          },
+          "id": "M1",
+          "links": [
+            {
+              "kind": "chat",
+              "message_id": "M1",
+              "revision": 1,
+              "sha256": "e0b2850c264122f26ae98f3fb53a1b8dd1d9403a2b9f32d1d4aca4606e55fba4",
+              "thread_id": "TH1"
+            }
+          ],
+          "mark": "estimated"
+        }
+      ],
+      "key": "discussion_sources",
+      "mark": "estimated",
+      "recorded": true
+    },
+    {
+      "entries": [
+        {
+          "detail": {
+            "candidate": "cut-min-edges",
+            "strategy_id": "arch-v4-cycle",
+            "strategy_name": "strategy/arch-v4-cycle/v1.json",
+            "strategy_task_id": "T1",
+            "task_id": "T2",
+            "version": 1
+          },
+          "id": "T2",
+          "links": [
+            {
+              "kind": "task",
+              "task_id": "T2"
+            },
+            {
+              "kind": "log",
+              "run_id": "R1",
+              "task_id": "T2"
+            },
+            {
+              "kind": "git",
+              "repo": "agent-platform",
+              "sha": "4a7c0d5e9b1f2a3c4d5e6f708192a3b4c5d6e7f8",
+              "task_id": "T2"
+            }
+          ],
+          "mark": "confirmed"
+        },
+        {
+          "detail": {
+            "candidate": "continue-pilots",
+            "strategy_id": "arch-v4-cycle",
+            "strategy_name": "strategy/arch-v4-cycle/v1.json",
+            "strategy_task_id": "T1",
+            "task_id": "T3",
+            "version": 1
+          },
+          "id": "T3",
+          "links": [
+            {
+              "kind": "task",
+              "task_id": "T3"
+            }
+          ],
+          "mark": "confirmed"
+        }
+      ],
+      "key": "experiments_and_tasks",
+      "mark": "confirmed",
+      "recorded": true
+    },
+    {
+      "entries": [
+        {
+          "detail": {
+            "budget": {
+              "usd_max": 70.0,
+              "wall_hours_max": 14.0
+            },
+            "marks": {
+              "list_price_usd": "estimated",
+              "tokens": "confirmed"
+            },
+            "spent": {
+              "list_price_complete": true,
+              "list_price_usd": 0.5,
+              "runs": 2,
+              "tokens": 2200
+            },
+            "strategy_id": "arch-v4-cycle",
+            "version": 1
+          },
+          "id": "arch-v4-cycle/v1",
+          "links": [
+            {
+              "kind": "task",
+              "task_id": "T2"
+            },
+            {
+              "kind": "log",
+              "run_id": "R1",
+              "task_id": "T2"
+            },
+            {
+              "kind": "task",
+              "task_id": "T3"
+            }
+          ],
+          "mark": "estimated"
+        }
+      ],
+      "key": "budget_spent",
+      "mark": "estimated",
+      "recorded": true
+    },
+    {
+      "entries": [
+        {
+          "detail": {
+            "source": "held_assumption",
+            "statement": "struct-deps の集計の規則が変わった"
+          },
+          "id": "arch-v4-cycle/v1/a-measure-stable",
+          "links": [],
+          "mark": "estimated"
+        }
+      ],
+      "key": "next_verification",
+      "mark": "estimated",
+      "recorded": true
+    },
+    {
+      "entries": [
+        {
+          "detail": {
+            "key_kind": "chat_proposal",
+            "message_id": "M1"
+          },
+          "id": "M1",
+          "links": [
+            {
+              "kind": "chat",
+              "message_id": "M1",
+              "revision": 1,
+              "sha256": "e0b2850c264122f26ae98f3fb53a1b8dd1d9403a2b9f32d1d4aca4606e55fba4",
+              "thread_id": "TH1"
+            }
+          ],
+          "mark": "needs_decision"
+        }
+      ],
+      "key": "pending_human_decisions",
+      "mark": "needs_decision",
+      "recorded": true
+    },
+    {
+      "entries": [
+        {
+          "detail": {
+            "by_code": [
+              {
+                "code": "contradicted",
+                "count": 1,
+                "strong": true
+              },
+              {
+                "code": "needs_decision",
+                "count": 1,
+                "strong": true
+              }
+            ]
+          },
+          "id": "warnings",
+          "links": [],
+          "mark": "contradicted"
+        }
+      ],
+      "key": "risks",
+      "mark": "contradicted",
+      "recorded": true
+    },
+    {
+      "entries": [],
+      "key": "publish_readiness",
+      "recorded": false
+    }
+  ],
+  "project_id": "P1",
+  "request_sha256": "de1a28d8b371845e4169d5e3686efc6058874fbfe73223ec08290ca4a872c98e",
+  "schema": "celeris.project-overview/1",
+  "truncated": [],
+  "warnings": [
+    {
+      "code": "contradicted",
+      "entry": "arch-v4-cycle/v1/h-pilots-enough",
+      "item": "hypotheses",
+      "links": [
+        {
+          "kind": "artifact",
+          "name": "strategy/arch-v4-cycle/v1.json",
+          "sha256": "",
+          "task_id": "T1"
+        }
+      ],
+      "strong": true
+    },
+    {
+      "code": "needs_decision",
+      "entry": "M1",
+      "item": "pending_human_decisions",
+      "links": [
+        {
+          "kind": "chat",
+          "message_id": "M1",
+          "revision": 1,
+          "sha256": "e0b2850c264122f26ae98f3fb53a1b8dd1d9403a2b9f32d1d4aca4606e55fba4",
+          "thread_id": "TH1"
+        }
+      ],
+      "strong": true
+    }
+  ]
+}

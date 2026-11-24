@@ -13,11 +13,11 @@ use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use task_core::Project;
-use task_core::decision::{DecisionRow, DecisionStatus};
+use task_core::decision::{DecisionRecord, DecisionRow, DecisionStatus};
 use task_core::local_machine::WorkspaceRoots;
 use task_core::model::{ArtifactRef, TaskId};
 use task_core::publish::{
-    self, Manifest, ManifestContext, ManifestRule, SignoffRecord, SignoffState,
+    self, Manifest, ManifestContext, ManifestRule, ManifestViolation, SignoffState,
 };
 use task_core::store::SqliteStore;
 use task_core::strategy::{RefStatus, Reference};
@@ -28,15 +28,6 @@ use crate::problem::{ApiProblem, store_problem};
 /// 参照（`url` を除く）を引く関数。呼び出し側（`crate::decisions`）が戦略の文書と同じ
 /// `cos::strategy_gate::Reader::lookup` を渡す（この module は循環の外に置き、`cos`・`state` を使わない）。
 pub(crate) type Lookup<'a> = dyn FnMut(&Project, &Reference) -> Result<RefStatus, ApiProblem> + 'a;
-
-/// 検査の違反 1 件（`task_core::publish::ManifestViolation` の写し）。
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-pub struct ManifestViolationView {
-    pub rule: ManifestRule,
-    pub code: String,
-    pub path: String,
-    pub detail: String,
-}
 
 /// 署名の状態（D3.3・D3.4。決定と file から導く）。
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -69,7 +60,7 @@ pub struct ManifestView {
     pub current_sha256: Option<String>,
     /// file の今の byte 列が記録と同じか。`false` の file は検査済みと出さない（違反に数える）。
     pub file_matches_record: bool,
-    pub violations: Vec<ManifestViolationView>,
+    pub violations: Vec<ManifestViolation>,
     /// 根拠の無い claim の id（証拠・内部の参照・再現条件の欠け）。
     pub unsupported_claims: Vec<String>,
     /// 概要の強い警告（`manifest_confidential`・`manifest_blocking_question`）。
@@ -143,7 +134,7 @@ pub(crate) fn manifest_status(
     let mut unsupported_claims = Vec::new();
     let mut doc: Option<Manifest> = None;
     match &bytes {
-        None => violations.push(ManifestViolationView {
+        None => violations.push(ManifestViolation {
             rule: ManifestRule::Shape,
             code: MANIFEST_INVALID.into(),
             path: String::new(),
@@ -151,7 +142,7 @@ pub(crate) fn manifest_status(
         }),
         Some(bytes) => {
             if !file_matches_record {
-                violations.push(ManifestViolationView {
+                violations.push(ManifestViolation {
                     rule: ManifestRule::Shape,
                     code: MANIFEST_STALE.into(),
                     path: String::new(),
@@ -199,12 +190,7 @@ pub(crate) fn manifest_status(
             };
             let found = publish::validate_manifest(bytes, &ctx);
             unsupported_claims = publish::unsupported_claims(&found);
-            violations.extend(found.into_iter().map(|v| ManifestViolationView {
-                rule: v.rule,
-                code: v.code.into(),
-                path: v.path,
-                detail: v.detail,
-            }));
+            violations.extend(found);
         }
     }
     let signoff = signoff_view(
@@ -309,18 +295,10 @@ fn signoff_view(
         )
     });
     let row = own.first().copied();
-    // 決定の行の `answer` は最後の `DecisionAnswered` の写し（revise は上書き）。
-    let answer = row
-        .and_then(|r| r.request.answer.as_ref())
-        .map(|a| (a.option.clone(), a.by.clone()));
+    let answer = row.and_then(DecisionRow::last_answer);
     let record = row
         .filter(|r| r.status != DecisionStatus::Withdrawn)
-        .map(|r| SignoffRecord {
-            key: r.key.clone(),
-            question: r.request.question.clone(),
-            status: r.status,
-            last_answer: answer.clone(),
-        });
+        .map(DecisionRecord::from_row);
     Ok(ManifestSignoffView {
         state: publish::signoff_state(
             manifest_id,

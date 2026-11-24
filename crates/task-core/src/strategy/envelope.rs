@@ -16,10 +16,10 @@ use serde_json::Value;
 
 pub use super::contains_secret;
 use super::{
-    APPROVE_OPTION, ActorKind, ApprovalRecord, Confidence, Consent, DecisionState, SECRET,
-    SourceKind, actor_allowed, approval_decision_key, approval_subject, bare_sha, consent_granted,
+    ActorKind, Confidence, Consent, DecisionState, SECRET, SourceKind, actor_allowed,
+    approval_decision_key, approval_subject, approving_human, bare_sha, consent_granted,
 };
-use crate::decision::DecisionStatus;
+use crate::decision::{DecisionRecord, DecisionStatus};
 use crate::is_human_principal;
 use crate::project_proposal::sha256_hex;
 
@@ -79,7 +79,7 @@ pub struct EnvelopeContext {
     /// MCP の client の scope（MCP のとき）。
     pub caller_scopes: Vec<String>,
     /// envelope の `content_hash` を承認する決定（`decisions` の行と最後の `DecisionAnswered`）。
-    pub approval: Option<ApprovalRecord>,
+    pub approval: Option<DecisionRecord>,
     /// 外へ出すときの人の共有。
     pub outbound_share: Option<OutboundShare>,
 }
@@ -115,7 +115,7 @@ pub fn state_allowed(source: SourceKind, body: &str, state: DecisionState) -> bo
 /// R10: `content_hash`（`sha256:<hex>`）を、人（`human:<名前>`）が承認の決定で承認したか。決定は D2.2 の
 /// `strategy-approve-v<n>` で、問いの sha256 が `content_hash` と一致し、answered で、最後の回答が `approve` であること。
 /// `mcp:`・`cos:`・`operator:` の回答は承認にならない。
-pub fn human_approved(approval: Option<&ApprovalRecord>, content_hash: &str) -> bool {
+pub fn human_approved(approval: Option<&DecisionRecord>, content_hash: &str) -> bool {
     let Some(a) = approval else {
         return false;
     };
@@ -125,7 +125,7 @@ pub fn human_approved(approval: Option<&ApprovalRecord>, content_hash: &str) -> 
     a.key == approval_decision_key(subject.version)
         && a.status == DecisionStatus::Answered
         && content_hash.strip_prefix("sha256:") == Some(subject.sha256.as_str())
-        && matches!(&a.last_answer, Some((option, by)) if option == APPROVE_OPTION && is_human_principal(by))
+        && approving_human(a.last_answer.as_ref()).is_some()
 }
 
 /// R13: confidential の内容（`content_hash`）を外へ出してよいか。人が `include_confidential` でその内容を共有したか、
@@ -133,7 +133,7 @@ pub fn human_approved(approval: Option<&ApprovalRecord>, content_hash: &str) -> 
 pub fn outbound_allowed(
     content_hash: &str,
     share: Option<&OutboundShare>,
-    approval: Option<&ApprovalRecord>,
+    approval: Option<&DecisionRecord>,
 ) -> bool {
     let shared = share.is_some_and(|s| {
         is_human_principal(&s.by)

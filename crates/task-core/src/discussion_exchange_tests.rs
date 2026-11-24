@@ -482,7 +482,7 @@ fn external_exchange_snapshot_omits_confidential() {
     // A person's approval decision of exactly this text lets it out and reads `approved`.
     let mut approved = strategy_doc(true);
     let hash = sha(&approved.body);
-    approved.approval = Some(crate::strategy::ApprovalRecord {
+    approved.approval = Some(crate::decision::DecisionRecord {
         key: approval_decision_key(1),
         question: approval_question("s1", 1, hash.trim_start_matches("sha256:")),
         status: DecisionStatus::Answered,

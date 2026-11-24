@@ -48,7 +48,7 @@ completed: 2026-11-24
 - stub の e2e（提出時の HEAD の前、同じ内容で実行）: `bash scripts/dev/parent-eval-blind.sh --harness stub --arms a,b,c --case research --research-src scripts/dev/parent-eval-blind/testdata/research/c-results.md --points 11.17,11.20 --out "$TMPDIR/rd-out"` → exit 0。`research/{11.17,11.20}/{a,b,c}/output.json` の 6 件と `input/`、`research/strategy-v1/` が書かれた。b・c の verdict `unknown`・next `ask_human`（stub の固定）、a は `fixed_plan`・next `continue`・LLM run 0。`grep -l "（Outcome の記録は無い）" research/*/[bc]/input/prompt.md` → 0 件（grep exit 1）。11.17 の `input/` に SYN-1118〜SYN-1121・SYN-16 の印は 0 件、11.20 の `input/` に SYN-1121・SYN-16 は 0 件、版 v1 の段の作業 tree に 11.16・11.17 の印は 0 件。
 
 ## operator の手順への追記（arm-driver の進捗の「operator が worker の外で実 LLM の pilot を流す手順」に足す）
-- 研究ケースは `--research-src` に host の実データの path を渡す: `/local/celeris/data/workspaces/01M7C56WK4E86BTZNDKAX7SP7C/artifacts/c-results.md`（`research_case.SRC`。sha256 `2830ce82…`、`research_case.SHA` と一致しなければ exit 2）。実データを repo に写さない。ChatGPT・Muse に送らない（人の答え: 内部の評価だけ）。
+- 研究ケースは `--research-src` に host の実データの path を渡す: `/local/celeris/data/workspaces/01M7C56WK4E86BTZNDKAX7SP7C/artifacts/c-results.md`（`research_case.SRC`。sha256 は `research_case.SHA` と一致しなければ exit 2）。実データを repo に写さない。ChatGPT・Muse に送らない（人の答え: 内部の評価だけ）。
   ```sh
   P=/local/celeris/data/workspaces/01M7XQA74FP70G3T3KSTP02S0W/artifacts/pilot-runs
   for it in 1 2; do

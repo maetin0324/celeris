@@ -835,8 +835,9 @@ export function richFixtures() {
   };
 }
 
-// ADR 2026-11-23-project-observability-publish D1: 案件 P1 の概要（14 項目）。印 4 種・記録無し・強い警告と通常の警告・
-// drill-down の 7 種の link（task・成果物・Notebook・log・Git・文献・chat）を rich の T1・R1・chat-history に向ける。
+// ADR 2026-11-23-project-observability-publish D1: 案件 P1 の概要（14 項目）。印 4 種・記録無し・強い警告と通常の警告を
+// 確かめる手書きの fixture。link は、同じ項目の key で golden（projectOverviewGolden）に現れる kind だけを置く（本物の daemon が
+// その項目に出さない kind を画面の試験に持ち込まない。fake-daemon.test.ts が確かめる）。drill-down の画面遷移は golden で確かめる。
 export function projectOverviewFixture() {
   const sha = (c) => c.repeat(64);
   const task = { kind: "task", task_id: "T1" };
@@ -846,7 +847,6 @@ export function projectOverviewFixture() {
   const git = { kind: "git", repo: "web", sha: "a".repeat(40), task_id: "T1" };
   const gitBare = { kind: "git", repo: "benchfs", sha: "b".repeat(40), task_id: null };
   const paper = { kind: "literature", url: "https://example.org/papers/io-sweep", path: null, sha256: null };
-  const kb = { kind: "literature", url: null, path: "projects/demo.md", sha256: sha("c") };
   const chat = (state) => ({
     kind: "chat",
     thread_id: "chat-history",
@@ -929,11 +929,9 @@ export function projectOverviewFixture() {
         ),
       ]),
       item("latest_findings", "estimated", [
-        e("CD1/verdict", "estimated", { verdict: "on_track", next: "continue", status: "valid", unsupported: [] }, [
-          artifact,
-        ]),
+        e("CD1/verdict", "estimated", { verdict: "on_track", next: "continue", status: "valid", unsupported: [] }),
         e("CD1/axis/execution", "estimated", { axis: "execution", value: "progressing" }),
-        e("CD1/learned/0", "estimated", { kind: "learned", statement: "提出の束ねで 2 倍", supported: false }, [log]),
+        e("CD1/learned/0", "estimated", { kind: "learned", statement: "提出の束ねで 2 倍", supported: false }),
       ]),
       item("discussion_sources", "contradicted", [
         e(
@@ -972,15 +970,13 @@ export function projectOverviewFixture() {
         ),
       ]),
       item("next_verification", "estimated", [
-        e(
-          "T1/io/v2/c2",
-          "estimated",
-          { source: "candidate_experiment", statement: "worker thread の比較を 1 回だけ測る" },
-          [kb],
-        ),
+        e("T1/io/v2/c2", "estimated", {
+          source: "candidate_experiment",
+          statement: "worker thread の比較を 1 回だけ測る",
+        }),
       ]),
       item("pending_human_decisions", "needs_decision", [
-        e("D3", "needs_decision", { decision_id: "D3", task_id: "T1", key_kind: "strategy-approve" }, [task]),
+        e("D3", "needs_decision", { decision_id: "D3", task_id: "T1", key_kind: "strategy-approve" }),
       ]),
       item("risks", "contradicted", [
         e("warnings", "contradicted", {
@@ -999,7 +995,7 @@ export function projectOverviewFixture() {
     warnings: [
       { code: "strategy_stale", item: "approved_strategy", strong: true, entry: "T1/io", links: [artifact, task] },
       { code: "contradicted", item: "hypotheses", strong: true, entry: "T1/io/v2/h2", links: [artifact] },
-      { code: "evaluation_unsupported", item: "latest_findings", strong: true, entry: "CD1/learned/0", links: [log] },
+      { code: "evaluation_unsupported", item: "latest_findings", strong: true, entry: "CD1/learned/0", links: [] },
       {
         code: "citation_stale",
         item: "discussion_sources",
@@ -1007,7 +1003,7 @@ export function projectOverviewFixture() {
         entry: "chat-history-2/citations/0",
         links: [chat("edited")],
       },
-      { code: "needs_decision", item: "pending_human_decisions", strong: true, entry: "D3", links: [task] },
+      { code: "needs_decision", item: "pending_human_decisions", strong: true, entry: "D3", links: [] },
       { code: "cost_unknown", item: "budget_spent", strong: false, entry: null, links: [] },
     ],
     truncated: [],
@@ -1015,6 +1011,213 @@ export function projectOverviewFixture() {
   const errors = validateFixture(value, schema.$defs.ProjectOverview);
   if (errors.length) throw new Error(`project overview fixture: ${errors.join(", ")}`);
   return value;
+}
+
+// ADR 2026-11-23-project-observability-publish D1.4: 本物の GET /projects/{id}/overview の応答。crates/task-api の試験
+// project_overview_drilldown_fixture_matches_generated が生成する golden（ID は T1・R1・TH1・M1・P1 に置き換え済み）を、
+// 写しを web/ に置かず repo の根からの相対で読む。createFakeDaemon({ projectOverview: "drilldown" }) はこれを P1 の概要に
+// そのまま返し、link の先（task・run の log・成果物・Notebook・変更・chat の thread）をこの label に合わせて足す。
+export const PROJECT_OVERVIEW_GOLDEN = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../../crates/task-api/tests/fixtures/project_overview_drilldown.json",
+);
+export function projectOverviewGolden() {
+  const value = JSON.parse(readFileSync(PROJECT_OVERVIEW_GOLDEN, "utf8"));
+  const errors = validateFixture(value, schema.$defs.ProjectOverview);
+  if (errors.length) throw new Error(`project overview golden: ${errors.join(", ")}`);
+  return value;
+}
+
+// 概要の (項目の key, link の kind) の組。項目の entries と、その項目を指す warnings の link を合わせる。
+export function overviewLinkKinds(overview) {
+  const kinds = new Map();
+  const add = (item, links) => {
+    for (const link of links ?? []) {
+      if (!kinds.has(item)) kinds.set(item, new Set());
+      kinds.get(item).add(link.kind);
+    }
+  };
+  for (const item of overview.items) for (const entry of item.entries) add(item.key, entry.links);
+  for (const warning of overview.warnings) add(warning.item, warning.links);
+  return kinds;
+}
+
+// golden の link の先。label は golden のもの（T1 は戦略の task、T2 は実験の task で run R1・Notebook・統合の commit を持つ、
+// T3 は run の無い実験の task、TH1 は外部 LLM の案 M1 の thread）。
+export const DRILLDOWN_THREAD = "TH1";
+export function drilldownFixtures() {
+  const golden = projectOverviewGolden();
+  const links = [
+    ...golden.items.flatMap((item) => item.entries.flatMap((entry) => entry.links)),
+    ...golden.warnings.flatMap((warning) => warning.links),
+  ];
+  const strategy = links.find((link) => link.kind === "artifact" && link.sha256);
+  const notebook = links.find((link) => link.kind === "notebook");
+  const log = links.find((link) => link.kind === "log");
+  const git = links.find((link) => link.kind === "git");
+  const rich = richFixtures();
+  const runSummary = (run_id) => ({
+    ...fixtureFor(schema.$defs.RunSummary),
+    run_id,
+    role: "worker",
+    adapter: "codex",
+    model: "standard",
+    started_at: richNow,
+    finished_at: richNow,
+  });
+  const detail = (id, title, extra, runs) => {
+    const base = structuredClone(rich["/api/v1/tasks/T1"]);
+    base.task = { ...base.task, id, title, objective: title, parent_id: "T1", depends_on: [], ...extra };
+    base.children = [];
+    base.dependents = [];
+    base.runs = runs.map(runSummary);
+    return base;
+  };
+  const artifactRow = (idx, run_id, name, sha256) => ({
+    idx,
+    run_id,
+    ts: richNow,
+    exists: true,
+    forbidden: false,
+    size: 64,
+    sha256_matches: true,
+    artifact: { kind: "file", name, path: name, sha256 },
+  });
+  const changes = {
+    ...fixtureFor(schema.$defs.ChangesView),
+    task_id: git.task_id,
+    gh: false,
+    merge_method: "merge",
+    delivery: null,
+    repos: [
+      {
+        repo: git.repo,
+        branch: `celeris/${git.task_id}`,
+        default_branch: "main",
+        base: "main",
+        head: git.sha,
+        ahead: 1,
+        files: [],
+        stat: { files: 0, additions: 0, deletions: 0 },
+        dirty: false,
+        missing: false,
+        origin: true,
+        integration: {
+          id: "I1",
+          task_id: git.task_id,
+          repo: git.repo,
+          repo_id: null,
+          method: "merge",
+          state: "merged",
+          detail: git.sha,
+          pr_number: null,
+          pr_url: null,
+          merged_at: richNow,
+          created_at: richNow,
+          updated_at: richNow,
+        },
+      },
+    ],
+  };
+  const value = {
+    "/api/v1/projects/P1/overview": golden,
+    [`/api/v1/tasks/${log.task_id}`]: detail(log.task_id, "実験: task-core の循環の辺を数える", { status: "done" }, [
+      log.run_id,
+    ]),
+    "/api/v1/tasks/T3": detail("T3", "実験: pilot を重ねる", { status: "done" }, []),
+    [`/api/v1/tasks/${strategy.task_id}/artifacts`]: {
+      task_id: strategy.task_id,
+      items: [artifactRow(0, "R1", strategy.name, strategy.sha256)],
+    },
+    [`/api/v1/tasks/${notebook.task_id}/artifacts`]: {
+      task_id: notebook.task_id,
+      items: [artifactRow(0, log.run_id, notebook.name, "9".repeat(64))],
+    },
+    [`/api/v1/tasks/${notebook.task_id}/tree`]: (url) => ({
+      repo: git.repo,
+      path: url.searchParams.get("path") ?? "",
+      repos: [{ name: git.repo, kind: "git", dir: `/workspace/${git.repo}` }],
+      entries: [{ kind: "file", name: path.basename(notebook.name), path: notebook.name, size: 64 }],
+    }),
+    [`/api/v1/tasks/${git.task_id}/changes`]: changes,
+  };
+  for (const [key, fixture] of Object.entries(value)) {
+    const def = {
+      "/api/v1/projects/P1/overview": "ProjectOverview",
+      [`/api/v1/tasks/${git.task_id}/changes`]: "ChangesView",
+    }[key];
+    if (!def || typeof fixture === "function") continue;
+    const errors = validateFixture(fixture, schema.$defs[def]);
+    if (errors.length) throw new Error(`drilldown fixture ${key}: ${errors.join(", ")}`);
+  }
+  return value;
+}
+
+export function drilldownFiles() {
+  const golden = projectOverviewGolden();
+  const links = golden.items.flatMap((item) => item.entries.flatMap((entry) => entry.links));
+  const log = links.find((link) => link.kind === "log");
+  const notebook = links.find((link) => link.kind === "notebook");
+  const line = (text) =>
+    JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] } });
+  return {
+    [`/api/v1/tasks/${log.task_id}/runs/${log.run_id}/stdout`]: {
+      body: `${[line("struct-deps で task-core の強連結成分を数えます"), line("循環の辺 3 本が成分の大半を作っていました")].join("\n")}\n`,
+      type: "text/plain; charset=utf-8",
+    },
+    [`/api/v1/tasks/${notebook.task_id}/artifacts/0`]: {
+      body: `${JSON.stringify({ cells: [], metadata: {}, nbformat: 4, nbformat_minor: 5 })}\n`,
+      type: "application/x-ipynb+json",
+    },
+  };
+}
+
+// golden の chat の link（TH1・M1）の thread。M1 は外部 LLM（mcp:chatgpt）の案で、版 1。
+export function drilldownChatFixture() {
+  const golden = projectOverviewGolden();
+  const chat = golden.items
+    .flatMap((item) => item.entries.flatMap((entry) => entry.links))
+    .find((link) => link.kind === "chat");
+  const at = "2026-11-24T00:00:00Z";
+  return {
+    thread: {
+      id: chat.thread_id,
+      title: "外部 LLM の案",
+      kind: "project",
+      status: "open",
+      revision: 1,
+      project_id: golden.project_id,
+      created_at: at,
+      updated_at: at,
+      active_run_id: null,
+      queue_paused: false,
+      queued_count: 0,
+      unread_count: 0,
+      attention_count: 0,
+      read_through_seq: 0,
+    },
+    messages: [
+      {
+        id: chat.message_id,
+        thread_id: chat.thread_id,
+        seq: 1,
+        role: "user",
+        author: "mcp:chatgpt",
+        text: "案: 循環の辺を少数だけ切る識別実験を先に行う。",
+        state: "completed",
+        revision: chat.revision,
+        attachment_ids: [],
+        cards: [],
+        created_at: at,
+        updated_at: at,
+        client_message_id: null,
+        run_id: null,
+        reply_to_id: null,
+        external: { source_kind: "mcp_client", source_label: "chatgpt", untrusted: true },
+        proposal: { kind: "external_llm", review_state: "pending" },
+      },
+    ],
+  };
 }
 
 // ADR 2026-11-23-project-observability-publish D3・D4: publish manifest の画面の fixture（createFakeDaemon({ publishManifest: true }) の
@@ -1826,8 +2029,12 @@ export function chatProposalFixture() {
   };
 }
 
-function createChatFixture({ proposals = false } = {}) {
-  const seed = proposals ? [...chatSeedFixture(), chatProposalFixture()] : chatSeedFixture();
+function createChatFixture({ proposals = false, drilldown = false } = {}) {
+  const seed = [
+    ...chatSeedFixture(),
+    ...(proposals ? [chatProposalFixture()] : []),
+    ...(drilldown ? [drilldownChatFixture()] : []),
+  ];
   const rows = new Map(
     seed.map(({ thread, messages }) => [
       thread.id,
@@ -3182,12 +3389,20 @@ export function createFakeDaemon({
   chatProposals = false,
   // publish manifest と署名の決定（createPublishFixture）を T1・P1 に足す。
   publishManifest = false,
+  // P1 の概要。"fixture" は手書きの projectOverviewFixture、"drilldown" は本物の backend の golden（drilldownFixtures）と
+  // その link の先の task・run・成果物・変更・chat の thread。
+  projectOverview = "fixture",
 } = {}) {
   if (host !== "127.0.0.1" && host !== "::1" && host !== "localhost") throw new Error("fake daemon requires loopback");
   if (!Number.isInteger(port) || port < 0 || port > 65535 || reservedPorts.has(port))
     throw new Error("fake daemon refuses reserved port");
   if (!delayValues.has(delayMs)) throw new Error("JSON delay must be 0, 5000 or 10000 ms");
   if (!new Set(["default", "rich"]).has(profile)) throw new Error(`unknown fixture profile: ${profile}`);
+  if (!new Set(["fixture", "drilldown"]).has(projectOverview))
+    throw new Error(`unknown project overview: ${projectOverview}`);
+  if (projectOverview === "drilldown" && (profile !== "rich" || publishManifest))
+    throw new Error("projectOverview drilldown needs the rich profile without publishManifest");
+  const drilldown = projectOverview === "drilldown";
   fixtures = {
     ...knowledgeFixtures,
     ...cronFixtures,
@@ -3288,9 +3503,10 @@ export function createFakeDaemon({
       ],
     },
     ...(profile === "rich" ? richFixtures() : {}),
+    ...(drilldown ? drilldownFixtures() : {}),
     ...fixtures,
   };
-  files = { ...(profile === "rich" ? richFiles() : {}), ...files };
+  files = { ...(profile === "rich" ? richFiles() : {}), ...(drilldown ? drilldownFiles() : {}), ...files };
   const requests = [];
   const clients = new Set();
   let delay = delayMs;
@@ -3312,7 +3528,7 @@ export function createFakeDaemon({
     notices: notices ?? noticesFixture(),
     answers: [],
   };
-  const chat = createChatFixture({ proposals: chatProposals });
+  const chat = createChatFixture({ proposals: chatProposals, drilldown });
   const publish = publishManifest ? createPublishFixture() : null;
   const streamPaths = new Set(["/events", "/api/v1/events", "/api/v1/stream"]);
   const matches = (rule, pathname) =>

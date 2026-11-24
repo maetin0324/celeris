@@ -1,4 +1,5 @@
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import schema from "../../api/generated/schema.json";
 import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
@@ -11,8 +12,12 @@ import {
   createFakeDaemon,
   defaultFixtures,
   type FakeDaemonOptions,
+  overviewLinkKinds,
+  PROJECT_OVERVIEW_GOLDEN,
   PUBLISH_DECISION_ID,
   PUBLISH_MANIFEST_ID,
+  projectOverviewFixture,
+  projectOverviewGolden,
   richFixtures,
   validateFixture,
 } from "./fake-daemon.mjs";
@@ -812,4 +817,90 @@ it("publish_manifest_ui_fixture_is_schema_valid_and_derives_signoff_like_the_dae
   await post("/__fixture/publish/new-version", {});
   expect((await manifest()).signoff.state).toBe("superseded");
   expect((await get(`/api/v1/tasks/T1/publish/${PUBLISH_MANIFEST_ID}`)).version).toBe(2);
+});
+
+// ADR 2026-11-23-project-observability-publish D1.4: 概要の手書きの fixture（projectOverviewFixture）は、本物の
+// GET /projects/{id}/overview が出さない (項目, link の kind) を持たない。golden は crates/task-api の試験
+// project_overview_drilldown_fixture_matches_generated が生成する。手書きの fixture に golden に無い link（例: latest_findings の
+// log、next_verification の文献、pending_human_decisions の task）を足すと、画面の試験が本物の daemon の返さない形を押して
+// 通ってしまう。画面の試験はこの組を確かめないので、ここで落とす。
+it("project_overview_fixture_links_are_kinds_the_golden_has_for_the_same_item", () => {
+  const golden = overviewLinkKinds(projectOverviewGolden());
+  const fixture = overviewLinkKinds(projectOverviewFixture());
+  const extra = [...fixture].flatMap(([item, kinds]) =>
+    [...kinds].filter((kind) => !golden.get(item)?.has(kind)).map((kind) => `${item}:${kind}`),
+  );
+  expect(extra).toEqual([]);
+  // 手書きの fixture が link を全く持たなくなれば上の検査は空で通る。drill-down の 7 種のうち手書きに残る kind を数える。
+  expect(new Set([...fixture.values()].flatMap((kinds) => [...kinds]))).toEqual(
+    new Set(["task", "artifact", "notebook", "log", "git", "literature", "chat"]),
+  );
+});
+
+// projectOverview: "drilldown" の偽 daemon は golden を書き換えずに P1 の概要として返し、golden の link の先（task・run の
+// log・成果物と Notebook・task 付きの Git の変更・chat の thread と版）をすべて返す。e2e の drill-down
+// （web/e2e/work/project-overview.spec.ts）はこの先の画面へ移るので、label がずれたら画面の試験より先にここで落ちる。
+it("project_overview_drilldown_daemon_serves_the_golden_and_every_link_target", async () => {
+  daemon = createFakeDaemon({ profile: "rich", projectOverview: "drilldown" });
+  const root = await daemon.start();
+  const fetchJson = async (path: string) => {
+    const res = await fetch(`${root}${path}`);
+    expect([path, res.status]).toEqual([path, 200]);
+    return res.json();
+  };
+  const golden = JSON.parse(readFileSync(PROJECT_OVERVIEW_GOLDEN, "utf8"));
+  expect(golden.project_id).toBe("P1");
+  expect(await fetchJson("/api/v1/projects/P1/overview")).toEqual(golden);
+
+  const links = [
+    ...golden.items.flatMap((item: { entries: { links: unknown[] }[] }) => item.entries.flatMap((e) => e.links)),
+    ...golden.warnings.flatMap((warning: { links: unknown[] }) => warning.links),
+  ] as Array<Record<string, string | number | null>>;
+  const seen = new Set<string>();
+  for (const link of links) {
+    seen.add(String(link.kind));
+    switch (link.kind) {
+      case "task":
+        expect((await fetchJson(`/api/v1/tasks/${link.task_id}`)).task.id).toBe(link.task_id);
+        break;
+      case "log": {
+        const detail = await fetchJson(`/api/v1/tasks/${link.task_id}`);
+        expect(detail.runs.map((run: { run_id: string }) => run.run_id)).toContain(link.run_id);
+        const res = await fetch(`${root}/api/v1/tasks/${link.task_id}/runs/${link.run_id}/stdout`);
+        expect(res.status).toBe(200);
+        break;
+      }
+      case "artifact":
+      case "notebook": {
+        const list = await fetchJson(`/api/v1/tasks/${link.task_id}/artifacts`);
+        const names = list.items.map((row: { artifact: { name: string } }) => row.artifact.name);
+        expect(names).toContain(link.name);
+        break;
+      }
+      case "git": {
+        expect(link.task_id).toBeTruthy();
+        const changes = await fetchJson(`/api/v1/tasks/${link.task_id}/changes`);
+        expect(validateFixture(changes, schema.$defs.ChangesView)).toEqual([]);
+        expect(changes.repos).toContainEqual(expect.objectContaining({ repo: link.repo, head: link.sha }));
+        break;
+      }
+      case "chat": {
+        const page = await fetchJson(`/api/v1/chat/threads/${link.thread_id}/messages?limit=20`);
+        expect(validateFixture(page, schema.$defs.ChatMessageListResponse)).toEqual([]);
+        expect(page.items).toContainEqual(
+          expect.objectContaining({ id: link.message_id, revision: link.revision, author: "mcp:chatgpt" }),
+        );
+        break;
+      }
+      case "literature":
+        expect(String(link.url)).toMatch(/^https:\/\//);
+        break;
+      default:
+        throw new Error(`unexpected link kind in the golden: ${link.kind}`);
+    }
+  }
+  expect(seen).toEqual(new Set(["task", "artifact", "notebook", "log", "git", "literature", "chat"]));
+  expect(() => createFakeDaemon({ profile: "rich", projectOverview: "drilldown", publishManifest: true })).toThrow(
+    /publishManifest/,
+  );
 });

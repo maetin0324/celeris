@@ -14,6 +14,7 @@ updated: 2026-11-24
 ## commit（件名）
 
 - adr: planner・side review・CoS の run の供給側の失敗を試行に数えず account を cooldown にする（CoS の失敗の原因を含む）
+- progress: ADR と CoS の失敗の原因の WorkUnit の検査の結果
 
 ## CoS の仕分けの run の失敗の原因（chat_runs 01M87BQVH0SWEA0875FRGZG14T）
 
@@ -71,8 +72,11 @@ updated: 2026-11-24
 
 この WorkUnit は文書（ADR と進捗ファイル）だけを足した。Rust のコードは変えていない。
 
-- `git diff --name-only $CELERIS_WU_BASE HEAD` → この 2 file だけ。
-- `cargo fmt --all -- --check` → 結果は下の「検査」に書く。
+- `git diff --name-only $CELERIS_WU_BASE HEAD` → ADR と この進捗ファイルの 2 file だけ（`sh "$CELERIS_WU_SCOPE_PATHS"` も同じ 2 file）。
+- `bash scripts/dev/test-affected.sh` → exit 0（「試験対象の変更なし（docs のみ等）」。repo-health は verdict=pass、new=0・worsened=0、source-size は doc_only で対象外）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+- `cargo fmt --all -- --check` → exit 0（差分なし）。
+- `sh scripts/dev/progress-index.sh --check` → exit 0（ok）。
 
 ## 未解決
 

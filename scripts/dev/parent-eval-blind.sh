@@ -7,7 +7,9 @@
 # 時点・方式ごとに一時 home（$TMPDIR か --state-root の下）に worktree の build の daemon（一時 DB・loopback）を起こし、slice から
 # 使い捨ての案件・承認済み Roadmap・strategy root・子を seed する。方式 a は controller を mode shadow にし（evaluate は suppressed、
 # reviewer run 0）、方式 b は mode enabled で evaluate が start_side_review で reviewer run を起こし、最終の記録が載るまで待つ
-# （scripts/dev/parent-eval-blind/driver.py）。方式 c（版 v1 を書く run と Critic）は driver に未実装で、指定すると exit 2。
+# （scripts/dev/parent-eval-blind/driver.py）。方式 c は、最初の時点より前の slice（replay は A-mid）で版 v1 を書く段を事例ごとに
+# 1 回流し（worker run と、Critic を兼ねる final review。出力は <out>/<case>/strategy-v1/）、各時点で b と同じ評価を、版 v1 を
+# 参照する strategy root と作業 tree で流す。
 # 出力は <out>/<case>/<point>/<arm>/ の output.json・reads.json・run.json・input/。
 # - `--harness stub` は LLM を呼ばない（parent-eval-blind/stub_reviewer.py。経路の確認だけで、評価の証拠に数えない）。
 # - `--harness config` は実 LLM（人の書いた --llm-config を config に足す）。Celeris の worker の run の中（CELERIS_RUN_ID が
@@ -51,8 +53,7 @@ for p in $(printf %s "$points" | tr , " "); do
 done
 for m in $(printf %s "$arms" | tr , " "); do
     case "$m" in
-        a|b) ;;
-        c) echo "parent-eval-blind: arm c (strategy v1 run and Critic) is not implemented in the driver yet" >&2; exit 2 ;;
+        a|b|c) ;;
         *) echo "parent-eval-blind: unknown arm $m (a, b, c)" >&2; exit 2 ;;
     esac
 done
@@ -97,14 +98,27 @@ fi
 set -- --harness "$harness"
 [ "$harness" = stub ] && set -- "$@" --stub "$root/scripts/dev/parent-eval-blind/stub_reviewer.py"
 [ "$harness" = config ] && set -- "$@" --llm-config "$llm_config" --max-usd "$max_usd"
+drive() {
+    python3 -I "$root/scripts/dev/parent-eval-blind/driver.py" --case "$case" \
+        --celeris "$bin/celeris" --script-deploy "$bin/script-deploy" --bundle "$work/bundle" --seed-bin "$seed_bin" \
+        --shadow "$root/crates/task-api/tests/fixtures/parent_checkpoint_shadow" --max-wall-secs "$max_wall" "$@"
+}
+case ",$arms," in
+    *,c,*)
+        echo "parent-eval-blind: case $case strategy v1 (arm c)" >&2
+        rm -rf "${out:?}/$case/strategy-v1"
+        drive --stage strategy-v1 --point A-mid --arm c --skill "$root/config/skills/cos-operator/strategy-review.md" \
+            --state "$work/$case-strategy-v1" --out "$out" "$@" >"$work/$case-strategy-v1.log" 2>&1 ||
+            { tail -40 "$work/$case-strategy-v1.log" >&2; fail "case $case strategy v1 failed"; }
+        ;;
+esac
 for p in $(printf %s "$points" | tr , " "); do
     for m in $(printf %s "$arms" | tr , " "); do
         echo "parent-eval-blind: case $case point $p arm $m" >&2
         rm -rf "${out:?}/$case/$p/$m"
-        python3 -I "$root/scripts/dev/parent-eval-blind/driver.py" --case "$case" --point "$p" --arm "$m" \
-            --state "$work/$case-$p-$m" --out "$out" \
-            --celeris "$bin/celeris" --script-deploy "$bin/script-deploy" --bundle "$work/bundle" --seed-bin "$seed_bin" \
-            --shadow "$root/crates/task-api/tests/fixtures/parent_checkpoint_shadow" --max-wall-secs "$max_wall" "$@" \
+        extra=()
+        [ "$m" = c ] && extra=(--strategy-dir "$out/$case/strategy-v1")
+        drive --point "$p" --arm "$m" "${extra[@]}" --state "$work/$case-$p-$m" --out "$out" "$@" \
             >"$work/$case-$p-$m.log" 2>&1 || { tail -40 "$work/$case-$p-$m.log" >&2; fail "case $case point $p arm $m failed"; }
     done
 done

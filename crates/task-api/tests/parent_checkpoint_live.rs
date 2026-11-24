@@ -301,8 +301,9 @@ struct Seeded {
 ///   `ReviewerPassed`）は無いので Outcome の event を書かない（status は承認の時点の open、evidence は空、D6 の到達は偽）。
 /// - 子の行の status は cutoff の時点の値。時点で ready の子は案件の外の draft の task に依存させ、daemon が起こさない。子は slice の
 ///   title と、[`child_criteria`] の受け入れ条件と、[`child_events`] の events を持つ。root と子の作業場所は `repo`（mode shared）。
-/// - strategy root の正本（ADR 2026-11-22-parent-checkpoint-evaluator D1.1）は gate と同じ `task.create` の操作の記録。
-fn seed(store: &SqliteStore, point: &str, repo: &Path) -> Seeded {
+/// - strategy root の正本（ADR 2026-11-22-parent-checkpoint-evaluator D1.1）は gate と同じ `task.create` の操作の記録。参照する
+///   版は `strategy`（成果物の name と sha256。対照 pilot の方式 c が版 v1 を渡す）、無ければ子 6 と同じ名目の参照。
+fn seed(store: &SqliteStore, point: &str, repo: &Path, strategy: Option<&Value>) -> Seeded {
     use task_core::chat::{AuditContext, ChatActor};
     use task_core::{Project, Task, TaskKind, WorkspaceMode, WorkspaceSpec};
 
@@ -396,8 +397,11 @@ fn seed(store: &SqliteStore, point: &str, repo: &Path) -> Seeded {
     let op = ulid::Ulid::new().to_string();
     let strategy = serde_json::json!({
         "task_id": root.id.to_string(),
-        "name": "strategy/arch-v4-cycle/v1.json",
-        "sha256": format!("sha256:{}", "a".repeat(64)),
+        "name": strategy.and_then(|s| s["name"].as_str()).unwrap_or("strategy/arch-v4-cycle/v1.json"),
+        "sha256": strategy
+            .and_then(|s| s["sha256"].as_str())
+            .map(String::from)
+            .unwrap_or_else(|| format!("sha256:{}", "a".repeat(64))),
     });
     store
         .cos_operation_apply_at(
@@ -439,7 +443,7 @@ fn seeded_inputs(
 ) {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = SqliteStore::open(&dir.path().join("celeris.db")).expect("store");
-    let seeded = seed(&store, case, dir.path());
+    let seeded = seed(&store, case, dir.path(), None);
     let pid = seeded.project_id.to_string();
     let now = OffsetDateTime::now_utc();
     let state = store
@@ -1025,6 +1029,7 @@ fn parent_checkpoint_live_sample_checks() {
 /// （`point`）の slice から案件・承認済み Roadmap・strategy root・子を [`seed`] で置く（`#[ignore]`: driver だけが走らせる）。
 ///
 /// - root と子の作業場所は spec の `repo`（slice だけの seed の git repo、mode shared）。
+/// - spec の `strategy`（任意。`{name, sha256}`）があれば、root の起票の操作の記録の参照をその版にする（方式 c）。
 /// - spec の `out` に `{project_id, root_id, children: {letter: id}}` を書く。本番の DB には触れない（spec の db が無い path なら作る）。
 #[test]
 #[ignore = "scripts/dev/parent-eval-blind/driver.py が一時 DB を seed するときだけ走らせる"]
@@ -1039,7 +1044,8 @@ fn parent_checkpoint_blind_seed() {
         "point {point} は盲検の時点（E-mid・C-mid・D-done・F-done）のどれでもない"
     );
     let store = SqliteStore::open(Path::new(&field("db"))).expect("store");
-    let seeded = seed(&store, &point, &repo);
+    let strategy = spec.get("strategy").filter(|s| !s.is_null());
+    let seeded = seed(&store, &point, &repo, strategy);
     let out = serde_json::json!({
         "project_id": seeded.project_id.to_string(),
         "root_id": seeded.root_id.to_string(),

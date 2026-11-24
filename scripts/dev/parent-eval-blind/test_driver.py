@@ -10,6 +10,9 @@ daemon も cargo も LLM も使わない。引数と承認の検査は cargo の
 - `--harness config` は Celeris の worker の run の中（CELERIS_RUN_ID がある）では引数の検査より前に exit 2。
 - 承認の scope.arms・scope.cases に無い方式・時点は exit 2（pilot_gate.py check-approval に方式の名をそのまま渡す）。
 - output.json は verdict・next（Rust の検査の後の effective）・claims（根拠の参照つき）・usage を持つ。方式 a は LLM 0（usage 無し）。
+- 方式 c の評価は版 v1 の段の出力（--strategy-dir）を要り、版を書く段は事例の最初の時点より前の slice（replay は A-mid）だけで走る。
+- stub は版を書く worker として `celeris.strategy/1` の文書を書いてその名（strategy/<id>/v1.json）を申告し、Critic として文書の
+  candidates[].id ごとに判定を書く（申告しない成果物は basename の名で記録され、Critic が起きない）。
 既存の試験で検出できない理由: driver と sh には試験が無く、子 6 の形（時点 E-mid・D-done、方式の名 parent-eval-blind 固定、
 出力 <out>/<point>/evaluation.json）のままでは、方式 a・b・c の引数・承認の arms・出力の形を誰も確かめなかった。
 """
@@ -26,6 +29,9 @@ SH = HERE.parent / "parent-eval-blind.sh"
 FIXTURE = HERE.parents[2] / "crates/task-api/tests/fixtures/parent_checkpoint_live/blind/replay"
 sys.path.insert(0, str(HERE))
 import driver  # noqa: E402
+
+STUB = HERE / "stub_reviewer.py"
+DRIVER = HERE / "driver.py"
 
 BASE_ARGS = ["--case", "replay", "--points", "C-mid,D-done,F-done"]
 
@@ -63,10 +69,24 @@ class Args(unittest.TestCase):
         self.assertEqual(r.returncode, 2, r.stderr)
         self.assertIn("unknown arm x", r.stderr)
 
-    def test_arm_c_is_refused_until_the_strategy_stage_exists(self):
-        r = run_sh(["--harness", "stub", "--arms", "c", *BASE_ARGS, "--out", str(self.dir / "o")])
-        self.assertEqual(r.returncode, 2, r.stderr)
-        self.assertIn("arm c", r.stderr)
+    def _driver(self, *extra):
+        args = ["--case", "replay", "--state", str(self.dir / "s"), "--out", str(self.dir / "o"), "--celeris", "x",
+                "--script-deploy", "x", "--bundle", "x", "--seed-bin", "x", "--shadow", "x", "--harness", "stub", *extra]
+        return subprocess.run([sys.executable, "-I", str(DRIVER), *args], capture_output=True, text=True, timeout=60)
+
+    def test_arm_c_needs_the_strategy_stage_output(self):
+        r = self._driver("--point", "C-mid", "--arm", "c")
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn("--arm c needs --strategy-dir", r.stderr)
+
+    def test_strategy_stage_runs_only_on_the_slice_before_the_first_point(self):
+        r = self._driver("--stage", "strategy-v1", "--point", "C-mid", "--arm", "c", "--skill", str(SH))
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn("--point A-mid", r.stderr)
+        self.assertEqual(driver.STRATEGY_POINT["replay"], "A-mid")
+        r = self._driver("--point", "C-mid", "--arm", "x")
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn("not an arm", r.stderr)
 
     def test_point_outside_the_case_is_refused(self):
         r = run_sh(["--harness", "stub", "--arms", "a", "--case", "replay", "--points", "E-mid", "--out",
@@ -152,6 +172,47 @@ class Output(unittest.TestCase):
         self.assertEqual(driver.ARMS, ("a", "b", "c"))
         sh = SH.read_text()
         self.assertIn('replay) known_points="C-mid D-done F-done"', sh)
+
+
+class Stub(unittest.TestCase):
+    """stub の 3 つの役（版を書く worker・Critic を兼ねる final review・評価）の出力の形。"""
+
+    def run_stub(self, work, objective, review=None):
+        art = work / "artifacts"
+        req = {"workspace": str(work), "artifacts_dir": str(art), "context": {"review": review},
+               "task": {"objective": objective, "project_id": "P1"}}
+        r = subprocess.run([sys.executable, "-I", str(STUB)], input=json.dumps(req), capture_output=True, text=True,
+                           timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return [json.loads(line) for line in r.stdout.splitlines()], art
+
+    def test_worker_writes_and_declares_the_strategy_document_and_critic_judges_its_candidates(self):
+        with tempfile.TemporaryDirectory() as d:
+            work = pathlib.Path(d)
+            (work / "goal.md").write_text("g")
+            lines, art = self.run_stub(work, "成果物 `strategy/pilot-replay/v1.json` にする")
+            self.assertIn({"type": "artifact", "name": "strategy/pilot-replay/v1.json",
+                           "path": "artifacts/strategy/pilot-replay/v1.json"}, lines)
+            self.assertEqual(lines[-1]["type"], "done")
+            doc = json.loads((art / "strategy/pilot-replay/v1.json").read_text())
+            self.assertEqual((doc["schema"], doc["strategy_id"], doc["version"]), ("celeris.strategy/1", "pilot-replay", 1))
+            self.assertGreaterEqual(len(doc["candidates"]), 2)
+            review = {"criteria": [0], "strategy_critic": {"criterion_idx": 1, "subjects": [
+                {"name": "strategy/pilot-replay/v1.json", "path": "artifacts/strategy/pilot-replay/v1.json",
+                 "sha256": "sha256:x", "strategy_id": "pilot-replay", "version": 1}], "rubric": []}}
+            self.run_stub(work, "", review)
+            out = json.loads((art / "review.json").read_text())
+            self.assertEqual(out["verdicts"], [{"criterion": 0, "pass": True, "reason": "stub"}])
+            subject = out["critic"]["subjects"][0]
+            self.assertEqual([c["id"] for c in subject["candidates"]], [c["id"] for c in doc["candidates"]])
+            self.assertTrue(subject["comparison"]["ok"] and subject["revisit"]["ok"])
+
+    def test_evaluation_role_writes_parent_evaluation(self):
+        with tempfile.TemporaryDirectory() as d:
+            work = pathlib.Path(d)
+            self.run_stub(work, "", {"criteria": [], "parent_checkpoint": {"x": 1}})
+            out = json.loads((work / "artifacts/review.json").read_text())
+            self.assertEqual(out["parent_evaluation"]["schema"], "celeris.parent-evaluation/1")
 
 
 if __name__ == "__main__":

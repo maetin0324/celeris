@@ -9,8 +9,12 @@ mode だけで作る:
   子の局所の review は slice の史実の記録（reviewer_passed）を使い、流し直さない（ADR D1.1）。
 - 方式 b（途中の親 Evaluator）: mode enabled。evaluate が start_side_review（SideReviewKind::ParentEvaluation）で reviewer run を
   起こし、root に最終の記録 `parent-evaluation/<判断 id>.json` の ArtifactProduced が載るまで待つ。
-- 方式 c（Evidence + 複数戦略）: b の評価に、版 v1 を書く run と Critic を足す（ADR D1.3）。版を書く段は未実装で、この driver は
-  方式 c を断る（arm-driver の進捗の「欠け」）。
+- 方式 c（Evidence + 複数戦略）: b の評価に、版 v1 を書く run と Critic を足す（ADR D1.3）。版 v1 は事例・反復ごとに 1 回、
+  最初の時点より前の slice（replay は A-mid）だけを置いた別の一時 home で、既存の task の経路（POST /api/v1/tasks → worker run →
+  final review）で書かせる（`--stage strategy`）。final review は版の成果物 `strategy/<id>/v1.json` から Critic を兼ねる
+  （task_core::strategy_critic::critic_subjects）。各時点の方式 c は b と同じ入口で、seed の StrategyRef が v1 を指し、作業 tree に
+  版と Critic の判定を置く。最初の pivot の後の v2 と起票の gate の試行（ADR D1.3 の後半）と、一時 DB の承認
+  strategy-approve-v1 はこの driver に無い（arm-driver の進捗の「欠け」）。
 reviewer の作業 tree は slice の file だけを置いた seed の git repo。出力は <out>/<case>/<point>/<arm>/ の output.json（verdict・
 next・claims〈根拠の参照つき〉・usage）・reads.json（読んだ path）・run.json（run id・harness・model・usage・USD・案件の id）と、
 方式に渡した入力の写し input/（request.json・prompt.md・files.json と tree/ の本文）。本番の DB・daemon・config に触れない。
@@ -37,9 +41,12 @@ from datetime import datetime
 
 SLICE_FILES = ("goal.md", "reports.json", "slice.json")
 ARMS = ("a", "b", "c")
-# 方式 c の版を書く run と Critic の段（ADR D1.3）はまだ driver に無い。手で書いた版で代えない（ADR D1.5）。
-ARMS_RUNNABLE = ("a", "b")
 CASES = {"replay": ("C-mid", "D-done", "F-done")}
+# 方式 c の版 v1 を書く段の slice（事例の最初の時点より前の時点。ADR D1.3）。
+STRATEGY_POINT = {"replay": "A-mid"}
+STRATEGY_STAGE = "strategy-v1"
+STRATEGY_FILE = "strategy-v1.json"
+CRITIC_FILE = "strategy-v1.critic.json"
 # 1 run の上限（ADR D3.1。3 方式で同じ値）と 1 時点の費用の上限。
 MAX_USD_PER_POINT = 3.0
 OUTPUT_SCHEMA = "celeris.pilot-arm-output/1"
@@ -168,6 +175,16 @@ def output_fixed_plan(decision, rows, children, case, point):
             "controller_decision": decision}
 
 
+def strategy_summary(stage):
+    """方式 c の output.json の `strategy`: 版 v1 の段の参照（name・sha256・段の task の status）と Critic の判定の理由。"""
+    meta = json.loads((stage / "run.json").read_text())
+    critic = json.loads((stage / CRITIC_FILE).read_text())
+    return {"name": meta["strategy"]["name"], "sha256": meta["strategy"]["sha256"], "stage_status": meta["task_status"],
+            "stage_llm_runs": meta["llm_runs"], "stage_usd": meta["usd"],
+            "critic": [{"pass": e.get("pass"), "reason": e.get("reason")} for e in critic["review_events"]
+                       if e.get("type") == "review_verdict"]}
+
+
 def tree_listing(root):
     """作業 tree の file（.git を除く）の一覧: path・bytes・sha256。"""
     files = []
@@ -230,10 +247,20 @@ class Point:
         return [json.loads(line) for line in files["events.jsonl"].decode().splitlines() if line.strip()]
 
     def seed(self):
-        git_seed(self.slice_files(), self.repo)
+        files = self.slice_files()
+        strategy = None
+        if self.a.arm == "c":
+            stage = pathlib.Path(self.a.strategy_dir)
+            doc = (stage / STRATEGY_FILE).read_bytes()
+            files[STRATEGY_FILE] = doc
+            files[CRITIC_FILE] = (stage / CRITIC_FILE).read_bytes()
+            meta = json.loads((stage / "run.json").read_text())
+            strategy = {"name": meta["strategy"]["name"], "sha256": "sha256:" + hashlib.sha256(doc).hexdigest()}
+        git_seed(files, self.repo)
         spec = self.home / "seed-spec.json"
         out = self.home / "seed.json"
-        spec.write_text(json.dumps({"db": str(self.db), "repo": str(self.repo), "point": self.a.point, "out": str(out)}))
+        spec.write_text(json.dumps({"db": str(self.db), "repo": str(self.repo), "point": self.a.point, "out": str(out),
+                                    "strategy": strategy}))
         r = subprocess.run([self.a.seed_bin, "--ignored", "--exact", "parent_checkpoint_blind_seed", "--nocapture"],
                            env={**self.clean_env(), "PARENT_EVAL_BLIND_SEED": str(spec)}, capture_output=True, text=True)
         if r.returncode != 0:
@@ -278,7 +305,7 @@ state_dir = "state"
 
 [project_controller]
 enabled = true
-allowed_project_ids = {json.dumps([self.seeded["project_id"]])}
+allowed_project_ids = {json.dumps([self.seeded["project_id"]] if self.seeded else [])}
 coalesce_secs = 1
 
 [project_controller.budget]
@@ -506,7 +533,10 @@ max_evaluation_attempts = 1
             reads += reads_from_log(p.read_text(errors="replace"))
         out = self.out_dir()
         prompt_source = self.copy_request(self.inp, run_id)
-        dump(out / "output.json", output_from_record(record, usage, self.a.case, self.a.point, self.a.arm))
+        output = output_from_record(record, usage, self.a.case, self.a.point, self.a.arm)
+        if self.a.arm == "c":
+            output["strategy"] = strategy_summary(pathlib.Path(self.a.strategy_dir))
+        dump(out / "output.json", output)
         dump(out / "reads.json", {"work_tree": str(self.repo), "home": str(self.home), "logs": [str(p) for p in logs],
                                   "reads": reads})
         dump(out / "run.json", self.run_json(run_id, row, usage, prompt_source))
@@ -518,32 +548,129 @@ def dump(path, value):
     pathlib.Path(path).write_text(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
 
 
+class StrategyStage(Point):
+    """方式 c の版 v1 を書く段（ADR D1.3）。slice（STRATEGY_POINT）だけを置いた作業 tree で、既存の task の経路に版を書かせる。
+    出力は <out>/<case>/strategy-v1/ の strategy-v1.json（版）・strategy-v1.critic.json（final review の判定）・run.json・
+    reads.json・input/。operator や実装者は版を手で書かない（未来を知る者が書くと漏れになる）。"""
+
+    def out_dir(self):
+        out = pathlib.Path(self.a.out) / self.a.case / STRATEGY_STAGE
+        out.mkdir(parents=True, exist_ok=True)
+        return out
+
+    def objective(self, name):
+        skill = pathlib.Path(self.a.skill).read_text()
+        return (f"戦略の版 v1 を書く。作業 tree の goal.md（親の目的）と events.jsonl・slice.json（{self.a.point} の時点までの記録）"
+                f"だけを読み、下の Strategy Review の手順で `celeris.strategy/1` の文書（根本原因の仮説・候補 2〜3・識別実験・"
+                f"反証条件・保留する前提・期待情報価値・予算・停止条件）を書き、成果物 `{name}` にする（artifacts の下）。"
+                "作業 tree の外の file を読まない。\n\n" + skill)
+
+    def run(self):
+        git_seed(self.slice_files(), self.repo)
+        self.seeded = None
+        self.inp = self.copy_tree(self.out_dir())
+        self.write_config()
+        self.start()
+        name = f"strategy/pilot-{self.a.case}/v1.json"
+        objective = self.objective(name)
+        dump(self.inp / "request.json", {"objective": objective, "artifact": name})
+        created = self.api("POST", "/api/v1/tasks", {
+            "title": f"対照 pilot 方式 c: 戦略の版 v1（{self.a.case}）", "objective": objective,
+            "acceptance": [{"type": "reviewer", "text": "版 v1 が celeris.strategy/1 の形で、候補・識別実験・反証条件が goal.md と slice の記録だけに基づく"}],
+            "workspace": str(self.repo), "workspace_mode": "shared", "max_turns": 30, "max_wall_secs": 600,
+            "max_retries": 0, "status": "ready"})
+        tid = (created.get("task") or created)["id"]
+        status = self.wait_terminal(tid)
+        conn = sqlite3.connect(f"file:{self.db}?mode=ro", uri=True)
+        events = [json.loads(j) for (j,) in conn.execute("SELECT json FROM events WHERE task_id = ? ORDER BY seq", (tid,))]
+        runs = conn.execute("SELECT run_id, role, adapter, model, status, usage_json FROM runs WHERE task_id = ? "
+                            "ORDER BY started_at", (tid,)).fetchall()
+        conn.close()
+        self.stop()
+        produced = [e for e in events if e.get("type") == "artifact_produced" and e["artifact"]["name"] == name]
+        if not produced:
+            seen = [(e.get("type"), (e.get("artifact") or {}).get("name"), e.get("reason") or e.get("verdicts"))
+                    for e in events if e.get("type") not in ("progress", "usage_progress")]
+            die(f"the strategy task {tid} ended {status} without the artifact {name}: {seen}")
+        doc = self.artifact_bytes(produced[-1])
+        out = self.out_dir()
+        (out / STRATEGY_FILE).write_bytes(doc)
+        reviews = [e for e in events if e.get("type") in ("review_verdict", "reviewer_passed", "reviewer_failed")]
+        reads = []
+        for run_id, *_ in runs:
+            for p in sorted(self.home.rglob(run_id)):
+                if p.is_dir() and (p / "stdout.jsonl").is_file():
+                    reads += reads_from_log((p / "stdout.jsonl").read_text(errors="replace"))
+        # final review の reviewer の出力（mode shared の作業 tree の artifacts/review.json。Critic の判定を含む）。
+        review_file = self.repo / "artifacts" / "review.json"
+        review_json = json.loads(review_file.read_text()) if review_file.is_file() else None
+        dump(out / CRITIC_FILE, {"task_status": status, "review_events": reviews, "review_json": review_json})
+        usage = [json.loads(r[5]) if r[5] else None for r in runs]
+        dump(out / "reads.json", {"work_tree": str(self.repo), "home": str(self.home), "reads": reads})
+        dump(out / "run.json", {
+            "case": self.a.case, "stage": STRATEGY_STAGE, "slice_point": self.a.point, "harness": self.a.harness,
+            "task_id": tid, "task_status": status,
+            "strategy": {"name": name, "sha256": "sha256:" + hashlib.sha256(doc).hexdigest()},
+            "runs": [{"run_id": r[0], "role": r[1], "adapter": r[2], "model": r[3], "status": r[4], "usage": u}
+                     for r, u in zip(runs, usage)],
+            "llm_runs": len(runs), "usd": sum((u or {}).get("cost_usd") or 0 for u in usage),
+            "approval": "not_run（一時 DB の strategy-approve-v1 は driver に無い）"})
+
+    def wait_terminal(self, tid):
+        deadline = time.time() + 2 * self.a.max_wall_secs
+        while time.time() < deadline:
+            if self.proc.poll() is not None:
+                die("the daemon exited during the strategy stage")
+            conn = sqlite3.connect(f"file:{self.db}?mode=ro", uri=True)
+            row = conn.execute("SELECT status FROM tasks WHERE id = ?", (tid,)).fetchone()
+            conn.close()
+            if row and row[0] in ("done", "failed", "cancelled"):
+                return row[0]
+            time.sleep(1)
+        print((self.home / "daemon.log").read_text()[-4000:], file=sys.stderr)
+        die(f"the strategy task {tid} did not finish in {2 * self.a.max_wall_secs} s")
+
+    def artifact_bytes(self, event):
+        name, want = event["artifact"]["name"], event["artifact"]["sha256"]
+        for p in sorted(self.home.rglob(pathlib.PurePosixPath(name).name)):
+            data = p.read_bytes()
+            if p.as_posix().endswith(name) and hashlib.sha256(data).hexdigest() in (want, want.removeprefix("sha256:")):
+                return data
+        die(f"artifact {name} (sha256 {want}) is not under {self.home}")
+
+
 def main():
     p = argparse.ArgumentParser()
     for k in ("case", "point", "arm", "state", "out", "celeris", "script-deploy", "bundle", "seed-bin", "shadow",
               "harness"):
         p.add_argument(f"--{k}", required=True)
     p.add_argument("--stub")
+    p.add_argument("--stage", choices=(STRATEGY_STAGE,))
+    p.add_argument("--strategy-dir")
+    p.add_argument("--skill")
     p.add_argument("--llm-config")
     p.add_argument("--max-wall-secs", type=int, default=600)
     p.add_argument("--max-usd", type=float, default=1.0)
     a = p.parse_args()
     if a.harness not in ("stub", "config"):
         die("--harness must be stub or config")
-    if a.point not in CASES.get(a.case, ()):
+    if a.stage:
+        if a.point != STRATEGY_POINT.get(a.case) or a.arm != "c" or not a.skill:
+            die(f"--stage {a.stage} needs --arm c --point {STRATEGY_POINT.get(a.case)} --skill <file>")
+    elif a.point not in CASES.get(a.case, ()):
         die(f"--case {a.case} --point {a.point} is not a pilot point")
-    if a.arm not in ARMS_RUNNABLE:
-        die(f"--arm {a.arm} is not runnable (arms {','.join(ARMS_RUNNABLE)})")
-    pt = Point(a)
+    if a.arm not in ARMS:
+        die(f"--arm {a.arm} is not an arm ({','.join(ARMS)})")
+    if a.arm == "c" and not a.stage and not a.strategy_dir:
+        die("--arm c needs --strategy-dir (the output of --stage strategy-v1)")
+    pt = StrategyStage(a) if a.stage else Point(a)
     try:
         pt.run()
     finally:
         pt.stop()
         log = pt.home / "daemon.log"
         if log.exists():
-            dest = pathlib.Path(a.out) / a.case / a.point / a.arm
-            dest.mkdir(parents=True, exist_ok=True)
-            shutil.copy(log, dest / "daemon.log")
+            shutil.copy(log, pt.out_dir() / "daemon.log")
         shutil.rmtree(pt.secret_dir, ignore_errors=True)
 
 

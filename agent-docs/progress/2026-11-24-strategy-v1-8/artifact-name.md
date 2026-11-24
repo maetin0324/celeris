@@ -69,13 +69,14 @@ Summary 5 tests run: 1 passed, 4 failed
 - 直し: その file を `$CELERIS_WU_BASE` の版に戻し（差分 0）、同じ試験を `crates/task-dispatch/src/undeclared_artifacts/tests.rs` の `final_review_tests` に移した。WorkUnit の採用（`task_ops::execution::adopt_plan`）・events の形・`review::artifact_candidates`・`review::review_task` の呼び方は前と同じ。試験の名と確かめる内容は変えていない。
 - 移した後も変更前に落ちることを確かめた（下の出力。`undeclared_artifacts.rs` だけを base の版に戻して実行し、元に戻した）。
 
-## 証拠（基準は `$CELERIS_WU_BASE`。Run #2 で、実装の commit の後の HEAD で再実行した。その後の commit はこの節の書き換えだけ）
+## 証拠（基準は `$CELERIS_WU_BASE`。Run #3 で、試験を移した commit の後の HEAD で再実行した。その後の commit はこの節の書き換えだけ）
 - `bash scripts/dev/test-affected.sh` → exit 0。対象 crate: celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。nextest 4011 tests run: 4011 passed、11 skipped。repo-health verdict=pass（fail_grade=0）。script bundle SKIP 0 件。
 - `cargo clippy --workspace -- -D warnings` → exit 0。
-- `cargo fmt --all -- --check` → exit 0（Run #1 の 1 回目は新しい試験の 1 行の折り返しで exit 1。`cargo fmt --all` で直した）。
+- `cargo fmt --all -- --check` → exit 0。
 - `cargo nextest run -p task-dispatch --lib -E 'test(/undeclared_nested_name_/)'` → exit 0、5 passed。
-- 変更前の再現: `undeclared_artifacts.rs` だけを `$CELERIS_WU_BASE` の版に戻して同じ試験 → exit 100、5 件のうち 4 件が落ちた（上の出力と同じ）。戻した file は `git checkout` で元に戻した。
-- `sh scripts/dev/progress-index.sh --check` → ok。`sh "$CELERIS_WU_SCOPE_PATHS"` → この WU の 5 file だけ。
+- 変更前の再現: `undeclared_artifacts.rs` だけを `$CELERIS_WU_BASE` の版に戻して同じ試験 → exit 100、5 件のうち 4 件が落ちた（上の出力と同じ）。その後、file を変更後の版に戻した。
+- `sh scripts/dev/progress-index.sh --check` → exit 0。
+- 範囲の check（計画の check と同じコマンド）→ exit 0。`sh "$CELERIS_WU_SCOPE_PATHS"` → 4 file（ADR-0067・この進捗・`undeclared_artifacts.rs`・`undeclared_artifacts/tests.rs`）。
 - `git diff "$CELERIS_WU_BASE" -- crates/task-worker/src/change_rules control-ts web | wc -l` → 0。
 
 ## LoC（`git diff --numstat "$CELERIS_WU_BASE"`）
@@ -86,6 +87,9 @@ Summary 5 tests run: 1 passed, 4 failed
 
 ## commit
 - `strategy-v1 8 artifact-name: artifacts の中の未申告の成果物の名を artifacts からの相対 path にする`
+- `strategy-v1 8 artifact-name: 提出時の HEAD で再実行した検査の結果を WU の進捗に書く`
+- `strategy-v1 8 artifact-name: 最終 review の入れ子の名の試験を undeclared_artifacts の試験に移す`
+- `strategy-v1 8 artifact-name: 試験を移した後の検査の結果を WU の進捗に書く`
 
 ## 未確認
 - 実 LLM（claude-code）の方式 c の版の段がこの変更で通るか。operator が段 recheck の後の人の確認の後に流す（この WU では LLM の run を起こさない）。

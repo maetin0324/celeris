@@ -74,12 +74,12 @@ tasks: [01M7XQ9R1EHA8GQ0TZVRM4FBVX]
 | O2 | `approved_strategy` | 承認戦略 | 決定 `strategy-approve-v<n>`（子 2 D2.2）と成果物 `strategy/<id>/v<n>.json` | 戦略の系列ごとに承認済みの最新の版 `{task_id, name, sha256, version, approved_by, approved_at}` と、回答待ちの版 | 承認が有効で鮮度も合う: `confirmed`。回答待ちだけ: `needs_decision`。request の sha256・Roadmap の版の不一致、より新しい承認、file の上書き: `contradicted` | `strategy_stale` | artifact・task |
 | O3 | `candidates` | 候補の比較 | O2 の版の文書の `candidates[]`（子 5 D1.1） | 候補ごとの `{id, title, state, selected, cost, experiment.budget, rejected_by}` と X(v) の task の id | 承認済みの版の `selected`: `confirmed`。`open`: `estimated`。`rejected`: `contradicted`（`rejected_by` の反証を持つ）。回答待ちの版の候補: `needs_decision` | 無し（却下は反証の反映で、危険ではない） | artifact・task |
 | O4 | `hypotheses` | 仮説 | 同じ文書の `hypotheses[]` | `{id, statement, confidence}` | 文書の `confidence` をそのまま使う（子 2 D2.3 で `confirmed` は内部の参照を要し、支持と反証の両方があれば `confirmed` にできない） | 無し（`contradicted`・`needs_decision` は規則 1 で強い警告） | artifact |
-| O5 | `verification` | 検証の状況 | 候補の `experiment.discriminates`、X(v) の task の status、`evidence[]` | 仮説ごとに識別実験の task の id と、stance ごとの証拠の数 | 実験の task が `done` で、その task を `task`・`artifact` で引く証拠がある: `confirmed`。実験の task が走っている: `estimated`。実験の task が無い・`failed`・`cancelled`: `needs_decision` | 無し | task・notebook（`log` は未実装。D1.4） |
+| O5 | `verification` | 検証の状況 | 候補の `experiment.discriminates`、X(v) の task の status、`evidence[]` | 仮説ごとに識別実験の task の id と、stance ごとの証拠の数 | 実験の task が `done` で、その task を `task`・`artifact` で引く証拠がある: `confirmed`。実験の task が走っている: `estimated`。実験の task が無い・`failed`・`cancelled`: `needs_decision` | 無し | task・notebook・log（識別実験の task ごと。D1.4） |
 | O6 | `refutations` | 反証 | 文書の `stance: refute` の証拠（子 2 D2.3 で版を進めても残る）、評価の記録の `refuted[]` | `{evidence_id, hypothesis, statement, references}` | 内部の参照（`commit`・`artifact`・`task`）を持つ: `confirmed`。外部の参照だけ: `estimated`。反証された仮説が `confirmed` のまま、または `selected` の候補の仮説のまま: `contradicted` | `refute_unapplied` | artifact・git・literature |
-| O7 | `latest_findings` | 最新に得た知見 | strategy root の最新の評価の記録 `parent-evaluation/<判断 id>.json`（子 6 D3.4。判断の行 `project_controller_decisions` から name を引く） | `effective.{verdict, next, axes, negative_result, unsupported}` と `measured[]`・`learned[]` | supported の項目（子 6 D4 R2）: `confirmed`。unsupported の項目: `estimated`。`status: invalid`・verdict `unknown`: `needs_decision`。verdict `off_track`: `contradicted`。3 軸（execution・epistemic・goal）は分けて返す（子 6 D7） | `evaluation_unsupported`・`evaluation_off_track`・`evaluation_invalid` | artifact・task（`log` は未実装。D1.4） |
+| O7 | `latest_findings` | 最新に得た知見 | strategy root の最新の評価の記録 `parent-evaluation/<判断 id>.json`（子 6 D3.4。判断の行 `project_controller_decisions` から name を引く） | `effective.{verdict, next, axes, negative_result, unsupported}` と `measured[]`・`learned[]` | supported の項目（子 6 D4 R2）: `confirmed`。unsupported の項目: `estimated`。`status: invalid`・verdict `unknown`: `needs_decision`。verdict `off_track`: `contradicted`。3 軸（execution・epistemic・goal）は分けて返す（子 6 D7） | `evaluation_unsupported`・`evaluation_off_track`・`evaluation_invalid` | artifact・task（評価の記録を作った run の `log` は未実装。D1.4） |
 | O8 | `discussion_sources` | 議論の出典 | 案件 thread の message の `metadata_json.exchange`（子 4）・`citations`（子 3 D6）、案の添付 | 出典ごとに `{message_id, revision, sha256, source_kind, source_label, author, review_state}` | 議論は検証済みの主張でないので `estimated`（子 4 D1.4 と同じ）。引用の状態が `current` でない: `contradicted` | `citation_stale` | chat・artifact |
-| O9 | `experiments_and_tasks` | 現在の実験と Task | `cos_operations` の strategy 付きの `task.create`（`task_core::strategy_reads::strategy_task_creates`） | strategy root と実験の task の `{task_id, strategy name, version, candidate}`（status は D1.1 の表のとおり `GET /projects/{id}` の `tasks[]` から Web が引く） | 記録の事実なので `confirmed` | 無し | task・log・git |
-| O10 | `budget_spent` | 予算と spent | 候補の `experiment.budget`・`cost`（子 5）と、X(v) の task の subtree の消費（`root_totals` を作る既存の集計 `task_ops::tree_view::project_root_totals` と同じ関数） | 版ごとの `{usd_max, wall_hours_max}` と `{tokens, list_price_usd}`（`wall_secs` は未実装: `RollupMetrics` に壁時計の合計が無い） | token（実測）: `confirmed`。USD（定価の換算）: `estimated`。消費が予算を超えた: `contradicted`。単価の無い model の run がある: `needs_decision` | `budget_exceeded`・`cost_unknown` | task・log |
+| O9 | `experiments_and_tasks` | 現在の実験と Task | `cos_operations` の strategy 付きの `task.create`（`task_core::strategy_reads::strategy_task_creates`） | strategy root と実験の task の `{task_id, strategy name, version, candidate}`（status は D1.1 の表のとおり `GET /projects/{id}` の `tasks[]` から Web が引く） | 記録の事実なので `confirmed` | 無し | task・log・git（`git` は取り込まれた task だけ。D1.4） |
+| O10 | `budget_spent` | 予算と spent | 候補の `experiment.budget`・`cost`（子 5）と、X(v) の task の subtree の消費（`root_totals` を作る既存の集計 `task_ops::tree_view::project_root_totals` と同じ関数） | 版ごとの `{usd_max, wall_hours_max}` と `{tokens, list_price_usd}`（`wall_secs` は未実装: `RollupMetrics` に壁時計の合計が無い） | token（実測）: `confirmed`。USD（定価の換算）: `estimated`。消費が予算を超えた: `contradicted`。単価の無い model の run がある: `needs_decision` | `budget_exceeded`・`cost_unknown` | task・log（X(v) の task ごと。D1.4） |
 | O11 | `next_verification` | 次の検証 | X(v) にまだ task の無い `open` の候補の `experiment`、最新の評価の `next`・`uncertainty[].resolve_by`、文書の `held_assumptions[].revisit_when` | `{source, statement}` の列 | 計画なので `estimated`。評価の `next` が `ask_human`: `needs_decision` | 無し | artifact・task |
 | O12 | `pending_human_decisions` | 人の判断待ち | 案件の task の `decisions`（`status = 'open'`）、採否の無い chat の案（D2.4） | 決定の `{decision_id, task_id, key の種類}`（`strategy-approve`・`publish-signoff`・その他）と案の message の id | 1 件以上なら `needs_decision` | 無し（規則 1 で強い警告） | task・chat |
 | O13 | `risks` | 危険 | O2〜O12・O14 の警告と、controller の phase が `blocked`（`GET /projects/{id}/controller` の行を参照する） | `warnings[]` の要約（code ごとの件数） | 強い警告が 1 件以上: `contradicted`。通常の警告だけ: `estimated`。警告が 0 件で記録がある: `confirmed` | 各項目の code | 各項目の link |
@@ -98,9 +98,9 @@ link は `{kind, …}` の 7 種だけである。Web は kind ごとに既存�
 |---|---|---|---|
 | `task` | `task_id` | `/tasks/{task_id}` | 案件の task だけ（他の案件の task は概要に出さない） |
 | `artifact` | `task_id`・`name`・`sha256` | `/tasks/{task_id}?tab=artifacts` と成果物の viewer | 未実装: 概要の panel は link の sha256 と今の file を照合せず、「上書きされた」を出さない（成果物の viewer の `sha256_matches` で読める）。戦略の文書の link の `sha256` は空文字（承認済みの版は O2 の link が sha256 を持つ） |
-| `notebook` | `task_id`・`name` | `artifact` と同じ viewer と `/tasks/{task_id}/files` | 実験の task の成果物のうち name が `.ipynb` で終わるもの。Celeris に Notebook の正本は無く、成果物の file を指すだけ |
-| `log` | `task_id`・`run_id` | `/tasks/{task_id}/runs/{run_id}` | 未実装: backend はこの kind の link をどの項目にも出さない（wire の enum `ProjectOverviewLink` に型があり、Web の移り先は fixture の e2e で確かめた） |
-| `git` | `repo`・`sha`・`task_id?` | `task_id` があれば `/tasks/{task_id}/changes`、無ければ repo 名と 40 桁の sha を写せる文字で出す | 子 2 の `commit` の参照。存在は reviewer が確かめる（gate は形だけ）。backend は `task_id` を付けない（子 2 の `commit` の参照が task を持たない）ので、今の Web は repo 名と sha を文字で出す |
+| `notebook` | `task_id`・`name` | `artifact` と同じ viewer と `/tasks/{task_id}/files` | O5 の識別実験の task（X(v)）の `ArtifactProduced` のうち name が `.ipynb` で終わるもの（同じ name は 1 件。link は既存の `artifact_link` が作る）。X(v) でない task の成果物は出さない。Celeris に Notebook の正本は無く、成果物の file を指すだけ |
+| `log` | `task_id`・`run_id` | `/tasks/{task_id}/runs/{run_id}` | X(v) の実験の task（O5・O9・O10）ごとに、`runs` の索引の `started_at` の順で最後の run（`SqliteStore::runs_for_task`。worker・reviewer・planner の役割を問わない）。run の無い task には出さない。未実装: O7 の評価の記録を作った run の `log` は出さない |
+| `git` | `repo`・`sha`・`task_id?` | `task_id` があれば `/tasks/{task_id}/changes`、無ければ repo 名と 40 桁の sha を写せる文字で出す | O9 は実験の task の最後の `IntegrationMerged`（delivery と sweep が取り込みを書く event。A9 D1 が取り込み済みと数える event と同じ）から、repo（task の `repos` の名前）・head の sha・`task_id` を出す。取り込みの記録の無い task には出さない。子 2 の `commit` の参照（O6・O7）は、repo と sha が実験の task の取り込みと一致すれば `task_id` を付ける。X(v) でない task の取り込みとは照合しない（概要は案件の全 task の event を読まない。D1.5）ので、その参照は `task_id` を持たず、Web は repo 名と sha を文字で出す。commit の存在は reviewer が確かめる（gate は形だけ） |
 | `literature` | `url` か `path`・`sha256` | `url` は新しい tab（`rel="noopener noreferrer"`）。`path` は写せる文字で出し、`/knowledge` の検索の画面へ移す | `url` は `https://` だけ（子 2 の参照の規則）。外部の資料は「外部・untrusted」と出す。knowledge の page へ path で直接移る口は未実装（「未確認」） |
 | `chat` | `thread_id`・`message_id`・`revision`・`sha256` | `/?thread={thread_id}`（概要と manifest の画面の link は `message` を付けない。chat の route の `/?thread=&message=` の強調は D4 で実装したが、概要の link からは使っていない） | 引用の状態（current・edited・retracted・missing）は O8 の引用の link だけが添える。案の message と戦略の文書の chat の参照の link は状態を持たない |
 
@@ -115,6 +115,8 @@ link は `{kind, …}` の 7 種だけである。Web は kind ごとに既存�
   索引か表を足すかをそのときの測定で決める（子 2 D3.4 と同じ条件）。
 - 評価の記録（O7）は `project_controller_decisions` の `evaluate` の判断の行から name を作り、root の `events_for` を 1 回読む。議論の出典（O8）は案件 thread の
   message を seq の新しい順に 50 件まで読む。概要全体で読む file は、戦略の系列ごとの最新の版 1 件・評価の記録 1 件・manifest ごとの最新の版 1 件だけである。
+- drill-down（D1.4）のために、X(v) の task ごとに `runs_for_task` と `events_for` を 1 回ずつ読む（`events_for` は task ごとに 1 回だけ読む cache を
+  O2・O7 と共有する）。file は読まない。
 
 ### D2: chat の案を人が採る・却下する・コメントする口
 
@@ -272,7 +274,7 @@ link は `{kind, …}` の 7 種だけである。Web は kind ごとに既存�
 
 ## 保証の表
 
-| 守る不変条件 | 試験（正式名。close-audit で 74 件すべてが crates に `fn` として実在することを確かめた） | 変更前に落ちるか |
+| 守る不変条件 | 試験（正式名。close-audit の 74 件と WU drilldown-api が足した 4 件の計 78 件すべてが crates に `fn` として実在することを確かめた） | 変更前に落ちるか |
 |---|---|---|
 | 非人の主体は publish manifest に署名できない（operator・CoS・MCP・token の無い構成） | `publish_signoff_operator_answer_is_403_and_records_nothing`・`publish_signoff_cos_operation_decision_answer_is_403_and_audited`・`publish_signoff_mcp_decision_answer_is_refused`（celeris-mcp）・`publish_signoff_unauthenticated_local_is_refused`（HTTP は管理系の入口で 401、共有の owner も `human:local` を拒む） | 落ちる（base はどの主体の回答も受ける） |
 | 人の発言の引用でも CoS は署名できない | `publish_signoff_cos_instructed_by_human_message_cannot_sign` | 落ちる |
@@ -316,7 +318,11 @@ link は `{kind, …}` の 7 種だけである。Web は kind ごとに既存�
 | 外部の出典は推定 | `project_overview_external_source_is_estimated` | 落ちる |
 | 予算の超過と単価の不明は強い警告（`budget_exceeded`・`cost_unknown` は実装したが試験は無い。下の「未確認」） | 無し | — |
 | 判断待ちは要判断、公開の準備度は署名の決定から導き、未署名・失効した manifest は強い警告 | `project_overview_open_decisions_are_needs_decision`・`project_overview_publish_readiness_from_signoff_decisions`・`project_overview_unsigned_or_stale_manifest_is_strong_warning` | 落ちる |
-| link の URL は https だけ（7 種の型は wire の enum `ProjectOverviewLink` で固定。`log` の link はまだ出さない。下の「未確認」） | `project_overview_url_link_is_https_only` | 落ちる |
+| link の URL は https だけ（7 種の型は wire の enum `ProjectOverviewLink` で固定） | `project_overview_url_link_is_https_only` | 落ちる |
+| 実験の task の最後の run を `log` にする（O5・O9・O10。run の無い task には出さない。挿入の順でなく `started_at` の順） | `project_overview_drilldown_log_link_points_to_latest_run_of_experiment_task` | 落ちる（概要が `log` を出さない） |
+| 実験の task の `.ipynb` の成果物を O5 の `notebook` にする（X(v) でない task の成果物と `.ipynb` でない成果物は出さない） | `project_overview_drilldown_notebook_link_from_experiment_ipynb_artifact` | 落ちる（O5 が task の link だけ） |
+| 取り込まれた実験の task の O9 の `git` は `task_id` を持ち、戦略の文書の `commit` の参照も取り込みの repo と sha に一致すれば `task_id` を持つ（一致しない参照は持たない） | `project_overview_drilldown_git_link_carries_task_id_from_integration` | 落ちる（`git` がいつも `task_id` 無しで、O9 に `git` が無い） |
+| 本物の route の drill-down の形を fixture `crates/task-api/tests/fixtures/project_overview_drilldown.json` に固定する（`log`・`notebook`・`task_id` 付きの `git` を含む。id は初出順の記号、`generated_at`・`approved_at` は固定。`UPDATE_FIXTURE=1` で書き直す） | `project_overview_drilldown_fixture_matches_generated` | 落ちる（fixture が無く、link も出ない） |
 | 別の案件の記録を出さず、記録の無い項目に印を付けない | `project_overview_other_project_data_excluded`・`project_overview_empty_project_items_absent` | 落ちる |
 | 人が概要で 14 項目・印・強い警告を読み、各 link で移れる | `web/e2e/work/project-overview.spec.ts` | 落ちる（画面が無い） |
 | 人が chat の案を採用・却下・コメントでき、外部の文に印が付く | `web/e2e/chat/proposal-review.spec.ts` | 落ちる |
@@ -384,7 +390,7 @@ link は `{kind, …}` の 7 種だけである。Web は kind ごとに既存�
 - 人の token の名前が `local` のとき、その人の署名も数えない。本番の token の名前は確かめていない。
 - 本番の config の変更は無い。本番への昇格・publish・外部公開は人が行う。
 - overview-api の WU（2026-11-23）: 失効した引用（`citation_stale`）・予算の超過（`budget_exceeded`）・単価の不明（`cost_unknown`）は導出を実装したが
-  試験が無い。`log` の link（run の id）はまだ出さない。O10 の `wall_secs` は返さない（`RollupMetrics` に壁時計の合計が無い）。
+  試験が無い。`log` の link（run の id）は出さなかった（WU drilldown-api が X(v) の task に足した。下）。O10 の `wall_secs` は返さない（`RollupMetrics` に壁時計の合計が無い）。
   O3 の却下の候補（`contradicted`）は規則 1 の強い警告から外した（D1.3 の表の「無し」に合わせた）。
 - close-audit（2026-11-24）が本文と WU の進捗から足した未確認と未実装:
   - 概要と manifest の画面の chat の link は `/?thread=` だけで、`message` を付けない（D1.4）。
@@ -393,6 +399,11 @@ link は `{kind, …}` の 7 種だけである。Web は kind ごとに既存�
   - 本物の gateway は daemon の 403 を 502 `daemon_auth` に置き換え、画面に拒否の code が届かない（D4）。gateway を変えるかは人が決める。
   - Web の e2e は偽 daemon（`web/e2e/support/fake-daemon.mjs`）に対して流した。本物の daemon・本物のデータに対する画面の確認はしていない。password 付きの gateway の e2e も無い。
   - CoS の案が戦略の添付を 2 つ以上持つとき、Web は最初の 1 件で採否する。daemon がどの添付を照合するかは確かめていない。
+- WU drilldown-api（2026-11-24）が残した未実装と未確認:
+  - `git` の `task_id` は X(v) の task の取り込みとだけ照合する。X(v) でない案件の task が取り込んだ commit を戦略の文書が引いても `task_id` は付かない。
+  - O7 の評価の記録を作った run の `log` は出さない。`log` は最後の run で、役割（worker・reviewer・planner）で選ばない。
+  - 概要の drill-down の e2e は、この WU の時点では偽 daemon の fixture の link を押す。本物の route が出した fixture の JSON で流すのは WU drilldown-e2e の仕事。
+  - X(v) の task ごとに増えた読み取り（`runs_for_task`・`events_for`）の時間を本番の大きさで測っていない。
 
 ## 付記（close-audit、2026-11-24）
 
@@ -407,3 +418,12 @@ link は `{kind, …}` の 7 種だけである。Web は kind ごとに既存�
   `Principal::Human` の照合を一時的に外し、`cargo nextest run -p task-api -p celeris-mcp -E 'test(/publish_signoff_|proposal_review_/)' --no-fail-fast` を流すと
   35 件のうち 11 件が落ちた（`publish_signoff_` 8 件・`proposal_review_` 3 件。名前は task の進捗の「試験」）。`git checkout --` で戻すと 35 件が通った。
 - LoC と試験の結果は task の進捗 [2026-11-23-strategy-v1-7](../progress/2026-11-23-strategy-v1-7.md) に書いた。
+
+## 付記（drilldown-api、2026-11-24）
+
+- final review（v3）の不合格（本物の backend が実験の task の `log`・`notebook`・task 付きの `git` を出さない）を直した。`task_ops::project_overview` の
+  `experiment_drills` が X(v) の task ごとに最後の run・`.ipynb` の成果物・最後の `IntegrationMerged` を読み、O5・O9・O10 の link と O6・O7 の `commit` の
+  参照の `task_id` に使う。新しい表・event の種類・状態は足していない。
+- 本文の直し: D1.3 の O5・O9・O10 の drill-down の列、O7 の未実装の範囲、D1.4 の `notebook`・`log`・`git` の備考、D1.5 の読み取り、保証の表の 4 行。
+  O7 の `log` は未実装のまま残した。
+- 変更前の再現と試験の結果は WU の進捗 [drilldown-api](../progress/2026-11-23-strategy-v1-7/drilldown-api.md) に書いた。

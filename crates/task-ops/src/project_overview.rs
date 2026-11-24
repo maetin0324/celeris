@@ -4,6 +4,8 @@
 //! 既存の GET（project detail・roadmap・controller）にある欄は写さず、導いた印・強い警告・参照の id だけを返す（D1.1）。
 //! 戦略の版と manifest の一覧は `decisions` の key から引き、案件の全 task の成果物は走査しない（D1.5）。
 //! manifest の検査と署名の状態は `task_api::publish::manifest_status` が持つので、呼び出し側が [`ManifestFacts`] を渡す。
+//! 実験の task（X(v)）の drill-down（最後の run の `log`・`.ipynb` の `notebook`・取り込みの `git`）は、その task の
+//! `runs` の索引と event から読む（D1.4）。
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -229,10 +231,22 @@ impl Out {
     }
 }
 
-/// 読み取りの文脈（案件の task と thread）。別の案件の資料を link にしない（D1.4）。
+/// 読み取りの文脈（案件の task・thread と実験の task の drill-down）。別の案件の資料を link にしない（D1.4）。
 struct Scope<'a> {
     tasks: &'a BTreeMap<String, Task>,
     threads: &'a BTreeSet<String>,
+    /// X(v) の task ごとの drill-down（[`experiment_drills`]）。
+    drills: BTreeMap<String, Drill>,
+}
+
+/// D1.4: 実験の task（X(v)）1 件の drill-down の元。
+struct Drill {
+    /// 最後の run（`runs` の索引の `started_at` の順）。run が無ければ `None`。
+    run_id: Option<String>,
+    /// name が `.ipynb` で終わる成果物の `notebook` の link（[`artifact_link`] が作る。初出の順）。
+    notebooks: Vec<Link>,
+    /// 最後の `IntegrationMerged` の repo の名前と head の sha。
+    merged: Option<(String, String)>,
 }
 
 impl Scope<'_> {
@@ -240,13 +254,47 @@ impl Scope<'_> {
         self.tasks.contains_key(id)
     }
 
+    /// `repo` の `sha` を取り込んだ実験の task（`git` の link の `task_id`）。
+    fn integrated_by(&self, repo: &str, sha: &str) -> Option<String> {
+        self.drills.iter().find_map(|(id, d)| {
+            d.merged
+                .as_ref()
+                .filter(|(r, s)| r == repo && s.eq_ignore_ascii_case(sha))
+                .map(|_| id.clone())
+        })
+    }
+
+    /// D1.3 の drill-down の列: 実験の task と、その最後の run の `log`。`notebook`（O5）と `git`（O9）は呼び出し側が選ぶ。
+    fn experiment_links(&self, id: &str, notebooks: bool, git: bool) -> Vec<Link> {
+        let mut links = vec![task_link(id)];
+        let Some(d) = self.drills.get(id) else {
+            return links;
+        };
+        if notebooks {
+            links.extend(d.notebooks.iter().cloned());
+        }
+        links.extend(d.run_id.as_ref().map(|run_id| Link::Log {
+            task_id: id.to_string(),
+            run_id: run_id.clone(),
+        }));
+        if git && let Some((repo, sha)) = &d.merged {
+            links.push(Link::Git {
+                repo: repo.clone(),
+                sha: sha.clone(),
+                task_id: Some(id.to_string()),
+            });
+        }
+        links
+    }
+
     /// 子 2 の参照を link にする。別の案件の task・thread と `https://` でない URL は出さない。
+    /// `commit` は実験の task の取り込みの sha と一致すれば、その task の id を持つ。
     fn link(&self, r: &Reference) -> Option<Link> {
         match r {
             Reference::Commit { repo, sha } => Some(Link::Git {
                 repo: repo.clone(),
                 sha: sha.clone(),
-                task_id: None,
+                task_id: self.integrated_by(repo, sha),
             }),
             Reference::Url { url } => url.starts_with("https://").then(|| Link::Literature {
                 url: Some(url.clone()),
@@ -384,9 +432,10 @@ pub fn overview(
         .map(|t| (t.id.to_string(), t))
         .collect();
     let threads = project_threads(store, &project_key)?;
-    let scope = Scope {
+    let mut scope = Scope {
         tasks: &tasks,
         threads: &threads,
+        drills: BTreeMap::new(),
     };
     let decisions: Vec<DecisionRow> = store
         .decisions_list(None)?
@@ -442,6 +491,7 @@ pub fn overview(
             .into_iter()
             .filter(|(target, r)| scope.has_task(target) && scope.has_task(&r.task_id))
             .collect();
+    scope.drills = experiment_drills(store, &mut events, &tasks, &creates)?;
     for (target, r) in &creates {
         let (sid, version) =
             task_core::strategy_ref::strategy_artifact(&r.name).unwrap_or((String::new(), 0));
@@ -452,7 +502,7 @@ pub fn overview(
                 Mark::Confirmed,
                 json!({ "task_id": target, "strategy_task_id": r.task_id, "strategy_name": r.name,
                         "strategy_id": sid, "version": version, "candidate": r.candidate }),
-                vec![task_link(target)],
+                scope.experiment_links(target, false, true),
             ),
         );
     }
@@ -526,6 +576,55 @@ pub fn overview(
         warnings: out.warnings,
         truncated,
     }))
+}
+
+/// D1.4: X(v) の task ごとの drill-down。run は `runs` の索引の最後、`.ipynb` は `ArtifactProduced`、取り込みは最後の
+/// `IntegrationMerged`（delivery と sweep が取り込みを書く event。repo の名前は task の `repos` から引く）。
+fn experiment_drills(
+    store: &SqliteStore,
+    events: &mut Events<'_>,
+    tasks: &BTreeMap<String, Task>,
+    creates: &[(String, task_core::strategy_ref::StrategyRef)],
+) -> Result<BTreeMap<String, Drill>, OpsError> {
+    let mut out = BTreeMap::new();
+    for (target, _) in creates {
+        let Some(task) = tasks.get(target).filter(|_| !out.contains_key(target)) else {
+            continue;
+        };
+        let run_id = store.runs_for_task(task.id)?.pop().map(|r| r.run_id);
+        let mut notebooks: Vec<Link> = Vec::new();
+        let mut merged = None;
+        for e in events.of(task.id)? {
+            match e {
+                Event::ArtifactProduced { artifact, .. } if artifact.name.ends_with(".ipynb") => {
+                    let link = artifact_link(target, &artifact.name, &artifact.sha256);
+                    if !notebooks.contains(&link) {
+                        notebooks.push(link);
+                    }
+                }
+                Event::IntegrationMerged {
+                    repo_id, head_sha, ..
+                } => {
+                    let repo = task
+                        .repos
+                        .iter()
+                        .find(|r| r.repo_id == *repo_id)
+                        .map_or_else(|| repo_id.to_string(), |r| r.name.clone());
+                    merged = Some((repo, head_sha.clone()));
+                }
+                _ => {}
+            }
+        }
+        out.insert(
+            target.clone(),
+            Drill {
+                run_id,
+                notebooks,
+                merged,
+            },
+        );
+    }
+    Ok(out)
 }
 
 /// O12 人の判断待ち: 案件の task の未回答の決定と、採否の無い chat の案。
@@ -837,7 +936,9 @@ fn o3_to_o6(
                 json!({ "hypothesis": h.id, "experiment_tasks": ids,
                         "support": count(Stance::Support), "refute": count(Stance::Refute),
                         "unknown": count(Stance::Unknown) }),
-                ids.iter().map(|t| task_link(t)).collect(),
+                ids.iter()
+                    .flat_map(|t| scope.experiment_links(t, true, false))
+                    .collect(),
             ),
         );
     }
@@ -929,7 +1030,10 @@ fn o10_budget(
         .map(|c| c.experiment.budget.wall_hours_max)
         .sum();
     let id = format!("{}/v{}", doc.strategy_id, doc.version);
-    let links: Vec<Link> = tasks.iter().map(|t| task_link(&t.id.to_string())).collect();
+    let links: Vec<Link> = tasks
+        .iter()
+        .flat_map(|t| scope.experiment_links(&t.id.to_string(), false, false))
+        .collect();
     let mark = if totals.cost_usd > usd_max {
         out.warn(9, "budget_exceeded", true, Some(&id), &links);
         Mark::Contradicted

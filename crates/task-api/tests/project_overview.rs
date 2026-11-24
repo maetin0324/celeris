@@ -758,3 +758,350 @@ async fn project_overview_empty_project_items_absent() {
     .await;
     assert_eq!(resp.status.as_u16(), 404);
 }
+
+// ---- drill-down（D1.4）: 実験の task の log・notebook・task 付きの git -------------------------------------------
+//
+// 守る不変条件: 実験の task（X(v)。O5・O9・O10）ごとに、最後の run を `log`、`.ipynb` の成果物を `notebook`、
+// 最後の `IntegrationMerged` を `task_id` 付きの `git` にする。戦略の文書の `commit` の参照も、取り込みの sha と
+// 一致すれば `task_id` を付ける。既存の試験は戦略の文書だけを置き、実験の task の run・成果物・取り込みを
+// 置かないので、これらの link が無くても通っていた（fake-daemon の fixture の link を押す e2e も本物の backend を見ない）。
+
+const STRATEGY_NAME: &str = "strategy/arch-v4-cycle/v1.json";
+const REPO: &str = "agent-platform";
+const MERGED_SHA: &str = "4a7c0d5e9b1f2a3c4d5e6f708192a3b4c5d6e7f8";
+const OTHER_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+
+impl World {
+    /// 戦略の文書を実行する X(v) の task（CoS の strategy 付きの `task.create` の行。子 5 D2.3）。
+    fn experiment(
+        &self,
+        strategy: &Task,
+        candidate: &str,
+        repo: Option<&task_core::RepoRef>,
+    ) -> Task {
+        let mut t = new_task(task_core::TaskKind::Execute, task_core::Status::Running);
+        t.project_id = Some(PROJECT.parse().expect("project"));
+        t.repos = repo.into_iter().cloned().collect();
+        self.env.seed(&t);
+        let sha = self
+            .env
+            .store
+            .events_for(strategy.id)
+            .expect("events")
+            .into_iter()
+            .find_map(|(_, e)| match e {
+                Event::ArtifactProduced { artifact, .. } if artifact.name == STRATEGY_NAME => {
+                    Some(artifact.sha256)
+                }
+                _ => None,
+            })
+            .expect("strategy artifact");
+        let conn = rusqlite::Connection::open(&self.env.db_path).expect("db");
+        let n: i64 = conn
+            .query_row("SELECT count(*) FROM cos_operations", [], |r| r.get(0))
+            .expect("count");
+        let payload = json!({ "strategy": { "task_id": strategy.id.to_string(), "name": STRATEGY_NAME,
+                                            "sha256": sha, "candidate": candidate } });
+        conn.execute(
+            "INSERT INTO cos_operations (id, thread_id, run_id, idempotency_key, request_hash, target_kind, \
+             target_id, action, payload_json, reason, policy_version, state, created_at, updated_at) \
+             VALUES (?1, ?2, 'cos-run', ?1, 'h', 'task', ?3, 'task.create', ?4, 'r', '11', 'applied', ?5, ?5)",
+            rusqlite::params![
+                format!("op-{n}"),
+                self.thread_id,
+                t.id.to_string(),
+                payload.to_string(),
+                format!("2026-11-23T01:00:{n:02}Z")
+            ],
+        )
+        .expect("task.create");
+        t
+    }
+
+    /// worker の run 1 本（`runs` の索引）。
+    fn run(&self, task: &Task, run_id: &str, started_at: &str) {
+        self.env
+            .store
+            .run_index_start(task_core::RunRow {
+                run_id: run_id.into(),
+                task_id: task.id.to_string(),
+                work_unit_id: None,
+                role: task_core::RunIndexRole::Worker,
+                seq: 1,
+                status: task_core::RunIndexStatus::Completed,
+                adapter: Some("fake".into()),
+                model: Some("m".into()),
+                account: None,
+                session_id: None,
+                checkpoint: None,
+                usage: Some(task_core::Usage {
+                    input_tokens: Some(1000),
+                    output_tokens: Some(100),
+                    cache_read_tokens: None,
+                    cache_creation_tokens: None,
+                    cost_usd: Some(0.25),
+                    duplicate_reads: None,
+                    session_resumed: None,
+                    context_tokens: None,
+                }),
+                metrics: None,
+                started_at: started_at.into(),
+                finished_at: Some(started_at.into()),
+            })
+            .expect("run");
+    }
+
+    /// task のブランチを取り込んだ（delivery と sweep が使う store の口。`IntegrationMerged` を足す）。
+    fn merged(&self, task: &Task, sha: &str) {
+        let now = OffsetDateTime::now_utc();
+        self.env
+            .store
+            .task_integration_upsert(&task_core::TaskRepoIntegrationState {
+                task_id: task.id,
+                repo_id: task.repos[0].repo_id,
+                branch: format!("celeris/{}", task.id),
+                head_sha: sha.into(),
+                state: task_core::TaskRepoIntegrationStatus::Integrated,
+                reason: None,
+                actor: task_core::DAEMON_ACTOR.into(),
+                checked_at: now,
+                updated_at: now,
+            })
+            .expect("integrated");
+    }
+}
+
+fn repo_ref() -> task_core::RepoRef {
+    task_core::RepoRef {
+        repo_id: task_core::RepoId::new(),
+        name: REPO.into(),
+    }
+}
+
+fn entry_of<'a>(o: &'a Value, key: &str, id: &str) -> &'a Value {
+    entries(o, key)
+        .iter()
+        .find(|e| e["id"] == id)
+        .unwrap_or_else(|| panic!("{key}/{id} in {}", item(o, key)))
+}
+
+fn links_of<'a>(e: &'a Value, kind: &str) -> Vec<&'a Value> {
+    e["links"]
+        .as_array()
+        .expect("links")
+        .iter()
+        .filter(|l| l["kind"] == kind)
+        .collect()
+}
+
+#[tokio::test]
+async fn project_overview_drilldown_log_link_points_to_latest_run_of_experiment_task() {
+    let w = World::new();
+    let strategy = w.strategy(PROJECT, "dec-s", |_| {});
+    w.answer(&web(), "dec-s", strategy::APPROVE_OPTION).await;
+    let exp = w.experiment(&strategy, "cut-min-edges", None);
+    let idle = w.experiment(&strategy, "continue-pilots", None);
+    // 新しい run を先に索引へ入れる（挿入の順でなく started_at の順で最後を選ぶ）。
+    let (old, new) = (ulid::Ulid::new().to_string(), ulid::Ulid::new().to_string());
+    w.run(&exp, &new, "2026-11-23T11:00:00Z");
+    w.run(&exp, &old, "2026-11-23T10:00:00Z");
+    let o = w.overview(PROJECT).await;
+    let want = json!({ "kind": "log", "task_id": exp.id.to_string(), "run_id": new });
+    // O9: 実験の task ごと。
+    let e = entry_of(&o, "experiments_and_tasks", &exp.id.to_string());
+    assert_eq!(links_of(e, "log"), vec![&want], "{e}");
+    // run の無い実験の task には log を出さない。
+    let e = entry_of(&o, "experiments_and_tasks", &idle.id.to_string());
+    assert!(links_of(e, "log").is_empty(), "{e}");
+    // O5: 識別実験の task の log。
+    let e = entry_of(&o, "verification", "arch-v4-cycle/v1/h-cycle-edges");
+    assert_eq!(links_of(e, "log"), vec![&want], "{e}");
+    // O10: X(v) の task の log。
+    let e = entry_of(&o, "budget_spent", "arch-v4-cycle/v1");
+    assert_eq!(links_of(e, "log"), vec![&want], "{e}");
+    assert!(!o.to_string().contains(&old), "older run is linked: {o}");
+}
+
+#[tokio::test]
+async fn project_overview_drilldown_notebook_link_from_experiment_ipynb_artifact() {
+    let w = World::new();
+    let strategy = w.strategy(PROJECT, "dec-s", |_| {});
+    w.answer(&web(), "dec-s", strategy::APPROVE_OPTION).await;
+    let exp = w.experiment(&strategy, "cut-min-edges", None);
+    w.produce(
+        &exp,
+        "analysis/scc.ipynb",
+        br#"{"cells": [], "nbformat": 4}"#,
+    );
+    w.produce(&exp, "report.md", b"# report");
+    // X(v) でない task の Notebook は O5 に出さない。
+    let stray = w.task(PROJECT);
+    w.produce(&stray, "stray.ipynb", b"{}");
+    let o = w.overview(PROJECT).await;
+    let e = entry_of(&o, "verification", "arch-v4-cycle/v1/h-cycle-edges");
+    assert_eq!(
+        links_of(e, "notebook"),
+        vec![
+            &json!({ "kind": "notebook", "task_id": exp.id.to_string(), "name": "analysis/scc.ipynb" })
+        ],
+        "{e}"
+    );
+    assert!(links_of(e, "artifact").is_empty(), "{e}");
+    assert!(!o.to_string().contains("stray.ipynb"), "{o}");
+    // 別の仮説（実験の task が無い）には notebook が付かない。
+    let e = entry_of(&o, "verification", "arch-v4-cycle/v1/h-pilots-enough");
+    assert!(links_of(e, "notebook").is_empty(), "{e}");
+}
+
+#[tokio::test]
+async fn project_overview_drilldown_git_link_carries_task_id_from_integration() {
+    let w = World::new();
+    // 反証の証拠が、実験の task が取り込んだ commit と、取り込みの記録の無い commit を引く。
+    let strategy = w.strategy(PROJECT, "dec-s", |d| {
+        let refs = d["evidence"][1]["references"].as_array_mut().expect("refs");
+        refs.push(json!({"kind": "commit", "repo": REPO, "sha": MERGED_SHA}));
+        refs.push(json!({"kind": "commit", "repo": REPO, "sha": OTHER_SHA}));
+    });
+    w.answer(&web(), "dec-s", strategy::APPROVE_OPTION).await;
+    let repo = repo_ref();
+    let exp = w.experiment(&strategy, "cut-min-edges", Some(&repo));
+    w.merged(&exp, MERGED_SHA);
+    let pending = w.experiment(&strategy, "continue-pilots", Some(&repo));
+    let o = w.overview(PROJECT).await;
+    let want =
+        json!({ "kind": "git", "repo": REPO, "sha": MERGED_SHA, "task_id": exp.id.to_string() });
+    // O9: 取り込まれた実験の task。
+    let e = entry_of(&o, "experiments_and_tasks", &exp.id.to_string());
+    assert_eq!(links_of(e, "git"), vec![&want], "{e}");
+    // 取り込みの記録の無い実験の task には git を出さない。
+    let e = entry_of(&o, "experiments_and_tasks", &pending.id.to_string());
+    assert!(links_of(e, "git").is_empty(), "{e}");
+    // O6: 戦略の文書の commit の参照は、取り込みの sha と一致したものだけ task_id を持つ。
+    let e = entries(&o, "refutations")
+        .iter()
+        .find(|e| e["detail"]["hypothesis"] == "h-pilots-enough")
+        .expect("refutation");
+    assert_eq!(
+        links_of(e, "git"),
+        vec![
+            &want,
+            &json!({ "kind": "git", "repo": REPO, "sha": OTHER_SHA })
+        ],
+        "{e}"
+    );
+}
+
+/// 概要の JSON の id を初出順の記号に置き換える（T1・R1・TH1・M1・P1）。`generated_at`・`approved_at` は固定する。
+fn normalized(mut o: Value, ids: &[(&str, String)]) -> String {
+    fn fix_times(v: &mut Value) {
+        match v {
+            Value::Object(map) => {
+                for (k, v) in map.iter_mut() {
+                    if (k == "generated_at" || k == "approved_at") && v.is_string() {
+                        *v = json!("2026-11-24T00:00:00Z");
+                    } else {
+                        fix_times(v);
+                    }
+                }
+            }
+            Value::Array(a) => a.iter_mut().for_each(fix_times),
+            _ => {}
+        }
+    }
+    fix_times(&mut o);
+    let mut text = serde_json::to_string_pretty(&o).expect("pretty");
+    let mut found: Vec<(usize, &str, &str)> = ids
+        .iter()
+        .filter_map(|(prefix, id)| text.find(id.as_str()).map(|p| (p, *prefix, id.as_str())))
+        .collect();
+    found.sort();
+    let mut counts: std::collections::BTreeMap<&str, usize> = Default::default();
+    for (_, prefix, id) in found {
+        let n = counts.entry(prefix).or_default();
+        *n += 1;
+        text = text.replace(id, &format!("{prefix}{n}"));
+    }
+    text.push('\n');
+    text
+}
+
+/// 本物の route が出す drill-down の形を fixture に固定する（Web の e2e が同じ JSON を使う）。
+/// `UPDATE_FIXTURE=1` で書き直す。
+#[tokio::test]
+async fn project_overview_drilldown_fixture_matches_generated() {
+    let w = World::new();
+    let strategy = w.strategy(PROJECT, "dec-s", |d| {
+        d["evidence"][1]["references"]
+            .as_array_mut()
+            .expect("refs")
+            .push(json!({"kind": "commit", "repo": REPO, "sha": MERGED_SHA}));
+    });
+    w.answer(&web(), "dec-s", strategy::APPROVE_OPTION).await;
+    let repo = repo_ref();
+    let exp = w.experiment(&strategy, "cut-min-edges", Some(&repo));
+    let idle = w.experiment(&strategy, "continue-pilots", Some(&repo));
+    let (r1, r2) = (ulid::Ulid::new().to_string(), ulid::Ulid::new().to_string());
+    w.run(&exp, &r1, "2026-11-23T10:00:00Z");
+    w.run(&exp, &r2, "2026-11-23T11:00:00Z");
+    w.produce(
+        &exp,
+        "analysis/scc.ipynb",
+        br#"{"cells": [], "nbformat": 4}"#,
+    );
+    w.merged(&exp, MERGED_SHA);
+    let req: task_core::discussion_exchange::ProposeRequest = serde_json::from_value(json!({
+        "thread_id": w.thread_id, "idempotency_key": "k1", "source_label": "chatgpt",
+        "body": "SCC の辺を切る案を先に試す", "references": [],
+        "confidence": "estimated", "decision_state": "proposed"
+    }))
+    .expect("propose request");
+    let message = w
+        .env
+        .store
+        .chat_exchange_propose(
+            "mcp:chatgpt",
+            &[
+                "discussion:read".to_owned(),
+                "discussion:propose".to_owned(),
+            ],
+            &req,
+            OffsetDateTime::now_utc(),
+        )
+        .expect("propose")
+        .message
+        .id;
+    let o = w.overview(PROJECT).await;
+    let ids = [
+        ("P", PROJECT.to_string()),
+        ("T", strategy.id.to_string()),
+        ("T", exp.id.to_string()),
+        ("T", idle.id.to_string()),
+        ("R", r1),
+        ("R", r2),
+        ("TH", w.thread_id.clone()),
+        ("M", message),
+    ];
+    let got = normalized(o, &ids);
+    for kind in ["\"log\"", "\"notebook\"", "\"git\""] {
+        assert!(
+            got.contains(&format!("\"kind\": {kind}")),
+            "{kind} missing: {got}"
+        );
+    }
+    assert!(
+        got.contains(&format!("\"sha\": \"{MERGED_SHA}\",\n")),
+        "{got}"
+    );
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/project_overview_drilldown.json"
+    );
+    if std::env::var_os("UPDATE_FIXTURE").is_some_and(|v| v == "1") {
+        std::fs::write(path, &got).expect("write fixture");
+    }
+    let want = std::fs::read_to_string(path).unwrap_or_default();
+    assert_eq!(
+        got, want,
+        "fixture differs; rerun with UPDATE_FIXTURE=1 and review the diff"
+    );
+}

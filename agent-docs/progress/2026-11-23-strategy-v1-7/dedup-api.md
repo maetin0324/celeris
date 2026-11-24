@@ -76,6 +76,7 @@ completed: 2026-11-24
 ## commit（件名）
 - strategy-v1 7 dedup-api: 決定の記録・最後の回答・manifest の違反の型を 1 つにする
 - strategy-v1 7 dedup-api: 最後の回答の試験と WU の進捗を書く
+- strategy-v1 7 dedup-api: 提出時の HEAD の test-affected の結果を進捗に書く
 
 ## 未確認・引き継ぎ
 - wire の名の変更（`ManifestViolationView` → `ManifestViolation`）は生成物だけに効く。`web/features`・`web/e2e` はこの型の名前を使っていない（git grep で 0 件）。

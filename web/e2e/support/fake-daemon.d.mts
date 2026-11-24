@@ -78,6 +78,21 @@ export const routingTrajectoryFixture: import("../../api/generated/types").TaskR
 export const routingShadowFixture: import("../../api/generated/types").TaskRoutingView;
 export const llmSourcesFixture: import("../../api/generated/types").LlmSourcesView;
 export function richFixtures(): Record<string, unknown>;
+export function projectOverviewFixture(): import("../../api/generated/types").ProjectOverview;
+// ADR 2026-11-23-project-observability-publish D1.4: 本物の GET /projects/{id}/overview が生成した golden の path と中身。
+export const PROJECT_OVERVIEW_GOLDEN: string;
+export function projectOverviewGolden(): import("../../api/generated/types").ProjectOverview;
+/** 概要の (項目の key → link の kind の集合)。entries と、その項目を指す warnings の link を合わせる。 */
+export function overviewLinkKinds(
+  overview: import("../../api/generated/types").ProjectOverview,
+): Map<string, Set<string>>;
+export const DRILLDOWN_THREAD: "TH1";
+export function drilldownFixtures(): Record<string, unknown>;
+export function drilldownFiles(): Record<string, { body: string; type: string }>;
+export function drilldownChatFixture(): {
+  thread: import("../../api/generated/types").ChatThread;
+  messages: import("../../api/generated/types").ChatMessage[];
+};
 export function richFiles(): Record<string, { body: string; type?: string }>;
 export function inboxItemsFixture(): import("../../api/generated/types").InboxItem[];
 export function noticesFixture(): import("../../api/generated/types").Notice[];
@@ -162,6 +177,9 @@ export type FakeDaemonOptions = {
   chatProposals?: boolean;
   // publish manifest（task T1 の publish/io-paper/v<n>.json）と署名の決定 publish-signoff-v<n> を足す（ADR 2026-11-23-project-observability-publish D3）。
   publishManifest?: boolean;
+  // P1 の概要。"drilldown" は本物の backend の golden（crates/task-api/tests/fixtures/project_overview_drilldown.json）を
+  // そのまま返し、link の先の task・run・成果物・変更・chat の thread を足す（rich の profile だけ。publishManifest とは併用しない）。
+  projectOverview?: "fixture" | "drilldown";
 };
 /** `GET /api/v1/tasks` の 1 頁を本物の daemon と同じ意味（status・order・limit・cursor）で作る。 */
 export function taskListPage(

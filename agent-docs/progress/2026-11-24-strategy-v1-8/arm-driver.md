@@ -85,6 +85,20 @@ base でも通った 4 件（`CELERIS_RUN_ID` の拒否・未知の事例と `--
 - 同じ試験を `PARENT_CHECKPOINT_BLIND_DIR=<stub の出力>` で → 1 passed（C-mid・D-done・F-done の方式 b・c の 6 件が `Checked`）。
 - `python3 -I scripts/dev/parent-eval-blind-compare.py --out <stub の出力> --answer-key agent-docs/progress/2026-11-21-strategy-v1-0/replay/answer_key.json` → exit 0、9 件とも forbidden 0・outside 0。
 
+## 検査（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+- `bash scripts/dev/test-affected.sh` → exit 0。対象は celeris・celeris-campaign・celerisctl・llm-proxy・task-api・task-dispatch・task-worker と web（typecheck+unit。task-api の変更のため）。nextest 6377 passed・32 skipped、web の vitest 108 files・773 tests passed、repo_health_gate: all checks passed、script bundle SKIP 0 件。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo fmt --all -- --check` → exit 0。
+- `git diff --stat "$CELERIS_WU_BASE" -- 'crates/*/src' control-ts web` → 差分 0。
+- 範囲（`sh "$CELERIS_WU_SCOPE_PATHS"`）: 変えた path は `scripts/dev/parent-eval-blind.sh`・`scripts/dev/parent-eval-blind/{driver,stub_reviewer,test_driver}.py`・`scripts/dev/parent-eval-blind-compare.py`・`crates/task-api/tests/parent_checkpoint_live.rs`・`crates/task-api/tests/fixtures/parent_checkpoint_live/blind/`（子 6 の記録の移動と `compare.json`）・この進捗。
+
+## LoC（`git diff --numstat "$CELERIS_WU_BASE"`）
+- production（`crates/*/src`・control-ts・web）: 0。
+- 道具の script: `driver.py` +338・−37、`stub_reviewer.py` +82・−12、`parent-eval-blind.sh` +50・−21、`parent-eval-blind-compare.py` +11・−9。
+- 試験: `test_driver.py` +219（新規）、`parent_checkpoint_live.rs` +90・−17。
+- fixture: 子 6 の記録の移動（`evaluation.json` を `output.json` の `record` に入れた分の差。reads.json は rename だけ）と `compare.json` の key 2 行。
+- 純増の理由: 方式 a・c の流れ（suppressed の判断を待つ・版の段）、出力の形（output.json・input/）、stub の役の 2 つ、試験 16 件を足した。新しい Manager・trait・状態機械・DB 表・Agent サービスは無い。
+
 ## operator が worker の外で実 LLM の pilot を流す手順
 人の答え（2026-11-24）: 2 反復・最大 48 run・25 USD、account は `claude_max_personal`、model は `claude-sonnet-5-5`（子 6 と同じ）。研究ケースは内部の評価だけ（ChatGPT・Muse に送らない）。測定用の account（`claude_max_lab`・`/local/celeris/measure-accounts`）は使わない。本番の DB・daemon・config に触れない。
 

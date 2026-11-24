@@ -30,8 +30,8 @@ fn sha(bytes: &[u8]) -> String {
     sha256_hex(std::str::from_utf8(bytes).unwrap())
 }
 
-fn approval(strategy_id: &str, version: u32, sha256: &str, by: &str) -> ApprovalRecord {
-    ApprovalRecord {
+fn approval(strategy_id: &str, version: u32, sha256: &str, by: &str) -> DecisionRecord {
+    DecisionRecord {
         key: approval_decision_key(version),
         question: approval_question(strategy_id, version, sha256),
         status: DecisionStatus::Answered,
@@ -258,7 +258,7 @@ fn strategy_contract_approval_needs_human_principal() {
             "{by}"
         );
     }
-    let variants: [fn(&mut ApprovalRecord); 4] = [
+    let variants: [fn(&mut DecisionRecord); 4] = [
         |a| a.last_answer = Some((REJECT_OPTION.into(), "human:web".into())),
         |a| a.status = DecisionStatus::Withdrawn,
         |a| a.question = approval_question("arch-v4-cycle", 1, &"0".repeat(64)),

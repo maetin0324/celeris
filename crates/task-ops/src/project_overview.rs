@@ -397,15 +397,6 @@ impl Events<'_> {
             _ => None,
         }))
     }
-
-    fn last_answer(&mut self, row: &DecisionRow) -> Result<Option<(String, String)>, OpsError> {
-        Ok(self.of(row.task_id)?.iter().rev().find_map(|e| match e {
-            Event::DecisionAnswered { id, option, by, .. } if id == &row.id => {
-                Some((option.clone(), by.clone()))
-            }
-            _ => None,
-        }))
-    }
 }
 
 /// D1: 案件の概要。案件が無ければ `None`。どの表にも書かない。
@@ -727,16 +718,15 @@ fn strategy_series(
         match d.status {
             DecisionStatus::Open => s.pending.push((subject.version, d.id.clone())),
             DecisionStatus::Answered => {
-                let human_approve = events.last_answer(d)?.filter(|(option, by)| {
-                    option == strategy::APPROVE_OPTION && task_core::is_human_principal(by)
-                });
-                if let Some((_, by)) = human_approve
+                // 子 2 D2.2 の承認の照合（option と人の主体）をそのまま使う（規約 2）。
+                let answer = d.last_answer();
+                if let Some(by) = strategy::approving_human(answer.as_ref())
                     && s.approved.as_ref().is_none_or(|a| a.0 < subject.version)
                 {
                     s.approved = Some((
                         subject.version,
                         d.id.clone(),
-                        by,
+                        by.to_string(),
                         d.answered_at.clone().unwrap_or_default(),
                         subject.sha256.clone(),
                     ));

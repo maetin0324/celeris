@@ -4016,10 +4016,10 @@ export type ManifestView = {
   "unsupported_claims": Array<string>;
   "version": number;
   "versions": Array<number>;
-  "violations": Array<ManifestViolationView>;
+  "violations": Array<ManifestViolation>;
 };
 
-export type ManifestViolationView = {
+export type ManifestViolation = {
   "code": string;
   "detail": string;
   "path": string;

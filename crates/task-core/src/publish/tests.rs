@@ -70,8 +70,8 @@ fn check(doc: &Value, ctx: &ManifestContext) -> Vec<ManifestViolation> {
     validate_manifest(doc.to_string().as_bytes(), ctx)
 }
 
-fn codes(v: &[ManifestViolation]) -> Vec<(ManifestRule, &'static str)> {
-    v.iter().map(|v| (v.rule, v.code)).collect()
+fn codes(v: &[ManifestViolation]) -> Vec<(ManifestRule, &str)> {
+    v.iter().map(|v| (v.rule, v.code.as_str())).collect()
 }
 
 #[test]
@@ -290,8 +290,8 @@ fn publish_manifest_limits_reject_long_commands_and_bad_commit() {
     assert_eq!(validate_manifest(&big, &ctx()).len(), 1);
 }
 
-fn record(option: &str, by: &str, sha: &str) -> SignoffRecord {
-    SignoffRecord {
+fn record(option: &str, by: &str, sha: &str) -> DecisionRecord {
+    DecisionRecord {
         key: signoff_decision_key(1),
         question: signoff_question("paper-a", 1, sha),
         status: DecisionStatus::Answered,

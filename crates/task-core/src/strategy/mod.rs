@@ -20,7 +20,7 @@ use time::format_description::well_known::Rfc3339;
 use crate::chat_citation::{
     ChatCitation, ChatCitationState, CitedMessage, citation_shape_ok, citation_state,
 };
-use crate::decision::DecisionStatus;
+use crate::decision::{DecisionRecord, DecisionStatus};
 use crate::project_proposal::sha256_hex;
 use crate::roadmap::ROADMAP_TEXT_MAX;
 pub use review::{
@@ -364,16 +364,6 @@ pub struct PreviousVersion {
     pub task_project_id: Option<String>,
 }
 
-/// 承認に使う決定（文書を作った task の `decisions` の行と、最後の `DecisionAnswered`）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ApprovalRecord {
-    pub key: String,
-    pub question: String,
-    pub status: DecisionStatus,
-    /// 最後の回答の `(option, by)`。
-    pub last_answer: Option<(String, String)>,
-}
-
 /// 照合の文脈（呼び出し側が store から集める）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckContext {
@@ -389,7 +379,8 @@ pub struct CheckContext {
     pub key_sha256s: Vec<String>,
     /// 前の版の鎖。`chain[0]` が `version - 1`。
     pub chain: Vec<PreviousVersion>,
-    pub approval: Option<ApprovalRecord>,
+    /// 承認に使う決定（文書を作った task の `decisions` の行と、最後の `DecisionAnswered`）。
+    pub approval: Option<DecisionRecord>,
     /// 同じ `strategy_id` で人が承認した最大の版。
     pub latest_approved_version: Option<u32>,
     /// 文書の参照（`url` を除く）を引いた結果。載っていない参照は引けなかったものとして扱う。
@@ -496,6 +487,18 @@ static SECRET: LazyLock<Option<Regex>> = LazyLock::new(|| {
     )
     .ok()
 });
+
+/// D2.2 の 5: 最後の回答（[`DecisionRecord::last_answer`]）が人（`human:<名前>`）の [`APPROVE_OPTION`] なら、
+/// その主体。`mcp:`・`cos:`・`operator:` の回答と却下は `None`。承認の照合（文書の検査・外へ出す許可・
+/// 案件の概要の承認済みの版）が option と主体をこの関数だけで照らす。
+pub fn approving_human(last_answer: Option<&(String, String)>) -> Option<&str> {
+    match last_answer {
+        Some((option, by)) if option == APPROVE_OPTION && crate::is_human_principal(by) => {
+            Some(by.as_str())
+        }
+        _ => None,
+    }
+}
 
 /// 問いから文書の name と sha256 を読む。名前と sha256 がちょうど 1 回ずつ現れるときだけ `Some`。
 pub fn approval_subject(question: &str) -> Option<ApprovalSubject> {
@@ -743,10 +746,10 @@ impl<'a> Input<'a> {
         if a.status != DecisionStatus::Answered {
             return Err(format!("決定が answered でない（{}）", a.status.as_str()));
         }
+        if approving_human(a.last_answer.as_ref()).is_some() {
+            return Ok(());
+        }
         match &a.last_answer {
-            Some((option, by)) if option == APPROVE_OPTION && crate::is_human_principal(by) => {
-                Ok(())
-            }
             Some((option, _)) if option != APPROVE_OPTION => Err(format!("最後の回答が {option}")),
             Some((_, by)) => Err(format!("承認した主体 {by} が人（human:<名前>）でない")),
             None => Err("回答が無い".into()),

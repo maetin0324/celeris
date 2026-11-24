@@ -21,13 +21,13 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use crate::chat::{ChatCitation, ChatMessageRole};
+use crate::decision::DecisionRecord;
 use crate::project_proposal::sha256_hex;
 use crate::strategy::envelope::{
     self, BODY_MAX_BYTES, EnvelopeContext, MCP_PROPOSE_CONSENT_SCOPE, OutboundShare,
 };
 use crate::strategy::{
-    Actor, ActorKind, ApprovalRecord, Confidence, Consent, DecisionState, Source, SourceKind,
-    SourceRevision,
+    Actor, ActorKind, Confidence, Consent, DecisionState, Source, SourceKind, SourceRevision,
 };
 
 mod format;
@@ -290,7 +290,7 @@ pub struct ExchangeDocument {
     /// The recorded state; only `discussion`・`proposed` are used. `approved` is derived from `approval` (D1.4).
     pub decision_state: DecisionState,
     /// The decision approving this text (child 2 D2.2), looked up by the caller.
-    pub approval: Option<ApprovalRecord>,
+    pub approval: Option<DecisionRecord>,
 }
 
 /// What [`build_snapshot`] reads (gathered by [`store`] in one read transaction).

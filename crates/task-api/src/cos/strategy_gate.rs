@@ -19,14 +19,13 @@ use std::path::{Component, Path};
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use task_core::decision::{DecisionRow, DecisionStatus};
-use task_core::model::{ArtifactRef, Event, Status, Task, TaskId};
+use task_core::decision::{DecisionRecord, DecisionRow, DecisionStatus};
+use task_core::model::{ArtifactRef, Status, Task, TaskId};
 use task_core::project_proposal::sha256_hex;
 use task_core::store::SqliteStore;
 use task_core::strategy::{
-    self, APPROVE_OPTION, ApprovalRecord, ArtifactFacts, ArtifactPointer, CheckContext,
-    ExecutionFacts, ExperimentTask, Intent, PreviousVersion, RefStatus, Reference, Rule,
-    StrategyDocument, Violation,
+    self, ArtifactFacts, ArtifactPointer, CheckContext, ExecutionFacts, ExperimentTask, Intent,
+    PreviousVersion, RefStatus, Reference, Rule, StrategyDocument, Violation,
 };
 use task_core::strategy_critic::critic_subjects;
 use task_core::strategy_reads;
@@ -192,7 +191,7 @@ fn violations(
     };
     if let Some(doc) = &doc {
         ctx.chain = reader.chain(doc)?;
-        ctx.approval = approval(store, &rows, source.id, doc, &strategy.sha256)?;
+        ctx.approval = approval(&rows, source.id, doc, &strategy.sha256);
         for subject in reader.human_approvals(&rows, &doc.strategy_id)? {
             ctx.latest_approved_version = ctx.latest_approved_version.max(Some(subject.version));
             if subject.version == doc.version {
@@ -273,30 +272,13 @@ fn execution_facts(
     })
 }
 
-/// 最後の `DecisionAnswered` の `(option, by)`。
-fn last_answer(
-    store: &SqliteStore,
-    row: &DecisionRow,
-) -> Result<Option<(String, String)>, ApiProblem> {
-    Ok(store
-        .events_for(row.task_id)
-        .map_err(store_problem)?
-        .into_iter()
-        .rev()
-        .find_map(|(_, e)| match e {
-            Event::DecisionAnswered { id, option, by, .. } if id == row.id => Some((option, by)),
-            _ => None,
-        }))
-}
-
 /// D2.2 の 1・2: 文書を作った task の、この版の key の決定（問いの sha256 が文書と同じものを先に選ぶ）。
 fn approval(
-    store: &SqliteStore,
     rows: &[DecisionRow],
     source: TaskId,
     doc: &StrategyDocument,
     sha256: &str,
-) -> Result<Option<ApprovalRecord>, ApiProblem> {
+) -> Option<DecisionRecord> {
     let key = strategy::approval_decision_key(doc.version);
     let mut own: Vec<&DecisionRow> = rows
         .iter()
@@ -305,15 +287,7 @@ fn approval(
     own.sort_by_key(|r| {
         strategy::approval_subject(&r.request.question).is_none_or(|s| s.sha256 != bare(sha256))
     });
-    let Some(row) = own.first() else {
-        return Ok(None);
-    };
-    Ok(Some(ApprovalRecord {
-        key: row.key.clone(),
-        question: row.request.question.clone(),
-        status: row.status,
-        last_answer: last_answer(store, row)?,
-    }))
+    own.first().map(|row| DecisionRecord::from_row(row))
 }
 
 /// store と workspace を読むだけの照会（task の案件は 1 回だけ引く）。publish manifest の検査
@@ -434,10 +408,7 @@ impl<'a> Reader<'a> {
             {
                 continue;
             }
-            if let Some((option, by)) = last_answer(self.store, row)?
-                && option == APPROVE_OPTION
-                && task_core::is_human_principal(&by)
-            {
+            if strategy::approving_human(row.last_answer().as_ref()).is_some() {
                 out.push(subject);
             }
         }

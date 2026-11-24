@@ -19899,7 +19899,7 @@
         },
         "violations": {
           "items": {
-            "$ref": "#/$defs/ManifestViolationView"
+            "$ref": "#/$defs/ManifestViolation"
           },
           "type": "array"
         }
@@ -19924,10 +19924,11 @@
       ],
       "type": "object"
     },
-    "ManifestViolationView": {
-      "description": "検査の違反 1 件（`task_core::publish::ManifestViolation` の写し）。",
+    "ManifestViolation": {
+      "description": "検査の違反 1 件。`GET /tasks/{id}/publish/{manifest_id}` の `violations` にもこの形で出る。",
       "properties": {
         "code": {
+          "description": "拒否の code（`ManifestRule::code`。API 側の file の欠けは `publish_manifest_invalid`、file の上書きは\n`publish_manifest_stale`）。",
           "type": "string"
         },
         "detail": {

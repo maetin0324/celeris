@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 
 use serde_json::{Value, json};
 
-use super::super::{approval_decision_key, approval_question};
+use super::super::{APPROVE_OPTION, approval_decision_key, approval_question};
 use super::*;
 
 const P: &str = "01M2WTS3DKNZBSZ2JMVB4CZMBW";
@@ -64,8 +64,8 @@ fn texts(v: &Value) -> Vec<String> {
 }
 
 /// D2.2 の承認の決定（answered、最後の回答は `approve`）。
-fn approval(strategy_id: &str, version: u32, sha256: &str, by: &str) -> ApprovalRecord {
-    ApprovalRecord {
+fn approval(strategy_id: &str, version: u32, sha256: &str, by: &str) -> DecisionRecord {
+    DecisionRecord {
         key: approval_decision_key(version),
         question: approval_question(strategy_id, version, sha256),
         status: DecisionStatus::Answered,
@@ -203,24 +203,24 @@ fn external_exchange_envelope_human_decision_approves() {
     assert_eq!(validate_envelope(&e, &ctx("human:web")), vec![R10]);
     let base = approval("cycle-cut", 1, &sha256_hex(BODY), "human:rmaeda");
     let variants = [
-        ApprovalRecord {
+        DecisionRecord {
             status: DecisionStatus::Open,
             last_answer: None,
             ..base.clone()
         },
-        ApprovalRecord {
+        DecisionRecord {
             status: DecisionStatus::Withdrawn,
             ..base.clone()
         },
-        ApprovalRecord {
+        DecisionRecord {
             last_answer: Some(("reject".into(), "human:rmaeda".into())),
             ..base.clone()
         },
-        ApprovalRecord {
+        DecisionRecord {
             key: approval_decision_key(2),
             ..base.clone()
         },
-        ApprovalRecord {
+        DecisionRecord {
             question: "承認しますか".into(),
             ..base
         },

@@ -6,6 +6,7 @@
 //! - [`DecisionRow`]: 派生の表 `decisions`（migration 0031）の 1 行と、events からの畳み込み
 //!   （[`DecisionRow::from_request`] / [`DecisionRow::apply_answer`] / [`DecisionRow::apply_withdrawal`]）。
 //!   store の書き込み（`Event` と同じトランザクション）と replay の再構築がこの同じ関数を通る。
+//! - [`DecisionRecord`]: 照合（戦略の承認・publish の署名）に使う行の key・問い・状態と最後の回答。
 //!
 //! 回答の流れ（API・MCP・受信箱・通知）は R3a。ここは型と形の検証だけ。
 
@@ -351,6 +352,15 @@ impl DecisionRow {
         }
     }
 
+    /// 最後の `DecisionAnswered` の `(option, by)`。[`DecisionRow::apply_answer`] が event と同じトランザクションで
+    /// 行に写した回答を読む（revise の回答は上書き。取り下げの後も残る）。最後の回答を引く唯一の照会。
+    pub fn last_answer(&self) -> Option<(String, String)> {
+        self.request
+            .answer
+            .as_ref()
+            .map(|a| (a.option.clone(), a.by.clone()))
+    }
+
     /// `Event::DecisionAnswered` を当てる。
     pub fn apply_answer(&mut self, option: &str, note: Option<&str>, by: &str, ts: &str) {
         self.status = DecisionStatus::Answered;
@@ -369,6 +379,28 @@ impl DecisionRow {
         self.status = DecisionStatus::Withdrawn;
         self.request.status = DecisionStatus::Withdrawn;
         self.request.withdrawn_reason = Some(reason.to_string());
+    }
+}
+
+/// 照合に使う決定（決定の行の key・問い・状態と、最後の回答）。戦略の承認（`strategy-approve-v<n>`、
+/// `task_core::strategy`）と publish の署名（`publish-signoff-v<n>`、`task_core::publish`）が同じ型を使う。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecisionRecord {
+    pub key: String,
+    pub question: String,
+    pub status: DecisionStatus,
+    /// 最後の回答の `(option, by)`（[`DecisionRow::last_answer`]）。
+    pub last_answer: Option<(String, String)>,
+}
+
+impl DecisionRecord {
+    pub fn from_row(row: &DecisionRow) -> Self {
+        DecisionRecord {
+            key: row.key.clone(),
+            question: row.request.question.clone(),
+            status: row.status,
+            last_answer: row.last_answer(),
+        }
     }
 }
 

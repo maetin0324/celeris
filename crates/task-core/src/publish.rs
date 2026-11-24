@@ -14,7 +14,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::decision::DecisionStatus;
+use crate::decision::{DecisionRecord, DecisionStatus};
 use crate::strategy::{
     Acl, Actor, ArtifactPointer, Classification, Confidence, RefStatus, Reference, Source,
     SourceRevision, Stance, contains_secret,
@@ -197,10 +197,13 @@ impl ManifestRule {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// 検査の違反 1 件。`GET /tasks/{id}/publish/{manifest_id}` の `violations` にもこの形で出る。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct ManifestViolation {
     pub rule: ManifestRule,
-    pub code: &'static str,
+    /// 拒否の code（`ManifestRule::code`。API 側の file の欠けは `publish_manifest_invalid`、file の上書きは
+    /// `publish_manifest_stale`）。
+    pub code: String,
     pub path: String,
     pub detail: String,
 }
@@ -307,25 +310,16 @@ pub enum SignoffState {
     Superseded,
 }
 
-/// 署名の決定（manifest を作った task の `decisions` の行と、最後の `DecisionAnswered`）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SignoffRecord {
-    pub key: String,
-    pub question: String,
-    pub status: DecisionStatus,
-    /// 最後の回答の `(option, by)`。
-    pub last_answer: Option<(String, String)>,
-}
-
 /// D3.3 の 1〜5 と D3.4 の失効。`recorded_sha256` は manifest の `ArtifactProduced` の sha256、
-/// `current_sha256` は file の今の byte 列の sha256（読めなければ `None`）、`newer_signoff` は同じ
+/// `current_sha256` は file の今の byte 列の sha256（読めなければ `None`）、`record` は manifest を作った task の
+/// 署名の決定（`decisions` の行と最後の `DecisionAnswered`）、`newer_signoff` は同じ
 /// `manifest_id` のより新しい版の署名の決定があるか。
 pub fn signoff_state(
     manifest_id: &str,
     version: u32,
     recorded_sha256: &str,
     current_sha256: Option<&str>,
-    record: Option<&SignoffRecord>,
+    record: Option<&DecisionRecord>,
     newer_signoff: bool,
 ) -> SignoffState {
     if newer_signoff {
@@ -383,7 +377,7 @@ fn push(
 ) {
     out.push(ManifestViolation {
         rule,
-        code: rule.code(),
+        code: rule.code().to_string(),
         path: path.into(),
         detail: detail.into(),
     });

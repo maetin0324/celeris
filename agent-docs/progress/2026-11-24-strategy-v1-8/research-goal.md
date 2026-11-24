@@ -69,7 +69,7 @@ exit 0
 - `python3 -I -m unittest discover -s scripts/dev/parent-eval-blind -p 'test_*.py'` → `Ran 55 tests` OK（`test_pilot_compare.py` の `test_testdata_is_what_the_generator_writes` を含む）。
 - `research.py check-goal --points 11.16,11.17,11.20` → 実データ（task C の `artifacts/c-results.md`）と合成（`testdata/research/c-results.md`）の両方で exit 0。3 時点とも leak 0 件、11.15 節の見出し・最初の段落 0 件。
 - 同じ実データに `--written-before <root の artifacts の research-evidence/c-results.pre-r25.md>` を付けて → 「前の版と同じ文の出典: 3 / 3 節」、exit 0。
-- 研究ケースの本文が repo に無いこと: `git ls-files` の sha256 に実データ（`2830ce82…`）も run 25 の前の写し（`baa2a185…`）も無い。`sh scripts/dev/check-doc-links.sh` → ok、`sh scripts/dev/check-adr-numbers.sh` → ok（482 files）。
+- 研究ケースの本文が repo に無いこと: `git ls-files` の sha256 に実データの sha256（`research_case.SHA`）も run 25 の前の写しの sha256（下の「根拠の写し」）も無い。`sh scripts/dev/check-doc-links.sh` → ok、`sh scripts/dev/check-adr-numbers.sh` → ok（482 files）。`sh scripts/dev/progress-index.sh --check` → exit 0。
 - `cargo fmt --all -- --check` → exit 0。`cargo check -p task-api --test parent_checkpoint_live` → exit 0。
 - `bash scripts/dev/test-affected.sh` → exit 0。対象は celeris・celeris-campaign・celerisctl・llm-proxy・task-api・task-dispatch・task-worker と web。nextest `6377 tests run: 6377 passed (11 slow), 32 skipped`、web の unit `773 passed (773)`（108 files）、tsc -b の error 0。終わりに scratch の trash の消し残しの `rm: Permission denied` が 3 行出た（exit は 0）。
 - `cargo clippy --workspace -- -D warnings` → exit 0。

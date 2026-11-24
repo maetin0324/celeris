@@ -99,7 +99,7 @@ class Slice(unittest.TestCase):
         self.assertTrue(all(b["outcome"] == o for b in built.values()), "Outcome が時点で変わる")
         self.assertEqual(o["id"], research.OUTCOME_ID)
         self.assertEqual(o["title"], "合成の k の cell で合成の node が止まっても欠測にせず、避ける手を試して測り直す（印 SYN-112-Q）。")
-        self.assertEqual(o["acceptance"], ["合成の triad の host の停止の割合（host × cell の数で数えた）: 合成の 2 / 8（印 SYN-115-M）。"])
+        self.assertEqual(o["acceptance"], ["合成の停止の割合（合成の数え方で数えた）: 合成の 3 / 9（印 SYN-115-M）。"])
         for p, b in built.items():
             goal = b["goal"]
             self.assertIn("目的：" + o["title"], goal)
@@ -121,7 +121,7 @@ class Slice(unittest.TestCase):
             self.assertNotEqual(key, "0")
             self.assertLess(keys.index(key), keys.index(research.STRATEGY_POINT), key)
         # 出典の箇条が無ければ、代わりの節（11.15 節など）を探さずに止まる。
-        no_method = self.text.replace("- 合成の triad の host の停止の割合", "- 合成の triad の host の数")
+        no_method = self.text.replace("- 合成の停止の割合", "- 合成の数え方")
         with self.assertRaises(ValueError):
             research.build(no_method, "11.17")
         # 出典に 11.15 節以降の節を書いた規則は断る。

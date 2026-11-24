@@ -4,69 +4,43 @@
 //! puts its `(source, account)` on cooldown with the same owner as worker runs, and the next
 //! attempt of the same chat run selects again from all of `cos.route_candidates`. Admission skips
 //! the cooled account, so another account of the same source (then the next candidate) runs.
-use task_core::accounts::AccountAdapter;
 use task_core::chat::{ChatPrelaunchReason, ChatRun, ChatRunState, ChatStatusPhase};
 use task_core::llm_route::{AccountId, SourceId};
-use task_worker::adapter::AdapterError;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use super::launch::CosChatLaunch;
 use super::sink::ChatRunSink;
 use super::slot_wait::{SLOT_WAIT_TEXT, SlotWait};
 use crate::dispatcher::Dispatcher;
-use crate::dispatcher::route_failure::{provider_failure_outcome, provider_failure_reason};
-use crate::policy::ProviderOutcome;
+use crate::routing_runtime::route_state::account_adapter_for_source_kind;
 use std::sync::Arc;
 
 /// A supply-side failure of a CoS route (ADR 2026-11-24 D1): the adapter's `Err` classified by
-/// the same functions as worker runs. `reason` is the `provider_failure_reason` vocabulary
-/// (`spawn` included); `outcome` decides the cooldown length.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SupplyFailure {
-    pub reason: &'static str,
-    pub outcome: ProviderOutcome,
-}
+/// `provider_failure_reason` (the cooldown vocabulary, `spawn` included) and
+/// `provider_failure_outcome` (the cooldown length), the same functions as worker runs.
+pub(crate) type SupplyFailure = (&'static str, crate::policy::ProviderOutcome);
 
-impl SupplyFailure {
-    pub(crate) fn of(error: &AdapterError) -> Option<Self> {
-        Some(Self {
-            reason: provider_failure_reason(error)?,
-            outcome: provider_failure_outcome(error)?,
-        })
-    }
-}
+/// One launched route of a chat run: the attempt number (0 is the first; a later attempt starts a
+/// fresh session) and the `(source, account)` it ran on. The number is not a candidate position.
+pub(super) type RouteAttempt = (usize, SourceId, AccountId);
 
-/// One launched route of a chat run. `index` counts the attempts of this run (0 is the first);
-/// it is not a position in the candidate list. A later attempt starts a fresh session.
-#[derive(Debug, Clone)]
-pub(super) struct RouteAttempt {
-    pub index: usize,
-    pub source: SourceId,
-    pub account: AccountId,
-    /// The account pool of the source (`None` for a source without one).
-    pub account_adapter: Option<AccountAdapter>,
-}
-
-impl Dispatcher {
-    /// Cool down the route that failed, with the owners worker runs use (`worker_finish.rs`): a
-    /// pool account goes to the account book (an auth failure is held until re-login and notifies
-    /// the human once); a source without a pool, or a spawn failure, cools the source.
-    fn cool_down_cos_route(&mut self, route: &RouteAttempt, supply: &SupplyFailure) {
-        match route.account_adapter {
-            Some(adapter) if supply.reason != "spawn" => self.record_account_failure(
-                adapter,
-                route.account.as_ref(),
-                supply.reason,
-                &supply.outcome,
-            ),
-            _ => {
-                let event = self.record_source_failure(
-                    route.source.as_ref(),
-                    supply.reason,
-                    &supply.outcome,
-                );
-                tracing::info!(?event, source = %route.source, "CoS route source cooled down");
-            }
+/// Cool down the route that failed, with the owners worker runs use (`worker_finish.rs`): a pool
+/// account goes to the account book (an auth failure is held until re-login and notifies the
+/// human once); a source without a pool, or a spawn failure, cools the source.
+fn cool_down(d: &mut Dispatcher, (_, source, account): &RouteAttempt, supply: &SupplyFailure) {
+    let (reason, outcome) = supply;
+    let registry = d.routing.registry();
+    let pool = registry
+        .sources
+        .get(source)
+        .and_then(|s| account_adapter_for_source_kind(s.kind.as_ref()));
+    match pool {
+        Some(pool) if *reason != "spawn" => {
+            d.record_account_failure(pool, account.as_ref(), reason, outcome)
+        }
+        _ => {
+            let event = d.record_source_failure(source.as_ref(), reason, outcome);
+            tracing::info!(?event, %source, "CoS route source cooled down");
         }
     }
 }
@@ -128,7 +102,7 @@ impl CosChatLaunch {
             self.route_reservations.remove(&retry.thread_id);
             // Once per failure, even when the retry waits for capacity or the run was stopped.
             if let Some(supply) = retry.supply.take() {
-                dispatcher.cool_down_cos_route(&retry.attempt, &supply);
+                cool_down(dispatcher, &retry.attempt, &supply);
             }
             let Ok(run) = self.store.chat_run_get(&retry.thread_id, &retry.run_id) else {
                 continue;
@@ -148,14 +122,7 @@ impl CosChatLaunch {
                 .get(&retry.thread_id)
                 .unwrap_or(&self.config)
                 .clone();
-            if run
-                .started_at
-                .as_deref()
-                .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
-                .is_some_and(|start| {
-                    (now - start).whole_seconds().max(0) as u64 >= config.max_wall_secs
-                })
-            {
+            if run_elapsed(&run, now) >= config.max_wall_secs {
                 self.fail_routes(
                     &run,
                     "CoS run の実行期限に達しました",
@@ -172,7 +139,7 @@ impl CosChatLaunch {
             self.route_notice(
                 &run.id,
                 &run.thread_id,
-                retry.attempt.index,
+                retry.attempt.0,
                 "failed",
                 &summary,
                 now,
@@ -198,7 +165,7 @@ impl CosChatLaunch {
                     dispatcher,
                     &retry.thread_id,
                     &run,
-                    retry.attempt.index + 1,
+                    retry.attempt.0 + 1,
                     Some(retry.previous),
                     now,
                 );

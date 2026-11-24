@@ -210,7 +210,7 @@ impl LaunchFailure {
 }
 
 /// A chat run whose route ended in a supply-side failure (ADR 2026-11-24 D5). `retry_routes`
-/// cools down `attempt`'s route with `supply` (taken once) and launches attempt `index + 1`.
+/// cools down `attempt`'s route with `supply` (taken once) and launches the next attempt number.
 pub(super) struct RouteRetry {
     pub thread_id: String,
     pub run_id: String,
@@ -651,7 +651,6 @@ impl CosChatLaunch {
                 .collect::<Vec<_>>(),
         )
         .map_err(|e| LaunchFailure::skills(format!("CoS skills unavailable: {e}")))?;
-        let provider = pick.candidate.source.to_string();
         let account = Some(pick.account.to_string());
         let selected_route = dispatcher
             .route_launch_target(&pick)
@@ -687,7 +686,7 @@ impl CosChatLaunch {
         let session_key = ChatSessionKey {
             thread_id: thread_id.to_string(),
             harness: pick.harness.to_string(),
-            provider: Some(provider.clone()),
+            provider: Some(pick.candidate.source.to_string()),
             llm_source: Some(pick.candidate.source.to_string()),
             model: Some(pick.candidate.model.to_string()),
             account_id: account.clone(),
@@ -902,21 +901,7 @@ impl CosChatLaunch {
             now,
         );
         let retries = Arc::clone(&self.retries);
-        let route = super::routes::RouteAttempt {
-            index: attempt,
-            source: pick.candidate.source.clone(),
-            account: pick.account.clone(),
-            account_adapter: dispatcher
-                .routing
-                .registry()
-                .sources
-                .get(&pick.candidate.source)
-                .and_then(|source| {
-                    crate::routing_runtime::route_state::account_adapter_for_source_kind(
-                        source.kind.as_ref(),
-                    )
-                }),
-        };
+        let route = (attempt, pick.candidate.source.clone(), pick.account.clone());
         self.running.insert(
             thread.clone(),
             tokio::spawn(async move {

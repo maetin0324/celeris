@@ -29,6 +29,8 @@ use task_core::chat::{
 use task_core::{ArtifactRef, BudgetKind, ProgressFields, ProgressKind, SqliteStore, Usage};
 use task_worker::adapter::{AdapterError, EventSink, RunOutcome, Terminal};
 use task_worker::result_report::ParsedActions;
+
+use crate::dispatcher::route_failure::{provider_failure_outcome, provider_failure_reason};
 use time::OffsetDateTime;
 
 /// 注入する時計（試験は固定の時刻を渡す）。
@@ -99,7 +101,7 @@ pub(crate) fn chat_finish_for(
         Ok(o) => o,
         Err(e) => {
             return ChatFinish {
-                supply: super::routes::SupplyFailure::of(e),
+                supply: provider_failure_reason(e).zip(provider_failure_outcome(e)),
                 ..finish(ChatRunState::Failed, None, Some(format!("worker: {e}")))
             };
         }

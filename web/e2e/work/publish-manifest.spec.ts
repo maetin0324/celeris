@@ -50,9 +50,11 @@ function mutations() {
 }
 
 async function openManifest(page: Page, version?: number) {
-  await page.goto(
+  const response = await page.goto(
     `${gateway.base}/tasks/T1/publish/${PUBLISH_MANIFEST_ID}${version === undefined ? "" : `?version=${version}`}`,
   );
+  // gateway は宣言した SPA の path（server/spa-routes.js）だけを 200 で返す。直接開いた manifest の URL も 200。
+  expect(response?.status()).toBe(200);
   const panel = page.getByTestId("publish-manifest");
   await expect(panel).toBeVisible();
   return panel;

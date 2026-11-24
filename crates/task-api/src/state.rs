@@ -393,6 +393,8 @@ impl ApiState {
             self.inner.daemon.borrow().as_ref(),
             time::OffsetDateTime::now_utc(),
         )
+        // ADR 2026-11-24-paused-children-free-child-slots D3: daemon と同じ実効の上限で枠の待ちを出す。
+        .with_child_slot_limit(self.inner.tree_limits.max_parallel_child_tasks)
     }
 
     /// DB を使う同期処理を `spawn_blocking` で実行する。

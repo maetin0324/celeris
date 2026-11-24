@@ -160,7 +160,7 @@ pub(super) fn unit_reasons(events: &[(u64, Event)], key: &str) -> Vec<String> {
         .collect()
 }
 
-fn view_ctx() -> task_ops::view::ViewContext {
+pub(super) fn view_ctx() -> task_ops::view::ViewContext {
     task_ops::view::ViewContext {
         workspace_roots: task_core::local_machine::WorkspaceRoots::new(
             PathBuf::from("/nonexistent"),

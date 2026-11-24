@@ -17,6 +17,11 @@ describe("task wait reasons", () => {
       }),
     ).toBe("WU 待ち: dispatch-prune ← cos-route");
   });
+  test("names the units waiting for a child task slot and the children holding it", () => {
+    const wait: TaskWait = { kind: "child_slot", unit_keys: ["e1b"], task_ids: ["T2", "T3"], limit: 2 };
+    expect(waitReason(wait)).toBe("子 task の枠の空き待ち: e1b（2/2）");
+    expect(waitTargets(wait)).toEqual(["T2", "T3"]);
+  });
   test("names the stalled stage and units of a plan that cannot dispatch", () => {
     expect(
       waitReason({

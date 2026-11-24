@@ -178,9 +178,10 @@ async fn task_wait_parent_waiting_on_child_uses_the_shared_resolution() {
         task_id: child.id,
         status: child.status,
         labels: child.labels.clone(),
+        self_paused: false,
     }];
     assert_eq!(
-        task_core::plan_waits(&units, &children, &[]).first(),
+        task_core::plan_waits(&units, &children, &[], None).first(),
         Some(&task_core::TaskWait::Children {
             task_ids: vec![child.id],
             unit_keys: vec!["merge".into()],

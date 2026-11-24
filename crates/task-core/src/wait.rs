@@ -116,6 +116,14 @@ pub enum TaskWait {
         task_ids: Vec<TaskId>,
         unit_keys: Vec<String>,
     },
+    /// ADR 2026-11-24-paused-children-free-child-slots D3: 現在の段の ready の kind task の unit（`unit_keys`、seq 順）が、同時の
+    /// 子 task の枠（`max_parallel_child_tasks` = `limit`）の空きを待つ。`task_ids` は枠を占める子（id 順。自分で一時停止した子は
+    /// 入らない）。
+    ChildSlot {
+        unit_keys: Vec<String>,
+        task_ids: Vec<TaskId>,
+        limit: usize,
+    },
     /// D8/D9: runnable な unit が無く、待っている unit がある。
     WorkUnits { units: Vec<UnitWait> },
     /// D10: 段に failed / blocked がある。
@@ -301,6 +309,8 @@ pub struct ChildFacts {
     pub task_id: TaskId,
     pub status: Status,
     pub labels: Vec<String>,
+    /// 子 task 自身に `paused_at` がある（祖先の一時停止は含めない。ADR 2026-11-24-paused-children-free-child-slots D1）。
+    pub self_paused: bool,
 }
 
 /// ADR-0074 D3.7: `child:<key>` 依存の解決と子待ち（D7）。dispatcher の `resolve_child_dependencies` と
@@ -530,10 +540,12 @@ pub fn plan_stall(
 }
 
 /// D7〜D11・D13: 計画（WorkUnit）から決まる待ち。`open_decision_keys` は未回答の `needed_before: self` の決定。
+/// `child_slot_limit` は実効の `max_parallel_child_tasks`（`None` なら枠の待ち〈`ChildSlot`〉を推測しない）。
 pub fn plan_waits(
     units: &[WorkUnitRow],
     children: &[ChildFacts],
     open_decision_keys: &[String],
+    child_slot_limit: Option<usize>,
 ) -> Vec<TaskWait> {
     let mut out = Vec::new();
     let live: Vec<&WorkUnitRow> = units.iter().filter(|u| u.status.is_active()).collect();
@@ -582,6 +594,21 @@ pub fn plan_waits(
             task_ids: child_ids.into_iter().collect(),
             unit_keys: child_keys,
         });
+    }
+    // ADR 2026-11-24-paused-children-free-child-slots D3: 子 task の枠の空き待ち（D7 の子待ちとは別の待ち）。
+    if let Some(limit) = child_slot_limit {
+        let self_paused: BTreeSet<TaskId> = children
+            .iter()
+            .filter(|c| c.self_paused)
+            .map(|c| c.task_id)
+            .collect();
+        if let Some(w) = child_slot_wait(units, &self_paused, limit) {
+            out.push(TaskWait::ChildSlot {
+                unit_keys: w.unit_keys,
+                task_ids: w.task_ids,
+                limit: w.limit,
+            });
+        }
     }
 
     // ADR 2026-10-23-stage-order-and-plan-stall D4: 計画の詰まり（D8/D9 の unit ごとの待ちも出せるときは続けて出す）。
@@ -683,6 +710,8 @@ pub fn plan_waits(
     out
 }
 
+mod child_slot;
+pub use child_slot::*;
 mod task_deps;
 pub use task_deps::*;
 

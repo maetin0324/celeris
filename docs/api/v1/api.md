@@ -68,6 +68,7 @@
   `POST /console/instruct`（CoS 宛）と `POST /org/cos/messages` の入力は scope ごとの legacy thread ではなく統括・案件の固定 CoS スレッドへ入る（応答の形は不変）。
   legacy スレッドへの `POST /chat/threads/{t}/messages` は 409 `chat_conflict`。
 - 改訂: 2026-11-11（ADR 2026-11-11-unit-task-dependencies）— **追加。v1 のまま**。/3 の計画の unit の `depends_on` に `task:<task id>`（木の外の同じ案件の task）を書ける（§`PUT /tasks/{id}/execution-plan` の /3 の項）。存在しない task・自分の木の task・別の案件・循環は 422 `validation`。`TaskWait` に kind `task_dependency`（`task_id`・`cause`〈`unfinished`/`unmerged`/`delivery_skipped`/`held`/`discarded`/`failed`/`cancelled`〉・`detail`・`unit_keys`）を足した（人の操作待ちではない。`human_wait_aging` の対象外）。
+- 改訂: 2026-11-24（ADR 2026-11-24-paused-children-free-child-slots）— **追加。v1 のまま**。`TaskWait` に kind `child_slot`（`unit_keys`・`task_ids`・`limit`）を足した。現在の段の ready の kind task の unit（`unit_keys`）が同時の子 task の枠（`max_parallel_child_tasks` = `limit`）の空きを待つときに出る。`task_ids` は枠を占める子で、自分で一時停止した子（`paused_at` を持つ子）は入らない（枠に数えない。祖先の一時停止で止まっている子は数える）。`children`（未完の子の完了待ち）とは別の待ち。
 - 改訂: 2026-10-17（ADR 2026-10-17-root-dependency-waits-for-integration D3）— **追加。v1 のまま**。`TaskWait` に kind `depends_on_integration`（`task_id`・`cause`〈`unmerged`/`delivery_skipped`/`held`/`discarded`〉・`detail`）を足した。
 - 改訂: 2026-10-11（ADR 2026-10-11-task-wait-reasons D4・D6）— **破壊的。v1 のまま**。`DaemonSnapshot.awaiting_human[]`・`awaiting_children[]`・`unroutable[]` を消し、`DaemonSnapshot.task_waits[]` の kind（`review_awaiting_human`・`delegated_children`・`unroutable`）へ寄せた（§3.20）。
 - 改訂: 2026-10-08（ADR 2026-10-08-account-concurrency-limits）— **追加と deprecate。v1 のまま**。エンドポイント 216:

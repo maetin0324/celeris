@@ -3148,6 +3148,10 @@ mod replan_rebase;
 /// 子待ち・subtree の中止・`review: human`（`src/dispatcher/tests/tree.rs`）。
 mod tree;
 
+/// ADR 2026-11-24-paused-children-free-child-slots: 自分で一時停止した子は同時の子 task の枠に数えない・祖先の一時停止は数える・
+/// 再開で上限を超えてよい・枠の待ち（`child_slot`）を waits に出す（`src/dispatcher/tests/tree_child_slots.rs`）。
+mod tree_child_slots;
+
 /// ADR-0079 §7 R1c: 子のブランチの基点・統合での子のブランチの merge・子の最終レビューの基点・孫 → 子 → root
 /// （`src/dispatcher/tests/tree_branches.rs`）。
 mod tree_branches;

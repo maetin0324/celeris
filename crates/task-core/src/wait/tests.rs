@@ -243,7 +243,7 @@ fn task_wait_unit_waits_agree_with_newly_ready_on_depends_on_and_stage() {
 
     // 走っている unit があるので task の WorkUnits 待ちは出さない。
     assert!(
-        !plan_waits(&units, &[], &[])
+        !plan_waits(&units, &[], &[], None)
             .iter()
             .any(|w| matches!(w, TaskWait::WorkUnits { .. }))
     );
@@ -257,7 +257,7 @@ fn task_wait_plan_waits_reports_units_when_nothing_runnable() {
         unit("c", Some("s1"), 2, WorkUnitStatus::Pending, &["b"]),
     ];
     assert_eq!(
-        plan_waits(&units, &[], &[]),
+        plan_waits(&units, &[], &[], None),
         vec![
             TaskWait::PlanStalled {
                 stage: Some("s1".into()),
@@ -302,11 +302,13 @@ fn task_wait_children_parent_waits_on_unfinished_child() {
             task_id: child,
             status: Status::Running,
             labels: vec!["child-survey".into()],
+            self_paused: false,
         },
         ChildFacts {
             task_id: other,
             status: Status::Ready,
             labels: vec!["child-report".into()],
+            self_paused: false,
         },
     ];
     let res = resolve_children(&units, &children);
@@ -314,7 +316,7 @@ fn task_wait_children_parent_waits_on_unfinished_child() {
     let mut ids = vec![child, other];
     ids.sort();
     assert_eq!(
-        plan_waits(&units, &children, &[])[0],
+        plan_waits(&units, &children, &[], None)[0],
         TaskWait::Children {
             task_ids: ids,
             unit_keys: vec!["survey".into(), "merge".into()]
@@ -326,6 +328,7 @@ fn task_wait_children_parent_waits_on_unfinished_child() {
         task_id: other,
         status: Status::Done,
         labels: vec!["child-report".into()],
+        self_paused: false,
     }];
     let res = resolve_children(&units, &done_children);
     assert!(res.waiting_units.is_empty());
@@ -346,7 +349,7 @@ fn task_wait_stage_halted_decision_and_blocked_units() {
     infra.blocked_reason = Some(WorkUnitBlockedReason::Infra);
     let units = vec![failed, decision, infra];
     assert_eq!(
-        plan_waits(&units, &[], &["self-key".to_string()]),
+        plan_waits(&units, &[], &["self-key".to_string()], None),
         vec![
             TaskWait::StageHalted {
                 stage: "s1".into(),
@@ -415,7 +418,7 @@ fn plan_stall_is_reported_when_nothing_can_be_dispatched() {
             &["parity-final"],
         ),
     ];
-    let waits = plan_waits(&units, &[], &[]);
+    let waits = plan_waits(&units, &[], &[], None);
     assert_eq!(
         waits,
         vec![TaskWait::PlanStalled {

@@ -33684,6 +33684,39 @@
           "type": "object"
         },
         {
+          "description": "ADR 2026-11-24-paused-children-free-child-slots D3: 現在の段の ready の kind task の unit（`unit_keys`、seq 順）が、同時の\n子 task の枠（`max_parallel_child_tasks` = `limit`）の空きを待つ。`task_ids` は枠を占める子（id 順。自分で一時停止した子は\n入らない）。",
+          "properties": {
+            "kind": {
+              "const": "child_slot",
+              "type": "string"
+            },
+            "limit": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "task_ids": {
+              "items": {
+                "$ref": "#/$defs/TaskId"
+              },
+              "type": "array"
+            },
+            "unit_keys": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "unit_keys",
+            "task_ids",
+            "limit"
+          ],
+          "type": "object"
+        },
+        {
           "description": "D8/D9: runnable な unit が無く、待っている unit がある。",
           "properties": {
             "kind": {

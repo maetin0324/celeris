@@ -33,6 +33,8 @@ export function waitReason(wait: TaskWait): string {
       return "親タスクの承認待ち";
     case "children":
       return `子 ${wait.task_ids.length} 件待ち`;
+    case "child_slot":
+      return `子 task の枠の空き待ち: ${wait.unit_keys.join(", ")}（${wait.task_ids.length}/${wait.limit}）`;
     case "work_units": {
       const unit = wait.units[0];
       return unit ? `WU 待ち: ${unit.key} ← ${unit.waiting_on[0] ?? unit.waiting_stage ?? "段"}` : "WU 待ち";
@@ -99,6 +101,7 @@ function taskDependencyCause(cause: TaskDependencyCause): string {
 export function waitTargets(wait: TaskWait): string[] {
   switch (wait.kind) {
     case "children":
+    case "child_slot":
     case "delegated_children":
     case "depends_on":
       return wait.task_ids;

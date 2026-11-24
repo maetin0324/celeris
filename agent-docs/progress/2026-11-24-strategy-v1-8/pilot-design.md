@@ -33,9 +33,14 @@ completed: 2026-11-24
 - 時点の材料: `python3 -I agent-docs/progress/2026-11-21-strategy-v1-0/research/research_case.py verify` → exit 0（7 slice、否定対照 1 件を検出）。
   `python3 -I agent-docs/progress/2026-11-21-strategy-v1-0/replay/replay.py verify` → exit 0（365 file 一致、12 slice・漏れ 0、否定対照 N1〜N3 を検出）。
 
-## 検査
+## 検査（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 
-提出時の HEAD で実行した結果は下の「検査の結果」に書く。
+- `git diff --quiet "$CELERIS_WU_BASE" -- crates/ control-ts/ web/ scripts/` → exit 0（コード・script の差分 0）
+- `sh "$CELERIS_WU_SCOPE_PATHS"` → exit 0。変更 path は ADR・task の進捗・この file の 3 件だけ
+- `sh scripts/dev/progress-index.sh --check` → exit 0
+- `bash scripts/dev/test-affected.sh` → exit 0（「試験対象の変更なし（docs のみ等）」。repo health は verdict=pass、new 0・worsened 0、source-size は doc_only で not_applicable）
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
 
 ## 未確認の事項
 

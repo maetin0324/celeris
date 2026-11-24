@@ -30,8 +30,6 @@ pub(super) const SLOT_WAIT_TEXT: &str = "CoS の枠の空き待ち";
 #[derive(Debug, Clone)]
 pub(crate) struct SlotWait {
     pub(super) thread_id: String,
-    /// 選び直すときの route 順の起点（初回と同じ）。
-    pub(super) first_route: usize,
 }
 
 pub(crate) type SlotWaits = BTreeMap<String, SlotWait>;

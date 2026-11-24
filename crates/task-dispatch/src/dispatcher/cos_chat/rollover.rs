@@ -450,6 +450,7 @@ pub(crate) async fn run_attempts(a: ChatAttempt) -> (ChatRunSink, ChatFinish) {
             if let Some(again) = retry.signals().resume_failed {
                 finish.state = ChatRunState::Failed;
                 finish.final_text = None;
+                finish.supply = None;
                 finish.reason = Some(format!(
                     "{RESUME_REFUSED_MARK} again after the single fresh retry: {again}"
                 ));
@@ -469,6 +470,7 @@ pub(crate) async fn run_attempts(a: ChatAttempt) -> (ChatRunSink, ChatFinish) {
                     "{RESUME_REFUSED_MARK} ({refusal}); fresh retry could not start: {error}"
                 )),
                 context_exhausted: false,
+                supply: None,
             };
             (sink, finish)
         }

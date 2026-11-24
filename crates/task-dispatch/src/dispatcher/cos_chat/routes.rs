@@ -1,18 +1,74 @@
 //! Explicit CoS route failover; no model judgment and no new input/run on retry.
+//!
+//! ADR 2026-11-24-planner-supply-failure-cooldown D5: a route that ended in a supply-side failure
+//! puts its `(source, account)` on cooldown with the same owner as worker runs, and the next
+//! attempt of the same chat run selects again from all of `cos.route_candidates`. Admission skips
+//! the cooled account, so another account of the same source (then the next candidate) runs.
+use task_core::accounts::AccountAdapter;
 use task_core::chat::{ChatPrelaunchReason, ChatRun, ChatRunState, ChatStatusPhase};
+use task_core::llm_route::{AccountId, SourceId};
+use task_worker::adapter::AdapterError;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use super::launch::CosChatLaunch;
 use super::sink::ChatRunSink;
 use super::slot_wait::{SLOT_WAIT_TEXT, SlotWait};
 use crate::dispatcher::Dispatcher;
+use crate::dispatcher::route_failure::{provider_failure_outcome, provider_failure_reason};
+use crate::policy::ProviderOutcome;
 use std::sync::Arc;
 
-pub(super) fn supply_failure(reason: &str) -> bool {
-    reason.contains("provider exhausted:")
-        || reason.contains("provider throttled")
-        || reason.contains("provider auth failed:")
-        || task_worker::provider::classify_provider_failure(reason).is_some()
+/// A supply-side failure of a CoS route (ADR 2026-11-24 D1): the adapter's `Err` classified by
+/// the same functions as worker runs. `reason` is the `provider_failure_reason` vocabulary
+/// (`spawn` included); `outcome` decides the cooldown length.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SupplyFailure {
+    pub reason: &'static str,
+    pub outcome: ProviderOutcome,
+}
+
+impl SupplyFailure {
+    pub(crate) fn of(error: &AdapterError) -> Option<Self> {
+        Some(Self {
+            reason: provider_failure_reason(error)?,
+            outcome: provider_failure_outcome(error)?,
+        })
+    }
+}
+
+/// One launched route of a chat run. `index` counts the attempts of this run (0 is the first);
+/// it is not a position in the candidate list. A later attempt starts a fresh session.
+#[derive(Debug, Clone)]
+pub(super) struct RouteAttempt {
+    pub index: usize,
+    pub source: SourceId,
+    pub account: AccountId,
+    /// The account pool of the source (`None` for a source without one).
+    pub account_adapter: Option<AccountAdapter>,
+}
+
+impl Dispatcher {
+    /// Cool down the route that failed, with the owners worker runs use (`worker_finish.rs`): a
+    /// pool account goes to the account book (an auth failure is held until re-login and notifies
+    /// the human once); a source without a pool, or a spawn failure, cools the source.
+    fn cool_down_cos_route(&mut self, route: &RouteAttempt, supply: &SupplyFailure) {
+        match route.account_adapter {
+            Some(adapter) if supply.reason != "spawn" => self.record_account_failure(
+                adapter,
+                route.account.as_ref(),
+                supply.reason,
+                &supply.outcome,
+            ),
+            _ => {
+                let event = self.record_source_failure(
+                    route.source.as_ref(),
+                    supply.reason,
+                    &supply.outcome,
+                );
+                tracing::info!(?event, source = %route.source, "CoS route source cooled down");
+            }
+        }
+    }
 }
 
 pub(super) fn failure_text(reason: &str) -> String {
@@ -56,7 +112,7 @@ impl CosChatLaunch {
     pub(super) fn retry_routes(&mut self, dispatcher: &mut Dispatcher) {
         // A worker enqueues only after it has exited. Do not race its final task instructions.
         let pending = std::mem::take(&mut *self.retries.lock().unwrap_or_else(|e| e.into_inner()));
-        for retry in pending {
+        for mut retry in pending {
             if self
                 .running
                 .get(&retry.thread_id)
@@ -70,6 +126,10 @@ impl CosChatLaunch {
             }
             self.running.remove(&retry.thread_id);
             self.route_reservations.remove(&retry.thread_id);
+            // Once per failure, even when the retry waits for capacity or the run was stopped.
+            if let Some(supply) = retry.supply.take() {
+                dispatcher.cool_down_cos_route(&retry.attempt, &supply);
+            }
             let Ok(run) = self.store.chat_run_get(&retry.thread_id, &retry.run_id) else {
                 continue;
             };
@@ -105,21 +165,14 @@ impl CosChatLaunch {
                 );
                 continue;
             }
-            let summary = if retry.next_route == 0 {
-                format!(
-                    "CoS の経路が利用上限・認証で失敗しました。次の代替経路で再試行します。理由: {}",
-                    retry.reason
-                )
-            } else {
-                format!(
-                    "CoS の利用可能な経路がなくなりました。理由: {}",
-                    retry.reason
-                )
-            };
+            let summary = format!(
+                "CoS の経路が利用上限・認証で失敗しました。別の経路で再試行します。理由: {}",
+                retry.reason
+            );
             self.route_notice(
                 &run.id,
                 &run.thread_id,
-                retry.next_route - 1,
+                retry.attempt.index,
                 "failed",
                 &summary,
                 now,
@@ -145,7 +198,7 @@ impl CosChatLaunch {
                     dispatcher,
                     &retry.thread_id,
                     &run,
-                    retry.next_route,
+                    retry.attempt.index + 1,
                     Some(retry.previous),
                     now,
                 );
@@ -153,13 +206,14 @@ impl CosChatLaunch {
         }
     }
 
+    /// Select a route from all CoS candidates and launch attempt `attempt` of `run`.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn launch_routes(
         &mut self,
         dispatcher: &mut Dispatcher,
         thread: &str,
         run: &ChatRun,
-        first: usize,
+        attempt: usize,
         previous: Option<Arc<ChatRunSink>>,
         now: OffsetDateTime,
     ) {
@@ -184,14 +238,14 @@ impl CosChatLaunch {
             cos: true,
             ..Default::default()
         };
-        let (outcome, trace) = dispatcher.select_cos_route_from(&input, first);
+        let (outcome, trace) = dispatcher.select_cos_route(&input);
         // ADR 2026-11-06-cos-run-launch-accounting-and-drain D2: 除外理由が全部「枠」なら失敗にせず待つ。
         // 理由は `RouteTrace` の構造化理由で決める（文字列は見ない）。起動済みの run の代替経路は従来どおり。
         if previous.is_none()
             && let Err(failure) = &outcome
             && crate::dispatcher::route_select::slot_only_wait(failure, &trace)
         {
-            self.hold_slot_wait(run, thread, first, now);
+            self.hold_slot_wait(run, thread, now);
             return;
         }
         let metadata = trace.metadata(&input, outcome.as_ref().ok(), outcome.as_ref().err());
@@ -199,14 +253,14 @@ impl CosChatLaunch {
         let result = match outcome {
             Err(error) => Err(super::launch::LaunchFailure::from(error.reason())),
             Ok(pick) => self.launch_claimed(
-                dispatcher, &cfg, first, previous, thread, &run.id, run, pick, metadata, now,
+                dispatcher, &cfg, attempt, previous, thread, &run.id, run, pick, metadata, now,
             ),
         };
         if let Err(failure) = result {
             self.route_notice(
                 &run.id,
                 thread,
-                first,
+                attempt,
                 "unavailable",
                 &format!("CoS route unavailable: {}", failure.text),
                 now,
@@ -216,13 +270,7 @@ impl CosChatLaunch {
     }
 
     /// 枠だけで選べなかった run を待ちに入れる。すでに待っている run には何も書かない（tick ごとに event を増やさない）。
-    fn hold_slot_wait(
-        &mut self,
-        run: &ChatRun,
-        thread: &str,
-        first_route: usize,
-        now: OffsetDateTime,
-    ) {
+    fn hold_slot_wait(&mut self, run: &ChatRun, thread: &str, now: OffsetDateTime) {
         if self.slot_waits.contains_key(&run.id) {
             return;
         }
@@ -230,7 +278,6 @@ impl CosChatLaunch {
             run.id.clone(),
             SlotWait {
                 thread_id: thread.to_owned(),
-                first_route,
             },
         );
         let _ = self.store.chat_run_status(
@@ -297,6 +344,7 @@ impl CosChatLaunch {
                     final_text: Some(text),
                     reason: Some(reason.into()),
                     context_exhausted: false,
+                    supply: None,
                 },
                 &task_worker::result_report::ParsedActions::default(),
             )

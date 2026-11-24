@@ -67,6 +67,9 @@ pub(crate) struct ChatFinish {
     pub reason: Option<String>,
     /// context の上限で終わった（rollover の判断材料）。
     pub context_exhausted: bool,
+    /// adapter の `Err` が供給側の失敗だった（ADR 2026-11-24-planner-supply-failure-cooldown D1/D5）。
+    /// `Some` の失敗は launch が失敗した route を cooldown にして別の route で再試行する。
+    pub supply: Option<super::routes::SupplyFailure>,
 }
 
 /// `RunOutcome`（または adapter の失敗）と呼び出し側の意図を chat run の終端に写す。
@@ -79,6 +82,7 @@ pub(crate) fn chat_finish_for(
         final_text,
         reason,
         context_exhausted: false,
+        supply: None,
     };
     match intent {
         ChatStopIntent::Stop => return finish(ChatRunState::Stopped, None, None),
@@ -93,7 +97,12 @@ pub(crate) fn chat_finish_for(
     }
     let outcome = match outcome {
         Ok(o) => o,
-        Err(e) => return finish(ChatRunState::Failed, None, Some(format!("worker: {e}"))),
+        Err(e) => {
+            return ChatFinish {
+                supply: super::routes::SupplyFailure::of(e),
+                ..finish(ChatRunState::Failed, None, Some(format!("worker: {e}")))
+            };
+        }
     };
     let non_empty = |s: &str| (!s.trim().is_empty()).then(|| s.to_string());
     match &outcome.terminal {
@@ -115,6 +124,7 @@ pub(crate) fn chat_finish_for(
             final_text: None,
             reason: Some(format!("budget exhausted ({kind:?}): {message}")),
             context_exhausted: *kind == BudgetKind::Context,
+            supply: None,
         },
         Terminal::Waiting { .. } => finish(
             ChatRunState::Failed,

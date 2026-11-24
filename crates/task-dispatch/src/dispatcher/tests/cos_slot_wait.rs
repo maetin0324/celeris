@@ -240,7 +240,7 @@ async fn cooldown_does_not_wait() {
 }
 
 /// Claude 予約（CosReservation）で候補が除外された CoS run は、待たずに route_unavailable で閉じる。
-/// 実経路（tick_cos_chat_launch → select_cos_route_from → route_select）で確かめる。
+/// 実経路（tick_cos_chat_launch → select_cos_route → route_select）で確かめる。
 #[tokio::test]
 async fn cos_reservation_closes_with_route_unavailable_without_waiting() {
     let (_dir, store, mut d) = fixture(FakeAdapter::default_command(), 2);

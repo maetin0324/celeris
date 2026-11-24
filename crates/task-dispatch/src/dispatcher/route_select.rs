@@ -832,20 +832,15 @@ impl Dispatcher {
         }
     }
 
-    /// Select from the remaining CoS candidates after earlier attempts failed.
-    pub(super) fn select_cos_route_from(
+    /// Select a CoS route from all of `cos.route_candidates`. A retry after a supply-side failure
+    /// selects again from the whole list: admission skips the cooled-down `(source, account)`
+    /// (ADR 2026-11-24-planner-supply-failure-cooldown D5).
+    pub(super) fn select_cos_route(
         &mut self,
         input: &RouteInput,
-        start: usize,
     ) -> (Result<RoutePick, RouteFailure>, RouteTrace) {
         let state = self.route_state(true);
-        let mut registry = self.routing.registry().clone();
-        registry.cos_route_candidates = registry
-            .cos_route_candidates
-            .into_iter()
-            .skip(start)
-            .collect();
-        route_select(input, &registry, &state)
+        route_select(input, self.routing.registry(), &state)
     }
 
     /// Append `harness_selected` and `llm_route_selected` for an admitted route and write the

@@ -13,14 +13,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use task_core::parent_checkpoint as pc;
-use task_core::project_proposal::{ProjectAction, sha256_hex};
+use task_core::project_proposal::{self as pp, ProjectAction, sha256_hex};
 use task_core::project_wake::{ControllerMode, ProjectControllerDecision};
 use task_core::store::SqliteStore;
 use task_core::strategy::Reference;
 use task_core::{ArtifactRef, Event, Status, Task, TaskId};
 use task_worker::protocol::{
-    ParentCheckpointChild, ParentCheckpointGoal, ParentCheckpointMetrics, ParentCheckpointPrevious,
-    ParentCheckpointRequest,
+    ParentCheckpointChild, ParentCheckpointGoal, ParentCheckpointMetrics, ParentCheckpointOutcome,
+    ParentCheckpointPrevious, ParentCheckpointRequest,
 };
 use task_worker::{AdapterError, RunOutcome, Terminal};
 
@@ -212,6 +212,7 @@ fn artifact_names(events: &[(u64, Event)]) -> Vec<String> {
 
 /// D3.1 の入力。root が strategy root でなければ `None`（run を起こさない。D9.1）。子の報告の本文は判断の行の
 /// `created_at`（checkpoint の時点）以前の `WorkerFinished` から `pc::child_reports` が選ぶ（既存の `event_rows_for`）。
+/// `goal.outcomes` は [`goal`]、子の `criteria` は snapshot の root の行と同じ `acceptance_criteria`（付記 WU eval-input）。
 fn request(
     store: &SqliteStore,
     root: &Task,
@@ -249,7 +250,10 @@ fn request(
             reviewer_passed: events
                 .iter()
                 .any(|(_, _, e)| matches!(e, Event::ReviewerPassed { .. })),
-            criteria: Vec::new(),
+            criteria: task_ops::project_snapshot::acceptance_criteria(
+                child,
+                events.iter().map(|(_, _, e)| *e),
+            ),
             reports,
         })
         .collect();
@@ -274,13 +278,14 @@ fn request(
         tokens_used: tokens(store, root.id, None)?,
         max_tokens: root.budget.max_tokens,
     };
+    let (outcomes, _) = goal(store, root)?;
     Ok(Some(ParentCheckpointRequest {
         decision_id: decision.id.clone(),
         root_id: root.id,
         triggers: decision.triggers.clone(),
         goal: ParentCheckpointGoal {
             request_sha256: decision.request_sha256.clone(),
-            outcomes: Vec::new(),
+            outcomes,
         },
         strategy,
         children,
@@ -363,8 +368,47 @@ fn finish(
     )
 }
 
+/// D3.1 の `goal.outcomes` と D4 R4 の `goal_reached`（ADR の付記 WU eval-input）。D6 の読み口
+/// `task_ops::project_controller_view::reach` の Outcome（承認済み Roadmap があればその生きている Outcome、無ければ依頼文の
+/// Outcome block）ごとに、`reached` は `pp::unverified_outcomes` に入らないこと（到達の記録があり `root_satisfies` を満たす
+/// root がある）。`goal_reached` は `unverified_outcomes` が空のとき（Outcome が 0 件・block が壊れていれば偽）。
+/// root が案件に属さなければ空と偽。snapshot の `now` は待ちの経過と許可の読み口だけに効き、到達には効かない。
+fn goal(
+    store: &SqliteStore,
+    root: &Task,
+) -> Result<(Vec<ParentCheckpointOutcome>, bool), DispatchError> {
+    let Some(project_id) = root.project_id else {
+        return Ok((Vec::new(), false));
+    };
+    let pid = project_id.to_string();
+    let now = time::OffsetDateTime::now_utc();
+    let state = match store.project_controller_state(&pid)? {
+        Some(state) => state,
+        None => task_core::store::project_controller_default_state(
+            &pid,
+            &now.format(&time::format_description::well_known::Rfc3339)
+                .unwrap_or_default(),
+        ),
+    };
+    let (snapshot, recorded) =
+        task_ops::project_controller_view::reach(store, project_id, &state, now)
+            .map_err(crate::dispatcher::ops_to_store)?;
+    let unverified = pp::unverified_outcomes(&snapshot, &recorded);
+    let outcomes = snapshot
+        .outcomes
+        .iter()
+        .map(|o| ParentCheckpointOutcome {
+            id: o.id.clone(),
+            title: o.title.clone(),
+            acceptance: o.acceptance.clone(),
+            reached: !unverified.contains(&o.id),
+        })
+        .collect();
+    Ok((outcomes, unverified.is_empty()))
+}
+
 /// D4 の事実。参照は同じ案件の task と、その task の `ArtifactProduced`（name と sha256）だけを実在とする。commit の
-/// 実在は確かめない（解決しない参照は支持の根拠に数えない）。`goal_reached` は false（D6 の値を入れるのは未実装）。
+/// 実在は確かめない（解決しない参照は支持の根拠に数えない）。`goal_reached` は [`goal`] の D6 の値。
 fn facts(
     store: &SqliteStore,
     root: &Task,
@@ -419,7 +463,7 @@ fn facts(
     }
     Ok(pc::EvaluationFacts {
         resolved,
-        goal_reached: false,
+        goal_reached: goal(store, root)?.1,
         children,
     })
 }
@@ -500,3 +544,6 @@ pub(crate) fn in_flight(events: &[(u64, Event)], run_id: &str) -> bool {
             .iter()
             .any(|(id, (_, r))| *r == run_id && !finals.contains(id))
 }
+
+#[cfg(test)]
+mod tests;

@@ -630,3 +630,45 @@ D8・D9.2・D11 の試験の置き場と分担を実装に合わせて書き足�
 2. 評価器の入力の未実装: D3.1 の表の `goal`・`children[]` の行と D4 の R4 に「未実装」を書き、「未確認」に、`review::parent_evaluation::request` が `goal.outcomes`・`children[].criteria` を空で渡すこと、
    `facts` が `goal_reached` を `false` に固定すること、盲検の 4 run がこの入力で流れたことを書いた。設計（D3.1・D4 の本文）は変えていない。
    D6 の読み口から入力を入れる修正の文案は子 6 の進捗の「子 8 への引き継ぎ」と「提案」にある。
+
+## 付記（2026-11-24、評価器の入力に Outcome・子の criteria・D6 の到達を入れた。WU eval-input）
+
+子 8（task 01M7XQA74FP70G3T3KSTP02S0W）の測定の前に、評価器の入力の欠けを直した（人 rmaeda の 2026-11-24 の判断。子 6 の進捗
+`agent-docs/progress/2026-11-22-strategy-v1-6.md` の「提案」1）。D1〜D11 の決定の本文と前の付記は変えていない。この付記が次の記述を置き換える:
+D3.1 の表の `goal`・`children[]` の行の「**未実装**」、D4 R4 の「**未実装**」、「保証と実装の対応」の goal の行の「dispatcher が渡す
+`goal_reached` は未実装で `false` 固定」、「未確認」の「評価器の入力の欠落」の項（2026-11-23 の盲検の 4 run がその入力で流れた、という記録は事実として残る）。
+
+決定:
+
+1. 見る Outcome の集合は D6 の判定と同じ `snapshot.outcomes`（`task_ops::project_controller_view::reach` が作る snapshot）。
+   - 承認済み Roadmap のある案件: その版の生きている Outcome（`dropped` を除く。`task_core::roadmap::snapshot_outcomes`）。
+   - Roadmap の無い案件: 依頼文（Project.request）の Outcome block。block が無い・壊れている案件では `goal.outcomes` は空で、prompt は従来どおり「（Outcome の記録は無い）」を出す。
+   - 理由: 評価器に見せる Outcome と controller が到達を数える Outcome を同じ集合にする。Roadmap の無い案件を常に空にする案は、依頼文の block で到達を数える controller の判定（ADR 2026-11-05-phase3-achievement-invariants I1）と食い違うので採らない。
+2. Outcome ごとの `reached` は `task_core::project_proposal::unverified_outcomes(snapshot, recorded)` に入らないこと。すなわち
+   `recorded_outcomes` に到達の記録があり、`root_satisfies` を満たす root が snapshot にある。controller の画面（`summary` の `outcomes[].reached`）と同じ値で、
+   どちらも `project_controller_view::reach` を読む。`mode` は controller の状態の行の mode（行が無ければ `off`）。評価の run は `enabled` の案件でしか起きない（D9.1）ので、
+   `shadow`・`dry_run` で `suppressed` の `mark_milestone` を記録に数える規則は評価の入力に効かない。
+3. `goal_reached`（D4 R4 の入力）が真になるのは `unverified_outcomes` が空のときだけ。すなわち見る Outcome が 1 件以上あり、すべてが 2. で到達のとき。
+   Outcome が 0 件・block が壊れている案件（`"*"`）では偽。phase `achieved` を書いてよいかの I1 の判定と同じ関数を使う。親 Outcome の到達は案件の単位で、評価する strategy root が根拠かは問わない。
+   snapshot が上限（1 MiB）で done の root を落としたときは、その root を根拠にした Outcome は到達にならない（D6 と同じで、`met` を出さない側に倒れる）。
+4. 子の `criteria` は子の受け入れ条件と今の試行の review の判定。組み立ては snapshot の root の行の `acceptance` と同じ関数
+   `task_ops::project_snapshot::acceptance_criteria`（`root_row` から切り出した。reopen・retry で前の判定を捨てる規則も同じ）。型は `task_core::project_proposal::SnapshotCriterion` の 1 つにし、
+   wire にあった別の型を消した（`docs/protocol/worker-protocol.schema.json` は再生成、`worker-protocol.md` の記述も直した）。`result` は `pass`・`fail`・`unknown`。
+   子の `status`・`reviewer_passed` と同じく今の store の値で、checkpoint の時点で切らない（時点で切るのは報告の本文だけ。D3.1.1）。
+5. 変えないもの: 評価器の prompt の文面（`crates/task-worker/src/change_rules/`。人の条件 3）、新しい表・event・状態機械・API、controller の mode の既定。
+   `PROTOCOL_VERSION` は上げない（欄の名前と形 `{text, kind, result}` は同じで、知らない欄を拒否するようになっただけ）。
+
+保証と実装の対応（この付記の分）:
+
+| 保証 | 実装 | 試験 |
+|---|---|---|
+| `request` の `goal.outcomes` は承認済み Roadmap の Outcome（id・title・acceptance）で、`reached` は controller の画面の D6 の値と同じ | `review::parent_evaluation::goal`・`request`、`project_controller_view::reach` | `parent_evaluation_input_outcomes_criteria_and_goal_reached_follow_d6` |
+| 子の `criteria` は受け入れ条件と今の試行の判定（`pass`・`fail`・`unknown`） | `project_snapshot::acceptance_criteria` | `parent_evaluation_input_outcomes_criteria_and_goal_reached_follow_d6`、`parent_evaluation_input_no_outcomes_is_not_reached` |
+| `facts` の `goal_reached` は D6（見る Outcome がすべて到達のときだけ真、0 件は偽） | `review::parent_evaluation::facts`・`goal` | 同上の 2 件 |
+| Outcome のある案件の prompt に「（Outcome の記録は無い）」が出ない（prompt の文面は変えていない） | 同上 | `parent_evaluation_input_outcomes_criteria_and_goal_reached_follow_d6` |
+
+未確認:
+
+- 本番の案件の承認済み Roadmap と Outcome の到達の状態は、この WU では本番の DB を読んで確かめていない。
+- `request` は評価の run を起こすたびに snapshot を 1 回作り、`facts` も決着のたびに 1 回作る（`summary` と同じ費用）。本番の root・判断の件数での時間は測っていない。
+- E-mid・D-done の盲検の入力（fixture）の書き直しは WU eval-seed の範囲で、この WU は変えていない。

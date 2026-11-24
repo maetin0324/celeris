@@ -3536,8 +3536,9 @@
       "properties": {
         "criteria": {
           "default": [],
+          "description": "子の受け入れ条件と今の試行の review の判定（`pass`・`fail`・`unknown`）。型と組み立ては snapshot の root の行と\n同じ（`task_ops::project_snapshot::acceptance_criteria`）。",
           "items": {
-            "$ref": "#/$defs/ParentCheckpointCriterion"
+            "$ref": "#/$defs/SnapshotCriterion"
           },
           "type": "array"
         },
@@ -3567,28 +3568,6 @@
         "title",
         "status",
         "reviewer_passed"
-      ],
-      "type": "object"
-    },
-    "ParentCheckpointCriterion": {
-      "description": "子の受け入れ条件 1 件と、その判定の結果。",
-      "properties": {
-        "kind": {
-          "description": "check の種類（`command`・`artifact_exists`・`reviewer`・`human` など）。",
-          "type": "string"
-        },
-        "result": {
-          "description": "判定の結果（`pass`・`fail`・`not_run`）。",
-          "type": "string"
-        },
-        "text": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "text",
-        "kind",
-        "result"
       ],
       "type": "object"
     },
@@ -5379,6 +5358,29 @@
       "required": [
         "name",
         "path"
+      ],
+      "type": "object"
+    },
+    "SnapshotCriterion": {
+      "additionalProperties": false,
+      "description": "root の受け入れ条件 1 件と結果。",
+      "properties": {
+        "kind": {
+          "description": "`command`・`reviewer`・`human`・`artifact_exists`。",
+          "type": "string"
+        },
+        "result": {
+          "description": "`pass`・`fail`・`unknown`（reviewer の判定・決定的 check の結果）。",
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "kind",
+        "result"
       ],
       "type": "object"
     },

@@ -16,7 +16,7 @@ pub(crate) fn sample_parent_checkpoint() -> ParentCheckpointRequest {
         title: title.to_string(),
         status,
         reviewer_passed: status == task_core::Status::Done,
-        criteria: vec![ParentCheckpointCriterion {
+        criteria: vec![task_core::project_proposal::SnapshotCriterion {
             text: "SCC の数を測る".to_string(),
             kind: "reviewer".to_string(),
             result: "pass".to_string(),
@@ -197,7 +197,7 @@ fn parent_evaluation_wire_schema_matches_md() {
         "ParentCheckpointOutcome",
         "StrategyRef",
         "ParentCheckpointChild",
-        "ParentCheckpointCriterion",
+        "SnapshotCriterion",
         "ParentCheckpointMetrics",
         "ParentCheckpointPrevious",
         "ParentEvaluation",

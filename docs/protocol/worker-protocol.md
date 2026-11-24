@@ -911,7 +911,8 @@ strategy root（CoS の `task.create` で `strategy` を付けて起票した ro
   `strategy` と同じ `task_core::strategy_ref::StrategyRef` の 1 つで（`task_id` は文字列、知らない欄は拒否）、値は
   `cos_operations` の照会 `SqliteStore::strategy_task_creates` から取る。
 - `children[]`（`ParentCheckpointChild`）: root の直下の子 `{task_id, title, status, reviewer_passed, criteria, reports?}`。`criteria[]`
-  （`ParentCheckpointCriterion`）は `{text, kind, result}`（`kind` は check の種類、`result` は `pass`・`fail`・`not_run`）。
+  （`SnapshotCriterion`。controller の snapshot の root の行の `acceptance` と同じ型）は `{text, kind, result}`（`kind` は check の種類、
+  `result` は今の試行の review の判定 `pass`・`fail`・`unknown`。知らない欄は拒否）。
   `reports[]`（`ParentCheckpointReport`）は子の報告の本文 `{seq, at, role, text, truncated?}`（`role` は `worker`・`reviewer`）で、
   判断の行の `created_at`（checkpoint の時点）以前の子の `WorkerFinished.outcome` を `task_core::parent_checkpoint::child_reports` が
   選ぶ（子ごとに新しい順に 4 件、1 件 2,000 byte、全体 16,000 byte。planner の run は入れない。無ければ省略）。報告は子の主張で、

@@ -1,0 +1,21 @@
+{
+  "arm": "c",
+  "case": "replay",
+  "children": {
+    "A": "01SYNCHILDAREPLAYCMIDC0000",
+    "B": "01SYNCHILDBREPLAYCMIDC0000",
+    "C": "01SYNCHILDCREPLAYCMIDC0000",
+    "D": "01SYNCHILDDREPLAYCMIDC0000",
+    "E": "01SYNCHILDEREPLAYCMIDC0000",
+    "F": "01SYNCHILDFREPLAYCMIDC0000",
+    "G": "01SYNCHILDGREPLAYCMIDC0000",
+    "H": "01SYNCHILDHREPLAYCMIDC0000"
+  },
+  "harness": "stub",
+  "llm_runs": 1,
+  "point": "C-mid",
+  "project_id": "01SYNPROJECT",
+  "root_id": "01SYNROOTREPLAYCMIDC000000",
+  "run_id": "01SYNRUNC",
+  "usd": 0.125
+}

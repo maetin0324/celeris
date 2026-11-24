@@ -1,0 +1,11 @@
+{
+  "arm": "a",
+  "case": "research",
+  "claims": [],
+  "next": "continue",
+  "point": "11.17",
+  "schema": "celeris.pilot-arm-output/1",
+  "status": "fixed_plan",
+  "usage": null,
+  "verdict": null
+}

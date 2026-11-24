@@ -1,0 +1,4 @@
+{"seq": 0, "task": "A", "ts": "2026-11-18T00:00:00.000000000Z", "type": "reviewer_passed"}
+{"seq": 1, "task": "B", "ts": "2026-11-18T00:00:01.000000000Z", "type": "reviewer_passed"}
+{"seq": 2, "task": "C", "ts": "2026-11-18T00:00:02.000000000Z", "type": "reviewer_passed"}
+{"seq": 3, "task": "D", "ts": "2026-11-18T00:00:03.000000000Z", "type": "reviewer_passed"}

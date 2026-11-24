@@ -1,0 +1,13 @@
+{
+  "case": "replay",
+  "harness": "stub",
+  "llm_runs": 2,
+  "slice_point": "A-mid",
+  "stage": "strategy-v1",
+  "strategy": {
+    "name": "strategy/pilot-replay/v1.json",
+    "sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "task_status": "done",
+  "usd": 0.25
+}

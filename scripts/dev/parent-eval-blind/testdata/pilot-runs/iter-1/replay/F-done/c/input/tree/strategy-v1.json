@@ -1,0 +1,1 @@
+{"candidates": [{"experiment": {"content": "合成の識別実験 a"}, "hypotheses": ["h-a"], "id": "syn-a", "title": "合成の候補 a"}, {"experiment": {"content": "合成の識別実験 b"}, "hypotheses": ["h-b"], "id": "syn-b", "title": "合成の候補 b"}], "schema": "celeris.strategy/1", "strategy_id": "pilot-replay", "version": 1}

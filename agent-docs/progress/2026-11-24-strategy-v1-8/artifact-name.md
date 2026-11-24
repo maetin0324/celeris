@@ -18,7 +18,7 @@ completed: 2026-11-24
 ## 実装前 brief
 1. 根本原因: `scan_undeclared_artifacts_in_dir` は候補の名に `entry.file_name()`（basename）を使っていた。`artifacts_dir` の中の入れ子の file は、名の規則（`task_core::strategy_ref::artifact_name` の `strategy/<id>/v<n>.json`）と、`ArtifactExists` の既定 path `{artifacts_rel}/{name}` の両方に合わない名で記録された。症状は方式 c の版の段で出た。claude-code の worker が書いた版が `v1.json` の名で記録され、driver が `strategy/pilot-replay/v1.json` を見つけられずに止まった。stub は `artifact` 行で名を申告していたので通っていた。
 2. 責務 owner: 未申告の成果物の名を決める `undeclared_artifacts::scan_undeclared_artifacts_in_dir`。run 後の走査（`dispatcher/worker_task.rs`）と補完（`backfill.rs`）はこの関数の結果をそのまま記録するだけなので、変えない。
-3. 既存の再利用先: 走査の中の `rel_path`（`artifacts_dir` からの相対。すでに深さと並べ替えに使っている）。版の名の関数 `strategy_ref::artifact_name`・`strategy_artifact`。最終 review の候補の組み立て `review::artifact_candidates` と試験の helper（`root_review_artifacts.rs` の `adopt_units`・`unit_run_produced`・`candidates`・`artifact_verdict`）。補完の試験の helper（`backfill_tests` の `task`・`remote`・`produced`）。
+3. 既存の再利用先: 走査の中の `rel_path`（`artifacts_dir` からの相対。すでに深さと並べ替えに使っている）。版の名の関数 `strategy_ref::artifact_name`・`strategy_artifact`。最終 review の候補の組み立て `review::artifact_candidates` と判定 `review::review_task`。補完の試験の helper（`backfill_tests` の `task`・`remote`・`produced`。`task` は最終 review の試験からも使うので `pub(super)` にした）。
 4. 選択肢:
    - (a) claude-code・codex・acp の adapter に成果物の申告の口（`result.json` の欄など）を足す。新しい port になり、3 つの adapter と prompt の契約を変える。既に書かれた file の名の不一致は残る。不採用。
    - (b) driver か最終 review で basename や path の末尾でも照合する。症状の出た場所に特例を足すことになり、名の規則が 2 つになる。不採用。
@@ -40,7 +40,7 @@ completed: 2026-11-24
 - `undeclared_artifacts::tests::undeclared_nested_name_reads_as_a_strategy_version`: (2) その名が `artifact_name("s1", 1)` と一致し、`strategy_artifact` で `("s1", 1)` と読める。
 - `undeclared_artifacts::tests::undeclared_nested_name_keeps_depth_one_and_markdown_scan_names`: (3) 深さ 1 の名（`report.md`・`data.csv`・`manifest.json`）は file 名のまま。作業場所全体の `*.md` 走査の名（`docs/paper/notes.md` → `notes.md`）も変わらない。
 - `undeclared_artifacts::tests::backfill_tests::undeclared_nested_name_backfill_registers_the_same_relative_name`: 補完が `strategy/s1/v1.json` と `report.md` の名で登録し、結果が同じ写しへの `scan_undeclared_artifacts_in_dir` と一致する。
-- `dispatcher::tests::root_review_artifacts::undeclared_nested_name_root_review_finds_the_work_unit_strategy_version`: WorkUnit の run の `wu/version/artifacts/strategy/s1/v1.json` を走査で登録し、root の最終 review の `ArtifactExists{name: "strategy/s1/v1.json"}` が `path=wu/version/artifacts/strategy/s1/v1.json` で合格する。
+- `undeclared_artifacts::tests::final_review_tests::undeclared_nested_name_root_review_finds_the_work_unit_strategy_version`: 本物の `adopt_plan` で WorkUnit `version` を採用し、その run の `wu/version/artifacts/strategy/s1/v1.json` を走査で登録し、root の最終 review の `ArtifactExists{name: "strategy/s1/v1.json"}` が `path=wu/version/artifacts/strategy/s1/v1.json` で合格する。
 
 入れ子の名を basename と仮定して確かめる既存の試験は無かった。そのため既存の試験は直していない（弱めた試験は 0）。
 
@@ -57,12 +57,17 @@ FAIL undeclared_artifacts::tests::undeclared_nested_name_is_relative_to_the_arti
 FAIL undeclared_artifacts::tests::backfill_tests::undeclared_nested_name_backfill_registers_the_same_relative_name
   left: [("report.md", "artifacts/report.md"), ("v1.json", "artifacts/strategy/s1/v1.json")]
  right: [("report.md", "artifacts/report.md"), ("strategy/s1/v1.json", "artifacts/strategy/s1/v1.json")]
-FAIL dispatcher::tests::root_review_artifacts::undeclared_nested_name_root_review_finds_the_work_unit_strategy_version
+FAIL undeclared_artifacts::tests::final_review_tests::undeclared_nested_name_root_review_finds_the_work_unit_strategy_version
   artifact "strategy/s1/v1.json" not found at artifacts/strategy/s1/v1.json
 Summary 5 tests run: 1 passed, 4 failed
 ```
 
 変更後: 同じコマンド → exit 0、5 tests run: 5 passed。`-E 'test(/undeclared/) | test(/root_review_artifact/) | test(/artifact_exists/)'` → 38 tests run: 38 passed。
+
+## 範囲の check の不合格と直し（Run #3）
+- Run #2 の後の範囲の check（許す path は `crates/task-dispatch/src/undeclared_artifacts(.rs|/)`・`crates/task-dispatch/tests/`・ADR-0067・この進捗）が exit 1 だった。最終 review の試験を `crates/task-dispatch/src/dispatcher/tests/root_review_artifacts.rs` に足していたため、その file が範囲の外だった。
+- 直し: その file を `$CELERIS_WU_BASE` の版に戻し（差分 0）、同じ試験を `crates/task-dispatch/src/undeclared_artifacts/tests.rs` の `final_review_tests` に移した。WorkUnit の採用（`task_ops::execution::adopt_plan`）・events の形・`review::artifact_candidates`・`review::review_task` の呼び方は前と同じ。試験の名と確かめる内容は変えていない。
+- 移した後も変更前に落ちることを確かめた（下の出力。`undeclared_artifacts.rs` だけを base の版に戻して実行し、元に戻した）。
 
 ## 証拠（基準は `$CELERIS_WU_BASE`。Run #2 で、実装の commit の後の HEAD で再実行した。その後の commit はこの節の書き換えだけ）
 - `bash scripts/dev/test-affected.sh` → exit 0。対象 crate: celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。nextest 4011 tests run: 4011 passed、11 skipped。repo-health verdict=pass（fail_grade=0）。script bundle SKIP 0 件。
@@ -75,7 +80,7 @@ Summary 5 tests run: 1 passed, 4 failed
 
 ## LoC（`git diff --numstat "$CELERIS_WU_BASE"`）
 - production: `crates/task-dispatch/src/undeclared_artifacts.rs` +5 −4（doc comment 4 行を足し、欄 `name` とその代入を消した）。
-- test: `crates/task-dispatch/src/undeclared_artifacts/tests.rs` +127、`crates/task-dispatch/src/dispatcher/tests/root_review_artifacts.rs` +37。
+- test: `crates/task-dispatch/src/undeclared_artifacts/tests.rs` +285 −1（−1 は `backfill_tests::task` を `pub(super)` にした行）。`crates/task-dispatch/src/dispatcher/tests/` の差分は 0。
 - 文書: ADR-0067 の付記 +52、この進捗。
 - 純増の理由: production は 1 行の純増（doc comment）。試験は契約の変更を固定する 5 件。
 

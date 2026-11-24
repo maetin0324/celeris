@@ -72,16 +72,20 @@ for n in $names; do git grep -qE "fn $n\(" -- crates || echo "missing $n"; done
 - 足した `trait` の行 0、`…Manager` の型 0、高 risk の path class に当たる path 0 件。足した `unwrap()` は試験の 2 行だけ（`crates/celeris-mcp/tests/mcp_integration.rs`）。
 - `docs/api/v1/api.md` に 3 つの口・`| 246 |`〜`| 248 |`・4 つの拒否の code がある（`grep -qF` で 10 項目）。
 
-### 検査（提出時の HEAD で実行）
-検査の結果は下の「検査の結果」に書く。
-
-## 検査の結果
-- `sh scripts/dev/check-doc-links.sh` → 結果は commit の後に追記。
-- `sh scripts/dev/check-adr-numbers.sh`・`sh scripts/dev/progress-index.sh --check` → 同上。
-- `cargo fmt --all -- --check`・`cargo clippy --workspace -- -D warnings`・`bash scripts/dev/test-affected.sh` → 同上。
+## 検査の結果（提出時の HEAD で実行）
+最初の commit の後に実行した。2 つ目の commit はこの file の検査の結果の節だけを変える。文書の検査は 2 つ目の commit の後にも実行した。
+- `sh scripts/dev/check-doc-links.sh` → exit 0（`check-doc-links: ok`）。
+- `sh scripts/dev/check-adr-numbers.sh` → exit 0（`check-adr-numbers: ok (481 files)`）。`sh scripts/dev/progress-index.sh --check` → exit 0（`progress-index --check: ok`）。
+- `cargo fmt --all -- --check` → exit 0（出力 0 行）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `bash scripts/dev/test-affected.sh`（基点 `$CELERIS_WU_BASE`）→ exit 0。`test-affected: 試験対象の変更なし（docs のみ等）`。repo-health は `mode=full`、
+  基点 `git merge-base HEAD main` で `verdict=pass exit=0 fail_grade=0`（findings 725: new 3・worsened 2・existing 720。required の項目はすべて pass）、
+  `repo_health_gate: all checks passed`、自己試験 126 件 OK。
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` の path は ADR・task の進捗・この file の 3 つだけ。
 
 ## commit（件名）
 - `strategy-v1 7 reclose-audit: 修正後の LoC・試験・未確認・寄与を task の進捗に書き、ADR に付記する`
+- `strategy-v1 7 reclose-audit: 提出時の HEAD の検査の結果を WU の進捗に書く`
 
 ## 未確認・引き継ぎ
 - 修正後の HEAD での 3 つの e2e（proposal-review・publish-manifest を含む）・fmt・clippy・task 全体の test-affected の再実行と、front matter の `updated`・`completed` は reclose-verify。

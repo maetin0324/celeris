@@ -1358,7 +1358,7 @@ export type ClusterLive = {
   "tunnel_login_needed"?: boolean;
 };
 
-export type ClusterScheduler = "pbs" | "slurm";
+export type ClusterScheduler = "pbs" | "slurm" | "nqsv";
 
 export type ClusterSettingsPutBody = {
   "work_dir"?: string | null;

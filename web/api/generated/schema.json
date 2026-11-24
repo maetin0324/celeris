@@ -6141,22 +6141,22 @@
       "oneOf": [
         {
           "const": "queued",
-          "description": "待ち行列にいる（PBS `Q` / `W` / `T`、Slurm `PENDING`）。",
+          "description": "待ち行列にいる（PBS `Q` / `W` / `T`、Slurm `PENDING`、NQSV `ARR` / `WAI` / `QUE` / `STG`）。",
           "type": "string"
         },
         {
           "const": "held",
-          "description": "保留・一時停止（PBS `H` / `S` / `U`、Slurm `SUSPENDED` / `REQUEUE_HOLD`）。",
+          "description": "保留・一時停止（PBS `H` / `S` / `U`、Slurm `SUSPENDED` / `REQUEUE_HOLD`、NQSV `HLD` / `HOL` / `SUS`）。",
           "type": "string"
         },
         {
           "const": "running",
-          "description": "実行中（PBS `R` / `B`、Slurm `RUNNING`）。",
+          "description": "実行中（PBS `R` / `B`、Slurm `RUNNING`、NQSV `PRR` / `RUN` / `MIG`）。",
           "type": "string"
         },
         {
           "const": "exiting",
-          "description": "終了処理中（PBS `E`、Slurm `COMPLETING`）。",
+          "description": "終了処理中（PBS `E`、Slurm `COMPLETING`、NQSV `POR` / `EXT`）。",
           "type": "string"
         },
         {
@@ -6166,7 +6166,7 @@
         },
         {
           "const": "gone",
-          "description": "scheduler が「その job は知らない」と明示した（履歴が消えた・id の誤り）。終わったものとして扱う。",
+          "description": "scheduler が「その job は知らない」と明示した（履歴が消えた・id の誤り。NQSV では終わった request は\n常にこれ）。終わったものとして扱う。",
           "type": "string"
         },
         {
@@ -6486,7 +6486,8 @@
       "description": "job scheduler の種類。",
       "enum": [
         "pbs",
-        "slurm"
+        "slurm",
+        "nqsv"
       ],
       "type": "string"
     },

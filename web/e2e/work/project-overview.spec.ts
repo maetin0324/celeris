@@ -77,6 +77,12 @@ test("概要は 14 項目を決めた順に出し、印を文字で区別し、�
     "ChatGPT の要約（外部の文・untrusted）",
   );
   await expect(list.locator("li[data-item='experiments_and_tasks'] [data-status='ready']")).toBeVisible();
+
+  // 証拠の Knowledge の参照は path だけの文献で、path を写せる文字で出し、知識の検索の画面へ移す（golden の O6 は url の文献だけ）。
+  const kb = list.locator("li[data-item='refutations'] span[data-link='literature']");
+  await expect(kb).toContainText("projects/demo.md");
+  await kb.getByRole("link", { name: "知識を検索" }).click();
+  await expect(page).toHaveURL(/\/knowledge$/);
 });
 
 // golden の中の link（本物の backend が出した形）。label は T1・R1・TH1・M1 に置き換え済み。

@@ -847,6 +847,8 @@ export function projectOverviewFixture() {
   const git = { kind: "git", repo: "web", sha: "a".repeat(40), task_id: "T1" };
   const gitBare = { kind: "git", repo: "benchfs", sha: "b".repeat(40), task_id: null };
   const paper = { kind: "literature", url: "https://example.org/papers/io-sweep", path: null, sha256: null };
+  // 証拠の Knowledge の参照（Reference::Knowledge）は path だけの literature になる。golden は O6 に literature を持つ。
+  const kb = { kind: "literature", url: null, path: "projects/demo.md", sha256: sha("c") };
   const chat = (state) => ({
     kind: "chat",
     thread_id: "chat-history",
@@ -925,7 +927,7 @@ export function projectOverviewFixture() {
           "ev-7",
           "estimated",
           { evidence_id: "ev-7", hypothesis: "h2", statement: "drop_caches の後も同じ値", references: 2 },
-          [git, paper],
+          [git, paper, kb],
         ),
       ]),
       item("latest_findings", "estimated", [

@@ -46,53 +46,6 @@ fn pause_points_resolved(task: &task_core::Task, plan_id: &str, spec: &Execution
     }
 }
 
-/// ADR-0074 D5.3（Phase F1）: planner の出力を読む。`schema` が `celeris.execution-plan-delta/1`
-/// なら差分として `active` な計画に当て、全体に展開する（`base_version` は `active` の版と一致
-/// しなければならない。それ以外は「移行期間」として `celeris.execution-plan/1` の全体形式で読む
-/// （D5.3「旧形式（全体）の replan 出力も受け付ける」）。
-pub fn parse_planner_output(
-    text: &str,
-    active: Option<&task_core::ExecutionPlanRow>,
-    done_keys: &std::collections::BTreeSet<String>,
-) -> Result<task_core::ExecutionPlanSpec, String> {
-    let raw: serde_json::Value =
-        serde_json::from_str(text).map_err(|e| format!("execution-plan.json の形式が不正: {e}"))?;
-    let schema = raw.get("schema").and_then(|v| v.as_str()).unwrap_or("");
-    if schema == task_core::execution_plan::EXECUTION_PLAN_DELTA_SCHEMA {
-        let Some(active) = active else {
-            return Err(
-                "execution-plan-delta/1 は replan（既に計画がある Task）でだけ受け付ける"
-                    .to_string(),
-            );
-        };
-        // ADR-0079 D9（Phase R2b）: 差分は /2 の形（`work_units`）しか持たない。/3 の replan は計画の全体を書く。
-        if active.spec.schema == task_core::EXECUTION_PLAN_SCHEMA_V3 {
-            return Err(format!(
-                "execution-plan-delta/1 は {} の計画の replan には使えない（計画の全体を書くこと。done の unit は省略してよい）",
-                task_core::EXECUTION_PLAN_SCHEMA_V3
-            ));
-        }
-        let delta: task_core::execution_plan::ExecutionPlanDelta = serde_json::from_value(raw)
-            .map_err(|e| format!("execution-plan-delta.json の形式が不正: {e}"))?;
-        if delta.base_version != active.version {
-            return Err(format!(
-                "execution-plan-delta.json の base_version {} が現在の版 {} と一致しない",
-                delta.base_version, active.version
-            ));
-        }
-        task_core::execution_plan::apply_delta(&active.spec, &delta)
-    } else {
-        let mut spec: task_core::ExecutionPlanSpec = serde_json::from_value(raw)
-            .map_err(|e| format!("execution-plan.json の形式が不正: {e}"))?;
-        // ADR-0079 D9（Phase R2b）: /3 の replan では done の unit を今の版の spec のまま持ち越す（planner が
-        // 省いた・書き写し損ねた unit も。unit の gate で上げ下げした spec を planner は知らない）。
-        if let Some(active) = active {
-            task_core::execution_plan::carry_done_units_v3(&active.spec, &mut spec, done_keys);
-        }
-        Ok(spec)
-    }
-}
-
 /// D14 の検証エラーを 1 行の文言にする（`OpsError::Validation`。API は 422、`celerisctl` はそのまま表示）。
 pub fn describe_validation_errors(errors: &[PlanValidationError]) -> String {
     errors

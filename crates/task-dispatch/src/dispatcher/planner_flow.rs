@@ -1002,7 +1002,7 @@ fn planner_plan_validation(
             None => Err(format!(
                 "artifacts/execution-plan.json が見つからない（{describe}）"
             )),
-            Some(text) => match task_ops::execution::parse_planner_output(
+            Some(text) => match task_core::execution_plan::parse_planner_output(
                 &text,
                 active_plan,
                 &done_work_units.iter().map(|(k, _)| k.clone()).collect(),

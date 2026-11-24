@@ -20,7 +20,7 @@ completed: 2026-11-24
 2. 責務 owner: `task_dispatch::review::parent_evaluation` の `request`・`facts`（入力と事実の組み立て）。到達の規則の owner は `task_ops::project_controller_view::recorded_outcomes` と `task_core::project_proposal::{root_satisfies, unverified_outcomes}`、criteria の組み立ての owner は `task_ops::project_snapshot`。
 3. 既存の再利用先: `project_snapshot::build`（snapshot）、`recorded_outcomes`・`unverified_outcomes`（D6・I1）、`root_row` の criteria の組み立て、controller の画面の `summary`（試験で D6 の比較先に使う）。
 4. 選択肢: (a) 評価器の側で Roadmap と events を読み直して写す → 二重実装なので不採用。(b) `summary` の snapshot の組み立てを `reach` に切り出し、`summary` と評価器が同じ関数を読む → 採用。到達は I1 と同じ `unverified_outcomes` で決める。Roadmap の無い案件を常に空にする案は controller の判定と食い違うので不採用（ADR の付記 1）。
-5. 新しい状態・分岐・fallback・port: 無し。新しい pub 関数は `project_snapshot::acceptance_criteria` と `project_controller_view::reach` の 2 つ（既存の組み立ての切り出し）。`dispatcher::ops_to_store` を `pub(crate)` にした（既存の写しの再利用）。
+5. 新しい状態・分岐・fallback・port: 無し。新しい pub 関数は `project_snapshot::acceptance_criteria` と `project_controller_view::reach` の 2 つ（既存の組み立ての切り出し）。`reach` の `OpsError` は同じ file の記録の書き込みと `dispatcher/project_resume.rs` と同じく `StoreError::Invalid` に写す（`dispatcher.rs` は WU の範囲の外なので変えない）。
 6. 撤去対象: wire の旧い criteria の型（`protocol/parent_checkpoint.rs`）、その re-export（`protocol.rs`）、schema の定義、`worker-protocol.md` の旧い記述（`not_run`）、`request()` の `Vec::new()` 2 か所と `facts()` の `false` 固定、その doc の「未実装」。
 7. 不変条件と試験: 下の「守る不変条件」。
 
@@ -61,7 +61,7 @@ Summary [   1.312s] 2 tests run: 0 passed, 2 failed, 1975 skipped
 - `git diff --stat "$CELERIS_WU_BASE" -- crates/task-worker/src/change_rules/` → 差分 0。
 
 ## LoC（`git diff --numstat "$CELERIS_WU_BASE" HEAD`）
-- production Rust: +144・−66（純増 +78）。内訳: `review/parent_evaluation.rs` +54・−7、`project_controller_view.rs` +33・−19、`project_snapshot.rs` +50・−25、`dispatcher.rs` +1・−1、`protocol.rs` +2・−3、`protocol/parent_checkpoint.rs` +4・−11。
+- production Rust: +143・−65（純増 +78）。内訳: `review/parent_evaluation.rs` +54・−7、`project_controller_view.rs` +33・−19、`project_snapshot.rs` +50・−25、`protocol.rs` +2・−3、`protocol/parent_checkpoint.rs` +4・−11。
 - 試験: `review/parent_evaluation/tests.rs` +415（新規）、`protocol/parent_checkpoint/tests.rs` +2・−2。
 - 文書・生成物: ADR +42、`worker-protocol.md` +2・−1、`worker-protocol.schema.json` +25・−23（生成）。
 - 純増の理由: 欠けていた入力（Outcome の写し・criteria・goal_reached）を組み立てる `goal()` と、既存の組み立てを 2 か所から呼ぶための切り出し（`acceptance_criteria`・`review_verdicts`・`reach`）の doc。新しい Manager・trait・状態機械・表は無い。
@@ -75,6 +75,10 @@ Summary [   1.312s] 2 tests run: 0 passed, 2 failed, 1975 skipped
 ## 親の目的への寄与
 - 改善 C・D（途中の親の独立評価）: 評価器が親 Outcome と子の受け入れ条件の結果を入力に持つようになった（確認済み: 上の試験）。評価の質が上がるかは子 8 の盲検の評価と人の rubric で測る（未確認）。
 
+## 再実行（attempt 2）
+- 前回の run の後の範囲の check が `crates/task-dispatch/src/dispatcher.rs`（`ops_to_store` を `pub(crate)` にした 1 行）を範囲の外として落とした。`dispatcher.rs` を基準に戻し、`goal()` の `reach` のエラーは `StoreError::Invalid(e.to_string())` に写した（同じ file の既存の写し方）。範囲の check は exit 0。
+
 ## commit
 - strategy-v1 8 eval-input: 評価器の request・facts に承認済み Roadmap の Outcome・子の criteria・D6 の到達を入れる
 - strategy-v1 8 eval-input: WU の進捗（変更前に落ちた出力・不変条件・検査の結果）
+- strategy-v1 8 eval-input: 範囲の外の dispatcher.rs を戻し、reach のエラーを review の中で写す

@@ -392,7 +392,7 @@ fn goal(
     };
     let (snapshot, recorded) =
         task_ops::project_controller_view::reach(store, project_id, &state, now)
-            .map_err(crate::dispatcher::ops_to_store)?;
+            .map_err(|e| task_core::store::StoreError::Invalid(e.to_string()))?;
     let unverified = pp::unverified_outcomes(&snapshot, &recorded);
     let outcomes = snapshot
         .outcomes

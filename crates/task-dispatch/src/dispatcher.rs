@@ -2074,7 +2074,7 @@ fn has_child_failed_transition(events: &[(u64, Event)]) -> bool {
 }
 
 /// task-ops の読み取りエラーをディスパッチャのエラーに写す（検証以外の失敗は来ない想定）。
-pub(crate) fn ops_to_store(e: task_ops::OpsError) -> DispatchError {
+fn ops_to_store(e: task_ops::OpsError) -> DispatchError {
     match e {
         task_ops::OpsError::Store(inner) => DispatchError::Store(inner),
         other => DispatchError::Store(StoreError::Invalid(other.to_string())),

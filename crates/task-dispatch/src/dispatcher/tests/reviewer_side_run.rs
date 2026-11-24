@@ -279,6 +279,53 @@ async fn reviewer_side_run_completion_kind_routes_to_the_design_verdict() {
     );
 }
 
+/// ADR 2026-11-24-planner-supply-failure-cooldown D4・D7-5: 設計 review の run が供給側の失敗（認証の失敗）で終わったら、
+/// worker・planner と同じ `record_supply_failure` で cooldown にし（この run は pool の account を持たないので source の
+/// 暗黙の account。`ProviderThrottled{reason: auth_failed}`）、`end` を `HarnessError{Supply}` にして判定に流さない
+/// （`DesignReviewed` を足さない）。守る不変条件: 供給の失敗で設計 review の結果を作らず、同じ供給元を cooldown にする。
+/// 既存の試験は side review の run を `Done` でしか終わらせず、修正前は cooldown が付かなかった。
+#[tokio::test]
+async fn reviewer_side_run_supply_failure_cools_down_and_reads_no_verdict() {
+    let mut f = pending(false);
+    f.d.coord
+        .completion_sender()
+        .send(Completion::SideReview(Box::new(
+            super::super::design_gate::SideReviewEnd {
+                task_id: f.task.id,
+                run_id: "side-run-auth".into(),
+                provider: "p1".into(),
+                kind: super::super::design_gate::SideReviewKind::Design,
+                result: Err(AdapterError::AuthFailed(
+                    "Failed to authenticate: this login reached its time limit".into(),
+                )),
+            },
+        )))
+        .unwrap();
+    f.d.tick().unwrap();
+    assert!(
+        f.reviewed().is_empty(),
+        "no DesignReviewed: {:?}",
+        f.reviewed()
+    );
+    let events = f.events();
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            Event::WorkerFinished { run_id, role: Some(RunRole::Reviewer), end, .. }
+                if run_id == "side-run-auth" && *end == Some(task_ops::tree::SUPPLY_FAILED_END)
+        )),
+        "{events:?}"
+    );
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            Event::ProviderThrottled { provider, reason: Some(r), .. }
+                if provider == "p1" && r == "auth_failed"
+        )),
+        "{events:?}"
+    );
+}
+
 /// `abort_stale_runs` の例外（`holds_side_review`）: 走っている設計 review の run は lease を持たない（task は `ready`）が
 /// 止められない。別の run の id は真にならない。run が終わって `WorkerFinished` が積まれた後は真にならない。
 #[tokio::test]

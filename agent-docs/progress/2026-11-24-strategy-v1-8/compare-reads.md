@@ -103,7 +103,12 @@ completed: 2026-11-25
 - `bash scripts/dev/test-affected.sh`・`cargo clippy --workspace -- -D warnings`・`cargo fmt --all -- --check`・`sh scripts/dev/progress-index.sh --check`・`sh scripts/dev/check-doc-links.sh`・`sh scripts/dev/check-adr-numbers.sh`: 結果は下の「提出時の検査」節。
 
 ## 提出時の検査（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
-- 下の結果は commit の後に書き足す。
+- `bash scripts/dev/test-affected.sh`: exit 0（「試験対象の変更なし」。変更は Python の script・試験と文書だけで、Rust の crate と web は対象外。repo_health_gate: all checks passed）。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+- `cargo fmt --all -- --check`: exit 0。
+- `sh scripts/dev/progress-index.sh --check`: exit 0（ok）。
+- `sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh`: exit 0（ok、482 files）。
+- WU の check: 範囲（`sh "$CELERIS_WU_SCOPE_PATHS"` の変更 path は「LoC」節の 6 file だけ）、unittest discover（66 件 OK）、testdata の leak exit 1・clean exit 0、実 run の compare（exit 0、出力は `pilot-compare-v4/metrics.json` と同じ byte）、blind（invalid の行 4 件、check-blank exit 0）。どれも exit 0。
 
 ## LoC（`git diff --numstat`、基準は `$CELERIS_WU_BASE`）
 - script（試験でない）: `parent-eval-blind-compare.py` +43/−5、`pilot_score.py` +13/−6。

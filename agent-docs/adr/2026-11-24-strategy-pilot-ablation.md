@@ -254,6 +254,33 @@ driver・比較・採点材料の script（`scripts/dev/` の下）と task-api 
 - 採点者は人（rubric.md の手順 1〜5）。実装者・CoS・operator は採点しない。close-audit が人の採点の後に `pilot-key.json` の sha256 を確かめてから開封する。
 - 既知の限界: 方式 (a) の記録は評価の本文を持たず、方式 (c) の記録は戦略の版を持つので、内容から方式を推測できる。伏せるのは名前だけで、この限界を採点の結果と一緒に報告する。
 
+##### D5 付記 1（2026-11-25、WU machine-axes。人の決定 2026-11-25）: 採点の分担と採点の場所
+
+- 分担: 人（rmaeda）は 4 軸（execution success・epistemic progress・parent goal achievement・unsupported claims）とレビュー時間（分）だけを付ける。
+  pivot の時点とコストの 2 軸は人が付けず、close-audit が人の採点の後に `pilot-key.json` を開いてから機械で付ける（規則は D7 付記 1）。
+  rubric.md の「採点の手順」3 にこの分担を書いた。「軸と基準」から末尾まで（合格線・史実の参照の点）は変えていない。
+- 採点の場所: 人は claude.ai の非公開の Artifact（operator が作る web 画面）で採点する。研究ケースの文をその Artifact に置くことは人が許可した
+  （11-24 の研究ケースの使い道の決定にある「人の採点」に当たる）。operator が画面の入力を root の artifacts の `pilot-scoring.md` の採点欄に書き写す。
+  採点欄の採点者は `human:rmaeda`。書き写したのが operator であることは close-audit が進捗に書く。
+- 作り直さないもの: score の段の成果物（`pilot-scoring.md` の記録・id・採点欄の印、`pilot-key.json`〈sha256 `36841f6b189dbecbbb0217108f1118ab235c17c73fe800528ea2b6f8de64aace`〉、
+  repo 用の写し `agent-docs/progress/2026-11-24-strategy-v1-8/pilot-scoring.md`）。人は今の id で採点している。
+- そのため材料に埋め込んだ「採点の手順」節は、材料を作った時点の手順 3（6 軸を人が付ける）のままである。`pilot_score.py` の `check-blank`・`check-human`・
+  `check-scored` は「採点の手順」節の有無だけを見て、「軸と基準」「合格線」は rubric.md との一致を見る。
+- 検査の口（`scripts/dev/parent-eval-blind/pilot_score.py`）:
+  - `check-human <md>`: 人の 4 軸が 0〜2 で根拠が空でなく「機械:」で始まらない、採点者が `human:<名>`、レビュー時間（分）が数、pivot の時点とコストの行は
+    空か「機械:」の根拠と 0〜2 の点。operator が書き写した後に流す。
+  - `machine-axes --scoring <md> --key <pilot-key.json> --metrics <metrics.json> --answer-key <answer_key.json> [--out <json>]`: check-human、
+    `pilot-key.json` の sha256（採点の file の値）、`metrics.json` の sha256（key の `metrics_sha256`）、answer key の sha256（metrics の `answer_key_sha256`）を
+    確かめてから、2 行だけを点と「機械: <規則> <数値>」で埋める。ほかの byte は変えない（元は空の行なので人の入力は失われない）。もう一度流しても同じ byte。
+    `--out` に id ごとの方式・規則・反復ごとの数値を書く。
+  - `check-scored <md>`: check-human に加え、2 軸が 0〜2 の点と「機械:」の根拠で埋まっている。
+  - `tally`: 開封・表・合格線の判定。`--metrics` を受けない（wrong_pivots による上書きは machine-axes に移した）。表の 2 軸の見出しに「（機械）」を付ける。
+- close-audit の手順（`ART=/local/celeris/data/workspaces/01M7XQA74FP70G3T3KSTP02S0W/artifacts`）:
+  `check-human $ART/pilot-scoring.md` → `machine-axes --scoring $ART/pilot-scoring.md --key $ART/pilot-key.json --metrics $ART/pilot-metrics/metrics.json
+  --answer-key agent-docs/progress/2026-11-21-strategy-v1-0/replay/answer_key.json --out $ART/pilot-machine-axes.json` → `check-scored $ART/pilot-scoring.md` →
+  `tally --scoring $ART/pilot-scoring.md --key $ART/pilot-key.json --out $ART/pilot-tally.json`。WU pilot-materials の進捗に書いた `tally … --metrics …` は使えない。
+- 子 9 で同じ分担を使うかは人の確認を待つ（子 8 の進捗の「提案」）。
+
 ### D6: 指標
 
 | 指標 | 定義 | 出し方 | 区分 |
@@ -277,6 +304,30 @@ driver・比較・採点材料の script（`scripts/dev/` の下）と task-api 
 - 合格を実証できなければ（採点が無い・合格線を満たさない・漏れの検査が落ちた・run が上限で足りない）、rollout しない。本番の controller の checkpoint の評価は mode `shadow` のままで、
   子 8 は mode を変えない。`enabled` にするのは人の手順（`docs/ops/project-controller.md` の「本番で有効にする人の手順」）で、子 8 の範囲の外である。
 - canary は始めない。合格した後に検討するときも、人が認めた 1 案件と予算を質問で人に聞いてからにする。
+
+##### D7 付記 1（2026-11-25、WU machine-axes。人の決定 2026-11-25）: 機械が付ける 2 軸の規則
+
+規則は反復ごとに当て、id の点は反復の最小とする。rubric.md の「軸と基準」の 2/1/0 点の基準を次の数値に当てる。
+
+- pivot の時点:
+  - 検知できた時点: replay は answer key の `first_detectable`（**E-mid**）、研究ケースは D2.2 の反証の **11.20**（yield でも止まった時点）。
+  - 検知: metrics の `first_detection`（compare `--pilot`: verdict が at_risk・off_track で next が continue 以外の最初の時点。方式 a は無し）。
+    record の status が invalid の記録は検知に数えず、同じ定義（compare の `DETECT_VERDICTS` を import して使う）で後の時点を見る。
+  - 時点の差: replay は answer key の `order`（A-mid 1・A-done 2・C-mid 3・C-done 4・D-mid 5・E-mid 6・D-done 7・E-done 8・F-mid 9・F-done 10・G-mid 11・G-done 12）、
+    研究ケースは `research_case.py` の `POINTS`（11.15〜11.21）の順で、符号付きの差（検知 − 検知できた時点）。
+  - 点: 差が 1 以下で 2（検知できた時点より前の検知は差が負で 2。rubric の「1 時点後までに」）、2〜3 で 1、4 以上か検知無しで 0。
+    その反復の `wrong_pivots`（answer key で on_track・unknown の時点の pivot・discriminating_experiment）が 2 以上なら 0（合格線の節の規則。tally から移した）。
+    研究ケースは answer key が無く metrics に `wrong_pivots` が無いので、誤った pivot は数えない。
+  - この pilot の時点で取りうる差: replay は C-mid −3・D-done +1・F-done +4、研究ケースは 11.16 −4・11.17 −3・11.20 0。したがって 1 点は出ず、
+    replay は C-mid か D-done の検知で 2、F-done の検知か検知無しで 0、研究ケースはどの時点の検知でも 2、検知無しで 0 になる。
+- コスト:
+  - replay: 比 = max((`unneeded_after_first_detectable` の worker run ＋ 方式の `llm_runs`) ÷ **137 run**, (同じ USD ＋ 方式の `usd`) ÷ **264.2525 USD**)。
+    `unneeded_after_first_detectable` は E-mid の cutoff から検知（無ければ H の統合）までの史実の worker run と USD（list price）。
+    基準の 137 run・264.2525 USD は metrics の `history`（E-mid の cutoff から H の統合まで。rubric の「137 run・264.25 USD」）から読む。
+  - 点: 比が **25 %** 以下で 2、**75 %** 以下で 1、超えたら 0。人の採点・review の時間（分）は人が採点欄のレビュー時間に書く（点に入れない）。
+  - 研究ケース: 史実の基準が無いので全方式 0（根拠に「史実の基準が無い・未確認」と書く）。方式の間の合計点の差には効かない。
+- 合格線（rubric.md の「合格線」）は変えない。tally の合格線の判定は、採点の file の pivot の時点（機械の点）を使う。
+- 試験: `scripts/dev/parent-eval-blind/test_pilot_score.py` の `test_check_human_*`・`test_machine_axes_*`（分担の前の script で落ちる）。
 
 ### D8: 評価器の入力の欠けを、測定の前に eval-input・eval-seed が直す
 

@@ -77,7 +77,7 @@ def one_line(text, redact=True):
 
 # ---------------------------------------------------------------- blind
 def load_runs(runs, metrics):
-    """{(iteration, case, point, arm): (output, metrics の行)} と {(iteration, case): 版の段の出力}。"""
+    """{(iteration, case, point, arm): (output, metrics の行, run.json の status)} と {(iteration, case): 版の段の出力}。"""
     records, stages = {}, {}
     for root in iteration_roots(runs):
         it = root.resolve().name
@@ -94,8 +94,9 @@ def load_runs(runs, metrics):
                     if (d / "output.json").is_file():
                         if f"{case}/{point}/{arm}" not in rows:
                             raise ValueError(f"metrics.json has no {it}/{case}/{point}/{arm}")
+                        run = json.loads((d / "run.json").read_text()) if (d / "run.json").is_file() else {}
                         records[(it, case, point, arm)] = (json.loads((d / "output.json").read_text()),
-                                                           rows[f"{case}/{point}/{arm}"])
+                                                           rows[f"{case}/{point}/{arm}"], run.get("status"))
     if not records:
         raise ValueError("no <case>/<point>/<arm>/output.json under --runs")
     return records, stages
@@ -126,12 +127,18 @@ def strategy_lines(doc, omit):
     return out
 
 
-def record_lines(rid, it, output, row, stage, excluded, omit):
-    ev = (output.get("record") or {}).get("evaluation") or {}
+def record_lines(rid, it, output, row, run_status, stage, excluded, omit):
+    record = output.get("record") or {}
+    ev = record.get("evaluation") or {}
     verdict = output.get("verdict") or "—（親の途中評価の記録が無い）"
     lines = [f"##### 記録 `{rid}`（反復 {it}）", ""]
     if excluded:
         lines += ["- **この記録は採点から外す**（compare --pilot が漏れか修正前の入力を検出した。理由は採点の後に metrics.json で開く）"]
+    if record.get("status") == "invalid":
+        # 評価器が答えを出せなかった記録（例: turn の上限）。下の判定と次の手は gate の既定値なので、人が評価器の答えと読み違えない
+        # ように示す（ADR D4.1 付記 2）。方式の名は出さない。
+        why = "、".join(one_line(v) for v in record.get("violations") or []) or "違反の記録無し"
+        lines.append(f"- 評価の記録の状態: invalid（run: {one_line(run_status) or '—'}、{why}）。判定と次の手は gate の既定値で、評価器の答えではない")
     lines += [f"- 判定（verdict）: {verdict}", f"- 次の手（next）: {output.get('next') or '—'}"]
     if ev.get("axes"):
         lines.append("- 評価の軸（axes）: " + "、".join(f"{k}={v}" for k, v in sorted(ev["axes"].items())))
@@ -206,9 +213,9 @@ def render(records, stages, metrics, key, key_sha, metrics_path, rng_order, repo
             lines += [f"#### 時点 {point}", ""]
             for k in here:
                 it, _, _, arm = k
-                output, row = records[k]
+                output, row, run_status = records[k]
                 stage = stages.get((it, case)) if arm == "c" else None
-                lines += record_lines(by_arm[case][arm], it, output, row, stage, f"{it}/{case}/{point}/{arm}" in excluded,
+                lines += record_lines(by_arm[case][arm], it, output, row, run_status, stage, f"{it}/{case}/{point}/{arm}" in excluded,
                                       repo_copy and case == "research")
     lines += ["## id ごとの決定的な指標", "",
               "検知できた時点（replay は E-mid）から検知までの史実の worker run は rubric のコストの軸の材料（史実 137 run・264.25 USD）。"

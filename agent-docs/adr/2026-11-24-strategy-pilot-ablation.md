@@ -202,6 +202,37 @@ driver・比較・採点材料の script（`scripts/dev/` の下）と task-api 
 - 子 6 の試験 `parent_checkpoint_blind_no_answer_key_or_future` の規則は変えない（子 6 の盲検の時点 E-mid・D-done では、除外に当たる本文が 0 種）。上の「子 6 と同じ規則」は、本文の除外を除いて同じ、と読む。
 - 試験: `test_pilot_compare.py` の `test_body_also_before_the_cutoff_is_not_a_leak`（変更前に落ちる）と `test_body_only_after_the_cutoff_is_a_leak`（否定対照）。
 
+##### D4.1 付記 2（2026-11-25、WU compare-reads。人の決定 2026-11-25）: 書き込みの heredoc と名の部分一致を禁じた読みに数えない。invalid の記録を採点材料に示す
+
+- 変更 1（`parent-eval-blind-compare.py` の `check_reads`）: Bash の command では、heredoc の本文（演算子の行の次の行から区切りの語の行まで）と
+  redirect（`>`・`>>`）の書き先を、禁じた名と照合する文から除く。redirect の書き先の切り出しは `mutation` が書き込みに数える正規表現と同じ
+  （書き込みに数えるものを読みに数えない）。heredoc の本文の中の、作業 tree・home の外の絶対 path（`reads_outside` と同じ切り出し）は
+  引き続き禁じた名と照合する。
+- 変更 2（同じ）: 末尾が `/` の禁じた名（`replay/`・`agent-docs/adr/`）は、path の成分の頭（文の先頭・`/`・空白・引用符の直後）でだけ一致とする。
+  ほかの名（`strategy-v1-6`・`c-results.md`・`answer_key` など）は部分一致のまま。
+- 前提: 評価器と版を書く run の作業 tree と一時 home には、禁じた file（answer key・`research-case.md`・`c-results.md`・子 0 の `replay/`・ADR・子 6 の進捗）
+  が無い。heredoc の本文に書いた相対の名や redirect の書き先から、禁じた file は読めない。禁じた file を読むには外の絶対 path が要り、
+  それは `reads_outside` が今までどおり記録し、heredoc の本文の中にあっても禁じた名と照合する。この前提が崩れる（driver が作業 tree に
+  禁じた file を置く）ときは、この付記を見直す。
+- 理由: operator の実 run（root の artifacts の `pilot-runs/iter-1`・`iter-2`）に当てた `compare --pilot`（`pilot-compare-v3`）が、8 点・16 件の
+  禁じた読みで exit 1 になった。16 件はどれも実際の読みではない。
+  - 6 件（研究ケースの方式 b・c）: `cat > artifacts/review.json <<'EOF'` と `python3 -I - <<'EOF'`（review.json を書く script）の heredoc の本文に、
+    driver の入力（`request.json`・`prompt.md`）にもある名 `c-results.md` があった（変更 1 で消える）。
+  - 10 件（replay の方式 c の版の段、2 反復で 5 件ずつ）: 版の path `artifacts/strategy/pilot-replay/v1.json` の `pilot-replay/` が禁じた名 `replay/` に
+    部分一致した（変更 2 で消える。うち 4 件は heredoc の本文にだけあり、変更 1 でも消える）。
+- 変えないもの: `reads_outside`（読みの文の全体から取る）、Read の path と Grep・Glob の pattern の照合（部分一致。末尾が `/` の名は成分の頭）、
+  sentinels の語・answer key の印と理由の文・期待の組・時刻・event の本文・研究ケースの規則、子 6 の呼び方（`--pilot` なし）の出力。
+  `testdata/pilot-runs-leak` の `metrics.json` は変更の前後で同じ byte。実 run の `metrics.json` は漏れ・`excluded`・`pass` と各点の `leaks`・`forbidden_reads` の
+  ほかは変更の前後で同じ。
+- 変更 3（`pilot_score.py blind`）: record の status が `invalid` の記録に `- 評価の記録の状態: invalid（run: <run.json の status>、<violations>）。判定と次の手は
+  gate の既定値で、評価器の答えではない` の 1 行を出す（方式の名は出さない）。人の決定 3 で、方式 c の 4 点の invalid（turn の上限で評価器が答えを
+  出せなかった）は流し直さず、そのまま採点材料に渡す。
+- 試験: `test_pilot_compare.py` の `test_cat_heredoc_body_is_not_a_read`・`test_python_heredoc_writing_review_is_not_a_read`・
+  `test_strategy_path_pilot_replay_is_not_the_replay_dir`（3 件とも変更前に落ちる）、否定対照 `test_real_reads_of_forbidden_names_stay_leaks`
+  （Read の path の `replay/answer_key.json`・`cat c-results.md`・`cat agent-docs/progress/2026-11-22-strategy-v1-6.md`・heredoc の外の引数・heredoc の本文の中の
+  外の絶対 path・heredoc の後の行が exit 1）、`test_heredoc_split_follows_bash`。`test_pilot_score.py` の
+  `test_invalid_record_says_the_verdict_is_the_gate_default`（変更前に落ちる）。
+
 #### D4.2 混ぜた入力の否定対照（exit 1 を確かめる）
 
 - C-mid の入力に F-done にだけある event を 1 件足す。

@@ -15,6 +15,8 @@ daemon も cargo も LLM も使わない。入力は合成の testdata（testdat
   から読む（Python に写さない）。
 - 子 6 の呼び方（--pilot なし）は今のまま動く: commit した fixture から同じ compare.json を書く。
 - 比較は run の記録（--runs）を書き換えない。
+- 禁じた読みは、Bash の heredoc の本文と redirect（>・>>）の書き先を読みと数えず、末尾が / の禁じた名を path の成分の頭でだけ
+  照合する。実際の読み（Read の path・cat の引数・heredoc の外の引数・heredoc の本文の中の外の絶対 path）は漏れのまま（ADR D4.1 付記 2）。
 既存の試験で検出できない理由: parent-eval-blind-compare.py には試験が無く、子 6 の呼び方は方式 b の verdict・next と読みしか
 見ない。方式 a・c と研究ケースの指標、出力側の漏れ、secret・mutation は誰も数えていなかった。
 """
@@ -229,6 +231,77 @@ class Pilot(unittest.TestCase):
         r, doc = compare(self.dir / "o", root)
         self.assertEqual(r.returncode, 1)
         self.assertTrue(any("reads: answer_key" in x for x in doc["leaks"]), doc["leaks"])
+
+    def add_reads(self, rel, *entries):
+        root = self.copy_clean()
+        reads = json.loads((root / rel / "reads.json").read_text())
+        reads["reads"] += [{"tool": "Bash", "command": e} if isinstance(e, str) else e for e in entries]
+        (root / rel / "reads.json").write_text(json.dumps(reads, ensure_ascii=False))
+        return root
+
+    # 不変条件（ADR D4.1 付記 2）: Bash の heredoc の本文と redirect（>・>>）の書き先は読みでない。末尾が / の禁じた名は path の成分の頭
+    # でだけ一致する。既存の試験で検出できない理由: 禁じた読みの試験は Read の path の 1 件だけで、operator の実 run の書き込みの
+    # heredoc（研究ケースの review.json）と方式 c の版の path（artifacts/strategy/pilot-replay/）の形が無かった。下の 3 件は変更前に落ちる。
+    def test_cat_heredoc_body_is_not_a_read(self):
+        cmd = ("mkdir -p /synthetic/home/slice-repo/artifacts && cat > /synthetic/home/slice-repo/artifacts/review.json <<'EOF'\n"
+               '{"parent_evaluation": {"reason": "c-results.md の 11.16 節までの結果から、次の識別実験を選ぶ"}}\nEOF')
+        root = self.add_reads("research/11.17/b", cmd)
+        r, doc = compare(self.dir / "o", root)
+        self.assertEqual((r.returncode, doc["leaks"]), (0, []), r.stderr)
+
+    def test_python_heredoc_writing_review_is_not_a_read(self):
+        cmd = ("cd /synthetic/home/slice-repo/artifacts && python3 -I - <<'E'\nimport json\n"
+               'pe = {"claims": [{"statement": "c-results.md の表の値は slice に無い"}]}\n'
+               "open('review.json', 'w').write(json.dumps({'parent_evaluation': pe}))\nE")
+        root = self.add_reads("research/11.17/c", cmd)
+        r, doc = compare(self.dir / "o", root)
+        self.assertEqual((r.returncode, doc["leaks"]), (0, []), r.stderr)
+
+    def test_strategy_path_pilot_replay_is_not_the_replay_dir(self):
+        cmd = ("cd /synthetic/home/slice-repo; sha256sum artifacts/strategy/pilot-replay/v1.json goal.md; "
+               "python3 -I -c \"import json;json.load(open('artifacts/strategy/pilot-replay/v1.json'))\"")
+        root = self.add_reads("replay/strategy-v1", cmd,
+                              {"tool": "Read", "path": "/synthetic/home/slice-repo/artifacts/strategy/pilot-replay/v1.json"})
+        r, doc = compare(self.dir / "o", root)
+        self.assertEqual((r.returncode, doc["leaks"]), (0, []), r.stderr)
+
+    def test_real_reads_of_forbidden_names_stay_leaks(self):
+        # 否定対照: 実際の読み（Read の path、cat の引数、heredoc の外の引数、heredoc の本文の中の外の絶対 path、heredoc の後の行）は
+        # 今までどおり漏れ（exit 1）。外の絶対 path は reads_outside にも残る。
+        src = "/work/agent-platform/agent-docs/progress/2026-11-21-strategy-v1-0/replay/answer_key.json"
+        adr = "/work/agent-platform/agent-docs/adr/2026-11-24-strategy-pilot-ablation.md"
+        cases = {
+            "Read の path": ({"tool": "Read", "path": "/synthetic/home/slice-repo/replay/answer_key.json"},
+                            ("replay/", "answer_key"), None),
+            "Read の相対 path": ({"tool": "Read", "path": "replay/answer_key.json"}, ("replay/", "answer_key"), None),
+            "cat c-results.md": ("cat c-results.md > /synthetic/home/slice-repo/artifacts/notes.txt", ("c-results.md",), None),
+            "cat 子 6 の進捗": ("cat agent-docs/progress/2026-11-22-strategy-v1-6.md", ("strategy-v1-6",), None),
+            "heredoc の外の引数": (f"python3 -I - {src} <<'EOF'\nimport sys\nprint(open(sys.argv[1]).read())\nEOF",
+                                ("replay/", "answer_key"), src),
+            "heredoc の本文の外の絶対 path": (f"python3 -I - <<'EOF'\nprint(open('{adr}').read())\nEOF", ("agent-docs/adr/",), adr),
+            "heredoc の後の行": ("cat > /synthetic/home/slice-repo/artifacts/review.json <<'EOF'\n{}\nEOF\ncat c-results.md",
+                              ("c-results.md",), None),
+        }
+        for label, (entry, names, outside) in cases.items():
+            with self.subTest(label):
+                shutil.rmtree(self.dir / "runs", ignore_errors=True)
+                root = self.add_reads("research/11.17/b", entry)
+                r, doc = compare(self.dir / f"o-{label}", root)
+                self.assertEqual(r.returncode, 1, f"{label}: {r.stdout}")
+                read = entry if isinstance(entry, str) else entry["path"]
+                for name in names:
+                    self.assertIn(f"iter-1/research/11.17/b: reads: {name} ({read})", doc["leaks"])
+                if outside:
+                    self.assertIn(outside, doc["iterations"]["iter-1"]["points"]["research/11.17/b"]["reads_outside"])
+
+    def test_heredoc_split_follows_bash(self):
+        mod = load_compare()
+        rest, body = mod.split_heredocs("cat <<-'A' <<B > out\n\tbody-a\n\tA\nbody-b\nB\ngrep x <<< here\nnext")
+        self.assertEqual((rest, body), ("cat <<-'A' <<B > out\ngrep x <<< here\nnext", "\tbody-a\nbody-b"))
+        self.assertTrue(mod.forbidden_name_in("replay/", "'replay/x'"))
+        self.assertTrue(mod.forbidden_name_in("replay/", "a/replay/x"))
+        self.assertFalse(mod.forbidden_name_in("replay/", "strategy/pilot-replay/v1.json"))
+        self.assertTrue(mod.forbidden_name_in("c-results.md", "x-c-results.md"), "末尾が / でない名は部分一致のまま")
 
     def test_secret_shapes_are_counted_without_their_value(self):
         root = self.copy_clean()

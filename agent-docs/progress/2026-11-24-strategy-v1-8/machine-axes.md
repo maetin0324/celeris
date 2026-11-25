@@ -67,14 +67,27 @@ WU pilot-materials の進捗に書いた `tally … --metrics …` は、tally �
 ## 受け入れ条件の確かめ（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 - rubric の「軸と基準」から末尾が base と同じ: `diff <(git show $CELERIS_WU_BASE:agent-docs/progress/2026-11-21-strategy-v1-0/rubric.md | sed -n '/^## 軸と基準$/,$p') <(sed -n '/^## 軸と基準$/,$p' agent-docs/progress/2026-11-21-strategy-v1-0/rubric.md)` → exit 0（差分なし）。rubric の差分は「採点の手順」の 3 の 1 行が 3 行に替わっただけ。
 - repo の写しの check-blank: `python3 -I scripts/dev/parent-eval-blind/pilot_score.py check-blank agent-docs/progress/2026-11-24-strategy-v1-8/pilot-scoring.md` → exit 0。写しは `$CELERIS_WU_BASE` と同じ byte（`git diff --quiet $CELERIS_WU_BASE -- agent-docs/progress/2026-11-24-strategy-v1-8/pilot-scoring.md` → exit 0）。
-- `pilot-key.json` の sha256: `sha256sum $ART/pilot-key.json` → `36841f6b189dbecbbb0217108f1118ab235c17c73fe800528ea2b6f8de64aace`（変わっていない）。
-- 検査の結果は下の「検査」節。
+- `pilot-key.json` の sha256: `sha256sum $ART/pilot-key.json` → `36841f6b189dbecbbb0217108f1118ab235c17c73fe800528ea2b6f8de64aace`（変わっていない）。`$ART/pilot-scoring.md` と `pilot-key.json` の mtime は 2026-11-25 03:44:53Z のまま。
+- 実の材料に読むだけの検査を当てた: `pilot_score.py check-blank $ART/pilot-scoring.md` → exit 0（埋め込んだ「採点の手順」節は材料を作った時点の文のままで、有無だけを見る規則で通る）。machine-axes と tally は当てていない。
+- 規則の数値（25 %・75 %・137 run・264.2525 USD・E-mid・11.20・反復の最小）は ADR の D7 付記 1 とこの file の「機械が付ける 2 軸の規則」にある（`grep -cF` でどれも 1 件以上）。
 
 ## 検査（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
-- 下の「検査の結果」に書く。
+- `bash scripts/dev/test-affected.sh` → exit 0（「試験対象の変更なし（docs のみ等）」。repo_health_gate: all checks passed）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo fmt --all -- --check` → exit 0。
+- `python3 -I scripts/dev/parent-eval-blind/test_pilot_score.py` → exit 0（21 件 OK）。同じ dir の `test_driver.py`・`test_pilot_compare.py`・`test_research.py` → どれも exit 0。
+- `sh scripts/dev/progress-index.sh --check` → exit 0（ok）。`sh scripts/dev/check-doc-links.sh` → exit 0（ok）。
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` の変更 path は ADR・rubric.md・この進捗・`pilot_score.py`・`test_pilot_score.py` の 5 file。
 
-## LoC
-- `git diff --numstat $CELERIS_WU_BASE` の値は下の「検査の結果」に書く。変えたのは script（`pilot_score.py`）・試験（`test_pilot_score.py`）・文書（rubric・ADR・この進捗）で、crates・web・評価器の prompt・testdata・compare は変えていない。
+## LoC（`git diff --numstat $CELERIS_WU_BASE`、この進捗の commit の前）
+| file | 区分 | 追加 | 削除 |
+|---|---|---|---|
+| `scripts/dev/parent-eval-blind/pilot_score.py` | script（dev の道具。production の crates ではない） | 213 | 13 |
+| `scripts/dev/parent-eval-blind/test_pilot_score.py` | 試験 | 237 | 14 |
+| `agent-docs/adr/2026-11-24-strategy-pilot-ablation.md` | 文書 | 51 | 0 |
+| `agent-docs/progress/2026-11-21-strategy-v1-0/rubric.md` | 文書 | 3 | 1 |
+| この進捗 | 文書 | 87 | 0 |
+- crates・web・評価器の prompt・testdata・compare は変えていない。production の Rust・TS の LoC は 0 行の差。script の純増 200 行は、人の決定で増えた 2 つの口（check-human・machine-axes）と規則の根拠の文の分。
 
 ## 未確認
 - 人の 4 軸の採点はまだ無い。machine-axes と tally は実データに当てていないので、実データでの機械の 2 軸の点と合格線の判定は未確認（close-audit の仕事）。

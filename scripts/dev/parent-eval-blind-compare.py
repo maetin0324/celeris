@@ -32,6 +32,11 @@ import sys
 FORBIDDEN = ("agent-docs/adr/", "replay/", "parent_checkpoint_", "strategy-v1-6", "execution-plan")
 # reviewer の道具が読むことのある system の path（評価の材料ではない）。
 SYSTEM = ("/usr/", "/bin/", "/lib/", "/lib64/", "/etc/", "/dev/null", "/proc/self/")
+ABS_PATH_RE = re.compile(r"(?<![\w.])/[^\s'\"|;&<>()]+")
+# Bash の redirect（> と >>）の書き先。mutation は書き込みに数え、check_reads は読みに数えない（ADR D4.1 付記 2）。
+REDIRECT_RE = re.compile(r">>?\s*([^\s;&|<>]+)")
+# heredoc の演算子（<<・<<-。<<< の here-string は除く）と区切りの語（引用符・\ 付きを含む）。
+HEREDOC_RE = re.compile(r"(?<!<)<<(?!<)(-?)\s*(?:'([^'\n]+)'|\"([^\"\n]+)\"|\\?([A-Za-z_][\w.-]*))")
 
 
 def inside(path, roots):
@@ -39,23 +44,57 @@ def inside(path, roots):
     return any(p == pathlib.PurePosixPath(r) or pathlib.PurePosixPath(r) in p.parents for r in roots)
 
 
+def split_heredocs(command):
+    """Bash の command を (heredoc の本文の外, heredoc の本文) に分ける。本文は演算子のある行の次の行から、区切りの語だけの
+    行（<<- は行頭の tab を除いて比べる）の前まで。1 行に演算子が複数あれば本文は順に続く。区切りの行はどちらにも入れない。"""
+    outside, body, pending = [], [], []
+    for line in command.split("\n"):
+        if pending:
+            strip_tabs, word = pending[0]
+            if (line.lstrip("\t") if strip_tabs else line) == word:
+                pending.pop(0)
+            else:
+                body.append(line)
+            continue
+        outside.append(line)
+        pending += [(bool(m.group(1)), next(g for g in m.group(2, 3, 4) if g)) for m in HEREDOC_RE.finditer(line)]
+    return "\n".join(outside), "\n".join(body)
+
+
+def forbidden_name_in(name, text):
+    """禁じた名が読みの文にあるか。末尾が / の名（dir の名）は path の成分の頭（文の先頭・/・空白・引用符の直後）でだけ一致とし、
+    pilot-replay/ のような別の名の後半には当てない。ほかの名は部分一致（ADR D4.1 付記 2）。"""
+    if name.endswith("/"):
+        return re.search(r"(?:^|(?<=[/\s'\"]))" + re.escape(name), text) is not None
+    return name in text
+
+
 def check_reads(reads, extra=()):
+    """(禁じた読み, 作業 tree・home の外の path)。外の path は reads の文の全体（heredoc の本文を含む）から取る。禁じた名は
+    Bash の command では heredoc の本文と redirect の書き先を除いた文と、heredoc の本文の中の外の絶対 path に照合する
+    （作業 tree と home に禁じた file は無いので、本文の相対の名は禁じた file を読めない。ADR D4.1 付記 2）。"""
     work, home = reads.get("work_tree"), reads.get("home")
     roots = [r for r in (work, home) if r]
+
+    def outside_paths(text):
+        return [tok for tok in ABS_PATH_RE.findall(text) if not inside(tok, roots) and not tok.startswith(SYSTEM)]
+
     forbidden, outside = [], []
     for r in reads.get("reads", []):
         text = r.get("path") or r.get("command") or r.get("pattern") or ""
+        matched = text
+        if not r.get("path") and r.get("command"):
+            rest, body = split_heredocs(text)
+            matched = "\n".join([REDIRECT_RE.sub(" ", rest), *outside_paths(body)])
         for name in (*FORBIDDEN, *extra):
-            if name in text:
+            if forbidden_name_in(name, matched):
                 forbidden.append({"read": text, "name": name})
         if "path" in r:
             path = r["path"] if r["path"].startswith("/") else f"{work}/{r['path']}"
             if not inside(path, roots) and not path.startswith(SYSTEM):
                 outside.append(r["path"])
         else:
-            for tok in re.findall(r"(?<![\w.])/[^\s'\"|;&<>()]+", text):
-                if not inside(tok, roots) and not tok.startswith(SYSTEM):
-                    outside.append(tok)
+            outside += outside_paths(text)
     return forbidden, sorted(set(outside))
 
 
@@ -138,7 +177,6 @@ WRITE_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
 REVIEW_OUTPUT = "review.json"
 PRE_FIX = "（Outcome の記録は無い）"
 TS_RE = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z")
-REDIRECT_RE = re.compile(r">>?\s*([^\s;&|<>]+)")
 
 
 def load_module(name, path):

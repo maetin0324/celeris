@@ -12,11 +12,13 @@ daemon も cargo も LLM も使わない。入力は合成の testdata（testdat
   研究ケースの本文を持たず、check-blank を通る。
 - check-scored は空欄・0〜2 の外・根拠の空・human: でない採点者で落ちる。
 - tally は pilot-key.json の sha256 が採点の file の値と違えば開封しない（exit 1）。一致すれば方式 × 軸 × 採点者の表と合格線の判定を出す。
+- record の status が invalid の記録は、判定と次の手が gate の既定値で評価器の答えでないことを示す（ADR D4.1 付記 2）。
 既存の試験で検出できない理由: 採点材料の script が無く、盲検の伏せ方・採点欄・開封の手順を確かめる試験が無かった。
 """
 import json
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -118,6 +120,36 @@ class Score(unittest.TestCase):
             orders.add(tuple(key[i] for i in re.findall(r"##### 記録 `(\w+)`", md.split("#### 時点 C-mid", 1)[1])[:3]))
             self.assertTrue(section)
         self.assertGreater(len(orders), 1, "時点の中の記録の順が乱数で変わらない")
+
+    def test_invalid_record_says_the_verdict_is_the_gate_default(self):
+        # 不変条件（ADR D4.1 付記 2、人の決定 3）: record の status が invalid の記録には、run.json の status と violations を添えて、
+        # 判定と次の手が gate の既定値で評価器の答えでないことを 1 行で示す。方式の名は出さず check-blank を通る。checked の記録には出さない。
+        # 既存の試験で検出できない理由: testdata の記録は全て checked で、invalid の記録を採点材料に出す試験が無かった（変更前に落ちる）。
+        runs = self.dir / "invalid-runs" / "iter-1"
+        shutil.copytree(CLEAN, runs)
+        point = runs / "replay/D-done/c"
+        out = json.loads((point / "output.json").read_text())
+        out.update({"status": "invalid", "verdict": "unknown", "next": "ask_human"})
+        out["record"].update({"status": "invalid", "violations": ["shape parent_evaluation: 節が無い"],
+                              "effective": {"verdict": "unknown", "next": "ask_human"}, "evaluation": {}})
+        (point / "output.json").write_text(json.dumps(out, ensure_ascii=False))
+        run = json.loads((point / "run.json").read_text())
+        (point / "run.json").write_text(json.dumps({**run, "status": "budget_exhausted"}, ensure_ascii=False))
+        d = self.dir / "invalid"
+        r = subprocess.run([sys.executable, "-I", str(COMPARE), "--pilot", "--runs", str(runs), "--answer-key", str(KEY),
+                            "--out", str(d)], capture_output=True, text=True, timeout=120)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        r = score("blind", "--runs", runs, "--metrics", d / "metrics.json", "--out", d / "s.md", "--key-out", d / "k.json",
+                  "--seed", 3)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        md = (d / "s.md").read_text()
+        line = ("- 評価の記録の状態: invalid（run: budget_exhausted、shape parent_evaluation: 節が無い）。"
+                "判定と次の手は gate の既定値で、評価器の答えではない")
+        self.assertEqual(md.count("評価の記録の状態"), 1, md)
+        rid = next(i for i, arm in json.loads((d / "k.json").read_text())["cases"]["replay"].items() if arm == "c")
+        record = md.split("#### 時点 D-done", 1)[1].split(f"##### 記録 `{rid}`", 1)[1].split("#####", 1)[0]
+        self.assertIn(line, record)
+        self.assertEqual(score("check-blank", d / "s.md").returncode, 0)
 
     def test_arm_name_in_the_material_fails_check_blank(self):
         d = self.blind("n1")

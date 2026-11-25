@@ -189,6 +189,19 @@ driver・比較・採点材料の script（`scripts/dev/` の下）と task-api 
   - 読み: `reads.json` に answer key・`research-case.md`・`c-results.md` の全体・replay の時点より後の dir の path があれば `forbidden`（子 6 の `parent-eval-blind-compare.py` の `check_reads` と同じ）。
 - 規則は既存の `replay.py`（`verify` の N1〜N3）・`research_case.py` の `leaks`・`parent-eval-blind-compare.py` の `check_reads` を import して使い、Python に写し直さない（規約 2）。
 
+##### D4.1 付記 1（2026-11-24、WU compare-leak）: 時点以前にも同じ本文がある後の event の本文は漏れに数えない
+
+- 変更: replay の「cutoff より後の event の本文」の規則は、後の event の `outcome`（40 字超）のうち、cutoff 以前の event の `outcome` のどれかに同じ文字列が
+  含まれるものを数えない（`parent-eval-blind-compare.py` の `Rules.leaks`）。時点より後にだけある本文は従来どおり漏れに数える。
+- 理由: operator の実 run（iter-1・iter-2 の C-mid の方式 a・b）で、`input/tree/events.jsonl` は cutoff 以前の行だけを持つのに、定型文
+  `interrupted: aborted (task no longer running under this lease)` が後の event の本文と一致して漏れとされ、`compare --pilot` が exit 1 になった。
+  この定型文は replay の events で C-mid の cutoff より前の task C の `worker_finished` に 57 件（実 run の C-mid の入力にも 57 行）、後の task D に 27 件ある。時点以前の本文にもある文字列は、入力にあっても時点以前の event から来うるので、
+  未来の情報の根拠にならない（誤検出）。replay の 12 時点のうち、この除外に当たるのは C-mid・C-done の上の 1 種だけ。
+- 変えないもの: sentinels の語・answer key の印と理由の文・期待の組・後の event の時刻・`events.jsonl` の cutoff 後の行・研究ケースの規則・読みの検査。
+  後の event そのものが入力に入れば、時刻と cutoff 後の行の規則で引き続き漏れになる。`testdata/pilot-runs-leak` の出力（`metrics.json`）は変更の前後で同じ byte。
+- 子 6 の試験 `parent_checkpoint_blind_no_answer_key_or_future` の規則は変えない（子 6 の盲検の時点 E-mid・D-done では、除外に当たる本文が 0 種）。上の「子 6 と同じ規則」は、本文の除外を除いて同じ、と読む。
+- 試験: `test_pilot_compare.py` の `test_body_also_before_the_cutoff_is_not_a_leak`（変更前に落ちる）と `test_body_only_after_the_cutoff_is_a_leak`（否定対照）。
+
 #### D4.2 混ぜた入力の否定対照（exit 1 を確かめる）
 
 - C-mid の入力に F-done にだけある event を 1 件足す。

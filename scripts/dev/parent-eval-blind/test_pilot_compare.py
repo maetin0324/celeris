@@ -57,6 +57,10 @@ def compare(out, *runs, extra=()):
     return r, doc
 
 
+def compare_ts_in(text):
+    return re.search(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d", text) is not None
+
+
 def tree_digest(root):
     h = hashlib.sha256()
     for p in sorted(pathlib.Path(root).rglob("*")):
@@ -175,6 +179,47 @@ class Pilot(unittest.TestCase):
                 r, doc = compare(self.dir / f"o-{len(want)}", root)
                 self.assertEqual(r.returncode, 1, f"{want}: {r.stdout}")
                 self.assertTrue(any(want in x for x in doc["leaks"]), doc["leaks"])
+
+    def replay_rows(self, point):
+        """子 0 の replay の events を時点の cutoff の前（以前）と後に分ける（compare の Rules と同じ読み方）。"""
+        mod = load_compare()
+        replay, research, _ = mod.pilot_modules()
+        rules = mod.Rules(replay, research, json.loads(KEY.read_text()), None)
+        cut = rules.cutoffs[point]
+        before = [e for e in rules.events if replay.norm(e["ts"]) <= cut]
+        return rules, before, rules.later(point)
+
+    def inject_event_row(self, rel, row):
+        root = self.copy_clean()
+        with open(root / rel / "input/tree/events.jsonl", "a") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        return root
+
+    def test_body_also_before_the_cutoff_is_not_a_leak(self):
+        # 不変条件: 時点以前の event にも同じ本文があれば、後の event の本文と一致しても漏れに数えない（ADR D4.1 付記 1）。
+        # operator の実 run（C-mid の方式 a・b）で、定型文が時点以前の行にだけあるのに漏れとされ exit 1 になった誤検出の再現。
+        boiler = "interrupted: aborted (task no longer running under this lease)"
+        _, before, later = self.replay_rows("C-mid")
+        self.assertGreater(len(boiler), 40)
+        self.assertIn(boiler, [e.get("outcome") for e in later], "前提: 定型文が時点より後の event にある")
+        row = next(e for e in before if e.get("outcome") == boiler)
+        root = self.inject_event_row("replay/C-mid/a", row)
+        r, doc = compare(self.dir / "o", root)
+        self.assertEqual((r.returncode, doc["leaks"]), (0, []), r.stderr)
+
+    def test_body_only_after_the_cutoff_is_a_leak(self):
+        # 否定対照: 時点より後にだけある本文は従来どおり漏れ。行の形にせず本文だけを入れ、ほかの規則（cutoff 後の event の行・
+        # 時刻）に当たらないことも確かめる。
+        rules, before, later = self.replay_rows("C-mid")
+        prior = [e["outcome"] for e in before if isinstance(e.get("outcome"), str)]
+        cut = rules.cutoffs["C-mid"]
+        body = next(b for b in (e.get("outcome") for e in later) if isinstance(b, str) and len(b) > 40
+                    and not any(b in p for p in prior) and not compare_ts_in(b)
+                    and not any(f > cut and t in b for t, f in rules.sentinels))
+        root = self.inject("replay/C-mid/a", "input/tree/goal.md", f"\n{body}\n")
+        r, doc = compare(self.dir / "o", root)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertEqual(doc["leaks"], ["iter-1/replay/C-mid/a: input:input/tree/goal.md: 時点より後の event の本文"])
 
     def test_forbidden_read_is_a_leak(self):
         root = self.copy_clean()

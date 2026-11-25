@@ -177,8 +177,8 @@ def sha256_file(path):
 
 class Rules:
     """漏れの規則（ADR D4.1）。replay は sentinels.json の語・answer key の印と理由の文・期待の組・cutoff 後の event の時刻と本文
-    （子 6 の試験 parent_checkpoint_blind_no_answer_key_or_future と同じ）、研究ケースは research_case.leaks・後の節の見出し・
-    参照の表の文。"""
+    （子 6 の試験 parent_checkpoint_blind_no_answer_key_or_future と同じ。ただし本文は cutoff 以前の event の本文にも同じ文字列が
+    あるものを除く。D4.1 付記 1）、研究ケースは research_case.leaks・後の節の見出し・参照の表の文。"""
 
     def __init__(self, replay, research, key, research_src):
         self.replay, self.research, self.rc = replay, research, research.rc
@@ -202,7 +202,11 @@ class Rules:
         if case == "replay":
             cut, later = self.cutoffs[point], self.later(point)
             later_ts = {e["ts"] for e in later}
-            bodies = [e["outcome"] for e in later if isinstance(e.get("outcome"), str) and len(e["outcome"]) > 40]
+            prior = [e["outcome"] for e in self.events
+                     if isinstance(e.get("outcome"), str) and self.replay.norm(e["ts"]) <= cut]
+            # 時点以前の本文にも同じ文字列がある本文（定型文など）は、入力にあっても未来の情報と区別できないので数えない（D4.1 付記 1）。
+            bodies = {b for b in (e.get("outcome") for e in later)
+                      if isinstance(b, str) and len(b) > 40 and not any(b in p for p in prior)}
             for where, name, text in texts:
                 at = f"{where}:{name}"
                 found += [f"{at}: answer key の印 {m}" for m in self.marks if m in text]

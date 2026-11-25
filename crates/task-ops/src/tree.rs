@@ -702,12 +702,14 @@ pub fn planner_pending(events: &[(u64, task_core::Event)]) -> bool {
 
 /// ADR-0079 D10（Phase R3b）: 木の 1 節点の生存確認の事実を store の読み取りだけで集める（判定は
 /// `task_core::tree::liveness`）。`eligible` は `ready_tasks` が返すか、`replans_left` は節点の replan の余地
-/// （回答の余裕込み。dispatcher が決める）。
+/// （回答の余裕込み。dispatcher が決める）。`child_slot_limit` は実効の `max_parallel_child_tasks`（ADR
+/// 2026-11-24-paused-children-free-child-slots D4: 枠を待つ unit を dispatcher の子の生成と同じ規則で決める）。
 pub fn node_liveness_facts(
     store: &SqliteStore,
     task: &Task,
     eligible: bool,
     replans_left: bool,
+    child_slot_limit: usize,
 ) -> Result<task_core::NodeLivenessFacts, OpsError> {
     use task_core::decision::{NEEDED_BEFORE_SELF, NEEDED_BEFORE_STAGE_PREFIX};
     let events = store.events_for(task.id)?;
@@ -744,11 +746,19 @@ pub fn node_liveness_facts(
     let task_deps =
         crate::unit_task_deps::resolve_pending_units(store, task, &rows, &mut Default::default())?;
     let mut units = Vec::new();
-    for u in rows {
+    // ADR 2026-11-24-paused-children-free-child-slots D1: 自分で一時停止した子（枠に数えない）。
+    let mut self_paused = std::collections::BTreeSet::new();
+    for u in &rows {
         let child = if u.kind == task_core::WorkUnitKind::Task {
             match u.child_task_id.as_deref() {
                 Some(raw) => match raw.parse::<TaskId>() {
-                    Ok(id) => Some((id, store.get(id)?.map(|c| c.status))),
+                    Ok(id) => {
+                        let child = store.get(id)?;
+                        if child.as_ref().is_some_and(|c| c.paused_at.is_some()) {
+                            self_paused.insert(id);
+                        }
+                        Some((id, child.map(|c| c.status)))
+                    }
                     Err(_) => None,
                 },
                 None => None,
@@ -797,6 +807,9 @@ pub fn node_liveness_facts(
         replans_left,
         plan_reviewed,
         plan_stalled,
+        child_slot_waiting: task_core::wait::child_slot_wait(&rows, &self_paused, child_slot_limit)
+            .map(|w| w.unit_keys)
+            .unwrap_or_default(),
         units,
     })
 }

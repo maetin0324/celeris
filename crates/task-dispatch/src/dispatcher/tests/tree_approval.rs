@@ -605,7 +605,8 @@ async fn liveness_flags_only_unexplained_stalls() {
     d.tick().unwrap();
     let found = stalls(&store, root_id);
     let task_now = store.get(root_id).unwrap().unwrap();
-    let facts = task_ops::tree::node_liveness_facts(store.as_ref(), &task_now, true, true).unwrap();
+    let facts =
+        task_ops::tree::node_liveness_facts(store.as_ref(), &task_now, true, true, 2).unwrap();
     assert_eq!(
         found.len(),
         1,
@@ -736,7 +737,7 @@ async fn human_replan_whose_first_attempt_is_invalid_gets_its_second_attempt() {
     let task = store.get(root_id).unwrap().unwrap();
     assert_eq!(task.status, Status::Ready);
     assert_eq!(adapter.planner_contexts().len(), 2);
-    let facts = task_ops::tree::node_liveness_facts(store.as_ref(), &task, true, true).unwrap();
+    let facts = task_ops::tree::node_liveness_facts(store.as_ref(), &task, true, true, 2).unwrap();
     assert!(facts.planner_pending, "the retry is promised");
     let verdict = task_core::tree::liveness(&task_core::TreeSnapshot {
         nodes: vec![facts.clone()],

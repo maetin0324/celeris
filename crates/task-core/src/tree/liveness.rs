@@ -108,6 +108,10 @@ pub struct NodeLivenessFacts {
     /// ADR 2026-10-23-stage-order-and-plan-stall D5: 計画の都合で何も起こせない（[`crate::wait::plan_stall`] の
     /// `detail`）。`Some` なら unit の分類より先に理由なし（`plan_stalled`）にする（ready の unit があっても起こせない）。
     pub plan_stalled: Option<String>,
+    /// ADR 2026-11-24-paused-children-free-child-slots D4: 同時の子 task の枠の空きを待つ unit の key
+    /// （[`crate::wait::child_slot_wait`] の `unit_keys`。自分で一時停止した子は枠に数えない）。ここに無い ready の kind task の
+    /// unit は次の tick で子 task になる。
+    pub child_slot_waiting: Vec<String>,
     pub units: Vec<LivenessUnitFacts>,
 }
 
@@ -235,11 +239,6 @@ fn classify_node(n: &NodeLivenessFacts) -> NodeLiveness {
     let mut runnable: Option<(&'static str, String)> = None;
     let mut waiting: Option<(&'static str, String)> = None;
     let mut unexplained: Option<(&'static str, String)> = None;
-    let live_child = n.units.iter().any(|u| {
-        u.kind == WorkUnitKind::Task
-            && u.status == WorkUnitStatus::Running
-            && matches!(u.child, Some((_, Some(s))) if !s.is_terminal())
-    });
     let mut active = 0usize;
     for u in n.units.iter().filter(|u| !u.status.is_terminal()) {
         active += 1;
@@ -283,9 +282,9 @@ fn classify_node(n: &NodeLivenessFacts) -> NodeLiveness {
                         "decision",
                         format!("unit {} は人の決定を待っている", u.key),
                     ));
-                } else if live_child {
+                } else if n.child_slot_waiting.contains(&u.key) {
                     waiting.get_or_insert((
-                        "children",
+                        "child_slot",
                         format!(
                             "unit {} は同時の子 task の空きを待っている（max_parallel_child_tasks）",
                             u.key

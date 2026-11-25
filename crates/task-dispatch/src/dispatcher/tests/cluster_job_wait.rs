@@ -766,6 +766,7 @@ async fn a_leaf_unit_waits_alone_and_liveness_names_the_wait() {
         &store.get(root_id).unwrap().unwrap(),
         true,
         true,
+        2,
     )
     .unwrap();
     let verdict = task_core::tree::liveness(&task_core::TreeSnapshot { nodes: vec![facts] });

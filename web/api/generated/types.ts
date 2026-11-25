@@ -6663,6 +6663,11 @@ export type TaskWait = {
   "task_ids": Array<TaskId>;
   "unit_keys": Array<string>;
 } | {
+  "kind": "child_slot";
+  "limit": number;
+  "task_ids": Array<TaskId>;
+  "unit_keys": Array<string>;
+} | {
   "kind": "work_units";
   "units": Array<UnitWait>;
 } | {

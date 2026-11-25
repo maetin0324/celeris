@@ -2060,3 +2060,14 @@ CPU 焼き負荷を使わずに、即時の stream 通知・終端・未完了 f
   `task_approve`・`task_reject` と同じ `tasks:decide` に移した。人の決定・計画・task の承認に答える MCP の道具は `tasks:decide` だけにある。
   `decision_list` は `tasks:interact` のまま（読むだけ）。本文の「scope `tasks:interact`」の記述（D7 の答えの流れ、R3a・R3b の付記）は
   この付記で置き換わる。API（`POST /decisions/{id}/answer`・`POST /tasks/{id}/execution/plan-gate`）と記録の主体（`mcp:<client_id>`）は変えていない。
+
+## 付記: 自分で一時停止した子は `max_parallel_child_tasks` に数えない（2026-11-24）
+
+`agent-docs/adr/2026-11-24-paused-children-free-child-slots.md` で D3 の表の `max_parallel_child_tasks`・R1b 付記 10・R2a 付記 10 を次のとおり明確化する。
+
+- 枠を占めるのは `running` の kind task の unit のうち、子 task 自身に `paused_at` が無いものだけ。自分で一時停止した子は数えない。
+  祖先の一時停止で止まっている子は従来どおり数える（D1）。
+- 一時停止を解いた子が上限を超えるときは、再開を待たせず一時的に超えてよい。超えている間は新しい子を作らない（D2）。
+- unit が枠を待つことは `TaskWait::ChildSlot`（`child_slot`: 待つ unit の key・枠を占める子の id・上限）として `waits` に出す（D3）。
+- D10 の生存確認の ready の kind task の unit は、同じ規則で「枠を待つ（`Waiting`・`child_slot`）」と「次の tick で子を作る（`Runnable`）」に
+  分ける。待ち合いを受信箱に知らせる経路は足さない（D4）。

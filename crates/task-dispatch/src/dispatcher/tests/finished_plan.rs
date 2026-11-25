@@ -338,11 +338,11 @@ fn liveness_does_not_flag_runnable_non_tree_plans() {
     );
     store.insert(&task).unwrap();
     adopt_three_step_plan(&store, task.id);
-    let facts = task_ops::tree::node_liveness_facts(store.as_ref(), &task, true, false).unwrap();
+    let facts = task_ops::tree::node_liveness_facts(store.as_ref(), &task, true, false, 2).unwrap();
     let v = task_core::tree::liveness(&task_core::TreeSnapshot { nodes: vec![facts] });
     assert_eq!(v[0].class, task_core::LivenessClass::Runnable, "{v:?}");
     settle_all_units(&store, task.id, task_core::WorkUnitStatus::Done);
-    let facts = task_ops::tree::node_liveness_facts(store.as_ref(), &task, true, false).unwrap();
+    let facts = task_ops::tree::node_liveness_facts(store.as_ref(), &task, true, false, 2).unwrap();
     assert!(!facts.plan_reviewed);
     let v = task_core::tree::liveness(&task_core::TreeSnapshot { nodes: vec![facts] });
     assert_eq!(
@@ -404,7 +404,7 @@ async fn a_plan_that_cannot_dispatch_reports_plan_stalled_and_reaches_the_inbox(
             .unwrap();
     }
     let units = store.work_units_for(task_id).unwrap();
-    let waits = task_core::plan_waits(&units, &[], &[]);
+    let waits = task_core::plan_waits(&units, &[], &[], None);
     assert!(
         matches!(
             waits.first(),

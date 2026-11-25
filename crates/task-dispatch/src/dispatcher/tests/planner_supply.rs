@@ -430,3 +430,80 @@ async fn planner_with_no_usable_account_waits_for_a_relogin_without_plan_invalid
     assert_eq!(store.get(root_id).unwrap().unwrap().attempts, 0);
     assert_replay_is_clean(&store);
 }
+
+/// 受け入れ 3（再起動 1）: `a` が認証の失敗で AuthFailed の cooldown になった後、daemon を再起動する（同じ account の
+/// root で新しい `Dispatcher` を作る＝`.celeris-usage.json` から `AccountBook` を読み直す）。cooldown は残り、
+/// 再起動後の最初の planner run は `a` を試さず `b` に回る。
+/// 守る不変条件: 認証の切れた account は再起動で routing に戻らない。既存の `accounts/tests.rs` の保存・読み直しの試験は
+/// 帳簿だけを見て、planner run の account の選択まで通さないので、この経路は検出できない。
+#[tokio::test]
+async fn auth_failed_cooldown_survives_restart() {
+    let accounts = accounts_fixture();
+    let ws = tempfile::tempdir().unwrap();
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let adapter = SupplyAdapter::new(&[("a", Fail::Auth)]);
+    let mut d = supply_dispatcher(&store, adapter.clone(), accounts.path(), 0);
+    let first = compound_root(ws.path());
+    let first_id = first.id;
+    store.create_task(&first, vec![]).unwrap();
+    run_until_task_terminal(&mut d, &store, first_id).await;
+    assert_eq!(adapter.planner_accounts(), vec!["a", "b"]);
+    assert!(accounts.path().join(".celeris-usage.json").exists());
+    drop(d);
+
+    // 再起動: 同じ root から帳簿を読み直す。
+    let mut d = supply_dispatcher(&store, adapter.clone(), accounts.path(), 0);
+    assert_eq!(
+        cooldown_of(&mut d, "a"),
+        Some(("auth_failed".to_string(), NOW + AUTH_FAILED_HOLD_SECS))
+    );
+    assert!(!account_live(&mut d, "a").logged_in);
+    let second = compound_root(ws.path());
+    let second_id = second.id;
+    store.create_task(&second, vec![]).unwrap();
+    run_until_task_terminal(&mut d, &store, second_id).await;
+
+    assert_eq!(
+        adapter.planner_accounts(),
+        vec!["a", "b", "b"],
+        "after restart the held account is not tried again"
+    );
+    assert!(plan_invalid_decisions(&store, second_id).is_empty());
+    assert_eq!(store.get(second_id).unwrap().unwrap().attempts, 0);
+    assert_replay_is_clean(&store);
+}
+
+/// 受け入れ 3（再起動 2）: 帳簿の file が失われた再起動（保存の失敗・file の削除）でも、最初の供給側の失敗で `a` は
+/// 再び AuthFailed の cooldown になり、2 本目の planner run は `b` に回る。どちらの失敗も計画の試行に数えない。
+/// 守る不変条件: cooldown の永続化に頼らず、失敗の観測が cooldown を作り直す（ADR D6）。
+#[tokio::test]
+async fn auth_failed_without_saved_book_is_cooled_down_again_by_the_first_failure() {
+    let accounts = accounts_fixture();
+    let ws = tempfile::tempdir().unwrap();
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let adapter = SupplyAdapter::new(&[("a", Fail::Auth)]);
+    let mut d = supply_dispatcher(&store, adapter.clone(), accounts.path(), 0);
+    let first = compound_root(ws.path());
+    let first_id = first.id;
+    store.create_task(&first, vec![]).unwrap();
+    run_until_task_terminal(&mut d, &store, first_id).await;
+    drop(d);
+
+    std::fs::remove_file(accounts.path().join(".celeris-usage.json")).unwrap();
+    let mut d = supply_dispatcher(&store, adapter.clone(), accounts.path(), 0);
+    assert_eq!(cooldown_of(&mut d, "a"), None, "book lost: no cooldown");
+    let second = compound_root(ws.path());
+    let second_id = second.id;
+    store.create_task(&second, vec![]).unwrap();
+    run_until_task_terminal(&mut d, &store, second_id).await;
+
+    assert_eq!(adapter.planner_accounts(), vec!["a", "b", "a", "b"]);
+    assert_eq!(
+        cooldown_of(&mut d, "a"),
+        Some(("auth_failed".to_string(), NOW + AUTH_FAILED_HOLD_SECS))
+    );
+    assert!(plan_invalid_decisions(&store, second_id).is_empty());
+    assert_eq!(plan_rejections(&store, second_id), 0);
+    assert_eq!(store.get(second_id).unwrap().unwrap().attempts, 0);
+    assert_replay_is_clean(&store);
+}

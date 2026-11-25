@@ -116,6 +116,11 @@ D6. **再起動の扱い:** `AccountBook` は起動時に `<account root>/.celer
     したがって AuthFailed の cooldown は daemon の再起動で消えない。保存に失敗した（warn だけ）、または file が無い・壊れた
     場合でも、再起動の後の最初の供給側の失敗で D2・D3 が再び cooldown にするので、2 回目の run は別の account に回り、
     試行には数えない。どちらも試験で示す（D7）。
+    確認の結果（WorkUnit restart-close）: `AccountBook` は保存・読み直しで AuthFailed の cooldown を保つ。
+    `dispatcher/tests/planner_supply.rs` の `auth_failed_cooldown_survives_restart` は、`a` が認証の失敗になった後に
+    同じ account root で新しい `Dispatcher` を作り（再起動）、cooldown が残り次の planner run が `b` だけに回ることを示す。
+    `auth_failed_without_saved_book_is_cooled_down_again_by_the_first_failure` は帳簿の file を消した再起動で、
+    最初の失敗が `a` を再び cooldown にし 2 回目が `b` に回り、試行に数えないことを示す（D7 の 8・9）。
 
 D7. **試験（実装の WorkUnit が足す。fake adapter と注入した時計で決定的に）:**
     - planner（WorkUnit planner-supply）:

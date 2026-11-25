@@ -88,3 +88,37 @@ updated: 2026-11-24
 ## 提案
 
 - eval trial・report の run の供給側の失敗の扱いを、この ADR の D1〜D3 と同じ規則で確かめる task を別に起こす（穴があれば）。
+
+## 再起動後の AuthFailed の扱い（WorkUnit restart-close）
+
+結論: `AccountBook` は `.celeris-usage.json` に保存され、再起動で AuthFailed の cooldown は消えない。さらに、file が無くても
+最初の失敗で再び cooldown になる。どちらも `crates/task-dispatch/src/dispatcher/tests/planner_supply.rs` の試験で示した
+（fake adapter・注入した時計 `NOW`・同じ account root で `Dispatcher` を作り直す）。ADR D6 に確認の結果を追記した。
+
+- `auth_failed_cooldown_survives_restart`: 1 つ目の task の planner run が `a` の認証の失敗で終わり `b` に回る → `Dispatcher` を作り直す →
+  `a` は `auth_failed`（until = NOW + `AUTH_FAILED_HOLD_SECS`）・`logged_in = false` のまま。2 つ目の task の planner run は `b` だけ
+  （`["a","b","b"]`）、`plan_invalid` なし・attempts 0。
+- `auth_failed_without_saved_book_is_cooled_down_again_by_the_first_failure`: 帳簿の file を消して作り直す → cooldown なし →
+  2 つ目の task の planner run は `a` で失敗して再び AuthFailed の cooldown になり `b` に回る（`["a","b","a","b"]`）、
+  `plan_invalid` なし・計画の拒否の進捗 0・attempts 0。
+- 足した理由: 既存の `accounts/tests.rs` は帳簿の保存・読み直しだけを見ており、再起動後の planner run の account の選択まで通さない。
+
+CoS の仕分けの run の原因は上の節「CoS の仕分けの run の失敗の原因」のとおり（再起動とは無関係。代替経路が候補の番号で進み同じ source の
+別 account を試さない不具合。WorkUnit cos-route で直し済み）。
+
+### commit（件名、この WorkUnit）
+
+- 試験: AuthFailed の cooldown は再起動の後も残り、帳簿が無くても最初の失敗で再び cooldown になる
+- progress: 再起動後の AuthFailed の扱いの検査結果（この節。ADR D6 の追記を含む）
+
+### 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+
+- 受け入れ 0: `cargo test -p task-dispatch --lib auth_failed_` → exit 0。再起動の 2 試験を含む 7 件 pass。
+- `bash scripts/dev/test-affected.sh` → exit 0。
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+- `cargo fmt --all -- --check` → exit 0（差分なし）。
+- 変更は試験・ADR・進捗ファイルだけ。旧い分岐は足していない。
+
+### 本番への移行
+
+無し（コードの挙動は変えていない）。本番の操作は不要。

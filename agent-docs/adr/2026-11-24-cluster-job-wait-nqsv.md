@@ -115,3 +115,5 @@ NQSV の状態名で正規化する。
 config の書き換えは要らない（クラスタの設定は変えない）。昇格は schema 127 を含むので stop → start。昇格の後、worker が
 Pegasus の job を `"scheduler": "nqsv"` で待てば解ける。昇格の前に作られた Pegasus の `waiting`（`scheduler = pbs`）の wait は
 `qstat -xf` を流し続けて期限切れで解ける（自動では書き換えない）。
+
+> 付記（2026-11-25）: D1 は [scheduler をクラスタの設定で決める](2026-11-25-cluster-scheduler-from-config.md) で置き換えた。D1 の「採らなかった案」（クラスタの設定で決める）を採り、申告の `scheduler` の欄を消した（書くと不正な wait）。正本は `[[clusters]] scheduler` で、`cluster_job_waits.scheduler` は登録の時点の設定の写し（migration なし）。2026-11-25 に worker が Pegasus の job を `pbs` で申告し、`qstat -xf` が exit 127 を返し続けて wait が期限まで解けない事象が起きたため。D5 の worker への案内の NQSV の見分け方の文は消した（`CLUSTER_JOB_RECOVERY_GUIDANCE` の NQSV の道具の説明は残す）。D2〜D4・D6 は変えない。

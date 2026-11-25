@@ -2,6 +2,11 @@
 
 use super::*;
 use crate::run_settlement::run_end_record;
+use task_ops::tree::{
+    SUPPLY_FAILED_END, plan_invalid_answer_position, plan_invalid_replan_note,
+    planner_blocked_question, planner_rejections_since_last_plan, planner_retry_message,
+    planner_supply_requeue_message,
+};
 
 /// 計画の採用の共通部（設計 review を通った計画と共有）。file は size の制約で `health_review/` に置く。
 #[path = "../health_review/plan_adoption.rs"]
@@ -31,6 +36,21 @@ impl Dispatcher {
         let now = OffsetDateTime::now_utc();
 
         let (run_end, describe, usage) = design_gate::run_end_of(&result, "planner");
+        // ADR 2026-11-24-planner-supply-failure-cooldown D1–D3: 供給側の失敗は worker と同じ関数で cooldown にし、数えない
+        // ものは `end = HarnessError{Supply}` で閉じる（`planner_attempts_in_window`・`planner_retry_pending` が読む）。
+        let supply = planner_supply_failure(
+            self,
+            task_id,
+            (account, account_adapter),
+            &provider,
+            &result,
+        )?;
+        let requeue = supply.as_ref().is_some_and(|(requeue, ..)| *requeue);
+        let run_end = if requeue {
+            Some(SUPPLY_FAILED_END)
+        } else {
+            run_end
+        };
 
         // ADR-0076: planner run の quota 消費も worker と同じ `RoutingRuntime::settle_quota` で見積もる。以降の `?` で抜けても
         // `QuotaActivity` が閉じているよう、分岐より前に一度だけ求め、`WorkerFinished` を保存するすべての分岐で同じトランザクションに添える。
@@ -66,72 +86,16 @@ impl Dispatcher {
         // 1 回目は従来どおり不正な試行（planner に理由を渡して再試行）、最後の試行では上限を緩めて採用し、超えた分の unit を
         // `kind: limit` の決定の要求で止める（黙って切らない・atomic に倒さない）。採用に使う上限を `adopt_limits` に返す。
         let mut adopt_limits = self.config.execution.limits;
-        let validation: Result<_, String> = if design_gate::plan_file_checked(&result) {
-            let workspace_dir = self.task_dir(task);
-            let artifacts_dir = workspace_dir.as_ref().map(|d| self.artifacts_dir(task, d));
-            match artifacts_dir
-                .as_deref()
-                .map(|d| d.join("execution-plan.json"))
-                .and_then(|p| std::fs::read_to_string(p).ok())
-            {
-                // D1: run の終わり方（turn の上限か）を理由に添え、次の planner に渡す。
-                None => Err(format!(
-                    "artifacts/execution-plan.json が見つからない（{describe}）"
-                )),
-                Some(text) => match parse_planner_output(
-                    &text,
-                    active_plan.as_ref(),
-                    &done_work_units.iter().map(|(k, _)| k.clone()).collect(),
-                ) {
-                    Err(e) => Err(e),
-                    Ok(spec) => match plan_preflight(self, task, &spec)? {
-                        Err(e) => Err(e),
-                        Ok(()) => {
-                            let ctx = task_core::PlanContext {
-                                origin: task_core::PlanOrigin::Planner,
-                                depth: task_core::tree::depth_of(task),
-                            };
-                            match task_core::execution_plan::validate_with(
-                                &spec,
-                                self.config.execution.limits,
-                                &done_work_units,
-                                ctx,
-                            ) {
-                                Ok(v) => Ok(v),
-                                Err(errors)
-                                    if spec.schema == task_core::EXECUTION_PLAN_SCHEMA_V3
-                                        && errors.iter().all(is_tree_plan_limit_error)
-                                        && self.planner_attempts_in_window(task_id)?
-                                            >= MAX_PLANNER_ATTEMPTS =>
-                                {
-                                    let relaxed =
-                                        relaxed_tree_plan_limits(self.config.execution.limits);
-                                    match task_core::execution_plan::validate_with(
-                                        &spec,
-                                        relaxed,
-                                        &done_work_units,
-                                        ctx,
-                                    ) {
-                                        Ok(v) => {
-                                            tracing::warn!(%task_id, %run_id, errors = %task_ops::execution::describe_validation_errors(&errors), "the /3 plan breaches only the plan limits on the last attempt; adopting it and holding the excess units for a limit decision (ADR-0079 D3)");
-                                            adopt_limits = relaxed;
-                                            Ok(v)
-                                        }
-                                        Err(e) => {
-                                            Err(task_ops::execution::describe_validation_errors(&e))
-                                        }
-                                    }
-                                }
-                                Err(errors) => {
-                                    Err(task_ops::execution::describe_validation_errors(&errors))
-                                }
-                            }
-                        }
-                    },
-                },
-            }
-        } else {
-            Err(format!("planner run did not finish cleanly: {describe}"))
+        let validation: Result<_, String> = match &supply {
+            Some((_, reason, _)) => Err(reason.clone()),
+            None => planner_plan_validation(
+                self,
+                task,
+                &result,
+                &describe,
+                (active_plan.as_ref(), &done_work_units),
+                &mut adopt_limits,
+            )?,
         };
         // ADR-0079 付記「R7-3」D3: replan の計画が退役した（superseded / cancelled の）行の key を再利用していれば、採用の前に検証の理由として
         // planner に返す（再試行・`plan_invalid` の経路）。以前は段階の統合 WU の key の重なりが採用の中で sqlite の `UNIQUE constraint failed: work_units.task_id, key` に落ちていた（08:15Z）。
@@ -276,6 +240,27 @@ impl Dispatcher {
                     }
                 }
             }
+            Err(reason) if requeue => {
+                let outcome = format!("requeue: adapter: {reason}");
+                let finished = run_end_record(
+                    &run_id,
+                    outcome,
+                    usage,
+                    Some(RunRole::Planner),
+                    metrics,
+                    run_end,
+                );
+                let progress =
+                    Event::worker_progress(run_id.clone(), planner_supply_requeue_message(&reason));
+                let events = [finished, quota_event]
+                    .into_iter()
+                    .chain(supply.and_then(|s| s.2));
+                self.store.apply_transition_with_events(
+                    task_id,
+                    Trigger::Requeue,
+                    events.chain([progress]).collect(),
+                )?;
+            }
             Err(reason) => {
                 let outcome = format!("error(retryable=true): invalid execution plan: {reason}");
                 let role = Some(RunRole::Planner);
@@ -284,7 +269,10 @@ impl Dispatcher {
                     task_id,
                     task,
                     &run_id,
-                    vec![finished, quota_event],
+                    [finished, quota_event]
+                        .into_iter()
+                        .chain(supply.and_then(|s| s.2))
+                        .collect(),
                     reason,
                     now,
                 )?;
@@ -496,7 +484,8 @@ impl Dispatcher {
     }
 
     /// ADR-0072 D14: 直近の `ExecutionPlanned`（無ければ Task の最初）から数えた planner run の試行
-    /// （`WorkerStarted{role: Planner}` の件数。この run 自身を含む。人の comment の割り込みで止まった run は除く）。
+    /// （`WorkerStarted{role: Planner}` の件数。この run 自身を含む。人の comment の割り込みで止まった run と、供給側の
+    /// 失敗で終わり試行に数えなかった run〈ADR 2026-11-24-planner-supply-failure-cooldown D2〉は除く）。
     pub(super) fn planner_attempts_in_window(
         &self,
         task_id: TaskId,
@@ -522,6 +511,7 @@ impl Dispatcher {
                             role: Some(RunRole::Planner),
                             ..
                         } if !continuation_session::interrupted_by_comment(&events, run_id)
+                            && !task_ops::tree::planner_run_supply_failed(&events, run_id)
                     )
             })
             .count())
@@ -908,152 +898,8 @@ impl Dispatcher {
 pub(super) fn rejected_plan_file(run_id: &str, attempt: usize) -> String {
     format!("execution-plan.rejected.{run_id}.attempt-{attempt}.json")
 }
-/// Phase F5-fix3: `give_up_or_retry_planner` の進捗・質問の文面（`planner_rejections_since_last_plan` が
-/// 同じ定数で理由を取り出す。文面は F5-fix2 までと 1 バイトも変えない）。
-// ADR-0079 D10（Phase R3b）: 生存確認（`task_ops::tree::planner_retry_pending`）が同じ文言を読むので task_ops に置く。
-pub(super) const PLANNER_RETRY_PREFIX: &str = task_ops::tree::PLANNER_RETRY_PREFIX;
-pub(super) const PLANNER_RETRY_SUFFIX: &str = task_ops::tree::PLANNER_RETRY_SUFFIX;
-pub(super) const PLANNER_BLOCKED_PREFIX: &str = "計画を直せませんでした（";
-pub(super) const PLANNER_BLOCKED_SUFFIX: &str = "）。予算を増やして続ける／人が計画を書き直す\n（PUT /tasks/{id}/execution-plan）／中止のいずれかを選んでください。";
-
-pub(super) fn planner_retry_message(reason: &str) -> String {
-    format!("{PLANNER_RETRY_PREFIX}{reason}{PLANNER_RETRY_SUFFIX}")
-}
-
-pub(super) fn planner_blocked_question(reason: &str) -> String {
-    format!("{PLANNER_BLOCKED_PREFIX}{reason}{PLANNER_BLOCKED_SUFFIX}")
-}
-
-/// Phase F5-fix3: 直近の `ExecutionPlanned`（無ければ最初）より後で、daemon が planner の計画を拒否した
-/// 理由（`planner_retry_message` / `planner_blocked_question` の進捗から、古い順・重複なし）。次の
-/// planner run のプロンプトに「前の計画はこの理由で拒否された」として渡す（純粋関数）。
-pub(super) fn planner_rejections_since_last_plan(events: &[(u64, Event)]) -> Vec<String> {
-    let since = events
-        .iter()
-        .rposition(|(_, e)| matches!(e, Event::ExecutionPlanned { .. }))
-        .map(|i| i + 1)
-        .unwrap_or(0);
-    let mut out: Vec<String> = Vec::new();
-    for (_, e) in &events[since..] {
-        let Event::WorkerProgress {
-            msg, kind: None, ..
-        } = e
-        else {
-            continue;
-        };
-        let reason = msg
-            .strip_prefix(PLANNER_RETRY_PREFIX)
-            .and_then(|r| r.strip_suffix(PLANNER_RETRY_SUFFIX))
-            .or_else(|| {
-                msg.strip_prefix(PLANNER_BLOCKED_PREFIX)
-                    .and_then(|r| r.strip_suffix(PLANNER_BLOCKED_SUFFIX))
-            });
-        if let Some(reason) = reason
-            && !out.iter().any(|r| r == reason)
-        {
-            out.push(reason.to_string());
-        }
-    }
-    out
-}
-
-/// ADR-0079 D7（Phase R3a）: 節点の events で、`plan_invalid` の決定への最後の回答（`DecisionAnswered`）の位置
-/// （planner の試行の窓を開け直す境目）。
-pub(super) fn plan_invalid_answer_position(events: &[(u64, Event)]) -> Option<usize> {
-    let ids: std::collections::BTreeSet<&str> = events
-        .iter()
-        .filter_map(|(_, e)| match e {
-            Event::DecisionRequested { decision }
-                if decision.kind == task_core::DecisionKind::PlanInvalid =>
-            {
-                Some(decision.id.as_str())
-            }
-            _ => None,
-        })
-        .collect();
-    events.iter().rposition(
-        |(_, e)| matches!(e, Event::DecisionAnswered { id, .. } if ids.contains(id.as_str())),
-    )
-}
-
-/// ADR-0079 D7（Phase R3a）: 最後の計画の採用の後に `plan_invalid` へ「replan」で答えた人の note（planner に
-/// 渡す。無ければ `None`）。
-pub(super) fn plan_invalid_replan_note(events: &[(u64, Event)]) -> Option<String> {
-    let idx = plan_invalid_answer_position(events)?;
-    let last_plan = events
-        .iter()
-        .rposition(|(_, e)| matches!(e, Event::ExecutionPlanned { .. }));
-    if last_plan.is_some_and(|p| p > idx) {
-        return None;
-    }
-    match &events[idx].1 {
-        Event::DecisionAnswered {
-            option, note, by, ..
-        } if task_core::answer_effect(task_core::DecisionKind::PlanInvalid, option)
-            == task_core::DecisionEffect::Replan =>
-        {
-            Some(
-                match note.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
-                    Some(n) => format!(
-                        "人の指示（{by}、plan_invalid の決定への回答 replan）: {n} — 前の試行の拒否の理由を踏まえ、この指示に従って計画を書き直してください"
-                    ),
-                    None => format!(
-                        "人（{by}）が plan_invalid の決定に replan と答えました。前の試行の拒否の理由を直して計画を書き直してください"
-                    ),
-                },
-            )
-        }
-        _ => None,
-    }
-}
-
-/// ADR-0074 D5.3（Phase F1）: planner の出力を読む。`schema` が `celeris.execution-plan-delta/1`
-/// なら差分として `active` な計画に当て、全体に展開する（`base_version` は `active` の版と一致
-/// しなければならない。それ以外は「移行期間」として `celeris.execution-plan/1` の全体形式で読む
-/// （D5.3「旧形式（全体）の replan 出力も受け付ける」）。
-pub(super) fn parse_planner_output(
-    text: &str,
-    active: Option<&task_core::ExecutionPlanRow>,
-    done_keys: &std::collections::BTreeSet<String>,
-) -> Result<task_core::ExecutionPlanSpec, String> {
-    let raw: serde_json::Value =
-        serde_json::from_str(text).map_err(|e| format!("execution-plan.json の形式が不正: {e}"))?;
-    let schema = raw.get("schema").and_then(|v| v.as_str()).unwrap_or("");
-    if schema == task_core::execution_plan::EXECUTION_PLAN_DELTA_SCHEMA {
-        let Some(active) = active else {
-            return Err(
-                "execution-plan-delta/1 は replan（既に計画がある Task）でだけ受け付ける"
-                    .to_string(),
-            );
-        };
-        // ADR-0079 D9（Phase R2b）: 差分は /2 の形（`work_units`）しか持たない。/3 の replan は計画の全体を書く。
-        if active.spec.schema == task_core::EXECUTION_PLAN_SCHEMA_V3 {
-            return Err(format!(
-                "execution-plan-delta/1 は {} の計画の replan には使えない（計画の全体を書くこと。done の unit は省略してよい）",
-                task_core::EXECUTION_PLAN_SCHEMA_V3
-            ));
-        }
-        let delta: task_core::execution_plan::ExecutionPlanDelta = serde_json::from_value(raw)
-            .map_err(|e| format!("execution-plan-delta.json の形式が不正: {e}"))?;
-        if delta.base_version != active.version {
-            return Err(format!(
-                "execution-plan-delta.json の base_version {} が現在の版 {} と一致しない",
-                delta.base_version, active.version
-            ));
-        }
-        task_core::execution_plan::apply_delta(&active.spec, &delta)
-    } else {
-        let mut spec: task_core::ExecutionPlanSpec = serde_json::from_value(raw)
-            .map_err(|e| format!("execution-plan.json の形式が不正: {e}"))?;
-        // ADR-0079 D9（Phase R2b）: /3 の replan では done の unit を今の版の spec のまま持ち越す（planner が
-        // 省いた・書き写し損ねた unit も。unit の gate で上げ下げした spec を planner は知らない）。
-        if let Some(active) = active {
-            task_core::execution_plan::carry_done_units_v3(&active.spec, &mut spec, done_keys);
-        }
-        Ok(spec)
-    }
-}
-
+// Phase F5-fix3: `give_up_or_retry_planner` の進捗・質問の文面と、それを読む `planner_rejections_since_last_plan` は、
+// 生存確認（`planner_retry_pending`）と同じ所（`task_ops::tree`）に置く（ADR-0079 D10、ADR 2026-11-24-planner-supply-failure-cooldown）。
 /// ADR-0072 D14（Phase E3）: 計画の各 WorkUnit の `harness` が `[[genres]]` にある id だけかを確かめる
 /// （担当の profile が許す harness に限る、の簡易版。`genres` が空の設定では検証しない。既存の
 /// `[[genres]] roles` の検証と同じ考え方）。
@@ -1090,4 +936,122 @@ pub(super) fn validate_plan_harnesses(
         }
     }
     Ok(())
+}
+
+/// ADR 2026-11-24-planner-supply-failure-cooldown D1–D3: run が供給側の失敗（`provider_failure_outcome`）で終わったなら、
+/// worker と同じ `record_supply_failure` で account（AuthFailed は再ログインまで保持し人に通知）か source を cooldown にし、
+/// (計画の試行に数えず requeue するか, 理由, source の cooldown の event) を返す。requeue は AuthFailed なら常に、Throttled・
+/// Exhausted は続いた requeue が `max_requeues` 未満の間（worker の `settle_adapter_failure` と同じ規則）。上限に達したら
+/// 理由を不正な試行の文にする。供給側でなければ `None`。
+fn planner_supply_failure(
+    d: &mut Dispatcher,
+    task_id: TaskId,
+    account: (Option<&str>, Option<AccountAdapter>),
+    provider: &str,
+    result: &Result<RunOutcome, AdapterError>,
+) -> Result<Option<(bool, String, Option<Event>)>, DispatchError> {
+    let Some(e) = result.as_ref().err() else {
+        return Ok(None);
+    };
+    let (Some(reason), Some(outcome)) = (provider_failure_reason(e), provider_failure_outcome(e))
+    else {
+        return Ok(None);
+    };
+    let cooldown = record_supply_failure(d, account, provider, reason, &outcome);
+    let max = d.config.max_requeues;
+    let requeue = matches!(outcome, ProviderOutcome::AuthFailed)
+        || task_ops::derive::consecutive_requeues(&d.store.events_for(task_id)?) < max;
+    let reason = match requeue {
+        true => e.to_string(),
+        false => format!("requeue limit ({max}) reached: adapter: {e}"),
+    };
+    Ok(Some((requeue, reason, cooldown)))
+}
+
+/// ADR-0072 D14: planner の `artifacts/execution-plan.json` の検証。run が `Terminal::Done` か turn の上限で終わったときだけ
+/// 試みる（ADR 2026-11-09-planner-turn-limit-and-comment-interrupt D1。それ以外は「不正な試行」）。
+/// ADR-0079 D3 / D4 (3)（Phase R2a）: /3 の計画が計画の上限（段階の数・段階あたりの unit・子 task・`max_depth`）だけで不正なら、
+/// 1 回目は従来どおり不正な試行（planner に理由を渡して再試行）、最後の試行では上限を緩めて採用し、超えた分の unit を
+/// `kind: limit` の決定の要求で止める（黙って切らない・atomic に倒さない）。採用に使う上限を `adopt_limits` に返す。
+fn planner_plan_validation(
+    d: &Dispatcher,
+    task: &Task,
+    result: &Result<RunOutcome, AdapterError>,
+    describe: &str,
+    (active_plan, done_work_units): (
+        Option<&task_core::ExecutionPlanRow>,
+        &[(String, task_core::WorkUnitSpec)],
+    ),
+    adopt_limits: &mut task_core::ExecutionLimits,
+) -> Result<Result<task_core::execution_plan::ValidatedPlan, String>, DispatchError> {
+    if !design_gate::plan_file_checked(result) {
+        return Ok(Err(format!(
+            "planner run did not finish cleanly: {describe}"
+        )));
+    }
+
+    let workspace_dir = d.task_dir(task);
+    let artifacts_dir = workspace_dir.as_ref().map(|dir| d.artifacts_dir(task, dir));
+    Ok(
+        match artifacts_dir
+            .as_deref()
+            .map(|dir| dir.join("execution-plan.json"))
+            .and_then(|p| std::fs::read_to_string(p).ok())
+        {
+            // D1: run の終わり方（turn の上限か）を理由に添え、次の planner に渡す。
+            None => Err(format!(
+                "artifacts/execution-plan.json が見つからない（{describe}）"
+            )),
+            Some(text) => match task_core::execution_plan::parse_planner_output(
+                &text,
+                active_plan,
+                &done_work_units.iter().map(|(k, _)| k.clone()).collect(),
+            ) {
+                Err(e) => Err(e),
+                Ok(spec) => match plan_preflight(d, task, &spec)? {
+                    Err(e) => Err(e),
+                    Ok(()) => {
+                        let ctx = task_core::PlanContext {
+                            origin: task_core::PlanOrigin::Planner,
+                            depth: task_core::tree::depth_of(task),
+                        };
+                        match task_core::execution_plan::validate_with(
+                            &spec,
+                            d.config.execution.limits,
+                            done_work_units,
+                            ctx,
+                        ) {
+                            Ok(v) => Ok(v),
+                            Err(errors)
+                                if spec.schema == task_core::EXECUTION_PLAN_SCHEMA_V3
+                                    && errors.iter().all(is_tree_plan_limit_error)
+                                    && d.planner_attempts_in_window(task.id)?
+                                        >= MAX_PLANNER_ATTEMPTS =>
+                            {
+                                let relaxed = relaxed_tree_plan_limits(d.config.execution.limits);
+                                match task_core::execution_plan::validate_with(
+                                    &spec,
+                                    relaxed,
+                                    done_work_units,
+                                    ctx,
+                                ) {
+                                    Ok(v) => {
+                                        tracing::warn!(task_id = %task.id, errors = %task_ops::execution::describe_validation_errors(&errors), "the /3 plan breaches only the plan limits on the last attempt; adopting it and holding the excess units for a limit decision (ADR-0079 D3)");
+                                        *adopt_limits = relaxed;
+                                        Ok(v)
+                                    }
+                                    Err(e) => {
+                                        Err(task_ops::execution::describe_validation_errors(&e))
+                                    }
+                                }
+                            }
+                            Err(errors) => {
+                                Err(task_ops::execution::describe_validation_errors(&errors))
+                            }
+                        }
+                    }
+                },
+            },
+        },
+    )
 }

@@ -230,19 +230,13 @@ impl Dispatcher {
                     .as_ref()
                     .and_then(|e| e.route.as_ref().map(|(source, _)| source.to_string()))
                 {
-                    match (&review_account, review_account_adapter) {
-                        (Some(acct), Some(adapter)) => self.record_account_failure(
-                            adapter,
-                            acct,
-                            cooldown_reason_name(&classified),
-                            &classified,
-                        ),
-                        _ => throttled_events.push(self.record_source_failure(
-                            &source,
-                            cooldown_reason_name(&classified),
-                            &classified,
-                        )),
-                    }
+                    throttled_events.extend(record_supply_failure(
+                        self,
+                        (review_account.as_deref(), review_account_adapter),
+                        &source,
+                        cooldown_reason_name(&classified),
+                        &classified,
+                    ));
                 }
             }
             // ADR-0054 D2（Phase 113）: 分類できた供給側失敗は従来どおり `max_requeues` /

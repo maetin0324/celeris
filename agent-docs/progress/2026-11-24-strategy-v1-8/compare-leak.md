@@ -48,6 +48,13 @@ completed: 2026-11-25
 - 同じ command で `--runs .../testdata/pilot-runs`: exit 0。
 - `bash scripts/dev/test-affected.sh`・`cargo clippy --workspace -- -D warnings`・`cargo fmt --all -- --check`・`sh scripts/dev/progress-index.sh --check`: 結果は下の「提出時の検査」節。
 
+## 提出時の検査（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+- `bash scripts/dev/test-affected.sh`: exit 0（「試験対象の変更なし」。変更は Python の script・試験と文書だけで、Rust の crate と web は対象外。repo_health_gate: all checks passed）。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+- `cargo fmt --all -- --check`: exit 0。
+- `sh scripts/dev/progress-index.sh --check`: exit 0（ok）。
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` の変更 path は上の「変えた file」の 4 件だけ。
+
 ## 実データの結果（operator の実 run、root の artifacts の pilot-runs）
 - 変更前（base の script）:
   ```

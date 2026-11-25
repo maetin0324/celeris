@@ -3,7 +3,7 @@
 #
 #   bash scripts/dev/parent-eval-blind.sh --harness stub --arms a,b,c --case replay --points C-mid,D-done,F-done --out <dir>
 #   bash scripts/dev/parent-eval-blind.sh --harness config --arms a,b,c --case replay --points C-mid,D-done,F-done --out <dir> --approval <人の承認の json> --llm-config <toml>
-#   bash scripts/dev/parent-eval-blind.sh --harness stub|config --arms a,b,c --case research --research-src <c-results.md> --points 11.17,11.20 --out <dir> [...]
+#   bash scripts/dev/parent-eval-blind.sh --harness stub|config --arms a,b,c --case research --research-src <c-results.md> --points 11.16,11.17,11.20 --out <dir> [...]
 #
 # 研究ケース（ADR D2.2）は --research-src の c-results.md から、子 0 の research_case.py（path で import）で時点の slice を切る
 # （parent-eval-blind/research.py）。時点は 11.16・11.17・11.20、版 v1 の段は 11.15 節。`--harness config` では --research-src の
@@ -15,13 +15,16 @@
 # （scripts/dev/parent-eval-blind/driver.py）。方式 c は、最初の時点より前の slice（replay は A-mid、研究ケースは 11.15 節）で版 v1 を書く段を事例ごとに
 # 1 回流し（worker run と、Critic を兼ねる final review。出力は <out>/<case>/strategy-v1/）、各時点で b と同じ評価を、版 v1 を
 # 参照する strategy root と作業 tree で流す。
-# 出力は <out>/<case>/<point>/<arm>/ の output.json・reads.json・run.json・input/。
+# 出力は <out>/<case>/<point>/<arm>/ の output.json・reads.json・run.json・input/。既にある <out>/<case>/<point>/<arm>/ と、
+# 段の終わっていない（run.json か strategy-v1.json が無い）<out>/<case>/strategy-v1/ は消さず上書きもしない。1 つでもあれば build の
+# 前に exit 1（前の反復の結果を残す。parent-eval-blind/pilot_runs.py check-new）。段の終わった strategy-v1/ は同じ <out>（反復）の
+# 方式 c が流し直さずに使う（時点を 1 つずつ流せる）。
 # - `--harness stub` は LLM を呼ばない（parent-eval-blind/stub_reviewer.py。経路の確認だけで、評価の証拠に数えない）。
 # - `--harness config` は実 LLM（人の書いた --llm-config を config に足す）。Celeris の worker の run の中（CELERIS_RUN_ID が
 #   ある）では引数の検査より前に断る。人の承認の記録（--approval）を pilot_gate.py check-approval が確かめる（scope の
 #   cases に時点、arms に方式、environment は non-production）。
 # - 本番の DB・daemon・config・release に触れない。
-# exit: 0 = 全時点・全方式の記録を書いた、1 = 失敗、2 = 使い方の誤り・承認が無い・worker の run の中。
+# exit: 0 = 全時点・全方式の記録を書いた、1 = 失敗・出力先に同じ方式の dir がある、2 = 使い方の誤り・承認が無い・worker の run の中。
 set -euo pipefail
 
 for a in "$@"; do
@@ -87,6 +90,8 @@ case "$harness" in
         ;;
     *) usage ;;
 esac
+python3 -I "$root/scripts/dev/parent-eval-blind/pilot_runs.py" check-new --out "$out" --case "$case" --points "$points" \
+    --arms "$arms" || fail "the output already has these arm dirs; move them away or pick another --out (they are not deleted)"
 command -v python3 >/dev/null || fail "python3 is missing"
 command -v node >/dev/null || fail "node is missing"
 : "${CARGO_TARGET_DIR:?CARGO_TARGET_DIR is required}"
@@ -124,17 +129,19 @@ drive() {
 }
 case ",$arms," in
     *,c,*)
-        echo "parent-eval-blind: case $case strategy v1 (arm c)" >&2
-        rm -rf "${out:?}/$case/strategy-v1"
-        drive --stage strategy-v1 --point "$strategy_point" --arm c --skill "$root/config/skills/cos-operator/strategy-review.md" \
-            --state "$work/$case-strategy-v1" --out "$out" "$@" >"$work/$case-strategy-v1.log" 2>&1 ||
-            { tail -40 "$work/$case-strategy-v1.log" >&2; fail "case $case strategy v1 failed"; }
+        if [ -d "$out/$case/strategy-v1" ]; then
+            echo "parent-eval-blind: case $case strategy v1 (arm c): reusing $out/$case/strategy-v1" >&2
+        else
+            echo "parent-eval-blind: case $case strategy v1 (arm c)" >&2
+            drive --stage strategy-v1 --point "$strategy_point" --arm c --skill "$root/config/skills/cos-operator/strategy-review.md" \
+                --state "$work/$case-strategy-v1" --out "$out" "$@" >"$work/$case-strategy-v1.log" 2>&1 ||
+                { tail -40 "$work/$case-strategy-v1.log" >&2; fail "case $case strategy v1 failed"; }
+        fi
         ;;
 esac
 for p in $(printf %s "$points" | tr , " "); do
     for m in $(printf %s "$arms" | tr , " "); do
         echo "parent-eval-blind: case $case point $p arm $m" >&2
-        rm -rf "${out:?}/$case/$p/$m"
         extra=()
         [ "$m" = c ] && extra=(--strategy-dir "$out/$case/strategy-v1")
         drive --point "$p" --arm "$m" "${extra[@]}" --state "$work/$case-$p-$m" --out "$out" "$@" \

@@ -11,10 +11,15 @@ daemon も cargo も LLM も使わない。引数と承認の検査は cargo の
 - 承認の scope.arms・scope.cases に無い方式・時点は exit 2（pilot_gate.py check-approval に方式の名をそのまま渡す）。
 - output.json は verdict・next（Rust の検査の後の effective）・claims（根拠の参照つき）・usage を持つ。方式 a は LLM 0（usage 無し）。
 - 方式 c の評価は版 v1 の段の出力（--strategy-dir）を要り、版を書く段は事例の最初の時点より前の slice（replay は A-mid）だけで走る。
-- stub は版を書く worker として `celeris.strategy/1` の文書を書いてその名（strategy/<id>/v1.json）を申告し、Critic として文書の
-  candidates[].id ごとに判定を書く（申告しない成果物は basename の名で記録され、Critic が起きない）。
+- stub は版を書く worker として `celeris.strategy/1` の文書を artifacts/strategy/<id>/v1.json に書くだけで、名を申告しない
+  （claude-code の worker と同じ。名は run 後の走査が artifacts からの相対 path で付ける）。Critic として文書の candidates[].id
+  ごとに判定を書く。
+- 既にある <out>/<case>/<point>/<arm>/ と段の終わっていない <out>/<case>/strategy-v1/ を sh も driver も消さず上書きしない
+  （exit 1）。段の終わった strategy-v1/ は同じ <out> の方式 c が流し直さずに使う。
 既存の試験で検出できない理由: driver と sh には試験が無く、子 6 の形（時点 E-mid・D-done、方式の名 parent-eval-blind 固定、
-出力 <out>/<point>/evaluation.json）のままでは、方式 a・b・c の引数・承認の arms・出力の形を誰も確かめなかった。
+出力 <out>/<point>/evaluation.json）のままでは、方式 a・b・c の引数・承認の arms・出力の形を誰も確かめなかった。stub の申告は、
+申告の行を出す stub の試験（前の test_worker_writes_and_declares_...）がむしろ要求していた。sh は同じ方式の dir を rm -rf して
+いたが、それを見る試験は無かった。
 """
 import json
 import os
@@ -29,6 +34,7 @@ SH = HERE.parent / "parent-eval-blind.sh"
 FIXTURE = HERE.parents[2] / "crates/task-api/tests/fixtures/parent_checkpoint_live/blind/replay"
 sys.path.insert(0, str(HERE))
 import driver  # noqa: E402
+import pilot_runs  # noqa: E402
 
 STUB = HERE / "stub_reviewer.py"
 DRIVER = HERE / "driver.py"
@@ -119,6 +125,50 @@ class Args(unittest.TestCase):
         self.assertEqual(r.returncode, 2, r.stderr)
         self.assertIn("scope.cases does not cover F-done", r.stderr)
 
+    def test_existing_arm_dirs_are_kept(self):
+        """前の反復の <out>/<case>/<point>/<arm>/ と strategy-v1/ は消さず上書きしない。sh は build の前に exit 1、driver も
+        exit 1。中身は変わらず、他の方式の dir も作らない。"""
+        out = self.dir / "o"
+        kept = out / "replay/C-mid/a/output.json"
+        kept.parent.mkdir(parents=True)
+        kept.write_text("iter-1 arm a\n")
+        r = run_sh(["--harness", "stub", "--arms", "a,b", "--case", "replay", "--points", "C-mid", "--out", str(out)])
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn(f"exists: {out}/replay/C-mid/a", r.stderr)
+        self.assertIn("they are not deleted", r.stderr)
+        self.assertEqual(kept.read_text(), "iter-1 arm a\n")
+        self.assertFalse((out / "replay/C-mid/b").exists())
+        stage = out / "replay/strategy-v1/run.json"
+        stage.parent.mkdir(parents=True)
+        stage.write_text("{}\n")
+        r = run_sh(["--harness", "stub", "--arms", "c", "--case", "replay", "--points", "D-done", "--out", str(out)])
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn(f"exists: {out}/replay/strategy-v1", r.stderr)
+        self.assertEqual(stage.read_text(), "{}\n")
+        self.assertFalse((out / "replay/D-done").exists())
+        r = self._driver("--point", "C-mid", "--arm", "a")
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn("does not delete or overwrite", r.stderr)
+        self.assertEqual(sorted(p.name for p in kept.parent.iterdir()), ["output.json"])
+        self.assertEqual(kept.read_text(), "iter-1 arm a\n")
+        self.assertNotIn('rm -rf "${out', SH.read_text())
+
+    def test_new_arm_dirs_pass_the_check(self):
+        """他の方式の dir と、段の終わった strategy-v1/（同じ反復の方式 c が使う）は妨げない。時点を 1 つずつ流せる。"""
+        out = self.dir / "o"
+        (out / "replay/C-mid/a").mkdir(parents=True)
+        self.assertEqual(pilot_runs.existing_run_dirs(out, "replay", ["C-mid"], ["b", "c"]), [])
+        stage = out / "replay/strategy-v1"
+        stage.mkdir(parents=True)
+        (stage / "run.json").write_text("{}")
+        self.assertEqual(pilot_runs.existing_run_dirs(out, "replay", ["D-done"], ["c"]), [stage])
+        (stage / "strategy-v1.json").write_text("{}")
+        self.assertEqual(pilot_runs.existing_run_dirs(out, "replay", ["D-done"], ["c"]), [])
+        self.assertIn('if [ -d "$out/$case/strategy-v1" ]; then', SH.read_text())
+        self.assertEqual(pilot_runs.run_dirs(out, "replay", ["C-mid"], ["b", "c"]),
+                         [out / "replay/strategy-v1", out / "replay/C-mid/b", out / "replay/C-mid/c"])
+        self.assertEqual(pilot_runs.existing_run_dirs(out, "replay", ["C-mid"], ["a", "b"]), [out / "replay/C-mid/a"])
+
     def test_config_without_approval_is_refused(self):
         r = run_sh(["--harness", "config", "--arms", "a,b", *BASE_ARGS, "--out", str(self.dir / "o")])
         self.assertEqual(r.returncode, 2, r.stderr)
@@ -186,13 +236,23 @@ class Stub(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         return [json.loads(line) for line in r.stdout.splitlines()], art
 
-    def test_worker_writes_and_declares_the_strategy_document_and_critic_judges_its_candidates(self):
+    def test_stub_writer_does_not_declare(self):
+        """版を書く役は artifact 行を出さない（claude-code の worker は ArtifactProduced を出さない）。版は artifacts の下の
+        strategy/<id>/v1.json にあり、artifacts からの相対 path（run 後の走査が付ける名）が版の名になる。"""
         with tempfile.TemporaryDirectory() as d:
             work = pathlib.Path(d)
             (work / "goal.md").write_text("g")
             lines, art = self.run_stub(work, "成果物 `strategy/pilot-replay/v1.json` にする")
-            self.assertIn({"type": "artifact", "name": "strategy/pilot-replay/v1.json",
-                           "path": "artifacts/strategy/pilot-replay/v1.json"}, lines)
+            self.assertEqual([x for x in lines if x.get("type") == "artifact"], [])
+            self.assertEqual(lines[-1]["type"], "done")
+            written = [p.relative_to(art).as_posix() for p in art.rglob("*") if p.is_file()]
+            self.assertEqual(written, ["strategy/pilot-replay/v1.json"])
+
+    def test_worker_writes_the_strategy_document_and_critic_judges_its_candidates(self):
+        with tempfile.TemporaryDirectory() as d:
+            work = pathlib.Path(d)
+            (work / "goal.md").write_text("g")
+            lines, art = self.run_stub(work, "成果物 `strategy/pilot-replay/v1.json` にする")
             self.assertEqual(lines[-1]["type"], "done")
             doc = json.loads((art / "strategy/pilot-replay/v1.json").read_text())
             self.assertEqual((doc["schema"], doc["strategy_id"], doc["version"]), ("celeris.strategy/1", "pilot-replay", 1))

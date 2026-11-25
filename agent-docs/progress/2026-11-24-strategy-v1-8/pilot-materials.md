@@ -146,7 +146,11 @@ python3 -I scripts/dev/parent-eval-blind/pilot_score.py check-scored $ART/pilot-
 - `pilot-key.json` は repo に無い（`git ls-files 'agent-docs/progress/2026-11-24-strategy-v1-8/pilot-key*'` が空）。
 
 ## 検査（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
-- 結果は下の「提出時の検査」節。
+- `bash scripts/dev/test-affected.sh`: exit 0（「試験対象の変更なし（docs のみ等）」。repo_health_gate: all checks passed）。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+- `cargo fmt --all -- --check`: exit 0。
+- `sh scripts/dev/progress-index.sh --check`: exit 0（ok）。`sh scripts/dev/check-doc-links.sh`: exit 0（ok）。
+- WU の check 5 件（範囲、`check-blank` の 2 file、実 run の compare の exit 0 と `pilot-runs` の grep の一致無し、36 点の `output.json`、進捗 file・`pilot-key.json` を追跡しない・`c-results.md` と同じ byte の file を追跡しない）: どれも exit 0。範囲の check の変更 path は `pilot-materials.md` と `pilot-scoring.md` の 2 file。compare の出力は `$ART/pilot-metrics/metrics.json` と同じ byte（`cmp`）。
 
 ## LoC
 - 変更は文書だけ（この進捗 file と repo 用の写し `pilot-scoring.md`）。script・試験・crates・web・評価器の prompt・testdata は変えていない。
@@ -155,5 +159,5 @@ python3 -I scripts/dev/parent-eval-blind/pilot_score.py check-scored $ART/pilot-
 - 盲検の強さ: 方式の名は伏せたが、記録の内容（親の途中評価の本文の有無・戦略の版の有無・invalid の行）から方式を推測できる（ADR D5 の既知の限界）。invalid の 4 点が方式 c であることは、この WU の objective と operator の報告にも書かれている。採点の前に人がどこまで知っていたかは、採点の後に close-audit で人に聞く必要がある。
 - 方式 c の版 v1 の段の失敗の 2 run・0.333 USD は operator の報告の値で、この WU では確かめていない（`run.json` が無い）。
 - build の commit（段 harness の後 = 段 harness の統合の後の worktree、段 recheck の後 = integrate wu/stub-undeclared の後）は operator の報告で、この WU では確かめていない。
-- `REDIRECT_RE` は Python の比較の `>` やコメントの `>=` を redirect と読む（`mutated` の誤検出 2 点）。漏れと採点には効かないので、この WU では直していない（範囲の外）。
+- `REDIRECT_RE` は Python の比較の `>` やコメントの `>=`、heredoc の本文の `>` を redirect と読む（`mutated` が誤検出だけで真になった点が 2 点、誤検出を含む点が 3 点）。漏れと採点には効かないので、この WU では直していない（範囲の外）。
 - 採点・合格線の判定・指標の表は、人の採点の後の close-audit の仕事で、この WU ではしていない。

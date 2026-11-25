@@ -248,11 +248,23 @@ async fn a_spawn_failure_keeps_launched_at() {
             ..Default::default()
         })),
     );
+    // A fixed admission clock: the source cooled below is still cooling when the run selects again.
+    f.d.probes.set_now_unix(Arc::new(|| 1_790_000_000));
     let t = f.thread("lw-spawnfail");
     let id = f.start(&t, "one");
     f.join(&t).await;
+    // ADR 2026-11-24-planner-supply-failure-cooldown D1: a spawn failure is supply-side. The next
+    // tick cools the source and selects again; the only candidate is cooling, so the launched run
+    // closes as failed.
+    f.d.tick_cos_chat_launch();
     let run = f.run(&t, &id);
     assert_eq!(run.state, ChatRunState::Failed, "{run:?}");
+    assert!(
+        run.reason
+            .as_deref()
+            .is_some_and(|r| r.contains("is eligible")),
+        "{run:?}"
+    );
     assert!(run.launched_at.is_some(), "may have started: {run:?}");
     assert_eq!(run.prelaunch_reason, None);
     assert_eq!(run.cost_state, ChatCostState::Unknown);
@@ -436,6 +448,7 @@ async fn a_missing_attempt_usage_is_recorded_and_hides_the_known_part() {
                 final_text: Some("ok".into()),
                 reason: None,
                 context_exhausted: false,
+                supply: None,
             },
             &task_worker::result_report::ParsedActions::default(),
         )

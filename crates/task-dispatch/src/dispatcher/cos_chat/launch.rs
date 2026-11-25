@@ -209,10 +209,13 @@ impl LaunchFailure {
     }
 }
 
+/// A chat run whose route ended in a supply-side failure (ADR 2026-11-24 D5). `retry_routes`
+/// cools down `attempt`'s route with `supply` (taken once) and launches the next attempt number.
 pub(super) struct RouteRetry {
     pub thread_id: String,
     pub run_id: String,
-    pub next_route: usize,
+    pub attempt: super::routes::RouteAttempt,
+    pub supply: Option<super::routes::SupplyFailure>,
     pub reason: String,
     pub previous: Arc<ChatRunSink>,
 }
@@ -403,7 +406,7 @@ impl CosChatLaunch {
                 } => self.close_unlaunched(&run, state, prelaunch, text, now),
                 SlotWaitStep::Hold => {}
                 SlotWaitStep::Launch => {
-                    self.launch_routes(dispatcher, thread, &run, wait.first_route, None, now);
+                    self.launch_routes(dispatcher, thread, &run, 0, None, now);
                     if self.running.contains_key(thread) {
                         self.slot_waits.remove(&id);
                         let text = "CoS の枠が空いたので起動しました";
@@ -588,7 +591,7 @@ impl CosChatLaunch {
         &mut self,
         dispatcher: &Dispatcher,
         cfg: &CosChatLaunchConfig,
-        route_index: usize,
+        attempt: usize,
         previous: Option<Arc<ChatRunSink>>,
         thread_id: &str,
         run_id: &str,
@@ -648,7 +651,6 @@ impl CosChatLaunch {
                 .collect::<Vec<_>>(),
         )
         .map_err(|e| LaunchFailure::skills(format!("CoS skills unavailable: {e}")))?;
-        let provider = pick.candidate.source.to_string();
         let account = Some(pick.account.to_string());
         let selected_route = dispatcher
             .route_launch_target(&pick)
@@ -684,14 +686,14 @@ impl CosChatLaunch {
         let session_key = ChatSessionKey {
             thread_id: thread_id.to_string(),
             harness: pick.harness.to_string(),
-            provider: Some(provider.clone()),
+            provider: Some(pick.candidate.source.to_string()),
             llm_source: Some(pick.candidate.source.to_string()),
             model: Some(pick.candidate.model.to_string()),
             account_id: account.clone(),
             cwd: Some(workspace.to_string_lossy().into_owned()),
             policy_key: Some(policy_key.clone()),
         };
-        let choice = if route_index > 0 {
+        let choice = if attempt > 0 {
             // Even two configured routes with the same session key must not reuse the failed
             // route's session. Only the session that completes may advance its cursor.
             let session = super::rollover::rotate_fresh(&self.store, session_key, now)?;
@@ -727,10 +729,10 @@ impl CosChatLaunch {
         } = choice;
         // A fallback route uses another session: it needs the full summary and history even
         // when the original attempt resumed with a delivery cursor.
-        let delta_from = if route_index == 0 { delta_from } else { None };
+        let delta_from = if attempt == 0 { delta_from } else { None };
         let mut history =
             super::rollover::history_for_run(&self.store, thread_id, input.seq, delta_from)?;
-        if route_index > 0 {
+        if attempt > 0 {
             let applied = self
                 .store
                 .cos_operation_applied_for_run(run_id)
@@ -887,7 +889,7 @@ impl CosChatLaunch {
         self.route_notice(
             run_id,
             thread_id,
-            route_index,
+            attempt,
             "started",
             &format!(
                 "CoS 実行経路: {} / {} / {} / {}",
@@ -899,6 +901,7 @@ impl CosChatLaunch {
             now,
         );
         let retries = Arc::clone(&self.retries);
+        let route = (attempt, pick.candidate.source.clone(), pick.account.clone());
         self.running.insert(
             thread.clone(),
             tokio::spawn(async move {
@@ -918,7 +921,7 @@ impl CosChatLaunch {
                     grace,
                     clock,
                     retries,
-                    route_index,
+                    route,
                     previous,
                 )
                 .await;
@@ -994,7 +997,7 @@ async fn run_claimed(
     grace: Duration,
     clock: ChatClock,
     retries: RouteRetries,
-    route_index: usize,
+    route: super::routes::RouteAttempt,
     previous: Option<Arc<ChatRunSink>>,
 ) {
     // A stop may be committed between the claim and the spawned task's first poll.
@@ -1080,7 +1083,7 @@ async fn run_claimed(
     }
     if finish.state == ChatRunState::Failed
         && !pending
-        && super::routes::supply_failure(finish.reason.as_deref().unwrap_or(""))
+        && let Some(supply) = finish.supply.take()
     {
         sink.close_attempt_tools();
         let reason = sink.redact_reason(finish.reason.as_deref().unwrap_or("利用上限"));
@@ -1091,7 +1094,8 @@ async fn run_claimed(
             .push(RouteRetry {
                 thread_id: thread_id.to_owned(),
                 run_id: run_id.to_owned(),
-                next_route: route_index + 1,
+                attempt: route,
+                supply: Some(supply),
                 reason,
                 previous: Arc::new(sink),
             });

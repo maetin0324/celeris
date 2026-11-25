@@ -3192,6 +3192,8 @@ mod cos_chat_triage_stagnation;
 mod cos_launch_cross;
 mod cos_launch_wire;
 mod cos_live_fix_d4;
+/// ADR 2026-11-24-planner-supply-failure-cooldown D5: CoS の代替経路は失敗した account を cooldown にして選び直す。
+mod cos_route_failover;
 mod cos_slot_wait;
 /// ADR 2026-10-11-task-wait-reasons: 見送りの理由（snapshot の task_waits と共有の待ち判定）。
 mod dep_integration;

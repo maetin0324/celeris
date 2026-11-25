@@ -108,10 +108,16 @@ async fn spawn_failure_after_the_notice_and_usage_null_stop_the_budget() {
             ..Default::default()
         })),
     );
+    // A fixed admission clock: the source cooled below is still cooling when the run selects again.
+    f.d.probes.set_now_unix(Arc::new(|| CLOCK));
     let t = f.thread("cross-spawnfail");
     let id = f.start(&t, "one");
     f.join(&t).await;
+    // ADR 2026-11-24-planner-supply-failure-cooldown D1: a spawn failure is supply-side; the next
+    // tick cools the source, finds no other route and closes the launched run.
+    f.d.tick_cos_chat_launch();
     let run = f.run(&t, &id);
+    assert_eq!(run.state, ChatRunState::Failed, "{run:?}");
     assert!(run.launched_at.is_some(), "{run:?}");
     assert_eq!(run.prelaunch_reason, None);
     let u = budget(&f.store, &t, f.d.now_utc());

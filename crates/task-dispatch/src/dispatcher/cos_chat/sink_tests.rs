@@ -593,6 +593,7 @@ fn cos_chat_usage_fixed_clock_skill_count_latency_retry_and_terminal_event() {
         final_text: None,
         reason: None,
         context_exhausted: false,
+        supply: None,
     };
     let run = retry
         .finish(&finish, &ParsedActions::default())
@@ -650,6 +651,7 @@ fn cos_chat_usage_retry_keeps_unreported_fields_unknown() {
                 final_text: None,
                 reason: None,
                 context_exhausted: false,
+                supply: None,
             },
             &ParsedActions::default(),
         )

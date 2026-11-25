@@ -8,7 +8,9 @@
 
 1. 採点者は人 1 名以上。方式の名を伏せた記録（各時点の判定・根拠・次の手・費用の記録）を受け取る。伏せ方: 記録の file 名を乱数の id に替え、方式の対応表は採点の後まで渡さない。
 2. 採点者は answer key（`replay/answer_key.json` と研究ケースの参照表）を**採点の後に**見る。先に自分の判定を書き、後で差を記録する。
-3. 6 つの軸を下の表の基準で 0〜2 点で付け、根拠（slice の file と行、event の (task, seq)）を 1 行書く。根拠を書けない点は 0 にする。
+3. 採点の分担（人の決定 2026-11-25）: 人は 4 つの軸（execution success・epistemic progress・parent goal achievement・unsupported claims）を下の表の基準で 0〜2 点で付け、根拠（slice の file と行、event の (task, seq)）を 1 行書く。根拠を書けない点は 0 にする。採点者（`human:<名>`）とレビュー時間（分）も書く。
+   pivot の時点とコストの 2 軸は人が付けない。人の採点の後に方式の対応表を開いてから、機械（`scripts/dev/parent-eval-blind/pilot_score.py machine-axes`）が下の表の 2/1/0 点の基準を answer key・研究ケースの参照表・`metrics.json` に当てて付け、根拠を「機械:」で始めて当てた規則と数値を書く。規則と数値は子 8 の進捗 file に書く。
+   子 9 で同じ分担を使うかは人の確認待ち（子 8 の進捗の「提案」）。
 4. 2 名で採点したら軸ごとの差を記録し、差が 1 点を超えた軸は話し合って 1 つにする（話し合いの前の点も残す）。
 5. 結果は `agent-docs/progress/` の子 8 の進捗 file に表で残す（方式 × 軸 × 採点者）。
 

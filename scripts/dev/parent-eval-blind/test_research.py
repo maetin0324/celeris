@@ -12,11 +12,16 @@ daemon も cargo も LLM も使わない。本文は合成の testdata（testdat
   research.py に写さない。
 - 時点 p の入力（作業 tree の file と seed の spec）は 11.15 節から p 節までだけで、p より後の節の本文・見出し・初出が p より後の
   SENTINELS を含まない。混ぜた入力（後の節の語・見出し）は run の前に Leak で止まる。
-- Outcome（問いと判定方法）は 11.15 節（全時点の cutoff 以前）だけから作る。子は節ごとに 1 件、報告は節の本文。
+- goal と Outcome（問いと判定方法）は task C の目的のうち 11.15 節より前に書かれた節（research.GOAL_SOURCES の 11.1・11.2・11.5）
+  だけから作り、時点で変わらない。11.15 節の見出しと見出しの後の最初の段落（後の結果の段落）、0 節（後で書かれた結論）を
+  含まない（ADR D2.2 の付記 1）。子は節ごとに 1 件、報告は節の本文。
+- `research.py check-goal` は各時点の build の Leak と、goal・Outcome への 11.15 節の見出し・最初の段落の混入を exit 1 にし、
+  本文を出さない。
 - `--harness config` は --research-src の sha256 が research_case.SHA と違えば exit 2（承認の検査の後、build の前）。
   承認の scope.cases の名は research-<時点>。
 既存の試験で検出できない理由: driver と sh は事例 replay しか受けず（--case research は exit 2）、研究ケースの slice・漏れの検査・
-sha256 の検査を誰も確かめていなかった。
+sha256 の検査を誰も確かめていなかった。goal と Outcome の試験は 11.15 節の見出しと最初の段落を問いと判定方法として期待していたので、
+実データで問いが 11.15 節の見出し・判定方法が後の結果の段落になる誤りを合格にしていた（research-goal の WU で直した）。
 """
 import json
 import os
@@ -85,17 +90,48 @@ class Slice(unittest.TestCase):
                 self.assertTrue(c["title"].startswith(c["key"] + " "))
                 self.assertEqual(len(c["criteria"]), 1)
 
-    def test_outcome_is_the_question_and_method_of_11_15_only(self):
-        outcomes = {p: research.build(self.text, p)["outcome"] for p in research.POINTS}
-        o = outcomes["11.17"]
-        self.assertTrue(all(v == o for v in outcomes.values()), "Outcome が時点で変わる")
-        self.assertEqual(o["title"], "11.15 合成 run 1: 共有の core で合成の node が止まるか")
-        self.assertEqual(o["acceptance"], ["合成の問いの判定は、合成の cell ごとの停止の数を数え、止まった cell の割合で決める。"])
-        goal = research.build(self.text, "11.17")["goal"]
-        self.assertIn("目的：" + o["title"], goal)
-        self.assertIn("判定方法：" + o["acceptance"][0], goal)
-        for key in ORDER[1:]:
-            self.assertNotIn(MARKS[key], goal + json.dumps(o, ensure_ascii=False))
+    def test_goal_and_outcome_come_from_the_question_written_before_11_15(self):
+        # 変更前（問い = 11.15 節の見出し、判定方法 = 見出しの後の最初の段落）では落ちる。
+        secs = research.rc.sections(self.text)
+        first = secs["11.15"]
+        built = {p: research.build(self.text, p) for p in research.POINTS}
+        o = built["11.17"]["outcome"]
+        self.assertTrue(all(b["outcome"] == o for b in built.values()), "Outcome が時点で変わる")
+        self.assertEqual(o["id"], research.OUTCOME_ID)
+        self.assertEqual(o["title"], "合成の k の cell で合成の node が止まっても欠測にせず、避ける手を試して測り直す（印 SYN-112-Q）。")
+        self.assertEqual(o["acceptance"], ["合成の停止の割合（合成の数え方で数えた）: 合成の 3 / 9（印 SYN-115-M）。"])
+        for p, b in built.items():
+            goal = b["goal"]
+            self.assertIn("目的：" + o["title"], goal)
+            self.assertIn("判定方法：" + o["acceptance"][0], goal)
+            self.assertIn("SYN-111", goal, "背景の 11.1 節の人の決定")
+            text = goal + json.dumps(b["outcome"], ensure_ascii=False)
+            # 11.15 節の見出し（番号の有無とも）・最初の段落・本文の印、0 節、出典の箇条の「止ま」の無い文は入らない。
+            for absent in (research.heading(first), research.heading(first).split(" ", 1)[1],
+                           research.first_paragraph(first), "SYN-1115", "SYN-0", "SYN-112-A", "SYN-112-B",
+                           "SYN-112-C", "SYN-115-A", "SYN-98"):
+                self.assertNotIn(absent, text, f"{p}: {absent!r}")
+            for key in ORDER[1:]:
+                self.assertNotIn(MARKS[key], text)
+            self.assertEqual(research.cutoff_hits(secs, b), 0)
+
+    def test_goal_sources_are_sections_written_before_11_15(self):
+        keys = list(research.rc.sections(self.text))
+        for _, key, _, _ in research.GOAL_SOURCES:
+            self.assertNotEqual(key, "0")
+            self.assertLess(keys.index(key), keys.index(research.STRATEGY_POINT), key)
+        # 出典の箇条が無ければ、代わりの節（11.15 節など）を探さずに止まる。
+        no_method = self.text.replace("- 合成の停止の割合", "- 合成の数え方")
+        with self.assertRaises(ValueError):
+            research.build(no_method, "11.17")
+        # 出典に 11.15 節以降の節を書いた規則は断る。
+        orig = research.GOAL_SOURCES
+        try:
+            research.GOAL_SOURCES = (("question", "11.16", "合成", None),) + orig[1:]
+            with self.assertRaises(ValueError):
+                research.build(self.text, "11.17")
+        finally:
+            research.GOAL_SOURCES = orig
 
     def test_inputs_have_no_section_after_the_cutoff(self):
         secs = research.rc.sections(self.text)
@@ -123,6 +159,11 @@ class Slice(unittest.TestCase):
         with self.assertRaises(research.Leak) as e:
             research.build(mixed, "11.16")
         self.assertIn("later heading", str(e.exception))
+        # 否定対照 3: goal の出典（11.2 節の問いの文）に 11.20 で初めて現れる語を混ぜる。
+        mixed = self.text.replace("（印 SYN-112-Q）", "（印 SYN-112-Q、16 件目）")
+        with self.assertRaises(research.Leak) as e:
+            research.build(mixed, "11.17")
+        self.assertIn("16 件目", str(e.exception))
 
     def test_driver_stops_a_leaking_slice_with_exit_1(self):
         secs = research.rc.sections(self.text)
@@ -188,6 +229,67 @@ class Shell(unittest.TestCase):
         self.assertEqual(driver.STRATEGY_POINT["research"], "11.15")
         sh = SH.read_text()
         self.assertIn('research) known_points="11.16 11.17 11.20" strategy_point="11.15"', sh)
+
+
+class CheckGoal(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = pathlib.Path(self.tmp.name)
+        self.text = SYNTH.read_text(encoding="utf-8")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_check(self, text, *extra, points="11.16,11.17,11.20"):
+        src = self.dir / "c.md"
+        src.write_text(text, encoding="utf-8")
+        return subprocess.run([sys.executable, "-I", str(HERE / "research.py"), "check-goal", "--src", str(src),
+                               "--points", points, *extra], capture_output=True, text=True, timeout=60)
+
+    def assert_no_body(self, out):
+        self.assertNotIn("SYN-", out)
+        self.assertNotIn("合成", out)
+
+    def test_synthetic_passes_and_prints_only_numbers(self):
+        r = self.run_check(self.text)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        for p in ("11.16", "11.17", "11.20"):
+            self.assertIn(f"{p}: sections 11.15..{p}", r.stdout)
+        self.assertEqual(r.stdout.count("11.15 節の見出し・最初の段落 0 件"), 3)
+        self.assert_no_body(r.stdout + r.stderr)
+
+    def test_goal_with_the_11_15_heading_or_first_paragraph_is_exit_1(self):
+        secs = research.rc.sections(self.text)
+        first = secs["11.15"]
+        for inject in (research.first_paragraph(first), research.heading(first).split(" ", 1)[1]):
+            mixed = self.text.replace("（印 SYN-112-Q）", "（印 SYN-112-Q）" + inject)
+            r = self.run_check(mixed)
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            self.assertIn("11.15 節の見出し・最初の段落 1 件", r.stdout)
+            self.assert_no_body(r.stdout + r.stderr)
+
+    def test_leak_is_exit_1_without_the_leaked_words(self):
+        secs = research.rc.sections(self.text)
+        mixed = self.text.replace(secs["11.17"], secs["11.17"] + secs["16"].split("\n", 1)[1])
+        r = self.run_check(mixed)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("11.17: leak 1 件", r.stdout)
+        self.assertNotIn("1 / 488", r.stdout + r.stderr)
+
+    def test_written_before_compares_the_source_sections(self):
+        older = self.dir / "older.md"
+        older.write_text(self.text, encoding="utf-8")
+        r = self.run_check(self.text, "--written-before", str(older))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("前の版と同じ文の出典: 3 / 3 節", r.stdout)
+        older.write_text(self.text.replace("（印 SYN-112-Q）", "（印 SYN-112-Q 前の版）"), encoding="utf-8")
+        r = self.run_check(self.text, "--written-before", str(older))
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("前の版と同じ文の出典: 2 / 3 節", r.stdout)
+
+    def test_unknown_point_is_exit_2(self):
+        r = self.run_check(self.text, points="11.18")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
 
 
 if __name__ == "__main__":

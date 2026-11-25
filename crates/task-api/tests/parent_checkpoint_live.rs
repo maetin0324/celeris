@@ -396,7 +396,8 @@ fn research_children(spec: &Value) -> Vec<SeedChild> {
 }
 
 /// 研究ケースの seed: spec の `research`（`goal`・`outcome` の `id`・`title`・`acceptance`・`children`）を [`seed_tree`] で置く。
-/// Outcome は 11.15 節（全時点の cutoff 以前）の問いと判定方法で、Outcome の event は書かない（D6 の到達は偽）。
+/// Outcome は task C の 11.15 節より前に書かれた節の問いと判定方法（`research.py` の `GOAL_SOURCES`。ADR D2.2 の付記 1）で、
+/// Outcome の event は書かない（D6 の到達は偽）。
 fn seed_research(
     store: &SqliteStore,
     point: &str,

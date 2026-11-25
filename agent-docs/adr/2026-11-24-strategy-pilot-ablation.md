@@ -97,6 +97,28 @@ driver・比較・採点材料の script（`scripts/dev/` の下）と task-api 
   sentinel（`research_case.py` の `SENTINELS`）の検査を通す。時点で checkpoint が 1 回だけ発火するように、driver が `children_per_checkpoint` を範囲 1〜8 から選ぶ（選べなければ D1.5）。
 - repo の試験と stub の確認は合成の testdata だけを使う（research-driver の WU）。
 
+##### D2.2 付記 1（2026-11-24、WU research-goal）: goal と Outcome の出典の節と規則
+
+- 直す前の誤り: `research.py` の `build` は、問いを 11.15 節の見出し、判定方法を見出しの後の最初の段落から作っていた。実データの 11.15 節は sweep の 1 本目の結果の節で、
+  最初の段落は「結論:」で始まる結果の段落である。そのため goal と Outcome が 11.15 の時点の結果になり、問いと判定方法になっていなかった（operator の stub の 1 回で人が確認、2026-11-24）。
+- 出典（`research.GOAL_SOURCES`）。どれも 11.15 節より前に書かれた節で、task C の目的の「追加の依頼（2026-11-15）」の C（node の停止で欠けた cell を欠測にせず、
+  原因の見当をつけ、避ける手を打ってから測り直す）を扱う:
+  - 問い（Outcome の `title`、goal の「目的」）: 11.2 節の「人の答え」を含む箇条のうち、「止ま」を含む文。人が 2026-11-15 に答えた k = 24 の cell の停止の扱い。
+  - 判定方法（Outcome の `acceptance` の 1 件、goal の「判定方法」）: 11.5 節の「停止の割合」を含む箇条の全文。停止を host × cell の数で数える数え方と、11.15 より前の割合。
+  - 背景（goal だけ）: 11.1 節の「人の決定」を含む箇条の全文。アプリ同居を欠測で閉じる案を人が採らなかったこと。
+  - 使わない節: 0 節（後で書かれた結論）、11.15 節以降の節、9.10 節（本文の 2 行が 11.15 より後に書き換えられていた。下の根拠）、12〜16 節（後の run で書き足された）。
+- 規則: 箇条は `- ` で始まる行のうち印を含む最初の 1 行、文は「。」で切る。出典の節・箇条・文が無いとき、出典が 0 節のとき、文書の中で 11.15 節より後ろにあるときは
+  `ValueError` で止まり、代わりの節を探さない。11.15 節の見出しと最初の段落は、問いにも判定方法にもしない。Outcome の `id` は `research-question` のままで、時点で変わらない。
+  人の答えは指示の文なので、Outcome の `title` も指示の文になる。研究ケースの本文を repo に写さないため、問いの形に書き直さない。
+- 11.15 より前に書かれた根拠: task C の作業場所に、run 25 の前の c-results.md の写し `/local/celeris/data/workspaces/01M7C56WK4E86BTZNDKAX7SP7C/target/.ctmp/c-results.pre-r25.md`
+  （sha256 `baa2a1858f04844330593fccd57e1380f4d1b8c75e910f8e253c5d8d59b0f8a0`、mtime 2026-11-16 08:42Z、最後の節は 11.13）がある。11.15 節は run 26（2026-11-16 10:3xZ）である。
+  出典の 3 節（11.1・11.2・11.5）は、この写しと最終の c-results.md（`research_case.SHA`）で同じ文である（`check-goal --written-before` が「前の版と同じ文の出典: 3 / 3 節」）。
+  9.8・9.9 節も同じ文だが、9.10 節は 2 行が違う。節の見出しの時刻は 11.1 が 2026-11-15 12:20Z、11.2 が run 14（2026-11-15 12:1x〜12:3xZ）、11.5 が run 17（2026-11-15 13:30Z）。
+  task C の `target/` は掃除で消えうるので、同じ sha256 の写しを子 8 の root の artifacts の `research-evidence/c-results.pre-r25.md`（`SHA256SUMS` 付き）に置いた。repo には入れない。
+- 検査: `python3 -I scripts/dev/parent-eval-blind/research.py check-goal --src <c-results.md> --points 11.16,11.17,11.20 [--written-before <前の版>]`。
+  各時点の build の `Leak`、または goal・Outcome に 11.15 節の見出し（番号の有無とも）か最初の段落があれば exit 1。出力は節の番号と件数だけで、本文を出さない。
+  実 LLM の run の前に実データで流す。
+
 ### D3: 同じモデル・同じ予算と承認の json
 
 #### D3.1 上限（3 方式で同じ値）
@@ -166,6 +188,19 @@ driver・比較・採点材料の script（`scripts/dev/` の下）と task-api 
   - 研究ケース: `research_case.py` の `SENTINELS` のうち初出が時点より後のもの、時点より後の節の見出し、子 0 の `research-case.md` の「時点ごとの採点の参照」の表の文。
   - 読み: `reads.json` に answer key・`research-case.md`・`c-results.md` の全体・replay の時点より後の dir の path があれば `forbidden`（子 6 の `parent-eval-blind-compare.py` の `check_reads` と同じ）。
 - 規則は既存の `replay.py`（`verify` の N1〜N3）・`research_case.py` の `leaks`・`parent-eval-blind-compare.py` の `check_reads` を import して使い、Python に写し直さない（規約 2）。
+
+##### D4.1 付記 1（2026-11-24、WU compare-leak）: 時点以前にも同じ本文がある後の event の本文は漏れに数えない
+
+- 変更: replay の「cutoff より後の event の本文」の規則は、後の event の `outcome`（40 字超）のうち、cutoff 以前の event の `outcome` のどれかに同じ文字列が
+  含まれるものを数えない（`parent-eval-blind-compare.py` の `Rules.leaks`）。時点より後にだけある本文は従来どおり漏れに数える。
+- 理由: operator の実 run（iter-1・iter-2 の C-mid の方式 a・b）で、`input/tree/events.jsonl` は cutoff 以前の行だけを持つのに、定型文
+  `interrupted: aborted (task no longer running under this lease)` が後の event の本文と一致して漏れとされ、`compare --pilot` が exit 1 になった。
+  この定型文は replay の events で C-mid の cutoff より前の task C の `worker_finished` に 57 件（実 run の C-mid の入力にも 57 行）、後の task D に 27 件ある。時点以前の本文にもある文字列は、入力にあっても時点以前の event から来うるので、
+  未来の情報の根拠にならない（誤検出）。replay の 12 時点のうち、この除外に当たるのは C-mid・C-done の上の 1 種だけ。
+- 変えないもの: sentinels の語・answer key の印と理由の文・期待の組・後の event の時刻・`events.jsonl` の cutoff 後の行・研究ケースの規則・読みの検査。
+  後の event そのものが入力に入れば、時刻と cutoff 後の行の規則で引き続き漏れになる。`testdata/pilot-runs-leak` の出力（`metrics.json`）は変更の前後で同じ byte。
+- 子 6 の試験 `parent_checkpoint_blind_no_answer_key_or_future` の規則は変えない（子 6 の盲検の時点 E-mid・D-done では、除外に当たる本文が 0 種）。上の「子 6 と同じ規則」は、本文の除外を除いて同じ、と読む。
+- 試験: `test_pilot_compare.py` の `test_body_also_before_the_cutoff_is_not_a_leak`（変更前に落ちる）と `test_body_only_after_the_cutoff_is_a_leak`（否定対照）。
 
 #### D4.2 混ぜた入力の否定対照（exit 1 を確かめる）
 

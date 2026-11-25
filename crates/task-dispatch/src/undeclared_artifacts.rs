@@ -174,11 +174,11 @@ fn is_excluded_artifact_filename(name: &str) -> bool {
 }
 
 /// 走査の候補（sha256 はまだ計算していない）。並べ替えの鍵は（拡張子のクラス → 深さ → path）。
+/// `rel_path` は `artifacts_dir` からの相対で、成果物の名にもなる（ADR-0067 付記 2026-11-24）。
 struct Candidate {
     class: usize,
     depth: usize,
     rel_path: PathBuf,
-    name: String,
     kind: String,
 }
 
@@ -187,7 +187,9 @@ struct Candidate {
 /// worktree / remote の写しでは使えない（無関係なファイルまで拾ってしまう）。ここでは run の**成果物
 /// ディレクトリの中だけ**を見て、`HUMAN_ARTIFACT_EXTENSIONS` のうち深さ [`MAX_DEPTH_IN_DIR`] までにあり
 /// `existing`（`(path, sha256)`）に無いものを（拡張子のクラス → 深さ → path の順で、最大
-/// [`MAX_FILES_IN_DIR`] 件）返す。`path` は `workspace_dir` からの相対。
+/// [`MAX_FILES_IN_DIR`] 件）返す。`path` は `workspace_dir` からの相対。`name` は `artifacts_dir` からの相対 path
+/// （区切り `/`。深さ 1 なら file 名。`artifacts/strategy/s1/v1.json` は版の名 `strategy/s1/v1.json` になる。
+/// ADR-0067 付記 2026-11-24）。
 pub fn scan_undeclared_artifacts_in_dir(
     workspace_dir: &Path,
     artifacts_dir: &Path,
@@ -246,7 +248,6 @@ pub fn scan_undeclared_artifacts_in_dir(
                 class,
                 depth: dir_depth + 1,
                 kind: HUMAN_ARTIFACT_EXTENSIONS[class].to_string(),
-                name: name_str.into_owned(),
                 rel_path,
             });
         }
@@ -271,7 +272,7 @@ pub fn scan_undeclared_artifacts_in_dir(
             continue;
         }
         found.push(ArtifactRef {
-            name: candidate.name,
+            name: candidate.rel_path.to_string_lossy().replace('\\', "/"),
             path: path_str,
             sha256,
             kind: candidate.kind,

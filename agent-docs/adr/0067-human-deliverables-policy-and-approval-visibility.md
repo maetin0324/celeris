@@ -239,3 +239,55 @@ raw が先に 20 件を使い切り `report.md` が落ちる。
   機械的に決まる。
 - **`json` を対象にしない**: 人の依頼に「json の要約など」があり、`manifest.json` のような小さな要約は
   人が見る。機械向けの名前は除外し、クラスを最後にして上限に当たるときは先に落ちるようにした。
+
+## 付記（2026-11-24）: `artifacts_dir` 走査の成果物の名は `artifacts_dir` からの相対 path
+
+### 文脈 — 実機で起きたこと（戦略層 v1 子 8 の pilot、task 01M7XQA74FP70G3T3KSTP02S0W）
+
+方式 c の版の段で、claude-code の worker が版を `artifacts/strategy/pilot-replay/v1.json` に書いた。claude-code・
+codex・acp の adapter は `ArtifactProduced` を出さないので、run 後の D3-c の走査（`scan_undeclared_artifacts_in_dir`）が
+この file を登録したが、名（`ArtifactRef.name`）を file の basename にしていたため `v1.json` で記録された。版の名の規則
+（`task_core::strategy_ref::artifact_name` の `strategy/<id>/v<n>.json`）にも、最終 review の `ArtifactExists` の既定 path
+`{artifacts_rel}/{name}`（`crates/task-dispatch/src/review.rs`）にも合わず、driver は `strategy/pilot-replay/v1.json` が
+無いとして止まった（stub は `artifact` 行で名を申告していたので通っていた）。
+
+### D3-e. 名の規則
+
+- `scan_undeclared_artifacts_in_dir` が返す `ArtifactRef.name` は **`artifacts_dir` からの相対 path（区切り `/`）**にする。
+  `artifacts/strategy/s1/v1.json` は `strategy/s1/v1.json`、`artifacts/cmp4/final/report.md` は `cmp4/final/report.md`。
+  深さ 1 の file（`artifacts/report.md`）の名は前と同じ file 名（`report.md`）。
+- `path`（`workspace_dir` からの相対）・`kind`・`sha256`・対象・順序・上限（D3-c）・重複の規則（D3-b）は変えない。
+- D3 の作業場所全体の `*.md` 走査（`scan_undeclared_markdown_artifacts`）の名は file 名のまま変えない（成果物置き場の外の
+  file で、`ArtifactExists` の既定 path の基準〈`artifacts_dir`〉と無関係なため）。申告済みの成果物の名（worker・harness が
+  決める）も変えない。
+- 補完（D3-d、`undeclared_artifacts/backfill.rs`）は同じ関数を使うので同じ名になる。
+
+理由: `ArtifactExists{name}` の既定 path は `{artifacts_rel}/{name}` で、名を `artifacts_dir` からの相対 path にすれば
+「名 = 成果物置き場の中の場所」が 1 つの規則になる。版の名（`strategy/<id>/v<n>.json`）・publish の manifest の名
+（`publish/<id>/v<n>.json`）のように `/` を含む名の規則を、申告の口を持たない harness の worker でも満たせる。
+
+試験（`crates/task-dispatch`）: `undeclared_nested_name_is_relative_to_the_artifacts_dir`・
+`undeclared_nested_name_reads_as_a_strategy_version`・`undeclared_nested_name_keeps_depth_one_and_markdown_scan_names`・
+`undeclared_nested_name_backfill_registers_the_same_relative_name`・
+`undeclared_nested_name_root_review_finds_the_work_unit_strategy_version`（最終 review の `ArtifactExists` が WorkUnit の run の
+入れ子の未申告の版を名で見つける）。深さ 1 の試験以外の 4 件は変更前に落ちる。
+
+### 契約の変更と既存の受け入れ条件への影響の見込み
+
+- 変わるのは「入れ子の未申告の成果物の名」だけ。前は basename を名にしていた契約を、この付記で相対 path に変えた。
+  入れ子の `name` を basename と仮定して確かめる既存の試験は無かった（D3-c の試験は入れ子の `path` と `kind` だけを見る）。
+- `ArtifactExists{name: "<file 名>"}` で、file が `artifacts_dir` の入れ子にあり申告されていない場合: 前は basename の名の
+  候補に当たって合格し得たが、今後は名が `<dir>/<file 名>` になり、既定 path `{artifacts_rel}/<file 名>` も無いので不合格に
+  なる。受け入れ条件の名を相対 path（`cmp4/final/report.md`）に書くか、file を `artifacts/` 直下に置けば合格する。
+  repo の中の JSON の `"artifact_exists", "name"` の例（`crates`・`config`・`docs`・`agent-docs` を 2026-11-24 に grep で数えた 82 件）は全部 `/` の無い file 名
+  （`result.md`・`plan.json` など）で、`artifacts/` 直下の file を指す。本番の受け入れ条件も深さ 1 の file 名が多いと
+  見込むが、本番の DB は数えていない（未確認）。
+- `ArtifactExists{name: "<dir>/<file 名>"}`（版の名など）: 前は review する run の `artifacts_dir` に file があるときだけ
+  既定 path で合格した。今後は WorkUnit の run の成果物も名で見つかる（ADR 2026-11-21-root-review-work-unit-artifacts の
+  候補）。
+- 既に記録された `ArtifactProduced` は書き換えない（events は追記専用）。D3-b の重複の規則は `(path, sha256)` なので、
+  変更前に basename の名で登録された file は、中身が変わるまで新しい名で登録し直されない。
+- 名の接頭辞で celeris 自身の記録を見分ける読み口（`parent_checkpoint::evaluation_decision_id` の `parent-evaluation/`）は、
+  worker が `artifacts_dir` の `parent-evaluation/` に書いた file も同じ名で見る。申告の口を持つ harness では前から同じ
+  名を申告できたが、この変更で claude-code・codex・acp の worker にも広がる。記録の `kind`（`parent_evaluation`）か run で
+  見分ける修正は別の変更の提案にする（子 8 artifact-name の WU の進捗の「提案」）。

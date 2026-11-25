@@ -279,6 +279,88 @@ fn in_dir_scan_respects_depth_and_count_limits() {
     );
 }
 
+// ---- ADR-0067 付記 2026-11-24: `artifacts_dir` 走査の名は `artifacts_dir` からの相対 path ----
+//
+// 守る不変条件: `scan_undeclared_artifacts_in_dir` が返す `ArtifactRef.name` は `artifacts_dir` からの相対 path
+// （区切り `/`）。深さ 1 の file の名は file 名のまま。前の試験は入れ子の file の `path` と `kind` だけを見て、
+// `name` が basename になって版の名（`task_core::strategy_ref::artifact_name`）や `ArtifactExists` の既定 path
+// `{artifacts_rel}/{name}` と食い違うことを検出しなかった（子 8 の方式 c の版の段が実 LLM で止まった）。
+
+/// (1) `artifacts/strategy/s1/v1.json` の名は `strategy/s1/v1.json`（変更前は `v1.json`）。
+#[test]
+fn undeclared_nested_name_is_relative_to_the_artifacts_dir() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path();
+    write(ws, "artifacts/strategy/s1/v1.json", "{}");
+    write(ws, "artifacts/cmp4/final/report.md", "# report");
+
+    let found = scan_undeclared_artifacts_in_dir(ws, &ws.join("artifacts"), &HashSet::new());
+    let pairs: Vec<(&str, &str)> = found
+        .iter()
+        .map(|a| (a.name.as_str(), a.path.as_str()))
+        .collect();
+    assert_eq!(
+        pairs,
+        vec![
+            ("cmp4/final/report.md", "artifacts/cmp4/final/report.md"),
+            ("strategy/s1/v1.json", "artifacts/strategy/s1/v1.json"),
+        ],
+        "{found:?}"
+    );
+}
+
+/// (2) その名は戦略の版の名（`strategy/<id>/v<n>.json`）として読める。
+#[test]
+fn undeclared_nested_name_reads_as_a_strategy_version() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path();
+    write(ws, "artifacts/strategy/s1/v1.json", "{}");
+
+    let found = scan_undeclared_artifacts_in_dir(ws, &ws.join("artifacts"), &HashSet::new());
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(
+        found[0].name,
+        task_core::strategy_ref::artifact_name("s1", 1)
+    );
+    assert_eq!(
+        task_core::strategy_ref::strategy_artifact(&found[0].name),
+        Some(("s1".to_string(), 1))
+    );
+}
+
+/// (3) 深さ 1 の名は file 名のまま。作業場所全体の `*.md` 走査の名（file 名）も変わらない。
+#[test]
+fn undeclared_nested_name_keeps_depth_one_and_markdown_scan_names() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path();
+    write(ws, "artifacts/report.md", "# report");
+    write(ws, "artifacts/data.csv", "a,b");
+    write(ws, "artifacts/manifest.json", "{}");
+    write(ws, "docs/paper/notes.md", "# notes");
+
+    let found = scan_undeclared_artifacts_in_dir(ws, &ws.join("artifacts"), &HashSet::new());
+    let pairs: Vec<(&str, &str)> = found
+        .iter()
+        .map(|a| (a.name.as_str(), a.path.as_str()))
+        .collect();
+    assert_eq!(
+        pairs,
+        vec![
+            ("report.md", "artifacts/report.md"),
+            ("data.csv", "artifacts/data.csv"),
+            ("manifest.json", "artifacts/manifest.json"),
+        ],
+        "{found:?}"
+    );
+
+    let md = scan_undeclared_markdown_artifacts(ws, &ws.join("artifacts"), &HashSet::new());
+    let pairs: Vec<(&str, &str)> = md
+        .iter()
+        .map(|a| (a.name.as_str(), a.path.as_str()))
+        .collect();
+    assert_eq!(pairs, vec![("notes.md", "docs/paper/notes.md")], "{md:?}");
+}
+
 // ---- ADR-0067 付記 2026-10-07 D3-d: 既存 task の補完 ----
 
 mod backfill_tests {
@@ -289,7 +371,7 @@ mod backfill_tests {
     };
     use time::OffsetDateTime;
 
-    fn task(workspace: WorkspaceSpec) -> Task {
+    pub(super) fn task(workspace: WorkspaceSpec) -> Task {
         let now = OffsetDateTime::now_utc();
         Task {
             harness_id: None,
@@ -468,6 +550,51 @@ mod backfill_tests {
         assert_eq!(produced(&store, t.id).len(), 4);
     }
 
+    /// ADR-0067 付記 2026-11-24: 補完も run 後の走査と同じ関数を使うので、入れ子の成果物の名は `artifacts_dir`
+    /// からの相対 path になる（深さ 1 は file 名）。補完の結果は同じ写しへの走査の結果と同じ。
+    #[test]
+    fn undeclared_nested_name_backfill_registers_the_same_relative_name() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let t = task(remote());
+        store.insert(&t).unwrap();
+        let mirror = root.path().join(t.id.to_string());
+        write(&mirror, "artifacts/strategy/s1/v1.json", "{}");
+        write(&mirror, "artifacts/report.md", "# report\n");
+
+        let report = backfill_task(
+            &store,
+            &t,
+            &task_core::local_machine::WorkspaceRoots::new(root.path().to_path_buf(), None),
+            false,
+        )
+        .unwrap();
+        let pairs: Vec<(&str, &str)> = report
+            .artifacts
+            .iter()
+            .map(|a| (a.name.as_str(), a.path.as_str()))
+            .collect();
+        assert_eq!(
+            pairs,
+            vec![
+                ("report.md", "artifacts/report.md"),
+                ("strategy/s1/v1.json", "artifacts/strategy/s1/v1.json"),
+            ],
+            "{report:?}"
+        );
+        let names: Vec<String> = produced(&store, t.id)
+            .into_iter()
+            .map(|(_, a)| a.name)
+            .collect();
+        assert_eq!(names, vec!["report.md", "strategy/s1/v1.json"]);
+
+        // 同じ写しへの走査（run 後の走査と同じ関数）と同じ結果。
+        let canon = mirror.canonicalize().unwrap();
+        let scanned =
+            scan_undeclared_artifacts_in_dir(&canon, &canon.join("artifacts"), &HashSet::new());
+        assert_eq!(report.artifacts, scanned);
+    }
+
     /// 写しが無い task は空（エラーにしない）。`runs` 索引が無ければ `WorkerStarted` の最後の run id、それも無ければ空文字。
     #[test]
     fn backfill_without_a_mirror_is_empty_and_run_id_falls_back() {
@@ -528,5 +655,162 @@ mod backfill_tests {
         assert_eq!(ids.len(), 2);
         ids.sort_by_key(|id| id.to_string());
         assert_eq!(ids, want);
+    }
+}
+
+// ---- ADR-0067 付記 2026-11-24: 最終 review の `ArtifactExists` が入れ子の未申告の版を名で見つける ----
+//
+// 守る不変条件: WorkUnit の run が `artifacts/` の中に申告せずに書いた入れ子の版
+// （`wu/<key>/artifacts/strategy/s1/v1.json`）を、root の最終 review の `ArtifactExists{name: "strategy/s1/v1.json"}` が
+// 名で見つける。候補は run 後の走査と同じ関数（`scan_undeclared_artifacts_in_dir`）で作り、dispatcher の最終 review と
+// 同じ組み立て（`review::artifact_candidates`）を通す。既存の root review の試験（`dispatcher/tests/root_review_artifacts.rs`）
+// は候補の `ArtifactRef` を手で作って名を正しく与えるので、走査が付ける名の食い違いを検出しなかった。変更前は名が
+// `v1.json` で照合できず、既定の `artifacts/strategy/s1/v1.json` を探して落ちた（子 8 の方式 c の版の段と同じ）。
+
+mod final_review_tests {
+    use super::*;
+    use crate::review::{ReviewExtras, artifact_candidates, review_task};
+    use task_core::{Check, Criterion, SqliteStore, WorkspaceSpec};
+    use task_worker::LocalWorkspace;
+    use time::OffsetDateTime;
+
+    const REVIEWED_RUN: &str = "run-root-reviewed";
+
+    /// `key` の WorkUnit 1 件の計画を本物の `adopt_plan` で採用し、その行を返す。
+    fn adopt_unit(
+        store: &SqliteStore,
+        task_id: task_core::TaskId,
+        key: &str,
+    ) -> task_core::WorkUnitRow {
+        let unit = task_core::WorkUnitSpec {
+            key: key.to_string(),
+            kind: task_core::WorkUnitKind::Implement,
+            title: format!("Work on {key}"),
+            objective: format!("Implement {key} thoroughly and completely"),
+            depends_on: Vec::new(),
+            done_when: vec![format!("{key} is done")],
+            checks: vec![],
+            context: task_core::WorkUnitContext::default(),
+            harness: None,
+            features: None,
+            budget: None,
+            outputs: vec![],
+            phase: None,
+        };
+        let spec = task_core::ExecutionPlanSpec {
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
+            schema: task_core::EXECUTION_PLAN_SCHEMA.to_string(),
+            rationale: "undeclared nested name".to_string(),
+            work_units: vec![unit],
+            phases: Vec::new(),
+            children: Vec::new(),
+            design_brief: None,
+        };
+        task_ops::execution::adopt_plan(
+            store,
+            task_id,
+            spec,
+            task_core::PlanOrigin::Fixture,
+            None,
+            task_core::ExecutionLimits::default(),
+            OffsetDateTime::now_utc(),
+        )
+        .expect("adopt plan");
+        store
+            .work_units_for(task_id)
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap()
+    }
+
+    /// WorkUnit `unit` の run `run_id` が走り、成果物 `produced` を出したことを events に残す
+    /// （dispatcher の `WorkUnitTransitioned{to: running}` と `ArtifactProduced` と同じ形）。
+    fn unit_run_produced(
+        store: &SqliteStore,
+        task_id: task_core::TaskId,
+        unit: &task_core::WorkUnitRow,
+        run_id: &str,
+        produced: &[ArtifactRef],
+    ) {
+        store
+            .append_event(
+                task_id,
+                &Event::WorkUnitTransitioned {
+                    work_unit_id: unit.id.clone(),
+                    key: unit.key.clone(),
+                    from: task_core::WorkUnitStatus::Ready,
+                    to: task_core::WorkUnitStatus::Running,
+                    reason: "dispatch".to_string(),
+                    run_id: Some(run_id.to_string()),
+                },
+            )
+            .unwrap();
+        for a in produced {
+            store
+                .append_event(
+                    task_id,
+                    &Event::ArtifactProduced {
+                        run_id: run_id.to_string(),
+                        artifact: a.clone(),
+                    },
+                )
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn undeclared_nested_name_root_review_finds_the_work_unit_strategy_version() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let store = SqliteStore::open_in_memory().unwrap();
+        let mut t = super::backfill_tests::task(WorkspaceSpec::Local {
+            path: dir.to_path_buf(),
+            mode: None,
+        });
+        t.acceptance = vec![Criterion {
+            text: "the strategy version exists".into(),
+            check: Check::ArtifactExists {
+                name: task_core::strategy_ref::artifact_name("s1", 1),
+            },
+        }];
+        store.insert(&t).unwrap();
+        let unit = adopt_unit(&store, t.id, "version");
+
+        write(dir, "wu/version/artifacts/strategy/s1/v1.json", "{}");
+        let scanned = scan_undeclared_artifacts_in_dir(
+            dir,
+            &dir.join("wu/version/artifacts"),
+            &HashSet::new(),
+        );
+        unit_run_produced(&store, t.id, &unit, "run-wu-version", &scanned);
+        unit_run_produced(&store, t.id, &unit, REVIEWED_RUN, &[]);
+
+        let produced = artifact_candidates(
+            &store.events_for(t.id).unwrap(),
+            &store.work_units_for(t.id).unwrap(),
+            REVIEWED_RUN,
+        );
+        let ws = LocalWorkspace::new(dir);
+        let outcome = review_task(
+            &t,
+            &ws,
+            dir,
+            &dir.join("artifacts"),
+            &produced,
+            std::time::Duration::from_secs(5),
+            ReviewExtras::default(),
+        )
+        .await;
+        let v = outcome.verdicts.into_iter().next().unwrap();
+        assert!(v.pass, "{}", v.reason);
+        assert!(
+            v.reason
+                .starts_with("path=wu/version/artifacts/strategy/s1/v1.json sha256="),
+            "{}",
+            v.reason
+        );
     }
 }

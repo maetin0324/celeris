@@ -11,7 +11,11 @@ completed: 2026-11-25
 - `scripts/dev/parent-eval-blind/stub_reviewer.py` の版を書く役は、`artifacts/strategy/<id>/v1.json` に書くだけで `artifact` 行を出さない（claude-code の worker と同じ）。この stub で方式 c の版 v1 の段が done になり、記録の名は `strategy/pilot-replay/v1.json`・`strategy/pilot-research/v1.json` だった。名を付けたのは WU artifact-name が直した run 後の走査（`scan_undeclared_artifacts_in_dir`）だけで、production の変更はこの WU に無い。
 - sh（`scripts/dev/parent-eval-blind.sh`）は、同じ方式の dir を `rm -rf` していた。これをやめた。出力先に `<out>/<case>/<point>/<arm>/` か段の終わっていない `<out>/<case>/strategy-v1/` があれば、build の前に exit 1 で止まり、何も消さない（`pilot_runs.py check-new`）。driver も自分の出力の dir があれば exit 1。段の終わった `strategy-v1/`（`run.json` と `strategy-v1.json` がある）は、同じ `--out` の方式 c が流し直さずに使う。operator が時点を 1 つずつ流し、各回の前に予算を検査できるようにするため。
 - stub で replay の方式 a・b・c × C-mid・D-done・F-done と、研究ケース（合成の testdata）の方式 a・b・c × 11.16・11.17・11.20 を同じ out に流し、両方 exit 0。その out に `compare --pilot` が exit 0（漏れ 0）、`pilot_score.py blind`・`check-blank`（本体と repo 用の写し）が exit 0。版の段の dir を含む配置は、直さずに読めた。漏れの規則は変えていない。
-- `agent-docs/progress/2026-11-24-strategy-v1-8/arm-driver.md` の operator の手順を、残りの run（replay の方式 c ×2、研究ケースの方式 a・b・c ×2）に書き直した。
+- `agent-docs/progress/2026-11-24-strategy-v1-8/arm-driver.md` の operator の手順を、残りの run（replay の方式 c ×2、研究ケースの方式 a・b・c ×2）に書き直した。1 回の sh で 3 時点を流す形（replay は `--arms c --points C-mid,D-done,F-done`、研究ケースは `--arms a,b,c --case research --research-src …/c-results.md --points 11.16,11.17,11.20`）を既定にし、上限の検査が通らないときだけ時点ごとに分ける。
+
+## 再実行（attempt 1 の後の check の不合格）
+- 不合格の check: `grep -qF -- '--points 11.16,11.17,11.20' agent-docs/progress/2026-11-24-strategy-v1-8/arm-driver.md` が exit 1。前の run は研究ケースの手順を時点ごとの `--points 11.16` にしていて、Objective の形（3 時点を 1 回）を書いていなかった。
+- 直したこと: arm-driver.md の手順 4 を Objective の形に書き直し、手順 5 に 3 時点の回の daemon の数（replay 4・研究ケース 7）と上限の検査の例を足した。`parent-eval-blind.sh` の冒頭の使い方の例の研究ケースの時点を `11.16,11.17,11.20` にした（コメントだけ）。driver・stub・試験は変えていない。研究ケースを 3 時点で 1 回に流す経路は、上の stub の端から端までの 2 で通っている。
 - 評価器の prompt（`crates/task-worker/src/change_rules/`）・`control-ts`・`web` の差分は 0。本番の DB・daemon・config には触れていない。LLM の run は起こしていない（`--harness stub` だけ）。task の進捗 `agent-docs/progress/2026-11-24-strategy-v1-8.md` は変えていない。
 
 ## 実装前 brief

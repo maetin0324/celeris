@@ -113,27 +113,28 @@ base でも通った 4 件（`CELERIS_RUN_ID` の拒否・未知の事例と `--
      --points 11.16 --out "$TMPDIR/research-precheck"
    ```
    `$TMPDIR/research-precheck/research/11.16/b/input/tree/goal.md` が研究ケースの問いになっていなければ、実 LLM を流さずに人に聞き直す。
-4. 実 LLM の run。時点ごとに 1 回ずつ sh を起こし、各回の前に下の上限の検査をする。出力先は反復ごとに `pilot-runs/iter-1`・`iter-2`。
+4. 実 LLM の run。反復ごと・事例ごとに 1 回ずつ sh を起こす（計 4 回: iter-1 の replay → iter-1 の研究ケース → iter-2 の replay → iter-2 の研究ケース）。各回の前に下の 5 の上限の検査をする。出力先は反復ごとに `pilot-runs/iter-1`・`iter-2`。
    ```sh
    P=/local/celeris/data/workspaces/01M7XQA74FP70G3T3KSTP02S0W/artifacts/pilot-runs
    AP=/local/celeris/data/workspaces/01M7XQA74FP70G3T3KSTP02S0W/artifacts/pilot-approval.json
    SRC=/local/celeris/data/workspaces/01M7C56WK4E86BTZNDKAX7SP7C/artifacts/c-results.md
    # replay は方式 c だけ（a・b は流し終えている）
-   bash scripts/dev/parent-eval-blind.sh --harness config --arms c --case replay --points C-mid \
+   bash scripts/dev/parent-eval-blind.sh --harness config --arms c --case replay --points C-mid,D-done,F-done \
      --out "$P/iter-1" --approval "$AP" --llm-config <operator の toml>
-   # D-done・F-done も同じ形で 1 時点ずつ。iter-2 も同じ。
    # 研究ケースは方式 a・b・c
-   bash scripts/dev/parent-eval-blind.sh --harness config --arms a,b,c --case research --research-src "$SRC" \
-     --points 11.16 --out "$P/iter-1" --approval "$AP" --llm-config <operator の toml>
-   # 11.17・11.20 も同じ形で 1 時点ずつ。iter-2 も同じ。
+   bash scripts/dev/parent-eval-blind.sh --harness config --arms a,b,c --case research --research-src /local/celeris/data/workspaces/01M7C56WK4E86BTZNDKAX7SP7C/artifacts/c-results.md --points 11.16,11.17,11.20 \
+     --out "$P/iter-1" --approval "$AP" --llm-config <operator の toml>
+   # iter-2 も同じ 2 回を --out "$P/iter-2" で流す。
    ```
-   - 方式 c の版 v1 の段は、反復・事例ごとに最初の 1 回だけ流れる（`<out>/<case>/strategy-v1/`）。同じ `--out` の次の時点は、段の終わった `strategy-v1/` を流し直さずに使う。
-   - sh は、出力先に同じ方式の `<out>/<case>/<point>/<arm>/` か、段の終わっていない `strategy-v1/`（`run.json` か `strategy-v1.json` が無い）があれば、build の前に exit 1 で止まり、何も消さない。失敗した run の dir は operator が pilot-runs の外（例: `/local/celeris/data/scratch/child8-pilot/`）に移してから流し直す。その run も使った量に数える。
-   - `--points` に時点を並べて 1 回で流すこともできるが、そのときは時点の間で上限を検査できない。
+   - 方式 c の版 v1 の段は、反復・事例ごとに最初の 1 回だけ流れる（`<out>/<case>/strategy-v1/`）。同じ `--out` の次の回は、段の終わった `strategy-v1/` を流し直さずに使う。
+   - sh は、出力先に同じ方式の `<out>/<case>/<point>/<arm>/` か、段の終わっていない `strategy-v1/`（`run.json` か `strategy-v1.json` が無い）があれば、build の前に exit 1 で止まり、何も消さない。replay の方式 a・b の dir は妨げない（方式 c だけを流すので）。失敗した run の dir は operator が pilot-runs の外（例: `/local/celeris/data/scratch/child8-pilot/`）に移してから流し直す。その run も使った量に数える。
+   - 3 時点を 1 回で流すと、時点の間では上限を検査できない。5 の検査がその回で通らないときは、時点を 1 つずつに分けて流す（例: `--points 11.16`。同じ `--out` に 11.17・11.20 を続ける。版 v1 の段は最初の回だけ流れる）。
 5. 上限（ADR D3.3・D3.4）: 全体で 48 run・25 USD。使った量は 8 run・1.087 USD で、残りは 40 run・約 23.9 USD。
    - 見込みの run 数: replay の方式 c は反復ごとに版 v1 の段 2 run（worker・final review）と 3 時点 × 1 run で 5 run、2 反復で 10 run。研究ケースは方式 a が 0 run、方式 b が 3 run、方式 c が 5 run（段 2 + 3 時点）で反復ごとに 8 run、2 反復で 16 run。計 26 run（使った量と合わせて 34 run）。v2 の 2 run（ADR D3.3）は driver に無いので流れない。
    - 見込みの USD（推定）: 前の 8 run の平均は 1 run 約 0.14 USD、失敗した段は 1 run 約 0.17 USD。26 run で約 3.5〜4.5 USD。
-   - 検査: 各回の前に、使った USD ＋ 3.0 ×（その回で reviewer か worker の run を起こす daemon の数）が 25 を超える、または使った run ＋ その回の見込みの run が 48 を超えるなら、その回を始めずに止め、残りを「未実施」として人に聞き直す。daemon の数は、replay の方式 c の 1 時点で 1（版 v1 の段を流す最初の回は 2）、研究ケースの 1 時点で 2（方式 b・c。版 v1 の段を流す最初の回は 3）。1 daemon の上限は `max_usd_per_day` 3.0 USD。
+   - 検査: 各回の前に、使った USD ＋ 3.0 ×（その回で reviewer か worker の run を起こす daemon の数）が 25 を超える、または使った run ＋ その回の見込みの run が 48 を超えるなら、その回を始めずに止める。時点を 1 つずつに分けても通らなければ、残りを「未実施」として人に聞き直す。1 daemon の上限は `max_usd_per_day` 3.0 USD（`driver.py` の `MAX_USD_PER_POINT`）。
+   - daemon の数: replay の方式 c は 1 時点で 1、版 v1 の段で 1。`--points C-mid,D-done,F-done` の 1 回は 4（3.0 × 4 = 12 USD、見込み 5 run）。研究ケースは 1 時点で 2（方式 b・c。方式 a は daemon を起こさない）、版 v1 の段で 1。`--points 11.16,11.17,11.20` の 1 回は 7（3.0 × 7 = 21 USD、見込み 8 run）。
+   - 例: iter-1 の replay は 1.087 ＋ 12 ≒ 13.1 で通る。研究ケースの回は、使った USD が 4.0 以下なら通る（4.0 ＋ 21 = 25）。超えたら研究ケースを時点ごとに分ける（1 時点の回は daemon 3〈版の段を含む〉か 2）。
    - 使った量の数え方: pilot-runs の下の全 `run.json` の `llm_runs`・`usd` の和に、pilot-runs の外に移した失敗の run（2 run・0.333 USD と、この後に移したもの）を足す。
      ```sh
      find "$P" -name run.json | python3 -I -c 'import json,sys; r=[json.load(open(l.strip())) for l in sys.stdin]; print(sum(x.get("llm_runs") or 0 for x in r), round(sum(x.get("usd") or 0 for x in r), 4))'

@@ -3,7 +3,7 @@
 #
 #   bash scripts/dev/parent-eval-blind.sh --harness stub --arms a,b,c --case replay --points C-mid,D-done,F-done --out <dir>
 #   bash scripts/dev/parent-eval-blind.sh --harness config --arms a,b,c --case replay --points C-mid,D-done,F-done --out <dir> --approval <人の承認の json> --llm-config <toml>
-#   bash scripts/dev/parent-eval-blind.sh --harness stub|config --arms a,b,c --case research --research-src <c-results.md> --points 11.17,11.20 --out <dir> [...]
+#   bash scripts/dev/parent-eval-blind.sh --harness stub|config --arms a,b,c --case research --research-src <c-results.md> --points 11.16,11.17,11.20 --out <dir> [...]
 #
 # 研究ケース（ADR D2.2）は --research-src の c-results.md から、子 0 の research_case.py（path で import）で時点の slice を切る
 # （parent-eval-blind/research.py）。時点は 11.16・11.17・11.20、版 v1 の段は 11.15 節。`--harness config` では --research-src の

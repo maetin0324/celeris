@@ -100,48 +100,54 @@ base でも通った 4 件（`CELERIS_RUN_ID` の拒否・未知の事例と `--
 - 純増の理由: 方式 a・c の流れ（suppressed の判断を待つ・版の段）、出力の形（output.json・input/）、stub の役の 2 つ、試験 16 件を足した。新しい Manager・trait・状態機械・DB 表・Agent サービスは無い。
 
 ## operator が worker の外で実 LLM の pilot を流す手順
-人の答え（2026-11-24）: 2 反復・最大 48 run・25 USD、account は `claude_max_personal`、model は `claude-sonnet-5-5`（子 6 と同じ）。研究ケースは内部の評価だけ（ChatGPT・Muse に送らない）。測定用の account（`claude_max_lab`・`/local/celeris/measure-accounts`）は使わない。本番の DB・daemon・config に触れない。
+この節は WU stub-undeclared（段 recheck）で書き直した。以前の手順（replay の方式 a・b の 2 反復）は operator が流し終えている（8 run・1.087 USD。内訳は replay の方式 b の 6 run・0.754 USD と、方式 c の版 v1 の段の失敗の 2 run・0.333 USD）。その結果 `pilot-runs/iter-1`・`iter-2` の `replay/{C-mid,D-done,F-done}/{a,b}/` は残し、流し直さない。残りは replay の方式 c ×2 反復と、研究ケースの方式 a・b・c ×2 反復。
 
-1. 承認の json を人が書き、root の artifacts に置く（commit しない）。例（`/local/celeris/data/workspaces/01M7XQA74FP70G3T3KSTP02S0W/artifacts/pilot-approval.json`）:
-   ```json
-   {
-     "approval_id": "strategy-v1-8-pilot-2026-11-24",
-     "approved_by": "human:rmaeda",
-     "approved_at": "2026-11-24T09:00:00Z",
-     "expires_at": "2026-12-01T00:00:00Z",
-     "account": "claude_max_personal",
-     "model": "claude-sonnet-5-5",
-     "harness": "claude_code",
-     "scope": {
-       "arms": ["a", "b", "c"],
-       "cases": ["C-mid", "D-done", "F-done", "research-11.16", "research-11.17", "research-11.20"],
-       "environment": "non-production"
-     },
-     "limits": {"max_usd": 25, "max_wall_secs": 600}
-   }
+人の答え（2026-11-24）: account は `claude_max_personal`、model は `claude-sonnet-5-5`（子 6 と同じ）。研究ケースは内部の評価だけ（ChatGPT・Muse に送らない）。測定用の account（`claude_max_lab`・`/local/celeris/measure-accounts`）は使わない。本番の DB・daemon・config に触れない。
+
+1. build: 段 recheck の統合の後の子 8 の branch（`celeris/01M7XQA74FP70G3T3KSTP02S0W`）を、operator が別の git worktree に出して、その中で流す（sh が `celeris`・`script-deploy`・seed の試験の binary をその worktree で build する）。本番の昇格は要らない。`CARGO_TARGET_DIR` は operator の local の dir にする。worker の run の中（`CELERIS_RUN_ID` がある）では `--harness config` は exit 2。
+2. 承認: 前と同じ `strategy-v1-8-pilot-2026-11-24`（`/local/celeris/data/workspaces/01M7XQA74FP70G3T3KSTP02S0W/artifacts/pilot-approval.json`）。`scope.arms` は `["a","b","c"]`、`scope.cases` は `C-mid`・`D-done`・`F-done`・`research-11.16`・`research-11.17`・`research-11.20`、`limits.max_usd` 25。期限（`expires_at`）が切れていれば人に書き直してもらう。`--llm-config` は前と同じ 1 つの TOML を全方式・全時点で使う（ADR D3.1）。
+3. 研究ケースの事前の確認（LLM 0）: 実データで stub を 1 回流し、goal.md の問いと判定方法が 11.15 より前の task C の問いになっているかを読む（WU research-goal の修正の確認）。出力は pilot-runs の外に置く。
+   ```sh
+   bash scripts/dev/parent-eval-blind.sh --harness stub --arms b --case research \
+     --research-src /local/celeris/data/workspaces/01M7C56WK4E86BTZNDKAX7SP7C/artifacts/c-results.md \
+     --points 11.16 --out "$TMPDIR/research-precheck"
    ```
-2. `--llm-config` の TOML は子 6 の 4 run と同じ形（`claude_code` の harness・`claude_max_personal`・`claude-sonnet-5-5` の route）を operator が書く。全方式・全時点で同じ 1 つの file を使う（ADR D3.1）。
-3. 反復ごとに出力先を分けて流す（worker の外の shell で。`CELERIS_RUN_ID` があると exit 2）:
+   `$TMPDIR/research-precheck/research/11.16/b/input/tree/goal.md` が研究ケースの問いになっていなければ、実 LLM を流さずに人に聞き直す。
+4. 実 LLM の run。時点ごとに 1 回ずつ sh を起こし、各回の前に下の上限の検査をする。出力先は反復ごとに `pilot-runs/iter-1`・`iter-2`。
    ```sh
    P=/local/celeris/data/workspaces/01M7XQA74FP70G3T3KSTP02S0W/artifacts/pilot-runs
-   for it in 1 2; do
-     bash scripts/dev/parent-eval-blind.sh --harness config --arms a,b --case replay \
-       --points C-mid,D-done,F-done --out "$P/iter-$it" \
-       --approval /local/celeris/data/workspaces/01M7XQA74FP70G3T3KSTP02S0W/artifacts/pilot-approval.json \
-       --llm-config <operator の toml>
-   done
+   AP=/local/celeris/data/workspaces/01M7XQA74FP70G3T3KSTP02S0W/artifacts/pilot-approval.json
+   SRC=/local/celeris/data/workspaces/01M7C56WK4E86BTZNDKAX7SP7C/artifacts/c-results.md
+   # replay は方式 c だけ（a・b は流し終えている）
+   bash scripts/dev/parent-eval-blind.sh --harness config --arms c --case replay --points C-mid \
+     --out "$P/iter-1" --approval "$AP" --llm-config <operator の toml>
+   # D-done・F-done も同じ形で 1 時点ずつ。iter-2 も同じ。
+   # 研究ケースは方式 a・b・c
+   bash scripts/dev/parent-eval-blind.sh --harness config --arms a,b,c --case research --research-src "$SRC" \
+     --points 11.16 --out "$P/iter-1" --approval "$AP" --llm-config <operator の toml>
+   # 11.17・11.20 も同じ形で 1 時点ずつ。iter-2 も同じ。
    ```
-   `--arms a,b,c` のとき、sh は反復（`--out`）ごとに版 v1 の段を 1 回流す。研究ケースは research-driver の WU が `--case` に足す。
-4. 上限（ADR D3.3・D3.4）: 全体で 48 run・25 USD。replay では、方式 a は 0 run、方式 b は 1 時点 1 run（3 時点 × 2 反復 = 6 run）、方式 c は 1 時点 1 run と反復ごとの版 v1 の段 2 run（3 × 2 + 2 × 2 = 10 run）で、replay の計は 16 run。v2 の 2 run（ADR D3.3）はこの driver に無いので流れない。1 時点の daemon の上限は `max_usd_per_day` 3.0 USD。各時点の前に、使った USD ＋ 3.0 が 25 を超える、または使った run ＋ 計画の run が 48 を超えるなら、その時点を始めずに止め、残りを「未実施」として人に聞き直す。使った USD と run は各 `run.json` の `usd`・`llm_runs` を足して数える。
-5. 流した後、`python3 -I scripts/dev/parent-eval-blind-compare.py --out "$P/iter-<n>" --answer-key agent-docs/progress/2026-11-21-strategy-v1-0/replay/answer_key.json` を operator が走らせ、forbidden・outside が 0 であることを確かめる（answer key を開くのはこの script だけ）。
+   - 方式 c の版 v1 の段は、反復・事例ごとに最初の 1 回だけ流れる（`<out>/<case>/strategy-v1/`）。同じ `--out` の次の時点は、段の終わった `strategy-v1/` を流し直さずに使う。
+   - sh は、出力先に同じ方式の `<out>/<case>/<point>/<arm>/` か、段の終わっていない `strategy-v1/`（`run.json` か `strategy-v1.json` が無い）があれば、build の前に exit 1 で止まり、何も消さない。失敗した run の dir は operator が pilot-runs の外（例: `/local/celeris/data/scratch/child8-pilot/`）に移してから流し直す。その run も使った量に数える。
+   - `--points` に時点を並べて 1 回で流すこともできるが、そのときは時点の間で上限を検査できない。
+5. 上限（ADR D3.3・D3.4）: 全体で 48 run・25 USD。使った量は 8 run・1.087 USD で、残りは 40 run・約 23.9 USD。
+   - 見込みの run 数: replay の方式 c は反復ごとに版 v1 の段 2 run（worker・final review）と 3 時点 × 1 run で 5 run、2 反復で 10 run。研究ケースは方式 a が 0 run、方式 b が 3 run、方式 c が 5 run（段 2 + 3 時点）で反復ごとに 8 run、2 反復で 16 run。計 26 run（使った量と合わせて 34 run）。v2 の 2 run（ADR D3.3）は driver に無いので流れない。
+   - 見込みの USD（推定）: 前の 8 run の平均は 1 run 約 0.14 USD、失敗した段は 1 run 約 0.17 USD。26 run で約 3.5〜4.5 USD。
+   - 検査: 各回の前に、使った USD ＋ 3.0 ×（その回で reviewer か worker の run を起こす daemon の数）が 25 を超える、または使った run ＋ その回の見込みの run が 48 を超えるなら、その回を始めずに止め、残りを「未実施」として人に聞き直す。daemon の数は、replay の方式 c の 1 時点で 1（版 v1 の段を流す最初の回は 2）、研究ケースの 1 時点で 2（方式 b・c。版 v1 の段を流す最初の回は 3）。1 daemon の上限は `max_usd_per_day` 3.0 USD。
+   - 使った量の数え方: pilot-runs の下の全 `run.json` の `llm_runs`・`usd` の和に、pilot-runs の外に移した失敗の run（2 run・0.333 USD と、この後に移したもの）を足す。
+     ```sh
+     find "$P" -name run.json | python3 -I -c 'import json,sys; r=[json.load(open(l.strip())) for l in sys.stdin]; print(sum(x.get("llm_runs") or 0 for x in r), round(sum(x.get("usd") or 0 for x in r), 4))'
+     ```
+     WU stub-undeclared の時点では `6 0.754`（＋外の 2 run・0.333 USD で 8 run・1.087 USD）。
+6. 流した後、`python3 -I scripts/dev/parent-eval-blind-compare.py --pilot --runs "$P" --answer-key agent-docs/progress/2026-11-21-strategy-v1-0/replay/answer_key.json --research-src "$SRC" --out <metrics の dir>` を operator が走らせ、exit 0（漏れが 0）を確かめる（answer key を開くのはこの script だけ）。採点の材料は段 score（pilot-materials）が作る。
 
 ## 欠け（plan_issue の候補）
 - 方式 c の後半（ADR D1.3）: 評価が `pivot`・`discriminating_experiment` を選び Rust の写しが `replan` になった最初の時点で v2 を書く run と v2 の Critic を流し、v2 を参照する `task.create` を CoS の API で試して gate の結果を記録すること。driver に無い。stub の評価は常に `ask_human` で、この分岐は stub では起きない。実 LLM で pivot が出たときに v2 を流すには driver の追加が要る（production の変更は要らない見込み。未確認）。
 - 一時 DB の承認 `strategy-approve-v1`（ADR D1.3）: driver は答えない。stub の worker は決定を出さず、評価の入口（seed の起票の記録）は gate を通らないので、評価は承認なしで流れる。`run.json` の `approval` に `not_run` と書いた。
-- 実 LLM（claude-code）が版を書くとき: 申告の無い成果物は file の basename の名（`v1.json`）で記録される（`crates/task-dispatch/src/undeclared_artifacts.rs`）。claude-code の worker が `artifacts/strategy/<id>/v1.json` に書いても名が `strategy/<id>/v1.json` にならず、Critic が起きず、driver は「成果物が無い」で落ちる見込み（未確認）。stub は fake の `artifact` 行で名を申告して通した。直すなら production（成果物の名の付け方か claude-code の申告の口）の変更で、この WU の範囲の外。operator は実 LLM の前に `--arms c` の版の段を 1 回だけ流して確かめる。
+- （解決済み）実 LLM（claude-code）が版を書くとき、申告の無い成果物が file の basename の名（`v1.json`）で記録された。WU artifact-name が名を artifacts からの相対 path にし、WU stub-undeclared が stub の申告をやめて、方式 c の版の段が申告なしで `strategy/pilot-<case>/v1.json` の名で done になることを stub で確かめた（`agent-docs/progress/2026-11-24-strategy-v1-8/stub-undeclared.md`）。実 LLM では未確認。
 
 ## 未確認
 - 実 LLM（`--harness config`）での run の全部。harness が `prompt.txt` を書く経路（`prompt_source: harness`）は stub では通っていない。
-- 上の欠けの 3 件。
+- 上の欠けの未解決の 2 件と、3 件目（解決済み）の実 LLM での確認。
 - D3.4 の方式の順の乱数（`pilot-key.json`）と D5 の盲検の id は、この driver では振っていない（出力の配置は objective のとおり方式の名を使う）。盲検は pilot-materials の段で行う前提。
 - `scripts/dev/test-affected.sh` は `scripts/dev/parent-eval-blind/` の python の試験を走らせない（集合に入っていない）。この WU は `test-affected.sh` を変えていない。

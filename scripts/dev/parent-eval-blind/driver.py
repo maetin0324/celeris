@@ -40,6 +40,7 @@ import urllib.request
 from datetime import datetime
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import pilot_runs  # noqa: E402
 import research  # noqa: E402
 
 SLICE_FILES = ("goal.md", "reports.json", "slice.json")
@@ -47,7 +48,7 @@ ARMS = ("a", "b", "c")
 CASES = {"replay": ("C-mid", "D-done", "F-done"), "research": research.POINTS}
 # 方式 c の版 v1 を書く段の slice（事例の最初の時点より前の時点。ADR D1.3）。
 STRATEGY_POINT = {"replay": "A-mid", "research": research.STRATEGY_POINT}
-STRATEGY_STAGE = "strategy-v1"
+STRATEGY_STAGE = pilot_runs.STRATEGY_STAGE
 STRATEGY_FILE = "strategy-v1.json"
 CRITIC_FILE = "strategy-v1.critic.json"
 # 1 run の上限（ADR D3.1。3 方式で同じ値）と 1 時点の費用の上限。
@@ -496,8 +497,11 @@ max_evaluation_attempts = 1
         self.stop()
         self.collect(record, run_id)
 
+    def out_path(self):
+        return pathlib.Path(self.a.out) / self.a.case / self.a.point / self.a.arm
+
     def out_dir(self):
-        out = pathlib.Path(self.a.out) / self.a.case / self.a.point / self.a.arm
+        out = self.out_path()
         out.mkdir(parents=True, exist_ok=True)
         return out
 
@@ -581,10 +585,8 @@ class StrategyStage(Point):
     出力は <out>/<case>/strategy-v1/ の strategy-v1.json（版）・strategy-v1.critic.json（final review の判定）・run.json・
     reads.json・input/。operator や実装者は版を手で書かない（未来を知る者が書くと漏れになる）。"""
 
-    def out_dir(self):
-        out = pathlib.Path(self.a.out) / self.a.case / STRATEGY_STAGE
-        out.mkdir(parents=True, exist_ok=True)
-        return out
+    def out_path(self):
+        return pathlib.Path(self.a.out) / self.a.case / STRATEGY_STAGE
 
     def objective(self, name):
         skill = pathlib.Path(self.a.skill).read_text()
@@ -696,6 +698,10 @@ def main():
     if a.arm == "c" and not a.stage and not a.strategy_dir:
         die("--arm c needs --strategy-dir (the output of --stage strategy-v1)")
     pt = StrategyStage(a) if a.stage else Point(a)
+    if pt.out_path().exists():
+        # 前の run（反復）の出力を消さず上書きもしない（daemon.log の写しも書かない）。
+        shutil.rmtree(pt.secret_dir, ignore_errors=True)
+        die(f"{pt.out_path()} exists; the driver does not delete or overwrite an earlier run's output")
     try:
         pt.run()
     finally:

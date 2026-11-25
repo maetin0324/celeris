@@ -6,8 +6,9 @@
 - 評価（`context.review.parent_checkpoint` がある。controller の evaluate → start_side_review）: prompt の出力の例と同じ形の
   `parent_evaluation` を artifacts/review.json に書く。
 - 版を書く worker（`context.review` が無く、objective に成果物の名 `strategy/<id>/v1.json` がある。方式 c の段）: 形だけの
-  `celeris.strategy/1` の文書（候補 2 件）を artifacts/strategy/<id>/v1.json に書き、`artifact` 行でその名を申告する
-  （申告しない成果物は file の basename の名で記録され、Critic の対象にならない）。
+  `celeris.strategy/1` の文書（候補 2 件）を artifacts/strategy/<id>/v1.json に書くだけで、`artifact` 行で名を申告しない。
+  claude-code・codex・acp の worker は ArtifactProduced を出さず、名は run 後の走査（undeclared_artifacts の
+  scan_undeclared_artifacts_in_dir。artifacts からの相対 path）が付ける。stub が申告すると、実 worker との違いが見えなくなる。
 - final review（上の 2 つ以外の `context.review`）: 条件ごとの合格の verdict を artifacts/review.json に書く。
   `strategy_critic` があれば（版を書いた task。Critic）、対象の文書の `candidates[].id` ごとの `critic` も書く。
 判定・文書の中身は評価ではない（run.json の harness は stub で、試験 parent_checkpoint_blind_live_checks は既定の dir の
@@ -103,8 +104,6 @@ def main():
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(json.dumps(strategy_document(m.group(1), req["task"].get("project_id")), ensure_ascii=False,
                                    indent=1))
-        print(json.dumps({"type": "artifact", "name": m.group(0), "path": dest.relative_to(workspace).as_posix()}),
-              flush=True)
         summary = "stub strategy writer (no LLM)"
     print(json.dumps({"type": "done", "summary": summary, "evidence": [], "usage": USAGE}))
 

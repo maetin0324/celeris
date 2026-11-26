@@ -30,12 +30,20 @@ job 318985〜318988 を `"scheduler": "pbs"` で待つ wait（01M89PTZ9YVYY5C0NM
 
 ### D1. scheduler の正本は `[[clusters]] scheduler`
 
-`[[clusters]]` に必須の欄 `scheduler = "pbs" | "slurm" | "nqsv"` を足す。既定値は置かない。欄が無い config、値が 3 つ以外の
-config は読み込みエラーにする（serde の必須欄と `ClusterScheduler` の enum で弾く）。設定は `ClusterSpec.scheduler` に写す。
+`[[clusters]]` に必須の欄 `scheduler = "pbs" | "slurm" | "nqsv" | "none"` を足す。既定値は置かない。欄が無い config、値が
+この 4 つ以外の config は読み込みエラーにする（serde の必須欄と `celeris::config::cluster::ClusterSchedulerSetting` の enum で
+弾く）。設定は `ClusterSpec.scheduler: Option<ClusterScheduler>` に写す（`none` は `None`）。
 
-wait の登録（`Dispatcher::cluster_job_wait_for`）は scheduler を申告からではなく、wait のクラスタの `ClusterSpec.scheduler` から
-決める。poll の command（`cluster_job::poll_script`）と読み方（`cluster_job::parse_poll_output`）は wait の行の `scheduler` を使う
-（従来どおり）。
+`"none"` は job scheduler の無いノード（remote-exec だけに使うワークステーション。example の fern03）の値。そのクラスタへの
+wait は、登録（`Dispatcher::cluster_job_wait_for`）で `cluster "<id>" has no job scheduler ([[clusters]] scheduler = "none")` として
+断る。run は `error(retryable)`（`invalid cluster job wait: …`、attempts を 1 使う）で終わり、行は作らず poll もしない。
+次の試行の run は wait を使わずに終わりを確かめる。`none` を置く理由: 欄を必須にすると、scheduler の無いノードにも値が要る。
+`pbs` 等を仮に書かせると、そのノードへの wait がクラスタに無い command で poll され、今回の事象（exit 127 で期限まで解けない）を
+設定の側で作り直す。`none` なら誤った wait は登録の時点で run に返る。
+
+wait の登録は scheduler を申告からではなく、wait のクラスタの `ClusterSpec.scheduler` から決める。poll の command
+（`cluster_job::poll_script`）と読み方（`cluster_job::parse_poll_output`）は wait の行の `scheduler` を使う（従来どおり）。
+`cluster_job_waits.scheduler` の CHECK は `pbs | slurm | nqsv` のままで、`none` は行に現れない。
 
 ### D2. 申告の `scheduler` の欄は消す（申告に書くと wait を断る）
 
@@ -117,13 +125,19 @@ Q・R なら待ち直す。失敗の原因がクラスタの設定（`[[clusters
   - 失敗の間に Q・R を返す poll が挟まると連続が切れ、閾値を超えても起きない。Q・R を返し続ける間は起きない。
 - worker の試験: `scheduler` を含む `result.json` の wait は不正な wait になる。前置きの `poll_failed` の文。
 - config の試験: `scheduler` の無い `[[clusters]]`、値が不正な `[[clusters]]`、`poll_failure_wake_secs = 0` は読み込みエラー。
+  `scheduler = "none"` は読めて `ClusterSpec.scheduler` が `None` になる。
+- dispatcher の試験: `scheduler` が `None` のクラスタへの wait は retryable な失敗（`has no job scheduler`）で、行も poll も無い。
 - PBS Pro・Slurm・NQSV の既存の poll の読み方の試験の期待値は変えない。試験は外部ネットワークに出ない。
 
 ## 本番への移行
 
 - config: 全ての `[[clusters]]` に `scheduler` を足す。**この欄を知る release の昇格と同時に**書き換える（旧い版は未知の欄で、
   新しい版は欄が無いと起動に失敗する）。pegasus = `"nqsv"`、sirius = `"pbs"`。fern03 等ほかのクラスタは scheduler を確かめて書く
-  （手順は task の進捗ファイルの「本番への移行」節）。
+  （job scheduler が無ければ `"none"`。手順は task の進捗ファイルの「本番への移行」節）。
 - DB: migration は無い。既存の wait の行の `scheduler` は書き換えない。
 - 昇格の前に `pbs` で登録された Pegasus の `waiting` の wait（01M89PTZ9YVYY5C0NMR1H9E364 など）は、昇格の後も `qstat -xf` で
   poll し続けて失敗するが、D4 により `poll_failure_wake_secs`（既定 30 分）の後に `poll_failed` で続きの run が起きる。
+
+> 付記（2026-11-26）: D1 の値 `"none"` と、そのクラスタへの wait を登録時に断る扱いを書き足した。実装（attempt 1）は `none` を
+> 受けていたが、この ADR の D1 は 3 つの値しか書いておらず、review で「設計の記録に無い」と指摘されたため。決定の中身
+> （scheduler の正本は設定だけ・申告の欄は消す・poll の失敗で起こす）は変えない。

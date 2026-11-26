@@ -8,7 +8,8 @@ updated: 2026-11-26
 
 完了日: 2026-11-26
 
-状態: done（ADR・実装・試験・失敗注入は済んだ。本番の config の書き換えは人が昇格と同時に行う。下の「本番への移行」）。
+状態: done（ADR・実装・試験・失敗注入は済んだ。本番の config の書き換えと昇格は運用者が 2026-11-26T03:10Z〜03:14Z に済ませた。
+下の「本番への移行」）。attempt 3（取り込みの後のリリース準備の差し戻し）の対応は「attempt 3」節。
 基準は `git merge-base HEAD main`。検査は提出時の HEAD で実行した。
 
 ## commit（件名）
@@ -23,6 +24,15 @@ updated: 2026-11-26
 - ADR: [[clusters]] scheduler の値 none と、そのクラスタへの wait を登録時に断る扱いを D1 に書き足す
 - cluster job wait: scheduler = none のクラスタへの wait を断る試験を足し、example・protocol・API の文書から申告の scheduler を消す
 - progress: attempt 2 の review への対応と検査の結果
+- ADR: [[clusters]] scheduler を 2 段で必須にする（1 段目は欄が無ければ未設定として wait を断る。verify が本番の config を新旧の版に読ませるため）
+- cluster job wait: [[clusters]] scheduler の無い config を 1 段目では読み、未設定として none と同じく wait を断る（本番の config のまま verify を通す）
+- cluster job wait: 未設定・none の wait を断る文を 1 行に収め、dispatcher の本体の行を増やさない（ADR の文も合わせる）
+- cluster job wait: celerisctl の試験の [[clusters]] を 1 段目の Option の scheduler に合わせる
+- ADR: [[clusters]] scheduler の 2 段の移行を取り消し、必須のままにする（本番は config を書き換えて c7863978ccb5 を昇格した）
+- cluster job wait: 2 段の移行の 1 段目（未設定の [[clusters]] scheduler を none と同じに扱う）を取り消す
+- progress: attempt 3（リリース準備の差し戻し）の対応と検査の結果
+
+上の 4 件（2 段の移行）は下の 2 件の取り消しで打ち消した。`git merge-base HEAD main` からの差分は ADR の付記とこの進捗ファイルだけ。
 
 ## 実装前 brief
 
@@ -120,7 +130,51 @@ updated: 2026-11-26
 
 提出時の HEAD で実行した結果は「検査の結果」節に書く。
 
+### attempt 3: 取り込みの後のリリース準備の差し戻し（2026-11-26）
+
+差し戻しの理由: 取り込みの後のリリース準備（release c7863978ccb5、`prepare.log`）は build・試験・web を通ったが、verify の検査 1 が
+``failed to parse config: missing field `scheduler` in `clusters` `` で落ちた。`verify.sh` は本番の `config.toml` をそのまま新しい版
+（検査 1）と旧い版 N-1（検査 5）に読ませる（`NEW_CMD`・`OLD_CMD` がどちらも `--config "$SD_CONFIG"`）。欄を必須にした新しい版は欄の
+無い config で起動せず、`deny_unknown_fields` の旧い版は欄のある config で起動しない。ADR の「昇格と同時に書き換える」は、書き換える
+前の config で verify する自動の経路を通れなかった。
+
+対応の経過:
+
+1. この run の前の run（同じ attempt。03:13Z の昇格の daemon の再起動で打ち切られた）は、欄を一時的に任意にし「未設定」を `none`
+   と同じに扱う 2 段の移行を ADR に書いて実装した（上の commit の 4 件）。失敗注入 F・G（`artifacts/failure-injection.txt`）:
+   必須の形に戻すと config の試験が `missing field scheduler` で落ち、03:10Z より前の本番の config は必須の形で exit 1、任意の形で
+   exit 0 だった。この run で、`celerisctl` の試験の `ClusterConfig` が `Option` に合わずコンパイルできないことを
+   test-affected で見つけて直した。
+2. その後で本番の状態を読み取りだけで確かめた。運用者が 03:10:57Z に本番の config の 3 つの `[[clusters]]` に `scheduler` を書き、
+   03:12:18Z に verify を流し直し（`verify.json`: `ok = true`、検査 1・2・3・4d・6 が真、検査 5 だけ偽で `live_ok = false`）、03:13:55Z に
+   c7863978ccb5 を停止 → 起動で昇格していた（`promote-20261126-031328.log`: 「new celeris is healthy: schema_version=127」、
+   current → c7863978ccb5、previous → 3c7fa588c844）。
+3. 判断: 2 段の移行を取り消し、欄は必須のままにした。昇格の後は次の verify の N-1（c7863978ccb5）が欄を知り、本番の config に欄が
+   あるので、必須の欄の release も検査 1 と 5 を通る。任意の欄を残すと、撤去を待つだけの未設定の分岐が増える（CLAUDE.md の互換分岐の
+   禁止。汎用規約 5）。ADR 2026-11-25-cluster-scheduler-from-config に付記（2026-11-26「リリース準備の失敗と昇格」）を足し、「本番への
+   移行」の節に、書き換えの後に verify を流し直して停止 → 起動で昇格する手順を書いた。コードは `main`（c7863978）と同じに戻った。
+4. 確認（読み取りだけ。本番の config・DB・daemon は変えていない）: 提出時の HEAD の `celerisctl config to-harnesses --config
+   ~/.config/celeris/config.toml`（標準出力は捨てた）→ exit 0。
+
 ## 検査の結果（提出時の HEAD）
+
+### attempt 3（2026-11-26）
+
+提出時の HEAD（2 段の移行を取り消した commit の後。main は `git merge-base HEAD main` から動いておらず、取り込み・rebase はしていない。
+この後の commit はこの進捗ファイルだけを変える）で実行した。
+
+- `bash scripts/dev/test-affected.sh` → exit 0。`git merge-base HEAD main` からの差分は ADR と進捗だけなので「試験対象の変更なし（docs
+  のみ等）」で、repo-health は `verdict=pass exit=0 fail_grade=0 new=0 worsened=0`。
+  - 取り消す前の HEAD（2 段の移行と celerisctl の試験の直しの後）でも exit 0 だった: crates `celeris celeris-campaign celerisctl
+    llm-proxy task-dispatch`、`Summary [431.141s] 4021 tests run: 4021 passed (9 slow), 11 skipped`。その前の 1 回目は
+    `crates/celerisctl/src/commands/worker_tests.rs:168` の型の不一致（`expected Option<ClusterSchedulerSetting>`）で build が落ちた。
+- `cargo nextest run -p task-core -p task-dispatch -p task-worker -p celeris -p celerisctl -E 'test(/cluster_job|job_wait|poll_fail|scheduler/)'`
+  → exit 0、`72 tests run: 72 passed, 5769 skipped`。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo fmt --all -- --check` → exit 0。
+- `celerisctl config to-harnesses --config ~/.config/celeris/config.toml`（本番の config の読み込みだけ）→ exit 0。
+
+### attempt 2
 
 提出時の HEAD（attempt 2 の最後のコードの commit の後。main は `git merge-base HEAD main` から動いておらず、取り込み・rebase は
 していない）で実行した。この後の commit はこの進捗ファイルだけを変える。
@@ -145,9 +199,13 @@ updated: 2026-11-26
 
 ## 本番への移行
 
-人が行う。**この欄を知る release の昇格と同時に** config を書き換える（旧い版は未知の欄 `scheduler` で起動に失敗し、新しい版は
-欄が無いと起動に失敗する。順序: release を作る → `~/.config/celeris/celeris.toml` の全ての `[[clusters]]` に `scheduler` を足す →
-昇格（stop → start）。昇格を戻すときは config の `scheduler` の行も消す）。
+済んだ（運用者が実行。この run は読み取りで確かめただけ）:
+
+- 2026-11-26T03:10:57Z: `~/.config/celeris/config.toml` の全ての `[[clusters]]` に `scheduler` を書いた
+  （pegasus = `"nqsv"`、sirius = `"pbs"`、fern03 = `"none"`。fern03 の値は未確認のまま置いた仮の値）。
+- 03:12:18Z: release c7863978ccb5 の verify を流し直した（`ok = true`、`live_ok = false`。検査 5 は旧い版 3c7fa588c844 が `scheduler` の欄を
+  知らないために落ちる。想定どおり）。
+- 03:13:55Z: c7863978ccb5 を停止 → 起動で昇格した（`schema_version` 127、healthy）。
 
 ```toml
 [[clusters]]
@@ -163,23 +221,27 @@ id = "fern03"
 scheduler = "none"   # 未確認。下の確認の後に決める
 ```
 
-- fern03 は未確認。2026-11-25 にこの run から `ssh -o BatchMode=yes fern03` で読み取りだけの確認を試みたが、
+残り（人が行う）:
+
+- fern03 の scheduler を確かめる。2026-11-25 にこの task の run から `ssh -o BatchMode=yes fern03` で読み取りだけの確認を試みたが、
   `REMOTE HOST IDENTIFICATION HAS CHANGED`（ED25519 `SHA256:1X4VOFiPleLPTH5hMRT3LclpyG4lto4OFvsrwqPk/zw`、
   `~/.ssh/known_hosts:3` の ECDSA 鍵と食い違い）で接続されなかった。host key の検査は迂回していない。人が host key の変更の理由を
   確かめてから、`ssh fern03 'for c in qstat sbatch; do command -v $c; done; bash -lc "command -v qstat sbatch"'` で scheduler の有無を
-  見る。何も無ければ `"none"`（その上での wait は登録時に断る）、`qstat` が PBS Pro なら `"pbs"`、`sbatch`/`sacct` なら `"slurm"`。
-  example（`config/celeris.clusters.example.toml`）は `"none"` にした（「クラスタでないノードでの実験用」と書かれているため）。
-- ほかに `[[clusters]]` があれば同じく scheduler を確かめて書く。
-- 確認: 昇格の後 `journalctl --user -u celeris@<sha12>` に config の読み込みエラーが無いこと。Pegasus の wait を待つ task で、
-  新しい wait の行の `scheduler` が `nqsv` であること（`GET /api/v1/tasks/{id}` の `cluster_job_wait.scheduler`）。
-- `job_wait.poll_failure_wake_secs` は任意（既定 1800 秒）。足すなら昇格の後。
-- DB: migration は無い。既存の wait の行は書き換えない。昇格の前に `pbs` で登録された Pegasus の `waiting` の wait
-  （01M89PTZ9YVYY5C0NMR1H9E364、期限 2026-11-26T15:57:52Z）は、昇格の後も `qstat -xf` で失敗するが、
-  `poll_failure_wake_secs`（30 分）の後に `poll_failed` で続きの run が起きる（期限が先に来ればこれまでどおり期限切れの質問）。
+  見る。何も無ければ `"none"` のまま、`qstat` が PBS Pro なら `"pbs"`、`sbatch`/`sacct` なら `"slurm"` に直し、daemon を再起動する
+  （`clusters` は起動時にだけ読む。ADR 2026-10-22-dynamic-config）。
+- c7863978ccb5 より前の release（3c7fa588c844 など）へ戻すときは、config の `scheduler` の行も消す（旧い版は未知の欄で起動しない）。
+- 確認: Pegasus の wait を待つ task で、新しい wait の行の `scheduler` が `nqsv` であること（`GET /api/v1/tasks/{id}` の
+  `cluster_job_wait.scheduler`）。
+- `job_wait.poll_failure_wake_secs` は任意（既定 1800 秒）。
+- DB: migration は無い。既存の wait の行は書き換えない。昇格の前に `pbs` で登録された Pegasus の wait
+  01M89PTZ9YVYY5C0NMR1H9E364（期限 2026-11-26T15:57:52Z）は、昇格の後も `qstat -xf` で失敗している（本番の log: 03:15:42Z から
+  5 分ごとに `cluster job poll returned no job states …`、`exit 127`）。最初の失敗から `poll_failure_wake_secs`（1800 秒）を過ぎた最初の
+  poll（03:45:42Z の後）で `poll_failed` で続きの run が起きるはず。この run の 03:33Z の時点では、まだ起きていない（未確認）。
 
 ## 未解決事項
 
-- fern03 の scheduler は未確認（上の「本番への移行」）。
+- fern03 の scheduler は未確認（上の「本番への移行」）。本番の config は仮に `"none"`。
+- wait 01M89PTZ9YVYY5C0NMR1H9E364 が `poll_failed` で起きることは、この run の時点（03:33Z）では未確認。
 - NQSV の Q・R の `qstat -f` の書式は未取得のまま（2026-11-24 D4）。exit 0 で `Unknown` だけの poll は失敗に数えないので、
   書式の違いで状態を読めないときは poll の失敗の起床も起きない（期限か全 request の `does not exist` で解ける）。
 - 起床の後の続きの run が待ち直し、poll の失敗が続くと、`poll_failure_wake_secs` ごとに run が起きる。設定の誤りなら worker は人に
@@ -187,5 +249,9 @@ scheduler = "none"   # 未確認。下の確認の後に決める
 
 ## 提案
 
+- 既存の config の型に必須の欄を足す release は、自動の取り込みのリリース準備（verify が本番の config を新旧の版に読ませる）を
+  通らない。ADR の「本番への移行」に、人が config を書き換えて verify を流し直し停止 → 起動で昇格する手順を書くか、ADR-0075 D7 の
+  順序（欄を任意で足し、昇格の後に本番の config に書き、次の release で必須にする）を選ぶかを、設計の時点で決める規則を
+  `agent-docs/guides/` か ADR-0075 の付記に置く。今回はこの規則が無く、取り込みの後に差し戻しになった。
 - worker の前置きに、そのクラスタの scheduler（`ClusterSpec.scheduler`）を書くと、続きの run が使う道具（PBS Pro の `qstat -x`、
   NQSV の `racctreq`）を選びやすい。今回は案内を「scheduler はクラスタの設定で決まる」に留めた。

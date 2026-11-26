@@ -605,8 +605,10 @@ async fn a_wait_on_an_unknown_cluster_is_a_retryable_failure() {
     )));
 }
 
-/// ADR 2026-11-25-cluster-scheduler-from-config D1: `[[clusters]] scheduler = "none"`（job scheduler の無いノード）の
-/// クラスタへの wait は登録時に断る（retryable な失敗。行を作らず poll もしない）。守る不変条件: scheduler の正本は設定だけで、
+/// ADR 2026-11-25-cluster-scheduler-from-config D1: `[[clusters]] scheduler = "none"`（job scheduler の無いノード）と、
+/// 2 段の移行の 1 段目で欄の無い（未設定の）クラスタ（どちらも `ClusterSpec.scheduler` が `None`。config 側は
+/// `cluster_scheduler_is_copied_into_the_spec_and_missing_means_unset` が見る）への wait は登録時に断る（retryable な失敗。
+/// 行を作らず poll もしない）。守る不変条件: scheduler の正本は設定だけで、
 /// 設定に scheduler が無いクラスタで poll の command を推測しない（旧い既定の `pbs` に落ちると 2026-11-25 の exit 127 の事象に
 /// 戻る）。既存の試験はどれも scheduler のあるクラスタで登録するので、この経路を検出できない。
 #[tokio::test]

@@ -92,6 +92,24 @@ pub fn observe(
     }
 }
 
+/// poll の結果（`read_poll_output`。job の状態か失敗の poll の要約）から、記録する job の状態と早期起床の理由を決める。
+/// job の状態は [`observe`]（`queued_wake_secs`）、失敗の poll は [`observe_poll_failure`]（`poll_failure_wake_secs`）。
+pub fn evaluate(
+    wait: &ClusterJobWait,
+    history: &[ClusterJobWait],
+    read: Result<Vec<ClusterJobStatus>, String>,
+    now: OffsetDateTime,
+    limits: &super::ClusterJobWaitLimits,
+) -> (Vec<ClusterJobStatus>, Option<&'static str>) {
+    match read {
+        Ok(mut jobs) => {
+            let reason = observe(wait, history, &mut jobs, now, limits.queued_wake_secs);
+            (jobs, reason)
+        }
+        Err(error) => observe_poll_failure(wait, &error, now, limits.poll_failure_wake_secs),
+    }
+}
+
 /// 失敗の poll（job の状態を返さない poll。ADR 2026-11-25-cluster-scheduler-from-config D4）を記録した job の状態と、
 /// 続きの run を起こすか（`Some(WAKE_POLL_FAILED)`）。
 ///

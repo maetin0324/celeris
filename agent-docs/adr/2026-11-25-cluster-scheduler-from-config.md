@@ -70,8 +70,12 @@ D4 で run が起きる。
 
 **記録**: 失敗の poll ごとに、wait の `last_status`（無ければ申告の job ごとの `Unknown`）の各 job に
 `poll_failed_since`（連続した失敗の最初の時刻、RFC 3339）と `poll_error`（最後の失敗の要約。`exit 127: <stderr の末尾>` の形、
-300 字まで）を書き、`cluster_job_wait_touch` で `last_status_json` に残す（event は出さない。ADR-0090 D2 の「状態の変わらない
-poll」と同じ扱い）。daemon の再起動をまたいでも連続の時刻は残る。前の観測（`job_state` 等）は消さない。
+300 字まで）を書き、`last_status_json` に残す。job の状態の JSON が変わった失敗の poll（連続の最初・要約が変わったとき）は
+`ClusterJobWaitPolled` を出し、同じ失敗の繰り返しは `cluster_job_wait_touch` だけにする（ADR-0090 D2 の「状態が変わった poll
+だけ event」と同じ規則）。daemon の再起動をまたいでも連続の時刻は残る。前の観測（`job_state` 等）は消さない。
+失敗の分け方は `task_core::cluster_job::read_poll_output`、記録と起床の判定は `cluster_job::wakeup::evaluate`
+（job の状態は従来の `observe`、失敗の poll は `observe_poll_failure`）が持ち、dispatcher は従来の判定の経路
+（`apply_cluster_job_statuses`）に結果を渡すだけにする。
 
 **起床の条件**: `now - poll_failed_since >= job_wait.poll_failure_wake_secs` になった失敗の poll で、wait を
 `ClusterJobWaitFinished{satisfied, detail: "poll_failed"}` で閉じ、既存の再開（atomic は `ClusterJobResume`、unit は

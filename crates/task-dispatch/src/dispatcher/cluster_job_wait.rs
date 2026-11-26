@@ -202,8 +202,7 @@ impl Dispatcher {
         result: Result<task_worker::RemoteCommandOutput, String>,
         now: OffsetDateTime,
     ) -> Result<bool, DispatchError> {
-        // ADR 2026-11-25-cluster-scheduler-from-config D4: 失敗の poll（job の状態を返さない poll）が
-        // `poll_failure_wake_secs` 続いたら、早期起床（detail `poll_failed`）で続きの run を起こす。
+        // ADR 2026-11-25-cluster-scheduler-from-config D4: 失敗の poll（`Err`）も同じ判定に渡す（`wakeup::evaluate`）。
         let read = result.and_then(|out| {
             cluster_job::read_poll_output(
                 wait.scheduler,
@@ -213,28 +212,10 @@ impl Dispatcher {
                 &wait.jobs,
             )
         });
-        let error = match read {
-            Ok(statuses) => return self.apply_cluster_job_statuses(wait, statuses, now),
-            Err(error) => error,
-        };
-        tracing::warn!(task_id = %wait.task_id, wait_id = %wait.wait_id, cluster = %wait.cluster, error = %error, "cluster job poll returned no job states (ADR-0090, ADR 2026-11-25-cluster-scheduler-from-config D4)");
-        let threshold = self.job_wait_limits(&wait.cluster).poll_failure_wake_secs;
-        let (statuses, wake) =
-            cluster_job::wakeup::observe_poll_failure(wait, &error, now, threshold);
-        let Some(reason) = wake else {
-            self.store
-                .cluster_job_wait_touch(&wait.wait_id, &rfc3339(now), &statuses)?;
-            return Ok(false);
-        };
-        let state = ClusterJobWaitState::Satisfied;
-        self.finish_cluster_job_wait(wait, state, statuses, reason.to_string(), now)?;
-        Ok(true)
-    }
-
-    /// クラスタの `job_wait`（設定から消えたクラスタは既定）。
-    fn job_wait_limits(&self, cluster: &str) -> cluster_job::ClusterJobWaitLimits {
-        let spec = self.config.clusters.get(cluster);
-        spec.map(|spec| spec.job_wait).unwrap_or_default()
+        if let Err(error) = &read {
+            tracing::warn!(task_id = %wait.task_id, wait_id = %wait.wait_id, cluster = %wait.cluster, error = %error, "cluster job poll returned no job states (ADR-0090, ADR 2026-11-25-cluster-scheduler-from-config D4)");
+        }
+        self.apply_cluster_job_statuses(wait, read, now)
     }
 
     /// 完了判定の共通部（poll の結果も通知も通る）。全 job が終わっていれば `finish_cluster_job_wait`（satisfied）、
@@ -242,12 +223,13 @@ impl Dispatcher {
     fn apply_cluster_job_statuses(
         &mut self,
         wait: &ClusterJobWait,
-        mut statuses: Vec<ClusterJobStatus>,
+        read: Result<Vec<ClusterJobStatus>, String>,
         now: OffsetDateTime,
     ) -> Result<bool, DispatchError> {
         let history = self.store.cluster_job_waits_for_task(wait.task_id)?;
-        let threshold = self.job_wait_limits(&wait.cluster).queued_wake_secs;
-        let reason = cluster_job::wakeup::observe(wait, &history, &mut statuses, now, threshold);
+        let spec = self.config.clusters.get(&wait.cluster);
+        let limits = spec.map(|spec| spec.job_wait).unwrap_or_default();
+        let (statuses, reason) = cluster_job::wakeup::evaluate(wait, &history, read, now, &limits);
         let all_finished = cluster_job::all_finished(&wait.jobs, &statuses);
         let reason = if all_finished { None } else { reason };
         if all_finished || reason.is_some() {
@@ -533,10 +515,12 @@ impl Dispatcher {
             return Ok(ClusterJobNoticeOutcome::Duplicate);
         }
         let now = self.now_utc();
-        Ok(if self.apply_cluster_job_statuses(&wait, statuses, now)? {
-            ClusterJobNoticeOutcome::Finished
-        } else {
-            ClusterJobNoticeOutcome::Applied
-        })
+        Ok(
+            if self.apply_cluster_job_statuses(&wait, Ok(statuses), now)? {
+                ClusterJobNoticeOutcome::Finished
+            } else {
+                ClusterJobNoticeOutcome::Applied
+            },
+        )
     }
 }

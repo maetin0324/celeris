@@ -605,6 +605,37 @@ async fn a_wait_on_an_unknown_cluster_is_a_retryable_failure() {
     )));
 }
 
+/// ADR 2026-11-25-cluster-scheduler-from-config D1: `[[clusters]] scheduler = "none"`（job scheduler の無いノード）の
+/// クラスタへの wait は登録時に断る（retryable な失敗。行を作らず poll もしない）。守る不変条件: scheduler の正本は設定だけで、
+/// 設定に scheduler が無いクラスタで poll の command を推測しない（旧い既定の `pbs` に落ちると 2026-11-25 の exit 127 の事象に
+/// 戻る）。既存の試験はどれも scheduler のあるクラスタで登録するので、この経路を検出できない。
+#[tokio::test]
+async fn a_wait_on_a_cluster_without_a_job_scheduler_is_a_retryable_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, mut d, task, _adapter, polls) =
+        setup(dir.path(), vec![wait_terminal(&["1"], None)], vec![]);
+    d.config
+        .clusters
+        .get_mut("sirius")
+        .expect("setup configures the cluster")
+        .scheduler = None;
+    let id = task.id;
+    tick_until(&mut d, |_| store.get(id).unwrap().unwrap().attempts == 1).await;
+    let t = store.get(id).unwrap().unwrap();
+    assert_ne!(t.status, Status::Blocked);
+    assert!(store.cluster_job_waits_for_task(id).unwrap().is_empty());
+    assert!(
+        polls.lock().unwrap().is_empty(),
+        "no poll for a cluster without a scheduler"
+    );
+    let events = store.events_for(id).unwrap();
+    assert!(events.iter().any(|(_, e)| matches!(
+        e,
+        Event::WorkerFinished { outcome, .. }
+            if outcome.contains("invalid cluster job wait") && outcome.contains("has no job scheduler")
+    )));
+}
+
 fn inbox_questions(store: &Arc<SqliteStore>) -> Vec<TaskId> {
     let ctx = task_ops::view::ViewContext {
         workspace_roots: task_core::local_machine::WorkspaceRoots::new(

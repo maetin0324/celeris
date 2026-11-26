@@ -586,6 +586,7 @@ workspace_root = "ws"
 [[clusters]]
 id = "test-cluster"
 host = "test-cluster"
+scheduler = "pbs"
 auth = "totp"
 
 [[clusters.forwards]]
@@ -676,6 +677,7 @@ workspace_root = "ws"
 [[clusters]]
 id = "auto"
 host = "celeris-no-such-host-for-tests-auto-phase81"
+scheduler = "pbs"
 auth = "publickey"
 "#,
     )
@@ -809,6 +811,7 @@ workspace_root = "ws"
 [[clusters]]
 id = "test-cluster"
 host = "test-cluster"
+scheduler = "pbs"
 auth = "totp"
 
 [[clusters.forwards]]

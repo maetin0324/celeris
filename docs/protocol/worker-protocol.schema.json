@@ -862,15 +862,6 @@
       ],
       "type": "object"
     },
-    "ClusterScheduler": {
-      "description": "job scheduler の種類。",
-      "enum": [
-        "pbs",
-        "slurm",
-        "nqsv"
-      ],
-      "type": "string"
-    },
     "CommentAuthorKind": {
       "description": "誰が書いたか（`task_comments.author_kind` の CHECK と対）。",
       "oneOf": [
@@ -6665,7 +6656,7 @@
           "type": "object"
         },
         {
-          "description": "ADR-0090 D1: クラスタ job の終了待ち（`result.json` と同じ形\n`{\"type\": \"wait\", \"kind\": \"cluster_job\", \"cluster\": .., \"jobs\": [..], \"scheduler\": \"pbs\", ...}`）。\n`yield` と同じく checkpoint を添えるが、continuation の回数・進捗なしの窓・attempts には数えない。\n追加のみ（`PROTOCOL_VERSION` は変えない）。",
+          "description": "ADR-0090 D1: クラスタ job の終了待ち（`result.json` と同じ形\n`{\"type\": \"wait\", \"kind\": \"cluster_job\", \"cluster\": .., \"jobs\": [..], ...}`）。scheduler はクラスタの設定\n（`[[clusters]] scheduler`）で決まり、申告には無い（ADR 2026-11-25-cluster-scheduler-from-config D2）。\n`yield` と同じく checkpoint を添えるが、continuation の回数・進捗なしの窓・attempts には数えない。\n追加のみ（`PROTOCOL_VERSION` は変えない）。",
           "properties": {
             "checkpoint": true,
             "cluster": {
@@ -6691,17 +6682,6 @@
                 "integer",
                 "null"
               ]
-            },
-            "scheduler": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/ClusterScheduler"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "省略時は `pbs`。"
             },
             "summary": {
               "type": "string"

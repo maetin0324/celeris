@@ -1025,6 +1025,7 @@ fn parses_worktree_sync_and_maps_it_to_the_worker_settings() {
 [[clusters]]
 id = "pegasus"
 host = "pegasus"
+scheduler = "nqsv"
 sync = "worktree"
 worktree_root = "/work/NBB/rmaeda/.celeris-worktrees"
 worktree_base = "origin/main"
@@ -1062,6 +1063,7 @@ fn rejects_unknown_sync_modes_and_worktree_auto_removal() {
 [[clusters]]
 id = "c"
 host = "h"
+scheduler = "pbs"
 {extra}
 "#
         )
@@ -1089,6 +1091,7 @@ fn cluster_auth_defaults_to_manual_and_only_three_values_are_accepted() {
 [[clusters]]
 id = "c"
 host = "h"
+scheduler = "pbs"
 {extra}
 "#
         )
@@ -1123,6 +1126,7 @@ fn cluster_control_persist_defaults_to_yes_and_accepts_only_yes_or_positive_seco
 [[clusters]]
 id = "c"
 host = "h"
+scheduler = "pbs"
 {extra}
 "#
         )
@@ -1152,6 +1156,41 @@ host = "h"
     }
 }
 
+/// ADR 2026-11-25-cluster-scheduler-from-config D1: `[[clusters]] scheduler` は必須で、`pbs | slurm | nqsv | none`
+/// だけを受ける。欄が無い config・値が不正な config は読み込みエラー。値は `ClusterSpec.scheduler` に写り
+/// （`none` は `None`）、`job_wait.poll_failure_wake_secs` の既定は 1800。旧い試験は scheduler の欄を持たない
+/// config を正しい config として読んでいたので、欄の欠落を受け付ける形を検出できない。
+#[test]
+fn cluster_scheduler_is_required_and_copied_into_the_spec() {
+    use task_core::cluster_job::ClusterScheduler;
+    let cluster = |id: &str, scheduler: &str| {
+        format!("[[clusters]]\nid = \"{id}\"\nhost = \"{id}\"\n{scheduler}\n")
+    };
+    let cfg: Config = toml::from_str(&format!(
+        "{}{}{}{}",
+        cluster("pegasus", "scheduler = \"nqsv\""),
+        cluster("sirius", "scheduler = \"pbs\""),
+        cluster("slurmy", "scheduler = \"slurm\""),
+        cluster("fern03", "scheduler = \"none\""),
+    ))
+    .unwrap();
+    cfg.validate().unwrap();
+    let specs = cfg.cluster_specs();
+    assert_eq!(specs["pegasus"].scheduler, Some(ClusterScheduler::Nqsv));
+    assert_eq!(specs["sirius"].scheduler, Some(ClusterScheduler::Pbs));
+    assert_eq!(specs["slurmy"].scheduler, Some(ClusterScheduler::Slurm));
+    assert_eq!(specs["fern03"].scheduler, None);
+    assert_eq!(specs["sirius"].job_wait.poll_failure_wake_secs, 1800);
+    let missing = toml::from_str::<Config>(&cluster("pegasus", "")).unwrap_err();
+    assert!(missing.to_string().contains("scheduler"), "{missing}");
+    for bad in ["\"PBS\"", "\"lsf\"", "\"\"", "1"] {
+        assert!(
+            toml::from_str::<Config>(&cluster("pegasus", &format!("scheduler = {bad}"))).is_err(),
+            "{bad}"
+        );
+    }
+}
+
 /// ADR-0090 D7: `job_wait` の既定は `{poll_secs = 300, max_wait_secs = 86400}`。`poll_secs >= 30`、
 /// `poll_secs <= max_wait_secs <= 14 日` を検証し、`ClusterSpec.job_wait` に写す。未知の欄は拒む。
 #[test]
@@ -1162,6 +1201,7 @@ fn cluster_job_wait_defaults_and_validation() {
 [[clusters]]
 id = "sirius"
 host = "sirius"
+scheduler = "pbs"
 {extra}
 "#
         )
@@ -1192,6 +1232,10 @@ host = "sirius"
         (
             "job_wait = { queued_wake_secs = 0 }",
             "queued_wake_secs must be > 0",
+        ),
+        (
+            "job_wait = { poll_failure_wake_secs = 0 }",
+            "poll_failure_wake_secs must be > 0",
         ),
         (
             "job_wait = { poll_secs = 600, max_wait_secs = 60 }",

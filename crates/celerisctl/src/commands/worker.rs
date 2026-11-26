@@ -654,7 +654,6 @@ fn normalize_outcome(result: Result<RunOutcome, AdapterError>) -> (WorkerMessage
                 WorkerMessage::Wait {
                     kind: task_core::cluster_job::WAIT_KIND_CLUSTER_JOB.to_string(),
                     cluster: request.cluster,
-                    scheduler: Some(request.scheduler),
                     jobs: request.jobs,
                     poll_secs: request.poll_secs,
                     timeout_secs: request.timeout_secs,

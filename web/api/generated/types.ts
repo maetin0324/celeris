@@ -1294,11 +1294,17 @@ export type ClusterForwardView = {
   "up"?: boolean | null;
 };
 
+export type ClusterJobPollFailure = {
+  "error": string;
+  "since": string;
+};
+
 export type ClusterJobState = "queued" | "held" | "running" | "exiting" | "finished" | "gone" | "unknown";
 
 export type ClusterJobStatus = {
   "exit_status"?: number | null;
   "job_id": string;
+  "poll_failure"?: ClusterJobPollFailure | null;
   "queue_notified"?: boolean;
   "queued_since"?: string | null;
   "raw_state"?: string | null;

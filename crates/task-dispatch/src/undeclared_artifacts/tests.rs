@@ -172,7 +172,6 @@ fn terminal_wants_scan_for_done_question_and_waiting_only() {
     assert!(terminal_wants_scan(&Terminal::Waiting {
         request: task_core::cluster_job::ClusterJobWaitRequest {
             cluster: Some("sirius".into()),
-            scheduler: task_core::cluster_job::ClusterScheduler::Pbs,
             jobs: vec!["1".into()],
             poll_secs: None,
             timeout_secs: None,

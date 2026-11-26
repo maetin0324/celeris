@@ -61,6 +61,8 @@ candidates = [{ source = "claude_oauth", model = "claude-sonnet-5-5" }]
 [[clusters]]
 id = "pegasus"
 host = "pegasus"                  # ~/.ssh/config の Host 名
+scheduler = "nqsv"                # 必須。job scheduler（"pbs" | "slurm" | "nqsv" | "none"）。クラスタ job の wait の
+                                  # poll の command はこれで決まる（worker の申告には書かない。ADR 2026-11-25-cluster-scheduler-from-config）
 concurrency = 2                   # このクラスタで同時に走らせる run の上限
 sync = "worktree"                 # git 管理下なら worktree（ADR-0019）。管理外なら "rsync"、共有 FS なら "none"
 delete_on_push = false            # 既定 false。既存プロジェクトのファイルを消さない
@@ -95,7 +97,7 @@ auth = "totp"                     # GUI の「接続」→ 検証コードの入
 # setup = ["module load python/3.12"]
 # env = { OMP_NUM_THREADS = "8" }
 # rsync_excludes = ["target/"]    # .celeris/ runs/ inputs/ は常に除外
-# job_wait = { poll_secs = 300, max_wait_secs = 86400, queued_wake_secs = 3600 }
+# job_wait = { poll_secs = 300, max_wait_secs = 86400, queued_wake_secs = 3600, poll_failure_wake_secs = 1800 }
 #   ↑ ADR-0090 D7: クラスタ job（qsub / sbatch）の durable wait の既定。worker が `result.json` に
 #     `{"type": "wait", "kind": "cluster_job", "cluster": "pegasus", "jobs": ["42634"], "scheduler": "pbs"}` を書いて
 #     run を終えると、daemon が `poll_secs` ごとに高々 1 回 `setup` の後に `qstat -xf <ids>`（Slurm は `sacct`）を
@@ -108,6 +110,7 @@ auth = "totp"                     # GUI の「接続」→ 検証コードの入
 [[clusters]]
 id = "sirius"
 host = "sirius"
+scheduler = "pbs"                 # PBS Pro
 concurrency = 2
 sync = "worktree"
 delete_on_push = false
@@ -120,6 +123,7 @@ auth = "totp"
 [[clusters]]
 id = "fern03"
 host = "fern03"
+scheduler = "none"                # job scheduler の無いノード（wait は断る。scheduler は未確認。進捗の「本番への移行」）
 concurrency = 1
 sync = "rsync"                    # クラスタでないノードでの実験用。git 管理外の作業ディレクトリを想定
 delete_on_push = false

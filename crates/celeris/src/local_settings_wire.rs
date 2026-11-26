@@ -349,7 +349,8 @@ pub(crate) fn cluster_id_local_is_reserved_config_error() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
     let home = dir.path();
     write_home(home, 2);
-    let cluster = |id: &str| format!("\n[[clusters]]\nid = \"{id}\"\nhost = \"h\"\n");
+    let cluster =
+        |id: &str| format!("\n[[clusters]]\nid = \"{id}\"\nhost = \"h\"\nscheduler = \"pbs\"\n");
 
     let reserved = home.join("reserved.toml");
     std::fs::write(&reserved, config_toml(2, &cluster("local")))

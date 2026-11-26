@@ -67,7 +67,6 @@ fn wait_terminal(jobs: &[&str], timeout_secs: Option<u64>) -> Terminal {
     Terminal::Waiting {
         request: task_core::cluster_job::ClusterJobWaitRequest {
             cluster: Some("sirius".into()),
-            scheduler: task_core::cluster_job::ClusterScheduler::Pbs,
             jobs: jobs.iter().map(|j| j.to_string()).collect(),
             poll_secs: Some(10),
             timeout_secs,
@@ -136,6 +135,7 @@ fn cluster(job_wait: task_core::cluster_job::ClusterJobWaitLimits) -> ClusterSpe
         work_dir: None,
         keepalive_secs: 0,
         liveness_probe_secs: 0,
+        scheduler: Some(task_core::cluster_job::ClusterScheduler::Pbs),
         job_wait,
     }
 }
@@ -1211,6 +1211,7 @@ async fn queued_job_wakes_once_across_rewait_with_scheduling_evidence() {
             poll_secs: 30,
             max_wait_secs: 3600,
             queued_wake_secs: 60,
+            poll_failure_wake_secs: task_core::cluster_job::default_poll_failure_wake_secs(),
         }),
     );
     d.set_cluster_liveness_probe(Arc::new(|_: &[String], _: &str| true));
@@ -1782,18 +1783,21 @@ async fn cluster_wait_decisions_atomic_node_answer_first() {
 /// で流し、Q・R の request では解けず、`Batch Request: <id> does not exist on nqsv.`（2026-11-24 に Pegasus で取った
 /// 出力）で `satisfied` になって continuation の run に戻る。既存の試験は PBS（`qstat -xf`）の出力しか流さないので、
 /// NQSV の poll の形と終わり方の読み方の誤り（本番で 3 件の wait が期限切れでしか解けなかった）を検出できない。
+///
+/// ADR 2026-11-25-cluster-scheduler-from-config D1: scheduler は申告に無く、クラスタの設定（`ClusterSpec.scheduler
+/// = nqsv`）で決まる。申告（`wait_terminal`）は scheduler を持たないので、行の `scheduler` と poll の script が
+/// NQSV になるのは設定から来たときだけ（修正を外して申告の既定の `pbs` に戻すと、行は `pbs` で `qstat -xf` を流す）。
 #[tokio::test]
 async fn an_nqsv_wait_polls_in_a_login_shell_and_resumes_when_the_request_no_longer_exists() {
     let dir = tempfile::tempdir().unwrap();
     let Terminal::Waiting {
-        mut request,
+        request,
         checkpoint,
         usage,
     } = wait_terminal(&["315477"], None)
     else {
         unreachable!("wait_terminal builds a wait")
     };
-    request.scheduler = task_core::cluster_job::ClusterScheduler::Nqsv;
     let nqsv = |stdout: &str| task_worker::RemoteCommandOutput {
         exit: Some(0),
         stdout: stdout.to_string(),
@@ -1818,6 +1822,11 @@ async fn an_nqsv_wait_polls_in_a_login_shell_and_resumes_when_the_request_no_lon
             nqsv("Batch Request: 315477.nqsv does not exist on nqsv.\n"),
         ],
     );
+    d.config
+        .clusters
+        .get_mut("sirius")
+        .expect("setup configures the cluster")
+        .scheduler = Some(task_core::cluster_job::ClusterScheduler::Nqsv);
     let id = task.id;
     tick_until(&mut d, |_| {
         store
@@ -1833,6 +1842,10 @@ async fn an_nqsv_wait_polls_in_a_login_shell_and_resumes_when_the_request_no_lon
         "bash -lc '{ module load openpbs; } && qstat -f 315477'"
     );
     let waits = store.cluster_job_waits_for_task(id).unwrap();
+    assert_eq!(
+        waits[0].scheduler,
+        task_core::cluster_job::ClusterScheduler::Nqsv
+    );
     assert_eq!(waits[0].state, ClusterJobWaitState::Waiting);
     assert_eq!(waits[0].last_status[0].state, ClusterJobState::Queued);
     assert_eq!(store.get(id).unwrap().unwrap().status, Status::Blocked);
@@ -1871,5 +1884,167 @@ async fn an_nqsv_wait_polls_in_a_login_shell_and_resumes_when_the_request_no_lon
     let preamble = task_worker::preamble::continuation_section(&seen[1]);
     assert!(preamble.contains("does not exist"), "{preamble}");
     drop(seen);
+    assert_replay_is_clean(&store);
+}
+
+/// 2026-11-25 の事象の poll の出力（Pegasus の非ログインのシェルに PBS の `qstat -xf` を流したとき）。
+fn qstat_not_found() -> task_worker::RemoteCommandOutput {
+    task_worker::RemoteCommandOutput {
+        exit: Some(127),
+        stdout: String::new(),
+        stderr: "bash: 行 1: qstat: コマンドが見つかりません\n".into(),
+    }
+}
+
+fn setup_poll_failure_wake(
+    dir: &std::path::Path,
+    polls: Vec<task_worker::RemoteCommandOutput>,
+) -> Setup {
+    let (store, mut d, task, adapter, seen) =
+        setup(dir, vec![wait_terminal(&["318985", "318986"], None)], polls);
+    let mut limits = task_core::cluster_job::ClusterJobWaitLimits::new(30, 3600);
+    limits.poll_failure_wake_secs = 90;
+    d.config.clusters.insert("sirius".into(), cluster(limits));
+    (store, d, task, adapter, seen)
+}
+
+/// `n` 回目の poll を起こして結果を拾い終えるまで進める（注入時計を `poll_secs` + 1 秒進める）。
+async fn poll_number(
+    d: &mut Dispatcher,
+    polls: &Arc<StdMutex<Vec<ClusterJobPollRequest>>>,
+    n: usize,
+) {
+    if n > 1 {
+        advance(d, 31);
+    }
+    tick_until(d, |d| {
+        polls.lock().unwrap().len() == n && d.cluster.job_polls_in_flight() == 0
+    })
+    .await;
+}
+
+/// ADR 2026-11-25-cluster-scheduler-from-config D4。
+///
+/// 不変条件: poll が job の状態を返さない失敗（exit 127・stderr だけ）を続けると、最初の失敗から
+/// `poll_failure_wake_secs` 経った失敗の poll で wait は `satisfied`（detail `poll_failed`）になり、続きの run が
+/// 起きて前置きに失敗の要約が出る。それより前は `waiting` のままで、失敗の連続の時刻は `last_status` に残る。
+/// 既存の試験は poll の失敗を「次の poll で再試行」としか見ておらず、期限まで黙って待つ形を検出できない。
+#[tokio::test]
+async fn polls_that_keep_failing_wake_the_run_after_poll_failure_wake_secs() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, mut d, task, adapter, polls) =
+        setup_poll_failure_wake(dir.path(), vec![qstat_not_found()]);
+    let id = task.id;
+    // 1 回目（t0）〜 3 回目（t0 + 62 秒）: 閾値 90 秒の前なので待ち続ける。
+    for n in 1..=3 {
+        poll_number(&mut d, &polls, n).await;
+        let waits = store.cluster_job_waits_for_task(id).unwrap();
+        assert_eq!(waits[0].state, ClusterJobWaitState::Waiting, "poll {n}");
+        let failure = waits[0].last_status[0]
+            .poll_failure
+            .clone()
+            .expect("the failed poll is recorded");
+        assert!(failure.error.starts_with("exit 127: "), "{failure:?}");
+        assert!(failure.error.contains("qstat"), "{failure:?}");
+        assert_eq!(store.get(id).unwrap().unwrap().status, Status::Blocked);
+    }
+    // 4 回目（t0 + 93 秒）: 閾値を超えた失敗 → satisfied（poll_failed）→ 続きの run → done。
+    advance(&d, 31);
+    tick_until(&mut d, |_| {
+        store.get(id).unwrap().unwrap().status == Status::Done
+    })
+    .await;
+    let waits = store.cluster_job_waits_for_task(id).unwrap();
+    assert_eq!(waits[0].state, ClusterJobWaitState::Satisfied);
+    let events = store.events_for(id).unwrap();
+    assert!(
+        events.iter().any(|(_, e)| matches!(
+            e,
+            Event::ClusterJobWaitFinished { state: ClusterJobWaitState::Satisfied, detail, .. }
+                if detail == task_core::cluster_job::WAKE_POLL_FAILED
+        )),
+        "{events:?}"
+    );
+    assert_eq!(polls.lock().unwrap().len(), 4);
+    let seen = adapter.seen.lock().unwrap();
+    assert_eq!(seen.len(), 2);
+    let jobs = seen[1]
+        .continuation
+        .clone()
+        .expect("the resumed run is a continuation")
+        .cluster_jobs
+        .expect("cluster job results");
+    assert_eq!(jobs.state, "poll_failed");
+    assert!(
+        jobs.jobs[0].contains("celeris poll failing since"),
+        "{jobs:?}"
+    );
+    let preamble = task_worker::preamble::continuation_section(&seen[1]);
+    assert!(
+        preamble.contains("poll が job の状態を返さない失敗を続けたため再開しました"),
+        "{preamble}"
+    );
+    assert!(preamble.contains("exit 127"), "{preamble}");
+    drop(seen);
+    assert_replay_is_clean(&store);
+}
+
+/// ADR 2026-11-25-cluster-scheduler-from-config D4「Q・R の間に早く起こさない」。
+///
+/// 不変条件: job の状態（R・Q）を返す poll は失敗に数えず、閾値（90 秒）を超えて R を返し続けても起きない。
+/// 失敗の間に Q を返す poll が挟まると連続が切れ、最初の失敗から閾値を超えても、切れた後の失敗が閾値に
+/// 届くまでは起きない。上の試験だけでは、連続でない失敗を足し合わせて早く起こす形を検出できない。
+#[tokio::test]
+async fn polls_that_report_q_or_r_never_count_towards_the_poll_failure_wake() {
+    let dir = tempfile::tempdir().unwrap();
+    let running = qstat(&[("318985", "R", None), ("318986", "R", None)]);
+    let queued = qstat(&[("318985", "Q", None), ("318986", "R", None)]);
+    let (store, mut d, task, _adapter, polls) = setup_poll_failure_wake(
+        dir.path(),
+        vec![
+            running.clone(),   // t0
+            running.clone(),   // +31
+            running.clone(),   // +62
+            running,           // +93（R が閾値を超えて続いても起きない）
+            qstat_not_found(), // +124 失敗の連続の始まり
+            qstat_not_found(), // +155
+            queued,            // +186 Q を読めた: 連続が切れる
+            qstat_not_found(), // +217 新しい連続の始まり（+124 から 93 秒）
+            qstat_not_found(), // +248
+            qstat_not_found(), // +279
+        ],
+    );
+    let id = task.id;
+    for n in 1..=10 {
+        poll_number(&mut d, &polls, n).await;
+        let waits = store.cluster_job_waits_for_task(id).unwrap();
+        assert_eq!(waits[0].state, ClusterJobWaitState::Waiting, "poll {n}");
+        assert_eq!(
+            store.get(id).unwrap().unwrap().status,
+            Status::Blocked,
+            "poll {n}"
+        );
+        let failure = waits[0].last_status[0].poll_failure.clone();
+        match n {
+            1..=4 | 7 => assert!(failure.is_none(), "poll {n}: {failure:?}"),
+            _ => assert!(failure.is_some(), "poll {n}"),
+        }
+        if n == 7 {
+            assert_eq!(waits[0].last_status[0].state, ClusterJobState::Queued);
+        }
+        if n >= 8 {
+            // 失敗の poll は前の観測（Q）を消さない。
+            assert_eq!(waits[0].last_status[0].state, ClusterJobState::Queued);
+        }
+    }
+    // 11 回目（+310、新しい連続の始まりの +217 から 93 秒）で初めて起きる。
+    advance(&d, 31);
+    tick_until(&mut d, |_| {
+        store.get(id).unwrap().unwrap().status == Status::Done
+    })
+    .await;
+    assert_eq!(polls.lock().unwrap().len(), 11);
+    let waits = store.cluster_job_waits_for_task(id).unwrap();
+    assert_eq!(waits[0].state, ClusterJobWaitState::Satisfied);
     assert_replay_is_clean(&store);
 }

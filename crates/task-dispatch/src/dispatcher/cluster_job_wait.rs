@@ -22,6 +22,14 @@ use super::{DispatchError, Dispatcher, ops_to_store, rfc3339};
 use crate::cluster_runtime::{ClusterJobPoller, ClusterRuntime, JobPollSlot};
 use task_ops::decision::job_end_target;
 
+/// 文字列の末尾 `max` 字（stderr の最後の行が原因を持つことが多い）。
+fn tail_chars(s: &str, max: usize) -> &str {
+    match s.char_indices().rev().nth(max.saturating_sub(1)) {
+        Some((i, _)) if max > 0 => &s[i..],
+        _ => s,
+    }
+}
+
 fn parse_ts(s: &str) -> Option<OffsetDateTime> {
     OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()
 }
@@ -76,6 +84,13 @@ impl Dispatcher {
                 "cluster {cluster:?} is not configured ([[clusters]])"
             ));
         };
+        // ADR 2026-11-25-cluster-scheduler-from-config D1: scheduler はクラスタの設定が正本（申告には無い）。
+        let Some(scheduler) = spec.scheduler else {
+            return Err(format!(
+                "cluster {cluster:?} has no job scheduler ([[clusters]] scheduler = \"none\"); \
+                 celeris cannot wait for jobs there"
+            ));
+        };
         let (poll_secs, timeout_secs) = spec.job_wait.clamp(request);
         let now = self.now_utc();
         let deadline =
@@ -86,7 +101,7 @@ impl Dispatcher {
             work_unit_id: work_unit_id.map(str::to_string),
             run_id: run_id.to_string(),
             cluster,
-            scheduler: request.scheduler,
+            scheduler,
             jobs: request.jobs.clone(),
             poll_secs,
             timeout_secs,
@@ -198,21 +213,61 @@ impl Dispatcher {
         result: Result<task_worker::RemoteCommandOutput, String>,
         now: OffsetDateTime,
     ) -> Result<bool, DispatchError> {
-        let out = match result {
-            Ok(out) => out,
+        // ADR 2026-11-25-cluster-scheduler-from-config D4: 失敗の poll は `Err` か、exit ≠ 0 でどの job の状態も
+        // 分からないもの。exit 0 で `Unknown` だけの poll は失敗に数えない（NQSV の Q・R の書式が未取得のため）。
+        let error = match result {
+            Ok(out) => {
+                let statuses = cluster_job::parse_poll_output(
+                    wait.scheduler,
+                    &out.stdout,
+                    &out.stderr,
+                    &wait.jobs,
+                );
+                let nothing_known = statuses.iter().all(|s| s.state == ClusterJobState::Unknown);
+                if out.exit == Some(0) || !nothing_known {
+                    return self.apply_cluster_job_statuses(wait, statuses, now);
+                }
+                tracing::warn!(task_id = %wait.task_id, wait_id = %wait.wait_id, cluster = %wait.cluster, exit = ?out.exit, stderr = %out.stderr.trim(), "cluster job poll returned no job states (ADR-0090, ADR 2026-11-25-cluster-scheduler-from-config D4)");
+                let exit = out
+                    .exit
+                    .map_or_else(|| "no exit code".to_string(), |c| format!("exit {c}"));
+                let detail = if out.stderr.trim().is_empty() {
+                    out.stdout.trim()
+                } else {
+                    out.stderr.trim()
+                };
+                format!(
+                    "{exit}: {}",
+                    tail_chars(detail, cluster_job::POLL_ERROR_MAX_CHARS)
+                )
+            }
             Err(e) => {
-                tracing::warn!(task_id = %wait.task_id, wait_id = %wait.wait_id, cluster = %wait.cluster, error = %e, "cluster job poll failed; retrying after poll_secs (ADR-0090)");
-                return Ok(false);
+                tracing::warn!(task_id = %wait.task_id, wait_id = %wait.wait_id, cluster = %wait.cluster, error = %e, "cluster job poll failed (ADR-0090, ADR 2026-11-25-cluster-scheduler-from-config D4)");
+                e
             }
         };
-        let statuses =
-            cluster_job::parse_poll_output(wait.scheduler, &out.stdout, &out.stderr, &wait.jobs);
-        let nothing_known = statuses.iter().all(|s| s.state == ClusterJobState::Unknown);
-        if out.exit != Some(0) && nothing_known {
-            tracing::warn!(task_id = %wait.task_id, wait_id = %wait.wait_id, cluster = %wait.cluster, exit = ?out.exit, stderr = %out.stderr.trim(), "cluster job poll returned no job states; retrying after poll_secs (ADR-0090)");
-            return Ok(false);
+        let threshold = self
+            .config
+            .clusters
+            .get(&wait.cluster)
+            .map(|spec| spec.job_wait.poll_failure_wake_secs)
+            .unwrap_or_else(cluster_job::default_poll_failure_wake_secs);
+        let (statuses, wake) =
+            cluster_job::wakeup::observe_poll_failure(wait, &error, now, threshold);
+        if let Some(reason) = wake {
+            tracing::warn!(task_id = %wait.task_id, wait_id = %wait.wait_id, cluster = %wait.cluster, error = %error, "cluster job polls kept failing past poll_failure_wake_secs; resuming as a continuation run (ADR 2026-11-25-cluster-scheduler-from-config D4)");
+            self.finish_cluster_job_wait(
+                wait,
+                ClusterJobWaitState::Satisfied,
+                statuses,
+                reason.to_string(),
+                now,
+            )?;
+            return Ok(true);
         }
-        self.apply_cluster_job_statuses(wait, statuses, now)
+        self.store
+            .cluster_job_wait_touch(&wait.wait_id, &rfc3339(now), &statuses)?;
+        Ok(false)
     }
 
     /// 完了判定の共通部（poll の結果も通知も通る）。全 job が終わっていれば `finish_cluster_job_wait`（satisfied）、
@@ -506,6 +561,7 @@ impl Dispatcher {
             scheduling: Vec::new(),
             queued_since: None,
             queue_notified: false,
+            poll_failure: None,
         };
         match statuses.iter_mut().find(|s| s.job_id == notice.job_id) {
             Some(s) => *s = fresh,

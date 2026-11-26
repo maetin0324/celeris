@@ -66,6 +66,7 @@ async fn cluster_and_provider_concurrency_are_both_enforced() {
             work_dir: None,
             keepalive_secs: 0,
             liveness_probe_secs: 0,
+            scheduler: Some(task_core::cluster_job::ClusterScheduler::Pbs),
             job_wait: Default::default(),
         },
     );
@@ -147,6 +148,7 @@ async fn offline_cluster_is_reported_in_the_snapshot_and_the_event_carries_the_h
             work_dir: None,
             keepalive_secs: 0,
             liveness_probe_secs: 0,
+            scheduler: Some(task_core::cluster_job::ClusterScheduler::Pbs),
             job_wait: Default::default(),
         },
     );
@@ -1734,6 +1736,7 @@ async fn cluster_cooldown_is_cleared_once_the_control_master_is_back() {
             work_dir: None,
             keepalive_secs: 0,
             liveness_probe_secs: 0,
+            scheduler: Some(task_core::cluster_job::ClusterScheduler::Pbs),
             job_wait: Default::default(),
         },
     );

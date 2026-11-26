@@ -241,7 +241,7 @@ pub fn normal_config(d: &Path) -> String {
     format!(
         "db = \"{n}/celeris.db\"\nworkspace_root = \"{n}/ws\"\n[knowledge]\nroot = \"{n}/kb\"\n[memory]\ndir = \"{n}/memory\"\n\
          [api]\nlisten = \"127.0.0.1:7700\"\ntoken_file = \"{n}/token\"\n\
-         [[clusters]]\nid = \"pegasus\"\nhost = \"pegasus\"\n",
+         [[clusters]]\nid = \"pegasus\"\nhost = \"pegasus\"\nscheduler = \"nqsv\"\n",
         n = d.join("normal").display()
     )
 }
@@ -251,7 +251,7 @@ pub fn measure_config(d: &Path, tag: &str) -> String {
     format!(
         "db = \"{n}/celeris.db\"\nworkspace_root = \"{n}/ws\"\n[knowledge]\nroot = \"{n}/kb\"\ndefault_mounts = [\"kb:trial\"]\n\
          [api]\nlisten = \"127.0.0.1:7701\"\n[[api.tokens]]\nprincipal = \"operator:measure\"\ntoken_file = \"{n}/token\"\n\
-         [[clusters]]\nid = \"pegasus\"\nhost = \"pegasus\"\n{probe}",
+         [[clusters]]\nid = \"pegasus\"\nhost = \"pegasus\"\nscheduler = \"nqsv\"\n{probe}",
         n = d.join(tag).display(),
         probe = probe_declarations("claude-code"),
     )

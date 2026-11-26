@@ -125,14 +125,13 @@ fn poll_commands_only_carry_valid_ids() {
 fn wait_requests_are_parsed_in_both_shapes() {
     let top = serde_json::json!({
         "type": "wait", "kind": "cluster_job", "cluster": "sirius",
-        "jobs": ["42634", 42635], "scheduler": "pbs", "poll_secs": 300, "timeout_secs": 43200,
+        "jobs": ["42634", 42635], "poll_secs": 300, "timeout_secs": 43200,
         "checkpoint": {"completed": ["submitted E1"], "next_action": "collect results"},
         "summary": "submitted 2 jobs"
     });
     let (req, cp) = parse_wait_request(&top).unwrap().unwrap();
     assert_eq!(req.cluster.as_deref(), Some("sirius"));
     assert_eq!(req.jobs, ids(&["42634", "42635"]));
-    assert_eq!(req.scheduler, ClusterScheduler::Pbs);
     assert_eq!(req.poll_secs, Some(300));
     assert_eq!(req.timeout_secs, Some(43200));
     assert_eq!(req.summary, "submitted 2 jobs");
@@ -142,7 +141,6 @@ fn wait_requests_are_parsed_in_both_shapes() {
         "summary": "s", "wait": {"kind": "cluster_job", "jobs": ["7"]}
     });
     let (req, cp) = parse_wait_request(&nested).unwrap().unwrap();
-    assert_eq!(req.scheduler, ClusterScheduler::Pbs);
     assert_eq!(req.summary, "s");
     assert!(cp.is_none());
 
@@ -162,11 +160,72 @@ fn wait_requests_are_parsed_in_both_shapes() {
             .unwrap()
             .is_err()
     );
-    assert!(
-        parse_wait_request(&serde_json::json!({"type": "wait", "jobs": ["1"], "scheduler": "lsf"}))
-            .unwrap()
-            .is_err()
+}
+
+/// ADR 2026-11-25-cluster-scheduler-from-config D2: 申告の `scheduler` の欄は消した。値によらず（正しい値でも、
+/// 2026-11-25 の事象の `pbs` でも、未知の値でも、入れ子でも）不正な wait になり、理由の文は設定の欄を指す。
+/// 旧い試験は `scheduler` の値を読んでいたので、欄を受け付けて黙って使う・無視する形を検出できない。
+#[test]
+fn wait_request_naming_a_scheduler_is_rejected() {
+    for spec in [
+        serde_json::json!({"type": "wait", "jobs": ["318985.nqsv"], "scheduler": "pbs"}),
+        serde_json::json!({"type": "wait", "jobs": ["315477.nqsv"], "scheduler": "NQSV"}),
+        serde_json::json!({"type": "wait", "jobs": ["1"], "scheduler": "lsf"}),
+        serde_json::json!({"summary": "s", "wait": {"jobs": ["1"], "scheduler": "slurm"}}),
+    ] {
+        let err = parse_wait_request(&spec).unwrap().unwrap_err();
+        assert!(err.contains("[[clusters]] scheduler"), "{err}");
+    }
+}
+
+/// ADR 2026-11-25-cluster-scheduler-from-config D4: 失敗の poll の記録と起床の条件。最初の失敗では起きず、
+/// 連続の最初の時刻から `threshold` 秒の失敗で起きる。前の観測（Q と queued_since）は残す。
+#[test]
+fn poll_failures_wake_only_after_the_threshold_from_the_first_failure() {
+    let t0 = time::OffsetDateTime::parse(
+        "2026-11-25T16:00:00Z",
+        &time::format_description::well_known::Rfc3339,
+    )
+    .unwrap();
+    let mut w = wait_with(&["318985", "318986"], Vec::new());
+    w.scheduler = ClusterScheduler::Pbs;
+    let (jobs, wake) =
+        wakeup::observe_poll_failure(&w, "exit 127: bash: qstat: command not found", t0, 1800);
+    assert_eq!(wake, None, "the first failure never wakes");
+    assert!(jobs.iter().all(|j| j.state == ClusterJobState::Unknown));
+    let since = jobs[0].poll_failure.clone().unwrap();
+    assert_eq!(since.since, "2026-11-25T16:00:00Z");
+    assert!(since.error.contains("exit 127"));
+    w.last_status = jobs;
+    let (jobs, wake) =
+        wakeup::observe_poll_failure(&w, "exit 127", t0 + time::Duration::seconds(1500), 1800);
+    assert_eq!(wake, None);
+    assert_eq!(
+        jobs[1].poll_failure.as_ref().unwrap().since,
+        "2026-11-25T16:00:00Z"
     );
+    w.last_status = jobs;
+    let (jobs, wake) =
+        wakeup::observe_poll_failure(&w, "exit 127", t0 + time::Duration::seconds(1800), 1800);
+    assert_eq!(wake, Some(WAKE_POLL_FAILED));
+    assert!(is_wake_reason(WAKE_POLL_FAILED));
+    assert!(jobs.iter().all(|j| j.poll_failure.is_some()));
+
+    // 前の観測（Q・queued_since）は失敗の poll で消えない。
+    let mut q = ClusterJobStatus::unknown("318985");
+    q.state = ClusterJobState::Queued;
+    q.queued_since = Some("2026-11-25T15:00:00Z".into());
+    let w = wait_with(&["318985"], vec![q]);
+    let (jobs, _) = wakeup::observe_poll_failure(&w, "exit 2: usage", t0, 1800);
+    assert_eq!(jobs[0].state, ClusterJobState::Queued);
+    assert_eq!(
+        jobs[0].queued_since.as_deref(),
+        Some("2026-11-25T15:00:00Z")
+    );
+    // 状態の JSON は読み書きできる（`last_status_json` と event に残る）。
+    let back: Vec<ClusterJobStatus> =
+        serde_json::from_str(&serde_json::to_string(&jobs).unwrap()).unwrap();
+    assert_eq!(back, jobs);
 }
 
 fn task(status: crate::Status) -> crate::Task {
@@ -218,6 +277,13 @@ fn task(status: crate::Status) -> crate::Task {
         tree: None,
         paused_at: None,
     }
+}
+
+fn wait_with(jobs: &[&str], last_status: Vec<ClusterJobStatus>) -> ClusterJobWait {
+    let mut w = wait_for(TaskId::new());
+    w.jobs = ids(jobs);
+    w.last_status = last_status;
+    w
 }
 
 fn wait_for(task_id: TaskId) -> ClusterJobWait {
@@ -288,6 +354,7 @@ fn events_project_into_the_table_and_terminal_transitions_cancel() {
             scheduling: Vec::new(),
             queued_since: None,
             queue_notified: false,
+            poll_failure: None,
         },
         ClusterJobStatus::unknown("42635"),
     ];
@@ -480,7 +547,6 @@ fn limits_clamp_and_validate() {
     assert!(limits.validate().is_ok());
     let req = |poll: Option<u64>, timeout: Option<u64>| ClusterJobWaitRequest {
         cluster: None,
-        scheduler: ClusterScheduler::Pbs,
         jobs: ids(&["1"]),
         poll_secs: poll,
         timeout_secs: timeout,
@@ -491,6 +557,14 @@ fn limits_clamp_and_validate() {
     assert_eq!(limits.clamp(&req(Some(900), Some(999_999))), (900, 86_400));
     assert!(ClusterJobWaitLimits::new(5, 100).validate().is_err());
     assert!(ClusterJobWaitLimits::new(300, 60).validate().is_err());
+    let mut zero = ClusterJobWaitLimits::new(300, 86_400);
+    zero.poll_failure_wake_secs = 0;
+    assert!(
+        zero.validate()
+            .unwrap_err()
+            .contains("poll_failure_wake_secs")
+    );
+    assert_eq!(limits.poll_failure_wake_secs, 1800);
     assert!(
         ClusterJobWaitLimits::new(300, MAX_WAIT_SECS_CEILING + 1)
             .validate()
@@ -818,10 +892,8 @@ fn nqsv_poll_script_runs_qstat_f_inside_a_login_shell() {
         poll_script(ClusterScheduler::Slurm, "", &ids(&["1", "2"])),
         "sacct -n -P -X -o JobID,State%64,ExitCode -j 1,2"
     );
-    // worker の申告は `nqsv` を受け付ける（大文字も）。
-    let v = serde_json::json!({"type": "wait", "scheduler": "NQSV", "jobs": ["315477.nqsv"]});
-    let (req, _) = parse_wait_request(&v).unwrap().unwrap();
-    assert_eq!(req.scheduler, ClusterScheduler::Nqsv);
+    // scheduler は申告せず設定で決まる（ADR 2026-11-25-cluster-scheduler-from-config。申告の拒否は
+    // `wait_request_naming_a_scheduler_is_rejected`）。
     assert_eq!(
         ClusterScheduler::parse("nqsv"),
         Some(ClusterScheduler::Nqsv)

@@ -563,7 +563,6 @@ pub(crate) async fn write_result_json(
         } => WorkerMessage::Wait {
             kind: task_core::cluster_job::WAIT_KIND_CLUSTER_JOB.to_string(),
             cluster: request.cluster.clone(),
-            scheduler: Some(request.scheduler),
             jobs: request.jobs.clone(),
             poll_secs: request.poll_secs,
             timeout_secs: request.timeout_secs,

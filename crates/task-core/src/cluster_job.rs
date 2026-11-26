@@ -42,6 +42,21 @@ pub const WAIT_KIND_CLUSTER_JOB: &str = "cluster_job";
 pub const REASON_WAITING: &str = "waiting_for_cluster_jobs";
 /// `Trigger::ClusterJobResume` の `Transitioned.reason`。
 pub const REASON_RESUME: &str = "cluster_job_resume";
+/// 早期起床の `ClusterJobWaitFinished.detail`（state は `satisfied`）: job の 1 つが失敗で終わった（ADR 2026-11-11）。
+pub const WAKE_JOB_FAILED: &str = "job_failed";
+/// 早期起床: job が Q/H のまま `queued_wake_secs` を超えた（ADR 2026-11-11）。
+pub const WAKE_QUEUE_STALLED: &str = "queue_stalled";
+/// 早期起床: poll が job の状態を返さない失敗を `poll_failure_wake_secs` 続けた
+/// （ADR 2026-11-25-cluster-scheduler-from-config D4）。
+pub const WAKE_POLL_FAILED: &str = "poll_failed";
+
+/// `ClusterJobWaitFinished.detail` が早期起床の理由か（続きの run の前置きの `state` に渡す）。
+pub fn is_wake_reason(detail: &str) -> bool {
+    matches!(
+        detail,
+        WAKE_JOB_FAILED | WAKE_QUEUE_STALLED | WAKE_POLL_FAILED
+    )
+}
 
 /// job scheduler の種類。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -135,7 +150,23 @@ pub struct ClusterJobStatus {
     /// A queue-delay wakeup was already delivered for this job.
     #[serde(default)]
     pub queue_notified: bool,
+    /// 連続した失敗の poll（job の状態を返さない poll）の記録。job の状態を返した poll で消える
+    /// （ADR 2026-11-25-cluster-scheduler-from-config D4）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poll_failure: Option<ClusterJobPollFailure>,
 }
+
+/// 連続した失敗の poll（ADR 2026-11-25-cluster-scheduler-from-config D4）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ClusterJobPollFailure {
+    /// 連続した失敗の最初の時刻（RFC 3339）。daemon の再起動・同じ wait の poll をまたいで残る。
+    pub since: String,
+    /// 最後の失敗の要約（`exit 127: <stderr の末尾>` の形、[`POLL_ERROR_MAX_CHARS`] 字まで）。
+    pub error: String,
+}
+
+/// `ClusterJobPollFailure.error` の上限の字数。
+pub const POLL_ERROR_MAX_CHARS: usize = 300;
 
 impl ClusterJobStatus {
     fn unknown(job_id: &str) -> Self {
@@ -147,6 +178,7 @@ impl ClusterJobStatus {
             scheduling: Vec::new(),
             queued_since: None,
             queue_notified: false,
+            poll_failure: None,
         }
     }
 }
@@ -185,10 +217,10 @@ impl ClusterJobWaitState {
 /// `result.json` の wait の申告（[`parse_wait_request`] が検証した後の形）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ClusterJobWaitRequest {
-    /// `[[clusters]] id`。省略時は task のクラスタ（dispatcher が埋める）。
+    /// `[[clusters]] id`。省略時は task のクラスタ（dispatcher が埋める）。scheduler は申告せず、
+    /// クラスタの設定（`[[clusters]] scheduler`）で決まる（ADR 2026-11-25-cluster-scheduler-from-config D1・D2）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cluster: Option<String>,
-    pub scheduler: ClusterScheduler,
     pub jobs: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub poll_secs: Option<u64>,
@@ -260,11 +292,14 @@ fn parse_wait_fields(
             "unsupported wait kind {kind:?} (only \"{WAIT_KIND_CLUSTER_JOB}\")"
         ));
     }
-    let scheduler = match spec.get("scheduler").and_then(|s| s.as_str()) {
-        Some(s) => ClusterScheduler::parse(&s.to_ascii_lowercase())
-            .ok_or_else(|| format!("unknown scheduler {s:?} (pbs | slurm | nqsv)"))?,
-        None => ClusterScheduler::Pbs,
-    };
+    // ADR 2026-11-25-cluster-scheduler-from-config D2: scheduler はクラスタの設定で決まる。申告の欄は消した。
+    if spec.contains_key("scheduler") {
+        return Err(
+            "`scheduler` is not part of the wait; celeris uses the cluster's configured scheduler \
+             ([[clusters]] scheduler). Remove `scheduler` and write the wait again"
+                .to_string(),
+        );
+    }
     let cluster = match spec.get("cluster") {
         None | Some(serde_json::Value::Null) => None,
         Some(serde_json::Value::String(c)) if valid_cluster_id(c) => Some(c.clone()),
@@ -318,7 +353,6 @@ fn parse_wait_fields(
     Ok((
         ClusterJobWaitRequest {
             cluster,
-            scheduler,
             jobs,
             poll_secs,
             timeout_secs,
@@ -338,6 +372,10 @@ pub struct ClusterJobWaitLimits {
     /// Q/H observation threshold before waking the worker (seconds, positive).
     #[serde(default = "default_queued_wake_secs")]
     pub queued_wake_secs: u64,
+    /// job の状態を返さない poll がこの秒数続いたら続きの run を起こす（正の整数。
+    /// ADR 2026-11-25-cluster-scheduler-from-config D4）。
+    #[serde(default = "default_poll_failure_wake_secs")]
+    pub poll_failure_wake_secs: u64,
 }
 
 impl Default for ClusterJobWaitLimits {
@@ -350,6 +388,11 @@ pub fn default_queued_wake_secs() -> u64 {
     3600
 }
 
+/// `job_wait.poll_failure_wake_secs` の既定（30 分。`poll_secs = 300` なら失敗の poll がおよそ 7 回続いたとき）。
+pub fn default_poll_failure_wake_secs() -> u64 {
+    1800
+}
+
 impl ClusterJobWaitLimits {
     /// Set poll/deadline limits while using the standard queue reassessment interval.
     pub fn new(poll_secs: u64, max_wait_secs: u64) -> Self {
@@ -357,6 +400,7 @@ impl ClusterJobWaitLimits {
             poll_secs,
             max_wait_secs,
             queued_wake_secs: default_queued_wake_secs(),
+            poll_failure_wake_secs: default_poll_failure_wake_secs(),
         }
     }
 
@@ -364,6 +408,9 @@ impl ClusterJobWaitLimits {
     pub fn validate(&self) -> Result<(), String> {
         if self.queued_wake_secs == 0 {
             return Err("job_wait.queued_wake_secs must be > 0".into());
+        }
+        if self.poll_failure_wake_secs == 0 {
+            return Err("job_wait.poll_failure_wake_secs must be > 0".into());
         }
         if self.poll_secs < MIN_POLL_SECS {
             return Err(format!(
@@ -625,6 +672,7 @@ pub fn parse_pbs_qstat_xf(stdout: &str, stderr: &str, jobs: &[String]) -> Vec<Cl
                         .collect(),
                     queued_since: None,
                     queue_notified: false,
+                    poll_failure: None,
                 };
             }
             if gone.iter().any(|g| job_matches(j, g)) {
@@ -636,6 +684,7 @@ pub fn parse_pbs_qstat_xf(stdout: &str, stderr: &str, jobs: &[String]) -> Vec<Cl
                     scheduling: Vec::new(),
                     queued_since: None,
                     queue_notified: false,
+                    poll_failure: None,
                 };
             }
             ClusterJobStatus::unknown(j)
@@ -716,6 +765,7 @@ pub fn parse_nqsv_qstat_f(stdout: &str, stderr: &str, jobs: &[String]) -> Vec<Cl
                     scheduling: Vec::new(),
                     queued_since: None,
                     queue_notified: false,
+                    poll_failure: None,
                 };
             }
             let mut own = blocks.iter().filter(|(i, _)| *i == idx).peekable();
@@ -736,6 +786,7 @@ pub fn parse_nqsv_qstat_f(stdout: &str, stderr: &str, jobs: &[String]) -> Vec<Cl
                     scheduling: Vec::new(),
                     queued_since: None,
                     queue_notified: false,
+                    poll_failure: None,
                 },
                 None => ClusterJobStatus::unknown(j),
             }
@@ -801,6 +852,7 @@ pub fn parse_slurm_sacct(stdout: &str, jobs: &[String]) -> Vec<ClusterJobStatus>
                     scheduling: Vec::new(),
                     queued_since: None,
                     queue_notified: false,
+                    poll_failure: None,
                 }
             }
             None => ClusterJobStatus::unknown(j),
@@ -825,6 +877,13 @@ pub fn preamble_lines(statuses: &[ClusterJobStatus]) -> Vec<String> {
                     }
                 })
                 .unwrap_or_default();
+            let raw = match &s.poll_failure {
+                Some(f) => format!(
+                    "{raw} / celeris poll failing since {}: {}",
+                    f.since, f.error
+                ),
+                None => raw,
+            };
             match (s.state, s.exit_status) {
                 (ClusterJobState::Finished, Some(code)) => {
                     format!("{}: finished (Exit_status {code}{raw})", s.job_id)

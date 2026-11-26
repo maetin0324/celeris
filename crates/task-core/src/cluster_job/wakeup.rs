@@ -1,5 +1,8 @@
 //! Early wake policy. History comes from durable wait rows, never worker memory.
-use super::{ClusterJobState, ClusterJobStatus, ClusterJobWait, ClusterScheduler};
+use super::{
+    ClusterJobPollFailure, ClusterJobState, ClusterJobStatus, ClusterJobWait, ClusterScheduler,
+    POLL_ERROR_MAX_CHARS, WAKE_JOB_FAILED, WAKE_POLL_FAILED, WAKE_QUEUE_STALLED,
+};
 use time::OffsetDateTime;
 
 fn timestamp(s: &str) -> Option<OffsetDateTime> {
@@ -81,10 +84,53 @@ pub fn observe(
         }
     }
     if failure {
-        Some("job_failed")
+        Some(WAKE_JOB_FAILED)
     } else if queued {
-        Some("queue_stalled")
+        Some(WAKE_QUEUE_STALLED)
     } else {
         None
     }
+}
+
+/// 失敗の poll（job の状態を返さない poll。ADR 2026-11-25-cluster-scheduler-from-config D4）を記録した job の状態と、
+/// 続きの run を起こすか（`Some(WAKE_POLL_FAILED)`）。
+///
+/// - job の状態は wait の `last_status`（無ければ `Unknown`）をそのまま残し、各 job の `poll_failure` に連続した失敗の
+///   最初の時刻（既にあればそれ、無ければ `now`）と最後の失敗の要約を書く。
+/// - 起こすのは `now - since >= threshold` のときだけ。最初の失敗では `now - since = 0` なので起きない。job の状態を
+///   返した poll の結果（`parse_poll_output`）は `poll_failure` を持たないので、Q・R を読めた poll で連続は切れる。
+pub fn observe_poll_failure(
+    wait: &ClusterJobWait,
+    error: &str,
+    now: OffsetDateTime,
+    threshold: u64,
+) -> (Vec<ClusterJobStatus>, Option<&'static str>) {
+    let mut jobs: Vec<ClusterJobStatus> = wait
+        .jobs
+        .iter()
+        .map(|j| {
+            wait.last_status
+                .iter()
+                .find(|s| &s.job_id == j)
+                .cloned()
+                .unwrap_or_else(|| ClusterJobStatus::unknown(j))
+        })
+        .collect();
+    let since = jobs
+        .iter()
+        .filter_map(|j| j.poll_failure.as_ref())
+        .filter_map(|f| timestamp(&f.since))
+        .min()
+        .unwrap_or(now);
+    let failure = ClusterJobPollFailure {
+        since: since
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap_or_default(),
+        error: super::truncate_chars(error.trim(), POLL_ERROR_MAX_CHARS),
+    };
+    for job in &mut jobs {
+        job.poll_failure = Some(failure.clone());
+    }
+    let wake = (now - since).whole_seconds() >= i64::try_from(threshold).unwrap_or(i64::MAX);
+    (jobs, wake.then_some(WAKE_POLL_FAILED))
 }

@@ -175,6 +175,7 @@ fn cluster_job_wait_event_types_match_their_serde_names() {
         scheduling: Vec::new(),
         queued_since: None,
         queue_notified: false,
+        poll_failure: None,
     };
     let events = vec![
         Event::ClusterJobWaitStarted {

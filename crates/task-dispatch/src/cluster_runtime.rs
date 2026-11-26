@@ -49,6 +49,10 @@ pub struct ClusterSpec {
     /// ServerAliveCountMax=3 -o TCPKeepAlive=yes`（`0` なら keepalive を付けない）。既定 30 秒。
     /// コマンドラインの `-o` は `~/.ssh/config` より優先されるので、人の設定を変えずに効く。
     pub keepalive_secs: u64,
+    /// ADR 2026-11-25-cluster-scheduler-from-config D1: このクラスタの job scheduler（`[[clusters]] scheduler`）。
+    /// クラスタ job の wait の poll の command と読み方の正本（worker の申告には無い）。`None` は job scheduler の
+    /// 無いノード（`scheduler = "none"`）で、wait を登録しない。
+    pub scheduler: Option<task_core::cluster_job::ClusterScheduler>,
     /// ADR-0090 D7: クラスタ job の durable wait の poll 間隔と上限（`[[clusters]] job_wait`）。
     pub job_wait: task_core::cluster_job::ClusterJobWaitLimits,
     /// ADR-0062 A: master 越しの実通信（`ssh -o BatchMode=yes <host> -- true`）による生存確認を

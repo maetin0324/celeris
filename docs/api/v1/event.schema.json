@@ -808,6 +808,24 @@
         }
       ]
     },
+    "ClusterJobPollFailure": {
+      "description": "連続した失敗の poll（ADR 2026-11-25-cluster-scheduler-from-config D4）。",
+      "properties": {
+        "error": {
+          "description": "最後の失敗の要約（`exit 127: <stderr の末尾>` の形、[`POLL_ERROR_MAX_CHARS`] 字まで）。",
+          "type": "string"
+        },
+        "since": {
+          "description": "連続した失敗の最初の時刻（RFC 3339）。daemon の再起動・同じ wait の poll をまたいで残る。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "since",
+        "error"
+      ],
+      "type": "object"
+    },
     "ClusterJobState": {
       "description": "1 つの job の状態（scheduler の文字を正規化したもの）。",
       "oneOf": [
@@ -862,6 +880,17 @@
         "job_id": {
           "description": "worker が申告した id（`42634`。scheduler の server 名の接尾辞は付けない）。",
           "type": "string"
+        },
+        "poll_failure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClusterJobPollFailure"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "連続した失敗の poll（job の状態を返さない poll）の記録。job の状態を返した poll で消える\n（ADR 2026-11-25-cluster-scheduler-from-config D4）。"
         },
         "queue_notified": {
           "default": false,

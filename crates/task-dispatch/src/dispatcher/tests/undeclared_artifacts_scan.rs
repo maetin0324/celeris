@@ -77,7 +77,6 @@ fn waiting() -> Terminal {
     Terminal::Waiting {
         request: task_core::cluster_job::ClusterJobWaitRequest {
             cluster: Some("sirius".into()),
-            scheduler: task_core::cluster_job::ClusterScheduler::Pbs,
             jobs: vec!["43508".into()],
             poll_secs: Some(10),
             timeout_secs: None,

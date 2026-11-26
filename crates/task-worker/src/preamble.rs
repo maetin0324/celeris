@@ -188,6 +188,12 @@ fn cluster_jobs_section(jobs: &crate::protocol::ClusterJobsContinuation) -> Stri
     let outcome = match jobs.state.as_str() {
         "job_failed" => "job の失敗を検出したため、他の job の終了を待たず再開しました",
         "queue_stalled" => "Q/H がしきい値を超えたため、資源指定を再評価するために再開しました",
+        "poll_failed" => {
+            "celeris の poll が job の状態を返さない失敗を続けたため再開しました（job が終わったとは限りません。\
+             下の各行の `celeris poll failing since` が最後の失敗です）。remote-exec で scheduler に job の状態を問い合わせ、\
+             終わっていれば回収し、Q / R ならもう一度 `wait` で終えること。失敗の原因がクラスタの設定（scheduler の種類・\
+             PATH）にあり、この run で直せないなら、失敗の出力を添えて人に質問すること"
+        }
         "satisfied" => "すべての job が終わりました",
         "timed_out" => {
             "待ちの上限に達しました（まだ終わっていない job があります。人の回答が下にあればそれに従うこと）"

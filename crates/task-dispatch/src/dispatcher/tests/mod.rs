@@ -947,6 +947,7 @@ fn cluster_spec_with_auth(id: &str, host: &str, auth: &str) -> ClusterSpec {
         work_dir: None,
         keepalive_secs: 0,
         liveness_probe_secs: 0,
+        scheduler: Some(task_core::cluster_job::ClusterScheduler::Pbs),
         job_wait: Default::default(),
     }
 }

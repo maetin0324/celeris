@@ -434,8 +434,8 @@ celeris 側の扱い（ADR-0016 D2, 実装メモ M2/M6/M7）:
 クラスタ job の終了を待って続きを走らせる。検証は `result.json` の wait と同じ
 （`task_core::cluster_job::parse_wait_request`）で、不正なら `error{retryable:true}` になる。
 `scheduler` の欄は無い（ADR 2026-11-25-cluster-scheduler-from-config D2）。書くと不正な wait になる。poll の command と
-読み方は wait のクラスタの `[[clusters]] scheduler`（`pbs` | `slurm` | `nqsv` | `none`）で決まり、`none` か欄の無い
-（未設定の）クラスタへの wait も `error{retryable:true}` になる。daemon が job を
+読み方は wait のクラスタの `[[clusters]] scheduler`（`pbs` | `slurm` | `nqsv` | `none`）で決まり、`none` のクラスタへの
+wait も `error{retryable:true}` になる。daemon が job を
 見て、終わったら（または `timeout_secs`・cancel で）次の run を始め、`context.continuation.cluster_jobs` に
 job の最終状態を渡す。`yielded` と違い、continuation の回数・進捗なしの窓・attempts には数えない。
 

@@ -77,9 +77,8 @@ impl Dispatcher {
             ));
         };
         // ADR 2026-11-25-cluster-scheduler-from-config D1: scheduler はクラスタの設定が正本（申告には無い）。
-        // `none` と、2 段の移行の 1 段目の未設定（欄が無い）は同じく断る（同 ADR の付記 2026-11-26）。
         let scheduler = spec.scheduler.ok_or_else(|| {
-            format!("cluster {cluster:?} has no job scheduler ([[clusters]] scheduler: none/unset)")
+            format!("cluster {cluster:?} has no job scheduler ([[clusters]] scheduler = \"none\")")
         })?;
         let (poll_secs, timeout_secs) = spec.job_wait.clamp(request);
         let now = self.now_utc();

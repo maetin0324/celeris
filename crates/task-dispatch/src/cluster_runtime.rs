@@ -51,8 +51,7 @@ pub struct ClusterSpec {
     pub keepalive_secs: u64,
     /// ADR 2026-11-25-cluster-scheduler-from-config D1: このクラスタの job scheduler（`[[clusters]] scheduler`）。
     /// クラスタ job の wait の poll の command と読み方の正本（worker の申告には無い）。`None` は job scheduler の
-    /// 無いノード（`scheduler = "none"`）か、2 段の移行の 1 段目で欄の無いクラスタ（未設定。同 ADR の付記 2026-11-26）で、
-    /// どちらも wait を登録しない。
+    /// 無いノード（`scheduler = "none"`）で、wait を登録しない。
     pub scheduler: Option<task_core::cluster_job::ClusterScheduler>,
     /// ADR-0090 D7: クラスタ job の durable wait の poll 間隔と上限（`[[clusters]] job_wait`）。
     pub job_wait: task_core::cluster_job::ClusterJobWaitLimits,

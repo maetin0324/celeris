@@ -1156,26 +1156,22 @@ scheduler = "pbs"
     }
 }
 
-/// ADR 2026-11-25-cluster-scheduler-from-config D1: `[[clusters]] scheduler` は `pbs | slurm | nqsv | none` だけを受け、
-/// 値が不正な config は読み込みエラー。値は `ClusterSpec.scheduler` に写り（`none` は `None`）、
-/// `job_wait.poll_failure_wake_secs` の既定は 1800。2 段の移行の 1 段目（同 ADR の付記 2026-11-26）では欄の無い
-/// `[[clusters]]`（2026-11-26 の本番の config の形）も読めて、未設定は `none` と同じ `None`（wait を断る）になる。
-/// 守る不変条件: 本番の config を書き換える前にこの版が verify を通る（欄を必須にした attempt 2 の版は verify の検査 1 で
-/// `missing field scheduler` になった）、かつ未設定のクラスタで scheduler を推測しない。2 段目でこの欠落の行を
-/// 「読み込みエラー」に戻す。
+/// ADR 2026-11-25-cluster-scheduler-from-config D1: `[[clusters]] scheduler` は必須で、`pbs | slurm | nqsv | none`
+/// だけを受ける。欄が無い config・値が不正な config は読み込みエラー。値は `ClusterSpec.scheduler` に写り
+/// （`none` は `None`）、`job_wait.poll_failure_wake_secs` の既定は 1800。旧い試験は scheduler の欄を持たない
+/// config を正しい config として読んでいたので、欄の欠落を受け付ける形を検出できない。
 #[test]
-fn cluster_scheduler_is_copied_into_the_spec_and_missing_means_unset() {
+fn cluster_scheduler_is_required_and_copied_into_the_spec() {
     use task_core::cluster_job::ClusterScheduler;
     let cluster = |id: &str, scheduler: &str| {
         format!("[[clusters]]\nid = \"{id}\"\nhost = \"{id}\"\n{scheduler}\n")
     };
     let cfg: Config = toml::from_str(&format!(
-        "{}{}{}{}{}",
+        "{}{}{}{}",
         cluster("pegasus", "scheduler = \"nqsv\""),
         cluster("sirius", "scheduler = \"pbs\""),
         cluster("slurmy", "scheduler = \"slurm\""),
         cluster("fern03", "scheduler = \"none\""),
-        cluster("unset", ""),
     ))
     .unwrap();
     cfg.validate().unwrap();
@@ -1184,8 +1180,9 @@ fn cluster_scheduler_is_copied_into_the_spec_and_missing_means_unset() {
     assert_eq!(specs["sirius"].scheduler, Some(ClusterScheduler::Pbs));
     assert_eq!(specs["slurmy"].scheduler, Some(ClusterScheduler::Slurm));
     assert_eq!(specs["fern03"].scheduler, None);
-    assert_eq!(specs["unset"].scheduler, None);
     assert_eq!(specs["sirius"].job_wait.poll_failure_wake_secs, 1800);
+    let missing = toml::from_str::<Config>(&cluster("pegasus", "")).unwrap_err();
+    assert!(missing.to_string().contains("scheduler"), "{missing}");
     for bad in ["\"PBS\"", "\"lsf\"", "\"\"", "1"] {
         assert!(
             toml::from_str::<Config>(&cluster("pegasus", &format!("scheduler = {bad}"))).is_err(),

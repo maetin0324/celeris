@@ -81,16 +81,10 @@ pub struct ClusterConfig {
     #[serde(default = "default_control_persist")]
     pub control_persist: String,
     /// ADR 2026-11-25-cluster-scheduler-from-config D1: このクラスタの job scheduler（`"pbs"` | `"slurm"` | `"nqsv"` |
-    /// `"none"`。値が不正なら読み込みエラー）。クラスタ job の wait の poll の command と読み方はこの値で決まり、worker の
-    /// wait の申告には scheduler を書かない。`"none"` は job scheduler の無いノード（fern03 等）で、そのクラスタへの wait は
-    /// 登録時に断る。
-    ///
-    /// 2 段の移行の 1 段目（同 ADR の付記 2026-11-26）: 欄が無ければ未設定（`None`）で、`"none"` と同じく wait を断る
-    /// （申告や既定の scheduler に落とさない）。verify は本番の config を新旧の版に読ませ、旧い版はこの欄を知らないため、
-    /// 本番の config に欄を足すのはこの版の昇格の後になる。撤去の条件: この版が昇格し、本番の config の全ての
-    /// `[[clusters]]` に欄が書かれた後、`Option` と `#[serde(default)]` を外して必須に戻す（責任者は運用者。同付記の 3・4）。
-    #[serde(default)]
-    pub scheduler: Option<ClusterSchedulerSetting>,
+    /// `"none"`）。必須（既定値は無い。欄が無い・値が不正なら読み込みエラー）。クラスタ job の wait の poll の command と
+    /// 読み方はこの値で決まり、worker の wait の申告には scheduler を書かない。`"none"` は job scheduler の無い
+    /// ノード（fern03 等）で、そのクラスタへの wait は登録時に断る。
+    pub scheduler: ClusterSchedulerSetting,
     /// ADR-0090 D7: クラスタ job の durable wait の既定（`job_wait = { poll_secs = 300, max_wait_secs = 86400 }`）。
     /// **本番の設定に足すのは、この欄を知る release の昇格の後**（旧い版は未知のキーで起動に失敗する）。
     #[serde(default)]
@@ -274,7 +268,7 @@ impl Config {
                         keepalive_secs: c.keepalive_secs,
                         liveness_probe_secs: c.liveness_probe_secs,
                         // ADR 2026-11-25-cluster-scheduler-from-config D1。
-                        scheduler: c.scheduler.and_then(ClusterSchedulerSetting::job_scheduler),
+                        scheduler: c.scheduler.job_scheduler(),
                         // ADR-0090 D7。
                         job_wait: c.job_wait.limits(),
                         // ADR-0053 D3（Phase 66）。

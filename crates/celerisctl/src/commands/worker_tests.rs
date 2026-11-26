@@ -165,7 +165,7 @@ fn cluster(id: &str, host: &str) -> celeris::config::ClusterConfig {
     celeris::config::ClusterConfig {
         id: id.into(),
         host: host.into(),
-        scheduler: Some(celeris::config::ClusterSchedulerSetting::Pbs),
+        scheduler: celeris::config::ClusterSchedulerSetting::Pbs,
         work_dir: None,
         concurrency: 1,
         sync: "rsync".into(),

@@ -22,14 +22,6 @@ use super::{DispatchError, Dispatcher, ops_to_store, rfc3339};
 use crate::cluster_runtime::{ClusterJobPoller, ClusterRuntime, JobPollSlot};
 use task_ops::decision::job_end_target;
 
-/// 文字列の末尾 `max` 字（stderr の最後の行が原因を持つことが多い）。
-fn tail_chars(s: &str, max: usize) -> &str {
-    match s.char_indices().rev().nth(max.saturating_sub(1)) {
-        Some((i, _)) if max > 0 => &s[i..],
-        _ => s,
-    }
-}
-
 fn parse_ts(s: &str) -> Option<OffsetDateTime> {
     OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()
 }
@@ -85,12 +77,9 @@ impl Dispatcher {
             ));
         };
         // ADR 2026-11-25-cluster-scheduler-from-config D1: scheduler はクラスタの設定が正本（申告には無い）。
-        let Some(scheduler) = spec.scheduler else {
-            return Err(format!(
-                "cluster {cluster:?} has no job scheduler ([[clusters]] scheduler = \"none\"); \
-                 celeris cannot wait for jobs there"
-            ));
-        };
+        let scheduler = spec.scheduler.ok_or_else(|| {
+            format!("cluster {cluster:?} has no job scheduler ([[clusters]] scheduler = \"none\")")
+        })?;
         let (poll_secs, timeout_secs) = spec.job_wait.clamp(request);
         let now = self.now_utc();
         let deadline =
@@ -213,61 +202,39 @@ impl Dispatcher {
         result: Result<task_worker::RemoteCommandOutput, String>,
         now: OffsetDateTime,
     ) -> Result<bool, DispatchError> {
-        // ADR 2026-11-25-cluster-scheduler-from-config D4: 失敗の poll は `Err` か、exit ≠ 0 でどの job の状態も
-        // 分からないもの。exit 0 で `Unknown` だけの poll は失敗に数えない（NQSV の Q・R の書式が未取得のため）。
-        let error = match result {
-            Ok(out) => {
-                let statuses = cluster_job::parse_poll_output(
-                    wait.scheduler,
-                    &out.stdout,
-                    &out.stderr,
-                    &wait.jobs,
-                );
-                let nothing_known = statuses.iter().all(|s| s.state == ClusterJobState::Unknown);
-                if out.exit == Some(0) || !nothing_known {
-                    return self.apply_cluster_job_statuses(wait, statuses, now);
-                }
-                tracing::warn!(task_id = %wait.task_id, wait_id = %wait.wait_id, cluster = %wait.cluster, exit = ?out.exit, stderr = %out.stderr.trim(), "cluster job poll returned no job states (ADR-0090, ADR 2026-11-25-cluster-scheduler-from-config D4)");
-                let exit = out
-                    .exit
-                    .map_or_else(|| "no exit code".to_string(), |c| format!("exit {c}"));
-                let detail = if out.stderr.trim().is_empty() {
-                    out.stdout.trim()
-                } else {
-                    out.stderr.trim()
-                };
-                format!(
-                    "{exit}: {}",
-                    tail_chars(detail, cluster_job::POLL_ERROR_MAX_CHARS)
-                )
-            }
-            Err(e) => {
-                tracing::warn!(task_id = %wait.task_id, wait_id = %wait.wait_id, cluster = %wait.cluster, error = %e, "cluster job poll failed (ADR-0090, ADR 2026-11-25-cluster-scheduler-from-config D4)");
-                e
-            }
+        // ADR 2026-11-25-cluster-scheduler-from-config D4: 失敗の poll（job の状態を返さない poll）が
+        // `poll_failure_wake_secs` 続いたら、早期起床（detail `poll_failed`）で続きの run を起こす。
+        let read = result.and_then(|out| {
+            cluster_job::read_poll_output(
+                wait.scheduler,
+                out.exit,
+                &out.stdout,
+                &out.stderr,
+                &wait.jobs,
+            )
+        });
+        let error = match read {
+            Ok(statuses) => return self.apply_cluster_job_statuses(wait, statuses, now),
+            Err(error) => error,
         };
-        let threshold = self
-            .config
-            .clusters
-            .get(&wait.cluster)
-            .map(|spec| spec.job_wait.poll_failure_wake_secs)
-            .unwrap_or_else(cluster_job::default_poll_failure_wake_secs);
+        tracing::warn!(task_id = %wait.task_id, wait_id = %wait.wait_id, cluster = %wait.cluster, error = %error, "cluster job poll returned no job states (ADR-0090, ADR 2026-11-25-cluster-scheduler-from-config D4)");
+        let threshold = self.job_wait_limits(&wait.cluster).poll_failure_wake_secs;
         let (statuses, wake) =
             cluster_job::wakeup::observe_poll_failure(wait, &error, now, threshold);
-        if let Some(reason) = wake {
-            tracing::warn!(task_id = %wait.task_id, wait_id = %wait.wait_id, cluster = %wait.cluster, error = %error, "cluster job polls kept failing past poll_failure_wake_secs; resuming as a continuation run (ADR 2026-11-25-cluster-scheduler-from-config D4)");
-            self.finish_cluster_job_wait(
-                wait,
-                ClusterJobWaitState::Satisfied,
-                statuses,
-                reason.to_string(),
-                now,
-            )?;
-            return Ok(true);
-        }
-        self.store
-            .cluster_job_wait_touch(&wait.wait_id, &rfc3339(now), &statuses)?;
-        Ok(false)
+        let Some(reason) = wake else {
+            self.store
+                .cluster_job_wait_touch(&wait.wait_id, &rfc3339(now), &statuses)?;
+            return Ok(false);
+        };
+        let state = ClusterJobWaitState::Satisfied;
+        self.finish_cluster_job_wait(wait, state, statuses, reason.to_string(), now)?;
+        Ok(true)
+    }
+
+    /// クラスタの `job_wait`（設定から消えたクラスタは既定）。
+    fn job_wait_limits(&self, cluster: &str) -> cluster_job::ClusterJobWaitLimits {
+        let spec = self.config.clusters.get(cluster);
+        spec.map(|spec| spec.job_wait).unwrap_or_default()
     }
 
     /// 完了判定の共通部（poll の結果も通知も通る）。全 job が終わっていれば `finish_cluster_job_wait`（satisfied）、
@@ -279,12 +246,7 @@ impl Dispatcher {
         now: OffsetDateTime,
     ) -> Result<bool, DispatchError> {
         let history = self.store.cluster_job_waits_for_task(wait.task_id)?;
-        let threshold = self
-            .config
-            .clusters
-            .get(&wait.cluster)
-            .map(|spec| spec.job_wait.queued_wake_secs)
-            .unwrap_or_else(cluster_job::default_queued_wake_secs);
+        let threshold = self.job_wait_limits(&wait.cluster).queued_wake_secs;
         let reason = cluster_job::wakeup::observe(wait, &history, &mut statuses, now, threshold);
         let all_finished = cluster_job::all_finished(&wait.jobs, &statuses);
         let reason = if all_finished { None } else { reason };

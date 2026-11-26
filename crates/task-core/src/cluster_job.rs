@@ -553,6 +553,36 @@ pub fn poll_script(scheduler: ClusterScheduler, prelude: &str, jobs: &[String]) 
     }
 }
 
+/// poll の結果を、job の状態か失敗の poll の要約（`Err`）に分ける（ADR 2026-11-25-cluster-scheduler-from-config D4）。
+///
+/// 失敗の poll は exit ≠ 0 でどの job の状態も分からない（`Unknown` だけの）もの。command が無い（exit 127）・usage・
+/// ssh の失敗（exit 255）がこれに当たる。exit 0 で `Unknown` だけの poll は失敗に数えない（NQSV の Q・R の書式が
+/// 未取得で、書式の違いで Q・R の job を `Unknown` と読む恐れがあるため）。要約は `exit 127: <stderr の末尾>` の形
+/// （stderr が空なら stdout の末尾）。
+pub fn read_poll_output(
+    scheduler: ClusterScheduler,
+    exit: Option<i32>,
+    stdout: &str,
+    stderr: &str,
+    jobs: &[String],
+) -> Result<Vec<ClusterJobStatus>, String> {
+    let statuses = parse_poll_output(scheduler, stdout, stderr, jobs);
+    if exit == Some(0) || statuses.iter().any(|s| s.state != ClusterJobState::Unknown) {
+        return Ok(statuses);
+    }
+    let exit = exit.map_or_else(|| "no exit code".to_string(), |c| format!("exit {c}"));
+    let detail = if stderr.trim().is_empty() {
+        stdout.trim()
+    } else {
+        stderr.trim()
+    };
+    let tail = match detail.char_indices().rev().nth(POLL_ERROR_MAX_CHARS - 1) {
+        Some((i, _)) => &detail[i..],
+        None => detail,
+    };
+    Err(format!("{exit}: {tail}"))
+}
+
 /// poll の出力を scheduler ごとに読む。
 pub fn parse_poll_output(
     scheduler: ClusterScheduler,

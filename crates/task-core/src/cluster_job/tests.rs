@@ -957,3 +957,50 @@ fn migration_0127_keeps_wait_rows_and_accepts_nqsv() {
     assert_eq!(w.scheduler, ClusterScheduler::Nqsv);
     assert_eq!(store.cluster_job_waits_waiting().unwrap().len(), 2);
 }
+
+/// ADR 2026-11-25-cluster-scheduler-from-config D4: 失敗の poll の分け方。2026-11-25 の事象の exit 127 と NQSV の
+/// usage は失敗（要約は `exit N: <stderr の末尾>`）、job の状態を 1 つでも読めた poll と exit 0 の poll は失敗でない。
+#[test]
+fn poll_results_without_job_states_are_failures_only_when_the_command_failed() {
+    let jobs = ids(&["318985", "318986"]);
+    let err = read_poll_output(
+        ClusterScheduler::Pbs,
+        Some(127),
+        "",
+        "bash: 行 1: qstat: コマンドが見つかりません\n",
+        &jobs,
+    )
+    .unwrap_err();
+    assert_eq!(err, "exit 127: bash: 行 1: qstat: コマンドが見つかりません");
+    let usage = read_poll_output(
+        ClusterScheduler::Nqsv,
+        Some(2),
+        "",
+        "qstat: invalid option -- 'x'\nusage: qstat [-f] ...",
+        &jobs,
+    )
+    .unwrap_err();
+    assert!(
+        usage.starts_with("exit 2: qstat: invalid option"),
+        "{usage}"
+    );
+    let long = "e".repeat(POLL_ERROR_MAX_CHARS + 50);
+    let tail = read_poll_output(ClusterScheduler::Pbs, None, &long, "", &jobs).unwrap_err();
+    assert_eq!(
+        tail,
+        format!("no exit code: {}", "e".repeat(POLL_ERROR_MAX_CHARS))
+    );
+    // exit 0 で何も読めない poll は失敗に数えない（`Unknown` のまま）。
+    let silent = read_poll_output(ClusterScheduler::Nqsv, Some(0), "", "", &jobs).unwrap();
+    assert!(silent.iter().all(|s| s.state == ClusterJobState::Unknown));
+    // exit ≠ 0 でも job の状態を読めれば失敗でない（PBS の一部の job が Unknown Job Id のとき）。
+    let partial = read_poll_output(
+        ClusterScheduler::Pbs,
+        Some(153),
+        "",
+        "qstat: Unknown Job Id 318985.sirius-pbs\n",
+        &jobs,
+    )
+    .unwrap();
+    assert_eq!(partial[0].state, ClusterJobState::Gone);
+}

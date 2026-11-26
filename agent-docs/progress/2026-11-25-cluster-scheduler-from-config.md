@@ -20,6 +20,9 @@ updated: 2026-11-26
 - cluster job wait: 失敗の poll を wakeup::evaluate で既存の判定の経路に通し、dispatcher の method を増やさない
 - cluster job wait: 試験用の [[clusters]] の config に必須になった scheduler を足す（cluster_admin・e2e の cluster_scenarios）
 - progress: 検査の結果（test-affected・nextest の絞り込み・clippy・fmt）
+- ADR: [[clusters]] scheduler の値 none と、そのクラスタへの wait を登録時に断る扱いを D1 に書き足す
+- cluster job wait: scheduler = none のクラスタへの wait を断る試験を足し、example・protocol・API の文書から申告の scheduler を消す
+- progress: attempt 2 の review への対応と検査の結果
 
 ## 実装前 brief
 
@@ -86,28 +89,59 @@ updated: 2026-11-26
   - C: 起床を止める（旧い「期限まで再試行」）→ 2 件とも FAIL（60 秒の状態待ちの保険で止まる。2 run、0 passed、2 failed）。
   - D: Q・R を読めた poll で連続を切らない → `polls_that_report_q_or_r_never_count_…` が FAIL（2 run、1 passed、1 failed）。
 
+### attempt 2: 前の review の指摘への対応
+
+前の review（attempt 1）は 2 点を不備とした。どちらも直した。
+
+- ADR の D1 が `pbs | slurm | nqsv` の 3 値だけを書き、実装の 4 つ目の値 `"none"`（job scheduler の無いノード。そのクラスタへの
+  wait は登録時に断る）が設計の記録に無かった。→ ADR の D1 に `none` の意味・登録時の拒否（`error(retryable)`、行も poll も無し）・
+  置く理由（必須の欄に scheduler の無いノードが `pbs` 等を仮に書くと、exit 127 で期限まで解けない事象を設定の側で作り直す）を
+  書き足し、試験と本番への移行の節にも足した。末尾に付記（2026-11-26）で書き足した経緯を残した。ADR-0090 の付記も
+  `pbs | slurm | nqsv | none` に直した。決定の中身（D2〜D5）は変えていない。
+- `config/celeris.clusters.example.toml` の `job_wait` の説明が、worker の wait の例に `"scheduler": "pbs"` を書いていた。→ 例から
+  外し、poll の command は上の `scheduler` で決まること（pbs・nqsv・slurm の command）、wait に `scheduler` を書くと断ること、
+  `poll_failure_wake_secs` の意味を書いた。
+- 同じ種類の残りを探して直した（`grep -rn '"scheduler"\s*:'`）: `docs/protocol/worker-protocol.md` §4.8 の wait の例と欄の表が
+  `scheduler`（省略時は `pbs`）を書いていた → 例と表の行を消し、「`scheduler` の欄は無い。書くと不正な wait。`[[clusters]] scheduler`
+  で決まり、`none` のクラスタへの wait も `error{retryable:true}`」と書いた。`docs/api/v1/api.md` の `cluster_job_wait.scheduler` の値が
+  `pbs | slurm` だった → `pbs | slurm | nqsv`（登録の時点の `[[clusters]] scheduler` の写し）に直した。
+  残りの `"scheduler":` は、dagbench の submit spec・submit-audit の台帳・task の詳細の `cluster_job_wait`（wait の行の値）・
+  過去の ADR の本文と過去の進捗で、wait の申告ではないので変えない。
+- 試験を 1 件足した: `task-dispatch dispatcher::tests::cluster_job_wait::a_wait_on_a_cluster_without_a_job_scheduler_is_a_retryable_failure`。
+  守る不変条件: 設定に scheduler の無いクラスタ（`scheduler = "none"`）で poll の command を推測しない（行を作らず poll もせず、
+  run は `invalid cluster job wait: … has no job scheduler` の retryable な失敗）。既存の試験はどれも scheduler のあるクラスタで
+  登録するので、この経路を検出できない（`none` の config の読み込みは `cluster_scheduler_is_required_and_copied_into_the_spec` が見る）。
+- 失敗注入 E（`artifacts/failure-injection.txt`）: 登録で `none` を断らず旧い既定の `Pbs` に落とす → 足した試験が FAIL
+  （1 run、0 passed、1 failed。wait が登録されて attempts が 1 にならず、`tick_until` の 60 秒の打ち切りで止まる）。
+  注入を外す（`git checkout -- crates/task-dispatch/src/dispatcher/cluster_job_wait.rs`、diff 空を確認）と 2 件（足した試験と
+  `a_wait_on_an_unknown_cluster_is_a_retryable_failure`）とも pass。
+
 ### 3. 検査
 
 提出時の HEAD で実行した結果は「検査の結果」節に書く。
 
 ## 検査の結果（提出時の HEAD）
 
-提出時の HEAD（最後のコードの commit と fmt の後。main の取り込み・rebase はしていない）で実行した。この後の commit は
-この進捗ファイルだけを変える。
+提出時の HEAD（attempt 2 の最後のコードの commit の後。main は `git merge-base HEAD main` から動いておらず、取り込み・rebase は
+していない）で実行した。この後の commit はこの進捗ファイルだけを変える。
 
-- `bash scripts/dev/test-affected.sh` → exit 0（2026-11-26T01:12Z〜01:24Z。fmt の折り返しの前の 00:55Z〜01:07Z の 1 回目も exit 0）。
-  repo-health は verdict=pass、web の型検査（tsc -b）は通り、web の unit は `Test Files 108 passed (108)`・`Tests 774 passed (774)`、
-  Rust は `Summary [498.698s] 8929 tests run: 8929 passed (7 slow), 34 skipped`。
-  - 前の run の 1 回目は、`[[clusters]] scheduler` を必須にしたことで欄の無い試験用の config が読み込みエラーになり、
+- `bash scripts/dev/test-affected.sh` → exit 0（2026-11-26、attempt 2）。repo-health は verdict=pass（`fail_grade=0`）、web の型検査
+  （tsc -b）は通り、web の unit は `Test Files 108 passed (108)`・`Tests 774 passed (774)`、Rust は
+  `Summary [604.432s] 8930 tests run: 8930 passed (12 slow), 34 skipped`（attempt 1 の 8929 件に足した試験 1 件）。
+  - repo-health の warning（advisory、合否に入らない）が 2 件ある。`dup.contract`: `celeris::config::cluster::ClusterJobWaitConfig`
+    （config の欄の読み込みと検証）と `task_core::cluster_job::ClusterJobWaitLimits`（dispatcher が使う値）が似ている。前者が後者を
+    作る層の違いで、`poll_failure_wake_secs` を両方に足したので似た形が増えた。`dup.public-surface`: `cluster_job::wakeup::evaluate` が
+    ほかの module の `evaluate` と同名（名前だけの一致）。どちらも attempt 1 の変更から出ており、attempt 2 では変えていない。
+  - attempt 1 の 1 回目は、`[[clusters]] scheduler` を必須にしたことで欄の無い試験用の config が読み込みエラーになり、
     `celeris cluster_admin::tests` の 4 件と `e2e::cluster_scenarios` の 2 件
     （`missing_control_master_records_cluster_unavailable_and_does_not_block_idle`・`worker_run_cluster_without_control_master_exits_4`）
     が落ちた（`missing field scheduler`）。これらの config は job scheduler を使わない（wait を申告しない）ので
     `scheduler = "none"` を足した。試験の期待値は変えていない。
-- `cargo nextest run -p task-core -p task-dispatch -p task-worker -E 'test(/cluster_job|job_wait|poll_fail|scheduler/)'`
-  → exit 0、`69 tests run: 69 passed, 4790 skipped`。PBS Pro・Slurm・NQSV の poll の読み方の既存の試験
-  （`task-core cluster_job::tests::*`）はこの 69 件に入り、期待値は変えていない。
+- `cargo nextest run -p task-core -p task-dispatch -p task-worker -p celeris -E 'test(/cluster_job|job_wait|poll_fail|scheduler/)'`
+  → exit 0、`72 tests run: 72 passed, 5568 skipped`。PBS Pro・Slurm・NQSV の poll の読み方の既存の試験
+  （`task-core cluster_job::tests::*`）はこの 72 件に入り、期待値は変えていない。
 - `cargo clippy --workspace -- -D warnings` → exit 0。
-- `cargo fmt --all -- --check` → exit 0（`cargo fmt --all` で試験用の config の 1 行を折り返した後）。
+- `cargo fmt --all -- --check` → exit 0。
 
 ## 本番への移行
 

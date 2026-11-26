@@ -16,6 +16,10 @@ updated: 2026-11-26
 - ADR: クラスタ job の wait の scheduler をクラスタの設定で決め、poll の失敗が続いたら run を起こす
 - cluster job wait: scheduler を [[clusters]] scheduler で決め、poll の失敗が続いたら poll_failed で run を起こす
 - progress: cluster job の wait の scheduler をクラスタの設定で決める task の証拠と本番への移行
+- cluster job wait: 失敗の poll の分け方を task_core::cluster_job::read_poll_output に移し、dispatcher の本体を増やさない
+- cluster job wait: 失敗の poll を wakeup::evaluate で既存の判定の経路に通し、dispatcher の method を増やさない
+- cluster job wait: 試験用の [[clusters]] の config に必須になった scheduler を足す（cluster_admin・e2e の cluster_scenarios）
+- progress: 検査の結果（test-affected・nextest の絞り込み・clippy・fmt）
 
 ## 実装前 brief
 
@@ -88,7 +92,22 @@ updated: 2026-11-26
 
 ## 検査の結果（提出時の HEAD）
 
-（下に追記）
+提出時の HEAD（最後のコードの commit と fmt の後。main の取り込み・rebase はしていない）で実行した。この後の commit は
+この進捗ファイルだけを変える。
+
+- `bash scripts/dev/test-affected.sh` → exit 0（2026-11-26T01:12Z〜01:24Z。fmt の折り返しの前の 00:55Z〜01:07Z の 1 回目も exit 0）。
+  repo-health は verdict=pass、web の型検査（tsc -b）は通り、web の unit は `Test Files 108 passed (108)`・`Tests 774 passed (774)`、
+  Rust は `Summary [498.698s] 8929 tests run: 8929 passed (7 slow), 34 skipped`。
+  - 前の run の 1 回目は、`[[clusters]] scheduler` を必須にしたことで欄の無い試験用の config が読み込みエラーになり、
+    `celeris cluster_admin::tests` の 4 件と `e2e::cluster_scenarios` の 2 件
+    （`missing_control_master_records_cluster_unavailable_and_does_not_block_idle`・`worker_run_cluster_without_control_master_exits_4`）
+    が落ちた（`missing field scheduler`）。これらの config は job scheduler を使わない（wait を申告しない）ので
+    `scheduler = "none"` を足した。試験の期待値は変えていない。
+- `cargo nextest run -p task-core -p task-dispatch -p task-worker -E 'test(/cluster_job|job_wait|poll_fail|scheduler/)'`
+  → exit 0、`69 tests run: 69 passed, 4790 skipped`。PBS Pro・Slurm・NQSV の poll の読み方の既存の試験
+  （`task-core cluster_job::tests::*`）はこの 69 件に入り、期待値は変えていない。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo fmt --all -- --check` → exit 0（`cargo fmt --all` で試験用の config の 1 行を折り返した後）。
 
 ## 本番への移行
 

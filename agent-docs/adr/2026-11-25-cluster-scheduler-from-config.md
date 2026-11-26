@@ -40,7 +40,7 @@ job 318985〜318988 を `"scheduler": "pbs"` で待つ wait（01M89PTZ9YVYY5C0NM
 欄の無い config を読み込みエラーにする。
 
 `"none"` は job scheduler の無いノード（remote-exec だけに使うワークステーション。example の fern03）の値。そのクラスタへの
-wait は、登録（`Dispatcher::cluster_job_wait_for`）で `cluster "<id>" has no job scheduler ([[clusters]] scheduler is "none" or not set)`
+wait は、登録（`Dispatcher::cluster_job_wait_for`）で `cluster "<id>" has no job scheduler ([[clusters]] scheduler: none/unset)`
 として断る（1 段目の「未設定」も同じ文で断る）。run は `error(retryable)`（`invalid cluster job wait: …`、attempts を 1 使う）で終わり、行は作らず poll もしない。
 次の試行の run は wait を使わずに終わりを確かめる。`none` を置く理由: 欄を必須にすると、scheduler の無いノードにも値が要る。
 `pbs` 等を仮に書かせると、そのノードへの wait がクラスタに無い command で poll され、今回の事象（exit 127 で期限まで解けない）を
@@ -168,7 +168,7 @@ ADR-0075 D7（設定の新しい欄は既定のままで動くように作り、
    の `None` に写し、`none` と同じく wait を登録時に断る。値が不正な config は 1 段目でも読み込みエラー。worker の申告の欄を消す
    こと（D2）、poll の失敗で起こすこと（D4）は 1 段目で入る。
 2. **2 段目**: 欄を必須に戻す（`Option` と `#[serde(default)]` を外し、欄の無い config を読み込みエラーにする。断る文から
-   「or not set」を消す。config の試験を「読み込みエラー」に戻す）。
+   「/unset」を消す。config の試験を「読み込みエラー」に戻す）。
 3. **2 段目に進む条件**: (a) 1 段目の release が本番に昇格している（2 段目の verify の N-1 が欄を知る版になる）、かつ
    (b) 本番の `config.toml` の全ての `[[clusters]]` に `scheduler` が書かれ、daemon がその config で起動している。
 4. **撤去の責任者**: 運用者（claude-code-ops-session）が (b) を確かめた後に 2 段目の task を起票する（task

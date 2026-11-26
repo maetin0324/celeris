@@ -30,13 +30,18 @@ job 318985〜318988 を `"scheduler": "pbs"` で待つ wait（01M89PTZ9YVYY5C0NM
 
 ### D1. scheduler の正本は `[[clusters]] scheduler`
 
-`[[clusters]]` に必須の欄 `scheduler = "pbs" | "slurm" | "nqsv" | "none"` を足す。既定値は置かない。欄が無い config、値が
-この 4 つ以外の config は読み込みエラーにする（serde の必須欄と `celeris::config::cluster::ClusterSchedulerSetting` の enum で
-弾く）。設定は `ClusterSpec.scheduler: Option<ClusterScheduler>` に写す（`none` は `None`）。
+`[[clusters]]` に欄 `scheduler = "pbs" | "slurm" | "nqsv" | "none"` を足す。既定値は置かない。値がこの 4 つ以外の config は
+読み込みエラーにする（`celeris::config::cluster::ClusterSchedulerSetting` の enum で弾く）。設定は
+`ClusterSpec.scheduler: Option<ClusterScheduler>` に写す（`none` は `None`）。
+
+欄は 2 段で必須にする（下の「付記（2026-11-26）: 2 段の移行」）。1 段目（この ADR の release）は欄の無い `[[clusters]]` を読み、
+その scheduler を「未設定」として `none` と同じく `None` に写す（そのクラスタへの wait は登録時に断る。worker の申告にも、
+既定の scheduler にも落とさない）。2 段目（本番の config の全ての `[[clusters]]` に欄が書かれた後の release）で欄を必須にし、
+欄の無い config を読み込みエラーにする。
 
 `"none"` は job scheduler の無いノード（remote-exec だけに使うワークステーション。example の fern03）の値。そのクラスタへの
-wait は、登録（`Dispatcher::cluster_job_wait_for`）で `cluster "<id>" has no job scheduler ([[clusters]] scheduler = "none")` として
-断る。run は `error(retryable)`（`invalid cluster job wait: …`、attempts を 1 使う）で終わり、行は作らず poll もしない。
+wait は、登録（`Dispatcher::cluster_job_wait_for`）で `cluster "<id>" has no job scheduler ([[clusters]] scheduler is "none" or not set)`
+として断る（1 段目の「未設定」も同じ文で断る）。run は `error(retryable)`（`invalid cluster job wait: …`、attempts を 1 使う）で終わり、行は作らず poll もしない。
 次の試行の run は wait を使わずに終わりを確かめる。`none` を置く理由: 欄を必須にすると、scheduler の無いノードにも値が要る。
 `pbs` 等を仮に書かせると、そのノードへの wait がクラスタに無い command で poll され、今回の事象（exit 127 で期限まで解けない）を
 設定の側で作り直す。`none` なら誤った wait は登録の時点で run に返る。
@@ -124,16 +129,19 @@ Q・R なら待ち直す。失敗の原因がクラスタの設定（`[[clusters
     `satisfied`（detail `poll_failed`）になり task が `ready` に戻る。
   - 失敗の間に Q・R を返す poll が挟まると連続が切れ、閾値を超えても起きない。Q・R を返し続ける間は起きない。
 - worker の試験: `scheduler` を含む `result.json` の wait は不正な wait になる。前置きの `poll_failed` の文。
-- config の試験: `scheduler` の無い `[[clusters]]`、値が不正な `[[clusters]]`、`poll_failure_wake_secs = 0` は読み込みエラー。
-  `scheduler = "none"` は読めて `ClusterSpec.scheduler` が `None` になる。
+- config の試験: 値が不正な `[[clusters]]`、`poll_failure_wake_secs = 0` は読み込みエラー。`scheduler = "none"` は読めて
+  `ClusterSpec.scheduler` が `None` になる。1 段目では `scheduler` の無い `[[clusters]]`（2026-11-26 の本番の config の形）が読めて
+  `ClusterSpec.scheduler` が `None` になる（2 段目でこの試験を「読み込みエラー」に戻す）。
 - dispatcher の試験: `scheduler` が `None` のクラスタへの wait は retryable な失敗（`has no job scheduler`）で、行も poll も無い。
 - PBS Pro・Slurm・NQSV の既存の poll の読み方の試験の期待値は変えない。試験は外部ネットワークに出ない。
 
 ## 本番への移行
 
-- config: 全ての `[[clusters]]` に `scheduler` を足す。**この欄を知る release の昇格と同時に**書き換える（旧い版は未知の欄で、
-  新しい版は欄が無いと起動に失敗する）。pegasus = `"nqsv"`、sirius = `"pbs"`。fern03 等ほかのクラスタは scheduler を確かめて書く
-  （job scheduler が無ければ `"none"`。手順は task の進捗ファイルの「本番への移行」節）。
+- config: この release（1 段目）は本番の config を書き換えずに verify・昇格する。**昇格の後**に全ての `[[clusters]]` に `scheduler` を
+  足し、daemon を再起動する（`clusters` は起動時にだけ読む欄。ADR 2026-10-22-dynamic-config）。pegasus = `"nqsv"`、sirius = `"pbs"`。
+  fern03 等ほかのクラスタは scheduler を確かめて書く（job scheduler が無ければ `"none"`。手順は task の進捗ファイルの「本番への移行」節）。
+  書き換えの後は、この欄を知らない release（この release より前）へ戻すときに `scheduler` の行も消す。
+- 昇格から書き換えまでの間、欄の無いクラスタへの wait は登録時に断られる（run は `error(retryable)`）。
 - DB: migration は無い。既存の wait の行の `scheduler` は書き換えない。
 - 昇格の前に `pbs` で登録された Pegasus の `waiting` の wait（01M89PTZ9YVYY5C0NMR1H9E364 など）は、昇格の後も `qstat -xf` で
   poll し続けて失敗するが、D4 により `poll_failure_wake_secs`（既定 30 分）の後に `poll_failed` で続きの run が起きる。
@@ -141,3 +149,31 @@ Q・R なら待ち直す。失敗の原因がクラスタの設定（`[[clusters
 > 付記（2026-11-26）: D1 の値 `"none"` と、そのクラスタへの wait を登録時に断る扱いを書き足した。実装（attempt 1）は `none` を
 > 受けていたが、この ADR の D1 は 3 つの値しか書いておらず、review で「設計の記録に無い」と指摘されたため。決定の中身
 > （scheduler の正本は設定だけ・申告の欄は消す・poll の失敗で起こす）は変えない。
+
+## 付記（2026-11-26）: 2 段の移行
+
+attempt 2 までの実装は `[[clusters]] scheduler` を 1 段で必須にした。取り込みの後のリリース準備
+（`scripts/selfdeploy/prepare.sh`、release c7863978ccb5）は verify の検査 1 で
+``failed to parse config: missing field `scheduler` in `clusters` `` になり、失敗した。
+
+理由: `verify.sh` は本番の `config.toml` を**そのまま**新しい版（検査 1）と旧い版 N-1（検査 5）の両方に読ませる
+（`docs/ops/selfdeploy.md` §8 の末尾、ADR-0041）。N-1（`[[clusters]]` に `deny_unknown_fields`）は `scheduler` を知らないので、
+欄を書いた config では検査 5 と rollback が壊れ、旧い daemon は再起動できない。欄を必須にした新しい版は、欄の無い config では
+検査 1 で起動しない。両方が読める config は無いので、1 段で必須にした release は自動の取り込み・リリース準備を通れない。
+ADR-0075 D7（設定の新しい欄は既定のままで動くように作り、それを知る release の昇格の後に本番の config に足す）と同じ順序が要る。
+
+決定:
+
+1. **1 段目（この ADR の release）**: `ClusterConfig.scheduler` は `Option`（欄が無ければ「未設定」）。未設定は `ClusterSpec.scheduler`
+   の `None` に写し、`none` と同じく wait を登録時に断る。値が不正な config は 1 段目でも読み込みエラー。worker の申告の欄を消す
+   こと（D2）、poll の失敗で起こすこと（D4）は 1 段目で入る。
+2. **2 段目**: 欄を必須に戻す（`Option` と `#[serde(default)]` を外し、欄の無い config を読み込みエラーにする。断る文から
+   「or not set」を消す。config の試験を「読み込みエラー」に戻す）。
+3. **2 段目に進む条件**: (a) 1 段目の release が本番に昇格している（2 段目の verify の N-1 が欄を知る版になる）、かつ
+   (b) 本番の `config.toml` の全ての `[[clusters]]` に `scheduler` が書かれ、daemon がその config で起動している。
+4. **撤去の責任者**: 運用者（claude-code-ops-session）が (b) を確かめた後に 2 段目の task を起票する（task
+   01M8AJ2STJRB0VQCCFRXQQ3R2P の進捗ファイルの「提案」）。
+
+この「未設定」は旧い仕組みへの互換分岐ではない。未設定のクラスタでも scheduler を worker の申告や既定の `pbs` から推測せず、
+wait を断る（正本は設定だけのまま。D3 の答えは変わらない）。CLAUDE.md の「移行のために旧い仕組みを一時的に残すときは撤去の条件と
+撤去の責任者を書く」に従い、上の 3・4 に書いた。

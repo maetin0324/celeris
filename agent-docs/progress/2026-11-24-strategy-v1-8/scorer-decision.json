@@ -1,0 +1,37 @@
+{
+  "scorer": "model:claude-fable-5-1",
+  "axes": [
+    "execution success",
+    "epistemic progress",
+    "parent goal achievement",
+    "unsupported claims"
+  ],
+  "decided_by": "human:rmaeda",
+  "decided_at": "2026-11-27",
+  "decision": "人は 4 軸を採点しない。Fable の model が盲検で付ける。pivot の時点とコストの 2 軸は開封の後に機械（pilot_score.py machine-axes）が付ける。",
+  "decision_source": "operator の対話 session（2026-11-27 10:3xZ）。段 axes の後の確認への人の回答「採点の件ですが面倒すぎます、Fable5.2なら私より賢いと思うのでFableにやらせてください」",
+  "relayed_by": "external_operator:claude-code-ops-session",
+  "model_note": "claude-fable-5-2 はこの環境に無く、使えた最新の Fable が claude-fable-5-1。operator が Claude Code の subagent として 1 回だけ走らせた。",
+  "input": {
+    "name": "data.json",
+    "sha256": "2899d50e5022ba8f26f0de3ea513948ba715addd8ef8af072d6af9a6422ead9e",
+    "content": "pilot-scoring.md の伏せた記録・6 軸の基準・決定的な指標の写し（採点 Artifact と同じ）"
+  },
+  "transcription": {
+    "target": "root の artifacts の pilot-scoring.md の採点欄（4 軸の点・根拠・採点者・レビュー時間）",
+    "by": "external_operator:claude-code-ops-session",
+    "rewrites": "根拠の `|` を `｜` に、改行を空白に替えた。pivot の時点・コストの行は空のまま、ほかの byte は変えていない",
+    "sha256_before": "fa074884b9113ddcf564a93d32718e8119d82b66377d4ebc1359e30d456754d9",
+    "sha256_after": "02f9b38b27c9e1ef9d349cc3a34fadc4ff224be86fb094d65cdc577a872a5d30"
+  },
+  "scorer_run": {
+    "window_utc": "2026-11-27T10:34Z/2026-11-27T10:40Z",
+    "wall_seconds": 335.7,
+    "tool_calls": {
+      "Read": 2,
+      "Write": 6
+    },
+    "tool_calls_note": "Read は 2 回とも data.json、Write は出力 6 file。pilot-key.json・answer_key.json・research-case.md・metrics.json・machine-axes.md・repo は開いていない（operator が subagent の transcript で確かめた）"
+  },
+  "review_minutes_note": "採点欄のレビュー時間（分）0.93 は subagent の wall 335.7 s を 6 表で等分した値（335.7 / 6 / 60 = 0.93）で、人の時間ではない"
+}

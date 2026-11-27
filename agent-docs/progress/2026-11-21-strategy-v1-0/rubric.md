@@ -6,10 +6,11 @@
 
 ## 採点の手順
 
-1. 採点者は人 1 名以上。方式の名を伏せた記録（各時点の判定・根拠・次の手・費用の記録）を受け取る。伏せ方: 記録の file 名を乱数の id に替え、方式の対応表は採点の後まで渡さない。
+1. 採点者は人 1 名以上か、人が採点者に決めた model。採点欄の採点者は `human:<名>` か `model:<id>` と書く。model の採点者には人の決定の記録（scorer・軸・決めた人 `human:<名>`・決めた日）が要り、`scripts/dev/parent-eval-blind/pilot_score.py check-graded --decision <記録の json>` が記録の無い model の採点者を通さない。実装者・CoS・operator は採点者にならない。方式の名を伏せた記録（各時点の判定・根拠・次の手・費用の記録）を受け取る。伏せ方: 記録の file 名を乱数の id に替え、方式の対応表は採点の後まで渡さない。
+   子 8 の採点者は、人 rmaeda が 2026-11-27 に決めた `model:claude-fable-5-1`（記録 `agent-docs/progress/2026-11-24-strategy-v1-8/scorer-decision.json`）。子 9 で model の採点者を使うかは人の確認待ち。
 2. 採点者は answer key（`replay/answer_key.json` と研究ケースの参照表）を**採点の後に**見る。先に自分の判定を書き、後で差を記録する。
-3. 採点の分担（人の決定 2026-11-25）: 人は 4 つの軸（execution success・epistemic progress・parent goal achievement・unsupported claims）を下の表の基準で 0〜2 点で付け、根拠（slice の file と行、event の (task, seq)）を 1 行書く。根拠を書けない点は 0 にする。採点者（`human:<名>`）とレビュー時間（分）も書く。
-   pivot の時点とコストの 2 軸は人が付けない。人の採点の後に方式の対応表を開いてから、機械（`scripts/dev/parent-eval-blind/pilot_score.py machine-axes`）が下の表の 2/1/0 点の基準を answer key・研究ケースの参照表・`metrics.json` に当てて付け、根拠を「機械:」で始めて当てた規則と数値を書く。規則と数値は子 8 の進捗 file に書く。
+3. 採点の分担（人の決定 2026-11-25）: 採点者（手順 1 の人か model）は 4 つの軸（execution success・epistemic progress・parent goal achievement・unsupported claims）を下の表の基準で 0〜2 点で付け、根拠（slice の file と行、event の (task, seq)）を 1 行書く。根拠を書けない点は 0 にする。採点者（`human:<名>` か `model:<id>`）とレビュー時間（分）も書く。model の採点者のレビュー時間は model の wall で、人の時間ではない（集計で区別する）。
+   pivot の時点とコストの 2 軸は採点者が付けない。4 軸の採点の後に方式の対応表を開いてから、機械（`scripts/dev/parent-eval-blind/pilot_score.py machine-axes`）が下の表の 2/1/0 点の基準を answer key・研究ケースの参照表・`metrics.json` に当てて付け、根拠を「機械:」で始めて当てた規則と数値を書く。規則と数値は子 8 の進捗 file に書く。
    子 9 で同じ分担を使うかは人の確認待ち（子 8 の進捗の「提案」）。
 4. 2 名で採点したら軸ごとの差を記録し、差が 1 点を超えた軸は話し合って 1 つにする（話し合いの前の点も残す）。
 5. 結果は `agent-docs/progress/` の子 8 の進捗 file に表で残す（方式 × 軸 × 採点者）。

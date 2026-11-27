@@ -4,12 +4,15 @@
     python3 -I pilot_score.py blind --runs <dir> [--runs <dir> ...] --metrics <metrics.json> --out <pilot-scoring.md>
         --key-out <pilot-key.json> [--seed N] [--repo-copy <md>]
     python3 -I pilot_score.py check-blank <md>       # 節がそろい、採点欄が空で、方式の名が無い（repo 用の写しも受ける）
-    python3 -I pilot_score.py check-human <md>       # 人の 4 軸が 0〜2 で根拠が空でない、採点者が human:<名>、レビュー時間が数、
+    python3 -I pilot_score.py check-graded <md> [--decision <json>]
+                                                     # 採点者の 4 軸が 0〜2 で根拠が空でない、採点者が human:<名> か
+                                                     # --decision の人の決定がある model:<id>、レビュー時間が数、
                                                      # 機械の 2 軸（pivot の時点・コスト）の行は空か根拠が「機械:」で始まる
     python3 -I pilot_score.py machine-axes --scoring <md> --key <pilot-key.json> --metrics <metrics.json>
-        --answer-key <answer_key.json> [--out <json>]
-    python3 -I pilot_score.py check-scored <md>      # 6 軸が 0〜2、人の 4 軸の根拠が空でない、機械の 2 軸の根拠が「機械:」で始まる
-    python3 -I pilot_score.py tally --scoring <md> [--scoring <md> ...] --key <pilot-key.json> [--out <json>]
+        --answer-key <answer_key.json> [--decision <json>] [--out <json>]
+    python3 -I pilot_score.py check-scored <md> [--decision <json>]
+                                                     # check-graded に加え、機械の 2 軸が 0〜2 の点と「機械:」の根拠で埋まっている
+    python3 -I pilot_score.py tally --scoring <md> [--scoring <md> ...] --key <pilot-key.json> [--decision <json>] [--out <json>]
 
 blind: --runs（driver の出力。反復ごとの dir またはその親 dir。dir の名が反復の名）と --metrics（parent-eval-blind-compare.py --pilot の出力）から、
 事例ごとに方式を乱数の id（8 文字）に替えた記録（時点ごとの判定・根拠・次の手・費用と、answer key に依らない指標）と、
@@ -17,9 +20,12 @@ rubric の 6 軸 × 0〜2 点と根拠の空欄・採点者・レビュー時間
 pilot-key.json の sha256 を書く。方式の名・run id・判断 id・harness の名・史実の参照の点・answer key の値は書かない。
 時点の中の記録の順は乱数で並べる。--seed を渡すと同じ入力で同じ byte。--repo-copy は研究ケースの本文（理由・主張・版の文）を
 除いた写し（repo に置く用。研究ケースの本文を repo に写さない。ADR D9）。
-採点の分担（人の決定 2026-11-25、ADR D5・D7 の付記）: 人は 4 軸（execution success・epistemic progress・parent goal achievement・
-unsupported claims）とレビュー時間（分）を付ける。pivot の時点とコストの 2 軸は人が付けず、開封の後に machine-axes が付ける。
-machine-axes: check-human と pilot-key.json の sha256（採点の file の値）・metrics.json の sha256（key の値）・answer key の sha256
+採点の分担（人の決定 2026-11-25、ADR D5・D7 の付記）: 採点者は 4 軸（execution success・epistemic progress・parent goal achievement・
+unsupported claims）とレビュー時間（分）を付ける。pivot の時点とコストの 2 軸は採点者が付けず、開封の後に machine-axes が付ける。
+採点者（人の決定 2026-11-27、ADR D5 付記 2、rubric の手順 1・3）: `human:<名>` は決定無しで通る。`model:<id>` は --decision の json
+（人の決定の記録）の scorer が同じ id で、decided_by が `human:<名>`、decided_at が YYYY-MM-DD、axes が採点者の 4 軸と同じときだけ通る。
+ほかの採点者（`operator:` など）は通らない。model の採点者のレビュー時間は model の wall で、人の時間ではない（tally が区別して出す）。
+machine-axes: check-graded と pilot-key.json の sha256（採点の file の値）・metrics.json の sha256（key の値）・answer key の sha256
 （metrics の値）を確かめてから key を開き、pivot の時点とコストの 2 行だけを点と「機械: <規則> <数値>」で埋める（ほかの byte を
 変えない。同じ入力でもう一度流しても同じ byte）。--out に id ごとの規則と数値を書く。規則は反復ごとに当て、id の点は反復の最小。
 - pivot の時点: 検知できた時点（replay は answer key の first_detectable、研究ケースは ADR D2.2 の反証の 11.20）から metrics の
@@ -27,11 +33,13 @@ machine-axes: check-human と pilot-key.json の sha256（採点の file の値�
   前の時点の検知は負）が 1 以下で 2、2〜3 で 1、4 以上か検知無しで 0。wrong_pivots が 2 以上なら 0。invalid の記録は検知に数えない。
 - コスト: unneeded_after_first_detectable に方式の llm_runs・usd を足し、史実（metrics の history: 137 run・264.2525 USD）に対する
   比の大きい方が 25 % 以下で 2、75 % 以下で 1、超えたら 0。研究ケースは史実の基準が無いので 0（根拠に「史実の基準が無い・未確認」）。
-tally: 各採点の file の pilot-key.json の sha256 を確かめてから開封し、方式 × 軸 × 採点者の表（機械の 2 軸に「（機械）」）と
-合格線の判定を出す。check-scored を通らない（機械の 2 軸が埋まっていない）file は開封しない。
+tally: 各採点の file の pilot-key.json の sha256 を確かめてから開封し、方式 × 軸 × 採点者の表（機械の 2 軸に「（機械）」、model の
+採点者のレビュー時間に「model の wall・人の時間ではない」）と合格線の判定を出す。check-scored を通らない（機械の 2 軸が埋まって
+いない、model の採点者に人の決定が無い）file は開封しない。
 exit: 0 = 成功（tally は合格線を満たさなくても 0）、1 = 検査の不合格・sha256 の不一致・記録が読めない、2 = 使い方の誤り。
 """
 import argparse
+import datetime
 import hashlib
 import json
 import pathlib
@@ -67,6 +75,10 @@ AXIS = {"execution": "execution success", "epistemic": "epistemic progress", "go
 # 人が付けない 2 軸（人の決定 2026-11-25）。開封の後に machine-axes が付け、根拠を MACHINE で始める。
 MACHINE_AXES = (AXIS["pivot"], AXIS["cost"])
 MACHINE = "機械:"
+# 採点者の欄（人の決定 2026-11-27、ADR D5 付記 2）。model は --decision の人の決定の記録があるときだけ通る。
+HUMAN_SCORER = re.compile(r"human:\S+")
+MODEL_SCORER = re.compile(r"model:\S+")
+MODEL_MINUTES = "model の wall・人の時間ではない"
 # 埋め込んだ rubric の節のうち、一致を見る節。「採点の手順」は有無だけを見る（材料を作った後に人が手順 3 を変え、材料の作り直しを禁じた）。
 RUBRIC_EXACT = ("軸と基準", "合格線")
 # 研究ケースの検知できた時点（ADR D2.2: 11.20 で yield でも止まり、早すぎた結論が反証された）。
@@ -213,7 +225,9 @@ def render(records, stages, metrics, key, key_sha, metrics_path, rng_order, repo
     lines = ["# 対照 pilot の盲検の採点材料（戦略層 v1 子 8）", "", head, "", "## この文書について", "",
              "- 方式の名を、事例ごとに乱数の id（8 文字）に替えた。対応表は pilot-key.json にあり、採点の後まで開かない。",
              f"- pilot-key.json の sha256: `{key_sha}`",
-             "- 採点者は人（rubric の手順）。実装者・CoS・operator は採点しない。採点欄の点・根拠・採点者（`human:<名>`）・レビュー時間（分）を埋める。",
+             "- 採点者は人（`human:<名>`）か、人の決定の記録がある model（`model:<id>`）（rubric の手順 1）。実装者・CoS・operator は採点しない。",
+             "- 採点者は 4 軸の点・根拠と採点者・レビュー時間（分）を埋め、pivot の時点とコストの行は空のまま残す（開封の後に機械が付ける。rubric の手順 3）。"
+             "model の採点者のレビュー時間は model の wall で、人の時間ではない。",
              "- 既知の限界: 伏せたのは名前だけで、記録の内容（親の途中評価の本文の有無・戦略の版の有無）から方式を推測できる。",
              f"- 記録の文の中の方式の名に当たる語は {REDACTED} に替えた。answer key の値と史実の参照の点は書いていない。"]
     if repo_copy:
@@ -330,9 +344,53 @@ def blank_problems(md):
     return problems
 
 
-def human_problems(md):
-    """人の 4 軸・採点者・レビュー時間が埋まり、機械の 2 軸の行が空か機械の根拠であること（check-human）。"""
+def graded_axes():
+    """採点者が付ける 4 軸（rubric の 6 軸から機械の 2 軸を除いたもの。rubric の順）。"""
+    return [a for a in axes() if a not in MACHINE_AXES]
+
+
+def load_decision(path):
+    """--decision の json（model の採点者を決めた人の決定の記録）。path が無ければ None。"""
+    if path is None:
+        return None
+    doc = json.loads(pathlib.Path(path).read_text())
+    if not isinstance(doc, dict):
+        raise ValueError(f"{path}: --decision is not a JSON object")
+    return doc
+
+
+def is_date(value):
+    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        return False
+    try:
+        datetime.date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
+def decision_problems(decision):
+    """人の決定の記録が model の採点者を認める形か（scorer が model:<id>、decided_by が human:<名>、decided_at が YYYY-MM-DD、
+    axes が採点者の 4 軸と同じ）。"""
+    problems = []
+    if not MODEL_SCORER.fullmatch(str(decision.get("scorer") or "")):
+        problems.append("--decision の scorer が model:<id> でない")
+    if not HUMAN_SCORER.fullmatch(str(decision.get("decided_by") or "")):
+        problems.append("--decision の decided_by が human:<名> でない")
+    if not is_date(decision.get("decided_at")):
+        problems.append("--decision の decided_at が YYYY-MM-DD でない")
+    got = decision.get("axes")
+    if not isinstance(got, list) or sorted(map(str, got)) != sorted(graded_axes()):
+        problems.append(f"--decision の axes が採点者の 4 軸 {graded_axes()} と違う")
+    return problems
+
+
+def graded_problems(md, decision=None):
+    """採点者の 4 軸・採点者・レビュー時間が埋まり、機械の 2 軸の行が空か機械の根拠であること（check-graded）。
+    採点者は human:<名>、または decision（人の決定の記録）が認めた model:<id>。"""
     problems, scores = structure_problems(md)
+    if decision is not None:
+        problems += decision_problems(decision)
     for (case, rid), s in scores.items():
         for axis, (pt, why) in s["axes"].items():
             if axis in MACHINE_AXES:
@@ -344,17 +402,23 @@ def human_problems(md):
             if not why:
                 problems.append(f"{case}/{rid}/{axis}: 根拠が空")
             elif why.startswith(MACHINE):
-                problems.append(f"{case}/{rid}/{axis}: 人の軸の根拠が「{MACHINE}」で始まる")
-        if not re.fullmatch(r"human:\S+", s["scorer"] or ""):
-            problems.append(f"{case}/{rid}: 採点者が human:<名> でない")
+                problems.append(f"{case}/{rid}/{axis}: 人の軸の根拠が「{MACHINE}」で始まる（採点者が付ける 4 軸。人か model）")
+        scorer = s["scorer"] or ""
+        if MODEL_SCORER.fullmatch(scorer):
+            if decision is None:
+                problems.append(f"{case}/{rid}: 採点者 {scorer} を認めた人の決定の記録（--decision）が無い")
+            elif decision.get("scorer") != scorer:
+                problems.append(f"{case}/{rid}: 採点者 {scorer} が --decision の scorer {decision.get('scorer')!r} と違う")
+        elif not HUMAN_SCORER.fullmatch(scorer):
+            problems.append(f"{case}/{rid}: 採点者が human:<名> でない（人の決定の記録がある model:<id> でもない）")
         if not re.fullmatch(r"\d+(\.\d+)?", s["minutes"] or ""):
             problems.append(f"{case}/{rid}: レビュー時間（分）が数でない")
     return problems
 
 
-def scored_problems(md):
-    """check-human に加えて、機械の 2 軸が 0〜2 の点と「機械:」の根拠で埋まっていること（check-scored）。"""
-    problems = human_problems(md)
+def scored_problems(md, decision=None):
+    """check-graded に加えて、機械の 2 軸が 0〜2 の点と「機械:」の根拠で埋まっていること（check-scored）。"""
+    problems = graded_problems(md, decision)
     for (case, rid), s in parse_scores(md).items():
         for axis in MACHINE_AXES:
             pt, why = s["axes"].get(axis, ("", ""))
@@ -363,8 +427,8 @@ def scored_problems(md):
     return problems
 
 
-def cmd_check(path, rule):
-    problems = rule(pathlib.Path(path).read_text())
+def cmd_check(path, rule, *extra):
+    problems = rule(pathlib.Path(path).read_text(), *extra)
     for p in problems:
         print(f"pilot_score: {p}", file=sys.stderr)
     return 1 if problems else 0
@@ -484,9 +548,10 @@ def fill_machine(md, scores):
 def cmd_machine_axes(a):
     path = pathlib.Path(a.scoring)
     md = path.read_text()
-    problems = human_problems(md)
+    decision = load_decision(a.decision)
+    problems = graded_problems(md, decision)
     if problems:
-        return fail(f"{path}: check-human を通らない: {problems}")
+        return fail(f"{path}: check-graded を通らない: {problems}")
     key_bytes = pathlib.Path(a.key).read_bytes()
     key_sha = sha256_bytes(key_bytes)
     m = SHA_LINE.search(md)
@@ -506,7 +571,7 @@ def cmd_machine_axes(a):
         return fail(f"{path}: 採点欄の id が pilot-key.json と違う（欄だけ {sorted(ids - keyed)}、key だけ {sorted(keyed - ids)}）")
     scores = machine_scores(metrics, key["cases"], json.loads(answer_key_bytes), key["iterations"])
     new = fill_machine(md, scores)
-    problems = scored_problems(new)
+    problems = scored_problems(new, decision)
     if problems:
         return fail(f"{path}: 機械の 2 軸を埋めた後も check-scored を通らない: {problems}")
     if new != md:
@@ -545,13 +610,14 @@ def cmd_tally(a):
     key_bytes = pathlib.Path(a.key).read_bytes()
     key_sha = sha256_bytes(key_bytes)
     key = json.loads(key_bytes)["cases"]
+    decision = load_decision(a.decision)
     per_scorer = {}
     for path in a.scoring:
         md = pathlib.Path(path).read_text()
         m = SHA_LINE.search(md)
         if not m or m.group(1) != key_sha:
             return fail(f"{path}: pilot-key.json の sha256 {key_sha} が採点の file の値 {m.group(1) if m else None} と一致しない")
-        problems = scored_problems(md)
+        problems = scored_problems(md, decision)
         if problems:
             return fail(f"{path}: 採点が埋まっていない: {problems}")
         for (case, rid), s in parse_scores(md).items():
@@ -571,6 +637,12 @@ def cmd_tally(a):
             "points": {f"{c}/{arm}": pts for (c, arm), pts in sorted(points.items())},
             "minutes": {f"{c}/{arm}": v["minutes"] for (c, arm), v in sorted(rows.items())},
             "totals": totals, "judgement": judge(totals, points, cases)}
+        if MODEL_SCORER.fullmatch(scorer):
+            # check-scored を通ったので decision があり、scorer が同じ。レビュー時間は model の wall で人の時間ではない。
+            result["scorers"][scorer].update({"kind": "model", "minutes_note": MODEL_MINUTES,
+                                              "decided_by": decision["decided_by"], "decided_at": decision["decided_at"]})
+        else:
+            result["scorers"][scorer]["kind"] = "human"
     names = sorted(result["scorers"])
     if len(names) >= 2:
         s1, s2 = (result["scorers"][n] for n in names[:2])
@@ -580,10 +652,13 @@ def cmd_tally(a):
     print("| 事例 | 方式 | 採点者 | " + " | ".join(f"{ax}（機械）" if ax in MACHINE_AXES else ax for ax in axes()) + " | 計 | 分 |")
     print("|---|---|---|" + "---|" * (len(axes()) + 2))
     for scorer, s in result["scorers"].items():
+        note = f"（{MODEL_MINUTES}）" if s["kind"] == "model" else ""
         for k, pts in s["points"].items():
             case, arm = k.split("/")
             print(f"| {case} | {arm} | {scorer} | " + " | ".join(str(pts.get(ax, "")) for ax in axes())
-                  + f" | {sum(pts.values())} | {s['minutes'][k]} |")
+                  + f" | {sum(pts.values())} | {s['minutes'][k]}{note} |")
+        if s["kind"] == "model":
+            print(f"採点者 {scorer}: {s['decided_by']} が {s['decided_at']} に決めた model の採点。分は {MODEL_MINUTES}")
         for arm in ("b", "c"):
             j = s["judgement"][arm]
             print(f"合格線 {scorer} 方式 {arm}: {'満たす' if j['pass'] else '満たさない'}（両事例の条件 {j['both_cases']}、"
@@ -603,17 +678,22 @@ def main(argv):
     b.add_argument("--key-out", required=True)
     b.add_argument("--seed", type=int)
     b.add_argument("--repo-copy")
-    for name in ("check-blank", "check-human", "check-scored"):
-        sub.add_parser(name).add_argument("md")
+    sub.add_parser("check-blank").add_argument("md")
+    for name in ("check-graded", "check-scored"):
+        c = sub.add_parser(name)
+        c.add_argument("md")
+        c.add_argument("--decision")
     m = sub.add_parser("machine-axes")
     m.add_argument("--scoring", required=True)
     m.add_argument("--key", required=True)
     m.add_argument("--metrics", required=True)
     m.add_argument("--answer-key", required=True)
+    m.add_argument("--decision")
     m.add_argument("--out")
     t = sub.add_parser("tally")
     t.add_argument("--scoring", action="append", required=True)
     t.add_argument("--key", required=True)
+    t.add_argument("--decision")
     t.add_argument("--out")
     a = ap.parse_args(argv)
     try:
@@ -621,10 +701,10 @@ def main(argv):
             return cmd_blind(a)
         if a.cmd == "check-blank":
             return cmd_check(a.md, blank_problems)
-        if a.cmd == "check-human":
-            return cmd_check(a.md, human_problems)
+        if a.cmd == "check-graded":
+            return cmd_check(a.md, graded_problems, load_decision(a.decision))
         if a.cmd == "check-scored":
-            return cmd_check(a.md, scored_problems)
+            return cmd_check(a.md, scored_problems, load_decision(a.decision))
         if a.cmd == "machine-axes":
             return cmd_machine_axes(a)
         return cmd_tally(a)

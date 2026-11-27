@@ -281,6 +281,37 @@ driver・比較・採点材料の script（`scripts/dev/` の下）と task-api 
   `tally --scoring $ART/pilot-scoring.md --key $ART/pilot-key.json --out $ART/pilot-tally.json`。WU pilot-materials の進捗に書いた `tally … --metrics …` は使えない。
 - 子 9 で同じ分担を使うかは人の確認を待つ（子 8 の進捗の「提案」）。
 
+##### D5 付記 2（2026-11-27、WU scorer-graded。人の決定 2026-11-27）: 4 軸の採点者は人が決めた model、検査は check-graded
+
+- 人の決定: 人 rmaeda が 2026-11-27 10:3xZ に operator（`external_operator:claude-code-ops-session`）の対話 session で、4 軸を自分で採点せず
+  Fable の model に盲検で付けさせると決めた。operator は `claude-fable-5-1`（5.2 はこの環境に無い）の subagent を 1 回だけ走らせた（wall 335.7 s。
+  入力は採点 Artifact と同じ `data.json` だけ〈sha256 `2899d50e5022ba8f26f0de3ea513948ba715addd8ef8af072d6af9a6422ead9e`〉、tool は data.json の Read 2・出力の Write 6）。
+  4 軸の点と根拠を root の artifacts の `pilot-scoring.md` に書き写した（書き写しの前の sha256 `fa074884b9113ddcf564a93d32718e8119d82b66377d4ebc1359e30d456754d9`、
+  後 `02f9b38b27c9e1ef9d349cc3a34fadc4ff224be86fb094d65cdc577a872a5d30`）。採点者は `model:claude-fable-5-1`。
+  記録は `agent-docs/progress/2026-11-24-strategy-v1-8/scorer-decision.json`（scorer・axes・decided_by `human:rmaeda`・decided_at `2026-11-27`・relayed_by・input・書き写しの前後の sha256・wall と tool の数・review_minutes_note）。
+- D5 の「採点者は人（rubric.md の手順 1〜5）」と付記 1 の「人は 4 軸を付ける」を次に替える: 4 軸の採点者は人（`human:<名>`）か、人の決定の記録がある model（`model:<id>`）。
+  実装者・CoS・operator は採点しない（operator は model を走らせて書き写しただけで、点を付けていない）。rubric.md の「採点の手順」1・3 をこれに合わせて直した。
+  「軸と基準」から末尾まで（合格線・史実の参照の点）は変えていない。
+- 検査の口: 付記 1 の `check-human` を `check-graded` に改名した（別名は残さない）。採点者の規則だけが変わり、ほかの規則（4 軸の点と根拠、機械の 2 行、レビュー時間が数）は同じ。
+  - `human:<名>` は決定無しで通る。
+  - `model:<id>` は `--decision <json>` の決定の `scorer` が同じ id で、`decided_by` が `human:<名>`、`decided_at` が YYYY-MM-DD、`axes` が採点者の 4 軸と同じときだけ通る。
+  - ほかの採点者（`operator:` など、名の無い `human:`・`model:`）は決定があっても通らない。
+  - `check-scored`・`machine-axes`・`tally` も `--decision` を受け、同じ規則を当てる。`tally` は model の採点者の行のレビュー時間（分）に「model の wall・人の時間ではない」と添え、
+    json の採点者ごとに `kind`（human・model）と、model なら `minutes_note`・`decided_by`・`decided_at` を書く。
+  - `blind` が作る材料の「この文書について」の採点者の文を、この規則に合わせた（今の材料は作り直さない。埋め込んだ「採点の手順」節は有無だけを見る）。
+- close-audit の手順は付記 1 のものを次に替える（`ART=/local/celeris/data/workspaces/01M7XQA74FP70G3T3KSTP02S0W/artifacts`、`DEC=agent-docs/progress/2026-11-24-strategy-v1-8/scorer-decision.json`）:
+  `check-graded $ART/pilot-scoring.md --decision $DEC` → `machine-axes --scoring $ART/pilot-scoring.md --key $ART/pilot-key.json --metrics $ART/pilot-metrics/metrics.json
+  --answer-key agent-docs/progress/2026-11-21-strategy-v1-0/replay/answer_key.json --decision $DEC --out $ART/pilot-machine-axes.json` →
+  `check-scored $ART/pilot-scoring.md --decision $DEC` → `tally --scoring $ART/pilot-scoring.md --key $ART/pilot-key.json --decision $DEC --out $ART/pilot-tally.json`。
+- 限界（close-audit が未確認・限界として報告に書く）:
+  - 4 軸は人ではなく model の採点である。人の独立の採点は無い。
+  - 評価器（`claude-sonnet-5-5`）を同じ provider の model（Fable）が採点した。同じ provider の model の癖を共有している可能性を除けていない。
+  - 採点欄のレビュー時間（分）0.93 は subagent の wall を 6 表で等分した値で、人のレビュー時間ではない。D6 の「人のレビュー時間」の指標は測れていない。
+  - 採点者が data.json だけを読んだことは operator が transcript で確かめたもので、この WU は transcript を見ていない。
+- 試験: D7 付記 1 の `test_check_human_*` は同じ assertion のまま `test_check_graded_*` に改名した。新しい `test_check_graded_*`
+  （model の採点者は決定があるときだけ通る・決定の欄の誤りで落ちる・ほかの採点者は落ちる・`human:` は決定無しで通る・`--decision` が check-scored・machine-axes・tally に届く・
+  commit した決定の記録が今の採点者を認める・材料の採点者の文）は改名の前の script で落ちる。
+
 ### D6: 指標
 
 | 指標 | 定義 | 出し方 | 区分 |

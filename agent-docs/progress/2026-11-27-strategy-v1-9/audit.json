@@ -1,0 +1,1428 @@
+{
+  "generated_at": "2026-11-27T13:34:38Z",
+  "db": "file:/local/celeris/data/db/celeris.sqlite3?mode=ro",
+  "reproduce": "python3 -I agent-docs/progress/2026-11-27-strategy-v1-9/audit_query.py --out <path>",
+  "request_sha256": "d7b584adb2c5992856f6b6a721c9ec1598b66b3d7ab1fa3610c4feeab871a699",
+  "request_sha256_expected": "d7b584adb2c5992856f6b6a721c9ec1598b66b3d7ab1fa3610c4feeab871a699",
+  "request_sha256_matches": true,
+  "project_updated_at": "2026-09-29T10:23:35.525587488Z",
+  "roadmap_changes": [],
+  "roadmap_state": {
+    "project_roadmap_versions_total": 0,
+    "project_roadmap_outcome_events_total": 0,
+    "since": "2026-11-21"
+  },
+  "scope": {
+    "parent": "01M7XQ9PS0AFKKMRJ7P5ZMKQQE",
+    "children": {
+      "0": {
+        "task_id": "01M7XQ9PZQ3DQZMYKNFNPTPBQJ",
+        "status": "done",
+        "descendants": [],
+        "work_units": 0,
+        "runs_by_role": {
+          "worker": 1,
+          "reviewer": 2
+        },
+        "events": 341,
+        "done_at": "2026-11-21T00:43:36.520087016Z",
+        "last_review_verdict": {
+          "ts": "2026-11-21T00:43:36.520397466Z",
+          "pass": true,
+          "run_id": "01M7XQA949D4JGG2RXHAP1SSW2"
+        }
+      },
+      "1": {
+        "task_id": "01M7XQ9Q4P4ZQ38Y509J9XYAQ0",
+        "status": "done",
+        "descendants": [
+          "01M7XSGW4FH258N1K3AMW76Y6F",
+          "01M7XSH46KVRV62ENAWWKWJKBQ"
+        ],
+        "work_units": 29,
+        "runs_by_role": {
+          "planner": 10,
+          "worker": 28,
+          "reviewer": 10
+        },
+        "events": 4900,
+        "done_at": "2026-11-21T13:34:07.468227663Z",
+        "last_review_verdict": {
+          "ts": "2026-11-21T13:34:07.468578273Z",
+          "pass": true,
+          "run_id": "01M7Z0X4JZKYB6C53A3AAN1BCZ"
+        }
+      },
+      "2": {
+        "task_id": "01M7XQ9Q9EB3CH59TSNYM9HBC8",
+        "status": "done",
+        "descendants": [],
+        "work_units": 9,
+        "runs_by_role": {
+          "planner": 1,
+          "worker": 8,
+          "reviewer": 2
+        },
+        "events": 1384,
+        "done_at": "2026-11-21T20:26:42.82925135Z",
+        "last_review_verdict": {
+          "ts": "2026-11-21T20:26:42.829569343Z",
+          "pass": true,
+          "run_id": "01M7ZQ7YRB40XW076P0HT3A0CF"
+        }
+      },
+      "3": {
+        "task_id": "01M7XQ9QE8STND208NXG90F743",
+        "status": "done",
+        "descendants": [],
+        "work_units": 16,
+        "runs_by_role": {
+          "planner": 4,
+          "worker": 19,
+          "reviewer": 1
+        },
+        "events": 2890,
+        "done_at": "2026-11-22T08:43:52.618744143Z",
+        "last_review_verdict": {
+          "ts": "2026-11-22T08:43:52.619076524Z",
+          "pass": true,
+          "run_id": "01M812GBB0HWKXZJFPWR81P42S"
+        }
+      },
+      "4": {
+        "task_id": "01M7XQ9QK1KC34Q2A6PJ960TJB",
+        "status": "done",
+        "descendants": [
+          "01M81YCN1GBTEQQMCE4AXSQM3E"
+        ],
+        "work_units": 19,
+        "runs_by_role": {
+          "planner": 6,
+          "worker": 13,
+          "reviewer": 2
+        },
+        "events": 2289,
+        "done_at": "2026-11-22T20:10:22.477739765Z",
+        "last_review_verdict": {
+          "ts": "2026-11-22T20:10:22.478095334Z",
+          "pass": true,
+          "run_id": "01M82AFSE00F57HFXWEDABKHCP"
+        }
+      },
+      "5": {
+        "task_id": "01M7XQ9QQXY1DY56EXE0TT8X6W",
+        "status": "done",
+        "descendants": [],
+        "work_units": 16,
+        "runs_by_role": {
+          "planner": 4,
+          "worker": 12,
+          "reviewer": 3
+        },
+        "events": 2244,
+        "done_at": "2026-11-22T19:08:55.294708298Z",
+        "last_review_verdict": {
+          "ts": "2026-11-22T19:08:55.295030342Z",
+          "pass": true,
+          "run_id": "01M827R6QC4WR31E39SXB9J1A6"
+        }
+      },
+      "6": {
+        "task_id": "01M7XQ9QWK58ESMW42Q1TGT3WZ",
+        "status": "done",
+        "descendants": [],
+        "work_units": 30,
+        "runs_by_role": {
+          "planner": 10,
+          "worker": 43,
+          "reviewer": 4
+        },
+        "events": 5633,
+        "done_at": "2026-11-23T17:03:24.88422232Z",
+        "last_review_verdict": {
+          "ts": "2026-11-23T17:03:24.884583547Z",
+          "pass": true,
+          "run_id": "01M84GX96J80TA6EQ7MRBGM9VA"
+        }
+      },
+      "7": {
+        "task_id": "01M7XQ9R1EHA8GQ0TZVRM4FBVX",
+        "status": "done",
+        "descendants": [
+          "01M858FZYWBY174A4ZJP0M8NGC",
+          "01M85J2Z5ZB5CZMAVBSRDC197R"
+        ],
+        "work_units": 27,
+        "runs_by_role": {
+          "planner": 6,
+          "worker": 24,
+          "reviewer": 2
+        },
+        "events": 3911,
+        "done_at": "2026-11-24T08:42:05.201396316Z",
+        "last_review_verdict": {
+          "ts": "2026-11-24T08:42:05.201721574Z",
+          "pass": true,
+          "run_id": "01M86742ZN63E72PJKHESZFGH8"
+        }
+      },
+      "8": {
+        "task_id": "01M7XQA74FP70G3T3KSTP02S0W",
+        "status": "done",
+        "descendants": [
+          "01M8EC03C58D22TWS31B1EVKTD"
+        ],
+        "work_units": 26,
+        "runs_by_role": {
+          "planner": 9,
+          "worker": 24,
+          "reviewer": 2
+        },
+        "events": 3652,
+        "done_at": "2026-11-27T13:17:29.621544778Z",
+        "last_review_verdict": {
+          "ts": "2026-11-27T13:17:29.621930519Z",
+          "pass": true,
+          "run_id": "01M8EE3ER2QKSNVPJR272SSYR6"
+        }
+      },
+      "9": {
+        "task_id": "01M7XQA79910VEZ66HWTX4HZVT",
+        "status": "running",
+        "descendants": [],
+        "work_units": 8,
+        "runs_by_role": {
+          "planner": 1,
+          "worker": 2
+        },
+        "events": 270,
+        "done_at": null,
+        "last_review_verdict": null
+      }
+    },
+    "children_match_db": true,
+    "parent_status": "ready",
+    "parent_decisions": 0,
+    "tasks_total": 17
+  },
+  "decisions": {
+    "all": [
+      {
+        "child": 1,
+        "task_id": "01M7XQ9Q4P4ZQ38Y509J9XYAQ0",
+        "decision_id": "01M7YQ5P2XZ2WTBK858NNHYMXW",
+        "key": "first-gate-unmet",
+        "kind": "choice",
+        "status": "answered",
+        "option": "replan",
+        "recorded_actor": "operator:claude-code",
+        "recorded_actor_kind": "operator",
+        "chosen_by_per_note": "human_via_operator",
+        "raised_by": {
+          "origin": "worker",
+          "run_id": "01M7YNPTQJB9H39Y1Z2D4DRKKF"
+        },
+        "created_at": "2026-11-21T09:32:04.629206911Z",
+        "answered_at": "2026-11-21T11:02:44.934718037Z",
+        "needed_before": [
+          "gate"
+        ],
+        "needed_before_targets": [
+          {
+            "target": "gate",
+            "units": 1,
+            "runs_started_while_open": 0
+          }
+        ],
+        "answered_before_needed": true
+      },
+      {
+        "child": 1,
+        "task_id": "01M7XQ9Q4P4ZQ38Y509J9XYAQ0",
+        "decision_id": "01M7Z0P5Y2GZKRRHNA22E0BRGP",
+        "key": "peer-uid-host-check",
+        "kind": "choice",
+        "status": "answered",
+        "option": "a",
+        "recorded_actor": "operator:claude-code",
+        "recorded_actor_kind": "operator",
+        "chosen_by_per_note": "operator_own",
+        "raised_by": {
+          "origin": "worker",
+          "run_id": "01M7YZB3H64PZQP1PS8BBCGNNN"
+        },
+        "created_at": "2026-11-21T12:18:22.332106755Z",
+        "answered_at": "2026-11-21T12:22:09.946495176Z",
+        "needed_before": [
+          "gate"
+        ],
+        "needed_before_targets": [
+          {
+            "target": "gate",
+            "units": 1,
+            "runs_started_while_open": 0
+          }
+        ],
+        "answered_before_needed": true
+      },
+      {
+        "child": 2,
+        "task_id": "01M7XQ9Q9EB3CH59TSNYM9HBC8",
+        "decision_id": "01M7Z5J0VAR3P3BVGB01S4N7BR",
+        "key": "prod-release",
+        "kind": "choice",
+        "status": "answered",
+        "option": "a",
+        "recorded_actor": "operator:claude-code",
+        "recorded_actor_kind": "operator",
+        "chosen_by_per_note": "operator_own",
+        "raised_by": {
+          "origin": "planner",
+          "run_id": "01M7Z51Q5FEB9HNTF4NXZFGF2C"
+        },
+        "created_at": "2026-11-21T13:43:28.874471578Z",
+        "answered_at": "2026-11-21T14:06:23.632992607Z",
+        "needed_before": [
+          "stage:design",
+          "stage:impl",
+          "stage:wire",
+          "stage:close"
+        ],
+        "needed_before_targets": [
+          {
+            "target": "stage:design",
+            "units": 2,
+            "runs_started_while_open": 0
+          },
+          {
+            "target": "stage:impl",
+            "units": 3,
+            "runs_started_while_open": 0
+          },
+          {
+            "target": "stage:wire",
+            "units": 2,
+            "runs_started_while_open": 0
+          },
+          {
+            "target": "stage:close",
+            "units": 2,
+            "runs_started_while_open": 0
+          }
+        ],
+        "answered_before_needed": true
+      },
+      {
+        "child": 4,
+        "task_id": "01M7XQ9QK1KC34Q2A6PJ960TJB",
+        "decision_id": "01M81764F4PW6YCXSV2RC3W176",
+        "key": "ext-client-scope",
+        "kind": "choice",
+        "status": "answered",
+        "option": "b",
+        "recorded_actor": "operator:claude-code",
+        "recorded_actor_kind": "operator",
+        "chosen_by_per_note": "human_via_operator",
+        "raised_by": {
+          "origin": "planner",
+          "run_id": "01M816VCDNNTTAM3KRAYN23N01"
+        },
+        "created_at": "2026-11-22T08:50:25.380656688Z",
+        "answered_at": "2026-11-22T08:57:58.308708231Z",
+        "needed_before": [
+          "scope-guard"
+        ],
+        "needed_before_targets": [
+          {
+            "target": "scope-guard",
+            "units": 1,
+            "runs_started_while_open": 0
+          }
+        ],
+        "answered_before_needed": true
+      },
+      {
+        "child": 6,
+        "task_id": "01M7XQ9QWK58ESMW42Q1TGT3WZ",
+        "decision_id": "01M82QEXNG1WN9RQZPWZX59629",
+        "key": "strategy-read-store-size",
+        "kind": "choice",
+        "status": "answered",
+        "option": "move-out-of-store",
+        "recorded_actor": "cos:01M5JJTVPW15CKFRCA0FAYCHK4",
+        "recorded_actor_kind": "cos",
+        "chosen_by_per_note": "cos_own",
+        "raised_by": {
+          "origin": "worker",
+          "run_id": "01M82Q04D90ZM134JYH9WTYC8Y"
+        },
+        "created_at": "2026-11-22T22:54:05.03787623Z",
+        "answered_at": "2026-11-22T22:54:46.536640746Z",
+        "needed_before": [
+          "strategy-read"
+        ],
+        "needed_before_targets": [
+          {
+            "target": "strategy-read",
+            "units": 1,
+            "runs_started_while_open": 0
+          }
+        ],
+        "answered_before_needed": true
+      },
+      {
+        "child": 8,
+        "task_id": "01M7XQA74FP70G3T3KSTP02S0W",
+        "decision_id": "01M86C4Q11H22VE2ZS4E5QXDXF",
+        "key": "llm-pilot",
+        "kind": "choice",
+        "status": "answered",
+        "option": "a",
+        "recorded_actor": "operator:claude-code",
+        "recorded_actor_kind": "operator",
+        "chosen_by_per_note": "human_via_operator",
+        "raised_by": {
+          "origin": "planner",
+          "run_id": "01M86BH29T0WEJPH5E57ED93B8"
+        },
+        "created_at": "2026-11-24T08:53:13.889643685Z",
+        "answered_at": "2026-11-24T08:59:32.167669531Z",
+        "needed_before": [
+          "stage:harness"
+        ],
+        "needed_before_targets": [
+          {
+            "target": "stage:harness",
+            "units": 4,
+            "runs_started_while_open": 0
+          }
+        ],
+        "answered_before_needed": true
+      },
+      {
+        "child": 8,
+        "task_id": "01M7XQA74FP70G3T3KSTP02S0W",
+        "decision_id": "01M86C4Q11SC88967QRMFE2S2Q",
+        "key": "research-use",
+        "kind": "choice",
+        "status": "answered",
+        "option": "a",
+        "recorded_actor": "operator:claude-code",
+        "recorded_actor_kind": "operator",
+        "chosen_by_per_note": "human_via_operator",
+        "raised_by": {
+          "origin": "planner",
+          "run_id": "01M86BH29T0WEJPH5E57ED93B8"
+        },
+        "created_at": "2026-11-24T08:53:13.88976577Z",
+        "answered_at": "2026-11-24T08:59:32.452910477Z",
+        "needed_before": [
+          "stage:harness"
+        ],
+        "needed_before_targets": [
+          {
+            "target": "stage:harness",
+            "units": 4,
+            "runs_started_while_open": 0
+          }
+        ],
+        "answered_before_needed": true
+      },
+      {
+        "child": 8,
+        "task_id": "01M7XQA74FP70G3T3KSTP02S0W",
+        "decision_id": "01M86C4Q11Q7Y7F3CC20WHM7Z6",
+        "key": "rubric-line",
+        "kind": "choice",
+        "status": "answered",
+        "option": "a",
+        "recorded_actor": "operator:claude-code",
+        "recorded_actor_kind": "operator",
+        "chosen_by_per_note": "human_via_operator",
+        "raised_by": {
+          "origin": "planner",
+          "run_id": "01M86BH29T0WEJPH5E57ED93B8"
+        },
+        "created_at": "2026-11-24T08:53:13.889840572Z",
+        "answered_at": "2026-11-24T08:59:32.909659788Z",
+        "needed_before": [
+          "stage:score"
+        ],
+        "needed_before_targets": [
+          {
+            "target": "stage:score",
+            "units": 2,
+            "runs_started_while_open": 0
+          }
+        ],
+        "answered_before_needed": true
+      },
+      {
+        "child": 8,
+        "task_id": "01M7XQA74FP70G3T3KSTP02S0W",
+        "decision_id": "01M87BQTRE2NFXT7MZCG6SGGPZ",
+        "key": "plan_invalid",
+        "kind": "plan_invalid",
+        "status": "answered",
+        "option": "replan",
+        "recorded_actor": "operator:claude-code",
+        "recorded_actor_kind": "operator",
+        "chosen_by_per_note": "operator_own",
+        "raised_by": {
+          "origin": "daemon",
+          "run_id": "01M87BQQRBPNEH9N5R5F74PZP3"
+        },
+        "created_at": "2026-11-24T18:05:26.159052782Z",
+        "answered_at": "2026-11-24T20:30:06.963805145Z",
+        "needed_before": [
+          "self"
+        ],
+        "needed_before_targets": [
+          {
+            "target": "self",
+            "runs_started_while_open": 0
+          }
+        ],
+        "answered_before_needed": true
+      }
+    ],
+    "first_gate": {
+      "child": 1,
+      "task_id": "01M7XQ9Q4P4ZQ38Y509J9XYAQ0",
+      "decisions": [
+        {
+          "child": 1,
+          "task_id": "01M7XQ9Q4P4ZQ38Y509J9XYAQ0",
+          "decision_id": "01M7YQ5P2XZ2WTBK858NNHYMXW",
+          "key": "first-gate-unmet",
+          "kind": "choice",
+          "status": "answered",
+          "option": "replan",
+          "recorded_actor": "operator:claude-code",
+          "recorded_actor_kind": "operator",
+          "chosen_by_per_note": "human_via_operator",
+          "raised_by": {
+            "origin": "worker",
+            "run_id": "01M7YNPTQJB9H39Y1Z2D4DRKKF"
+          },
+          "created_at": "2026-11-21T09:32:04.629206911Z",
+          "answered_at": "2026-11-21T11:02:44.934718037Z",
+          "needed_before": [
+            "gate"
+          ],
+          "needed_before_targets": [
+            {
+              "target": "gate",
+              "units": 1,
+              "runs_started_while_open": 0
+            }
+          ],
+          "answered_before_needed": true
+        },
+        {
+          "child": 1,
+          "task_id": "01M7XQ9Q4P4ZQ38Y509J9XYAQ0",
+          "decision_id": "01M7Z0P5Y2GZKRRHNA22E0BRGP",
+          "key": "peer-uid-host-check",
+          "kind": "choice",
+          "status": "answered",
+          "option": "a",
+          "recorded_actor": "operator:claude-code",
+          "recorded_actor_kind": "operator",
+          "chosen_by_per_note": "operator_own",
+          "raised_by": {
+            "origin": "worker",
+            "run_id": "01M7YZB3H64PZQP1PS8BBCGNNN"
+          },
+          "created_at": "2026-11-21T12:18:22.332106755Z",
+          "answered_at": "2026-11-21T12:22:09.946495176Z",
+          "needed_before": [
+            "gate"
+          ],
+          "needed_before_targets": [
+            {
+              "target": "gate",
+              "units": 1,
+              "runs_started_while_open": 0
+            }
+          ],
+          "answered_before_needed": true
+        }
+      ],
+      "gate_and_question_events": [
+        {
+          "child": 1,
+          "task_id": "01M7XQ9Q4P4ZQ38Y509J9XYAQ0",
+          "seq": 79,
+          "ts": "2026-11-21T00:53:51.413323082Z",
+          "type": "plan_gate_decided",
+          "action": "approve",
+          "recorded_actor": "operator:claude-code",
+          "recorded_actor_kind": "operator",
+          "chosen_by_per_note": "human_via_operator"
+        },
+        {
+          "child": 1,
+          "task_id": "01M7XSGW4FH258N1K3AMW76Y6F",
+          "seq": 878,
+          "ts": "2026-11-21T02:20:20.532040993Z",
+          "type": "plan_gate_decided",
+          "action": "replan",
+          "recorded_actor": "operator:claude-code",
+          "recorded_actor_kind": "operator",
+          "chosen_by_per_note": "human_via_operator"
+        }
+      ],
+      "done_at": "2026-11-21T13:34:07.468227663Z",
+      "last_review_verdict": {
+        "ts": "2026-11-21T13:34:07.468578273Z",
+        "pass": true,
+        "run_id": "01M7Z0X4JZKYB6C53A3AAN1BCZ"
+      }
+    },
+    "second_gate": {
+      "child": 6,
+      "task_id": "01M7XQ9QWK58ESMW42Q1TGT3WZ",
+      "decisions": [
+        {
+          "child": 6,
+          "task_id": "01M7XQ9QWK58ESMW42Q1TGT3WZ",
+          "decision_id": "01M82QEXNG1WN9RQZPWZX59629",
+          "key": "strategy-read-store-size",
+          "kind": "choice",
+          "status": "answered",
+          "option": "move-out-of-store",
+          "recorded_actor": "cos:01M5JJTVPW15CKFRCA0FAYCHK4",
+          "recorded_actor_kind": "cos",
+          "chosen_by_per_note": "cos_own",
+          "raised_by": {
+            "origin": "worker",
+            "run_id": "01M82Q04D90ZM134JYH9WTYC8Y"
+          },
+          "created_at": "2026-11-22T22:54:05.03787623Z",
+          "answered_at": "2026-11-22T22:54:46.536640746Z",
+          "needed_before": [
+            "strategy-read"
+          ],
+          "needed_before_targets": [
+            {
+              "target": "strategy-read",
+              "units": 1,
+              "runs_started_while_open": 0
+            }
+          ],
+          "answered_before_needed": true
+        }
+      ],
+      "gate_and_question_events": [
+        {
+          "child": 6,
+          "task_id": "01M7XQ9QWK58ESMW42Q1TGT3WZ",
+          "seq": 3405,
+          "ts": "2026-11-23T07:21:49.793257675Z",
+          "type": "answered",
+          "recorded_actor": "operator:claude-code",
+          "recorded_actor_kind": "operator",
+          "chosen_by_per_note": "human_via_operator"
+        },
+        {
+          "child": 6,
+          "task_id": "01M7XQ9QWK58ESMW42Q1TGT3WZ",
+          "seq": 3538,
+          "ts": "2026-11-23T07:38:15.130437048Z",
+          "type": "plan_gate_decided",
+          "action": "approve",
+          "recorded_actor": "operator:claude-code",
+          "recorded_actor_kind": "operator",
+          "chosen_by_per_note": "human_via_operator"
+        },
+        {
+          "child": 6,
+          "task_id": "01M7XQ9QWK58ESMW42Q1TGT3WZ",
+          "seq": 4077,
+          "ts": "2026-11-23T08:42:53.588148284Z",
+          "type": "plan_gate_decided",
+          "action": "approve",
+          "recorded_actor": "operator:claude-code",
+          "recorded_actor_kind": "operator",
+          "chosen_by_per_note": "human_via_operator"
+        },
+        {
+          "child": 6,
+          "task_id": "01M7XQ9QWK58ESMW42Q1TGT3WZ",
+          "seq": 4447,
+          "ts": "2026-11-23T11:47:36.125841582Z",
+          "type": "answered",
+          "recorded_actor": "operator:claude-code",
+          "recorded_actor_kind": "operator",
+          "chosen_by_per_note": "operator_own"
+        },
+        {
+          "child": 6,
+          "task_id": "01M7XQ9QWK58ESMW42Q1TGT3WZ",
+          "seq": 4577,
+          "ts": "2026-11-23T12:07:58.255315849Z",
+          "type": "answered",
+          "recorded_actor": "operator:claude-code",
+          "recorded_actor_kind": "operator",
+          "chosen_by_per_note": "human_via_operator"
+        }
+      ],
+      "done_at": "2026-11-23T17:03:24.88422232Z",
+      "last_review_verdict": {
+        "ts": "2026-11-23T17:03:24.884583547Z",
+        "pass": true,
+        "run_id": "01M84GX96J80TA6EQ7MRBGM9VA"
+      }
+    },
+    "summary": {
+      "count": 9,
+      "answered_before_needed": 9,
+      "by_recorded_actor_kind": {
+        "operator": 8,
+        "cos": 1
+      },
+      "by_chosen_by_per_note": {
+        "human_via_operator": 5,
+        "operator_own": 3,
+        "cos_own": 1
+      },
+      "plan_gate_decided_by_actor_kind": {
+        "operator": 11,
+        "human": 1
+      }
+    }
+  },
+  "promotions_publications": {
+    "since": "2026-11-20",
+    "promotions": [
+      {
+        "operation": "promote",
+        "log": "promote-20261120-154302.log",
+        "release": "54e61984357f",
+        "last_log_line_at": "2026-11-20T15:44:23Z",
+        "record": null,
+        "audit": null,
+        "actor": null,
+        "actor_kind": null,
+        "actor_source": "unconfirmed: no promoted record in release-records.jsonl, release dir pruned, log has no actor"
+      },
+      {
+        "operation": "promote",
+        "log": "promote-20261120-170859.log",
+        "release": "7f69057907ad",
+        "last_log_line_at": "2026-11-20T17:09:34Z",
+        "record": {
+          "actor": "external_operator:claude-code-ops-session",
+          "promoted_at": "2026-11-20T17:09:27Z",
+          "from": "54e61984357f",
+          "status": "succeeded",
+          "has_policy_ref": true,
+          "included_tasks": 1
+        },
+        "audit": null,
+        "actor": "external_operator:claude-code-ops-session",
+        "actor_kind": "external_operator",
+        "actor_source": [
+          "logs/release-records.jsonl"
+        ]
+      },
+      {
+        "operation": "promote",
+        "log": "promote-20261121-011226.log",
+        "release": "147c84783273",
+        "last_log_line_at": "2026-11-21T01:13:04Z",
+        "record": {
+          "actor": "external_operator:claude-code-ops-session",
+          "promoted_at": "2026-11-21T01:12:56Z",
+          "from": "7f69057907ad",
+          "status": "succeeded",
+          "has_policy_ref": true,
+          "included_tasks": 1
+        },
+        "audit": null,
+        "actor": "external_operator:claude-code-ops-session",
+        "actor_kind": "external_operator",
+        "actor_source": [
+          "logs/release-records.jsonl"
+        ]
+      },
+      {
+        "operation": "promote",
+        "log": "promote-20261121-140517.log",
+        "release": "53a88490a5d9",
+        "last_log_line_at": "2026-11-21T14:06:04Z",
+        "record": {
+          "actor": "external_operator:claude-code-ops-session",
+          "promoted_at": "2026-11-21T14:05:55Z",
+          "from": "147c84783273",
+          "status": "succeeded",
+          "has_policy_ref": true,
+          "included_tasks": 1
+        },
+        "audit": null,
+        "actor": "external_operator:claude-code-ops-session",
+        "actor_kind": "external_operator",
+        "actor_source": [
+          "logs/release-records.jsonl"
+        ]
+      },
+      {
+        "operation": "promote",
+        "log": "promote-20261121-152201.log",
+        "release": "56f1f8d3ee4c",
+        "last_log_line_at": "2026-11-21T15:22:56Z",
+        "record": {
+          "actor": "external_operator:claude-code-ops-session",
+          "promoted_at": "2026-11-21T15:22:48Z",
+          "from": "53a88490a5d9",
+          "status": "succeeded",
+          "has_policy_ref": true,
+          "included_tasks": 1
+        },
+        "audit": null,
+        "actor": "external_operator:claude-code-ops-session",
+        "actor_kind": "external_operator",
+        "actor_source": [
+          "logs/release-records.jsonl"
+        ]
+      },
+      {
+        "operation": "promote",
+        "log": "promote-20261121-180628.log",
+        "release": "7534c6b4d4f5",
+        "last_log_line_at": "2026-11-21T18:08:34Z",
+        "record": {
+          "actor": "external_operator:claude-code-ops-session",
+          "promoted_at": "2026-11-21T18:08:26Z",
+          "from": "56f1f8d3ee4c",
+          "status": "succeeded",
+          "has_policy_ref": true,
+          "included_tasks": 1
+        },
+        "audit": null,
+        "actor": "external_operator:claude-code-ops-session",
+        "actor_kind": "external_operator",
+        "actor_source": [
+          "logs/release-records.jsonl"
+        ]
+      },
+      {
+        "operation": "promote",
+        "log": "promote-20261121-205754.log",
+        "release": "9e33fe4f46f4",
+        "last_log_line_at": "2026-11-21T21:01:25Z",
+        "record": {
+          "actor": "external_operator:claude-code-ops-session",
+          "promoted_at": "2026-11-21T21:01:17Z",
+          "from": "7534c6b4d4f5",
+          "status": "succeeded",
+          "has_policy_ref": true,
+          "included_tasks": 1
+        },
+        "audit": null,
+        "actor": "external_operator:claude-code-ops-session",
+        "actor_kind": "external_operator",
+        "actor_source": [
+          "logs/release-records.jsonl"
+        ]
+      },
+      {
+        "operation": "promote",
+        "log": "promote-20261121-232919.log",
+        "release": "8ca493c1e68e",
+        "last_log_line_at": "2026-11-21T23:31:57Z",
+        "record": {
+          "actor": "external_operator:claude-code-ops-session",
+          "promoted_at": "2026-11-21T23:31:49Z",
+          "from": "9e33fe4f46f4",
+          "status": "succeeded",
+          "has_policy_ref": true,
+          "included_tasks": 1
+        },
+        "audit": null,
+        "actor": "external_operator:claude-code-ops-session",
+        "actor_kind": "external_operator",
+        "actor_source": [
+          "logs/release-records.jsonl"
+        ]
+      },
+      {
+        "operation": "promote",
+        "log": "promote-20261122-091955.log",
+        "release": "3c1a45964d22",
+        "last_log_line_at": "2026-11-22T09:32:18Z",
+        "record": {
+          "actor": "external_operator:claude-code-ops-session",
+          "promoted_at": "2026-11-22T09:32:08Z",
+          "from": "8ca493c1e68e",
+          "status": "succeeded",
+          "has_policy_ref": true,
+          "included_tasks": 1
+        },
+        "audit": null,
+        "actor": "external_operator:claude-code-ops-session",
+        "actor_kind": "external_operator",
+        "actor_source": [
+          "logs/release-records.jsonl"
+        ]
+      },
+      {
+        "operation": "promote",
+        "log": "promote-20261122-194330.log",
+        "release": "45ab21a81960",
+        "last_log_line_at": "2026-11-22T19:48:35Z",
+        "record": {
+          "actor": "external_operator:claude-code-ops-session",
+          "promoted_at": "2026-11-22T19:48:26Z",
+          "from": "3c1a45964d22",
+          "status": "succeeded",
+          "has_policy_ref": true,
+          "included_tasks": 1
+        },
+        "audit": null,
+        "actor": "external_operator:claude-code-ops-session",
+        "actor_kind": "external_operator",
+        "actor_source": [
+          "logs/release-records.jsonl"
+        ]
+      },
+      {
+        "operation": "promote",
+        "log": "promote-20261122-204653.log",
+        "release": "bc8ad17cbaa3",
+        "last_log_line_at": "2026-11-22T20:48:53Z",
+        "record": {
+          "actor": "external_operator:claude-code-ops-session",
+          "promoted_at": "2026-11-22T20:48:45Z",
+          "from": "45ab21a81960",
+          "status": "succeeded",
+          "has_policy_ref": true,
+          "included_tasks": 1
+        },
+        "audit": null,
+        "actor": "external_operator:claude-code-ops-session",
+        "actor_kind": "external_operator",
+        "actor_source": [
+          "logs/release-records.jsonl"
+        ]
+      },
+      {
+        "operation": "promote",
+        "log": "promote-20261123-173630.log",
+        "release": "f7677970b32a",
+        "last_log_line_at": "2026-11-23T17:49:07Z",
+        "record": {
+          "actor": "external_operator:claude-code-ops-session",
+          "promoted_at": "2026-11-23T17:48:59Z",
+          "from": "bc8ad17cbaa3",
+          "status": "succeeded",
+          "has_policy_ref": true,
+          "included_tasks": 1
+        },
+        "audit": null,
+        "actor": "external_operator:claude-code-ops-session",
+        "actor_kind": "external_operator",
+        "actor_source": [
+          "logs/release-records.jsonl"
+        ]
+      },
+      {
+        "operation": "promote",
+        "log": "promote-20261124-091734.log",
+        "release": "3acae8dec315",
+        "last_log_line_at": "2026-11-24T09:20:32Z",
+        "record": {
+          "actor": "external_operator:claude-code-ops-session",
+          "promoted_at": "2026-11-24T09:20:24Z",
+          "from": "f7677970b32a",
+          "status": "succeeded",
+          "has_policy_ref": true,
+          "included_tasks": 1
+        },
+        "audit": null,
+        "actor": "external_operator:claude-code-ops-session",
+        "actor_kind": "external_operator",
+        "actor_source": [
+          "logs/release-records.jsonl"
+        ]
+      },
+      {
+        "operation": "promote",
+        "log": "promote-20261124-180532.log",
+        "release": "92cad9bc9dcf",
+        "last_log_line_at": "2026-11-24T18:05:59Z",
+        "record": {
+          "actor": "external_operator:claude-code-ops-session",
+          "promoted_at": "2026-11-24T18:05:50Z",
+          "from": "3acae8dec315",
+          "status": "succeeded",
+          "has_policy_ref": true,
+          "included_tasks": 1
+        },
+        "audit": null,
+        "actor": "external_operator:claude-code-ops-session",
+        "actor_kind": "external_operator",
+        "actor_source": [
+          "logs/release-records.jsonl"
+        ]
+      },
+      {
+        "operation": "promote",
+        "log": "promote-20261124-222245.log",
+        "release": "ef60a6a96ba5",
+        "last_log_line_at": "2026-11-24T22:25:19Z",
+        "record": {
+          "actor": "external_operator:claude-code-ops-session",
+          "promoted_at": "2026-11-24T22:25:09Z",
+          "from": "92cad9bc9dcf",
+          "status": "succeeded",
+          "has_policy_ref": true,
+          "included_tasks": 1
+        },
+        "audit": {
+          "actor": "external_operator:claude-code-ops-session",
+          "actor_kind": "external_operator",
+          "status": "succeeded",
+          "from": "92cad9bc9dcf",
+          "started_at": "2026-11-24T22:22:45.470817+00:00",
+          "task_refs": 1,
+          "decision_refs": 0
+        },
+        "actor": "external_operator:claude-code-ops-session",
+        "actor_kind": "external_operator",
+        "actor_source": [
+          "logs/release-records.jsonl",
+          "releases/<sha>/audit/*.json"
+        ]
+      },
+      {
+        "operation": "promote",
+        "log": "promote-20261125-025947.log",
+        "release": "3c7fa588c844",
+        "last_log_line_at": "2026-11-25T03:11:00Z",
+        "record": {
+          "actor": "external_operator:claude-code-ops-session",
+          "promoted_at": "2026-11-25T03:10:52Z",
+          "from": "ef60a6a96ba5",
+          "status": "succeeded",
+          "has_policy_ref": true,
+          "included_tasks": 1
+        },
+        "audit": {
+          "actor": "external_operator:claude-code-ops-session",
+          "actor_kind": "external_operator",
+          "status": "succeeded",
+          "from": "ef60a6a96ba5",
+          "started_at": "2026-11-25T02:59:47.967842+00:00",
+          "task_refs": 1,
+          "decision_refs": 0
+        },
+        "actor": "external_operator:claude-code-ops-session",
+        "actor_kind": "external_operator",
+        "actor_source": [
+          "logs/release-records.jsonl",
+          "releases/<sha>/audit/*.json"
+        ]
+      },
+      {
+        "operation": "promote",
+        "log": "promote-20261126-031328.log",
+        "release": "c7863978ccb5",
+        "last_log_line_at": "2026-11-26T03:14:17Z",
+        "record": {
+          "actor": "external_operator:claude-code-ops-session",
+          "promoted_at": "2026-11-26T03:14:09Z",
+          "from": "3c7fa588c844",
+          "status": "succeeded",
+          "has_policy_ref": true,
+          "included_tasks": 1
+        },
+        "audit": {
+          "actor": "external_operator:claude-code-ops-session",
+          "actor_kind": "external_operator",
+          "status": "succeeded",
+          "from": "3c7fa588c844",
+          "started_at": "2026-11-26T03:13:28.888422+00:00",
+          "task_refs": 1,
+          "decision_refs": 0
+        },
+        "actor": "external_operator:claude-code-ops-session",
+        "actor_kind": "external_operator",
+        "actor_source": [
+          "logs/release-records.jsonl",
+          "releases/<sha>/audit/*.json"
+        ]
+      },
+      {
+        "operation": "promote",
+        "log": "promote-20261126-041158.log",
+        "release": "cb5da040629b",
+        "last_log_line_at": "2026-11-26T04:14:40Z",
+        "record": {
+          "actor": "external_operator:claude-code-ops-session",
+          "promoted_at": "2026-11-26T04:14:32Z",
+          "from": "c7863978ccb5",
+          "status": "succeeded",
+          "has_policy_ref": true,
+          "included_tasks": 1
+        },
+        "audit": {
+          "actor": "external_operator:claude-code-ops-session",
+          "actor_kind": "external_operator",
+          "status": "succeeded",
+          "from": "c7863978ccb5",
+          "started_at": "2026-11-26T04:11:58.479886+00:00",
+          "task_refs": 1,
+          "decision_refs": 0
+        },
+        "actor": "external_operator:claude-code-ops-session",
+        "actor_kind": "external_operator",
+        "actor_source": [
+          "logs/release-records.jsonl",
+          "releases/<sha>/audit/*.json"
+        ]
+      }
+    ],
+    "promotions_total": 18,
+    "promotions_with_recorded_actor": 17,
+    "promotions_by_actor_kind": {
+      "null": 1,
+      "external_operator": 17
+    },
+    "promotions_by_worker_cos_mcp": [],
+    "promotion_or_publish_event_types_in_db": {},
+    "publish_signoffs": [],
+    "publish_signoffs_by_worker_cos_mcp": []
+  },
+  "actors": {
+    "since": "2026-11-21T00:00:00Z",
+    "chat_messages_by_actor": [
+      {
+        "thread_kind": "general",
+        "thread": "other",
+        "role": "assistant",
+        "author_kind": "none(cos)",
+        "relay": "-",
+        "mcp": "-",
+        "count": 23
+      },
+      {
+        "thread_kind": "general",
+        "thread": "other",
+        "role": "assistant",
+        "author_kind": "none(cos_escalation_card)",
+        "relay": "-",
+        "mcp": "-",
+        "count": 30
+      },
+      {
+        "thread_kind": "general",
+        "thread": "other",
+        "role": "assistant",
+        "author_kind": "none(run)",
+        "relay": "-",
+        "mcp": "-",
+        "count": 19
+      },
+      {
+        "thread_kind": "general",
+        "thread": "other",
+        "role": "system",
+        "author_kind": "none(run)",
+        "relay": "-",
+        "mcp": "-",
+        "count": 38
+      },
+      {
+        "thread_kind": "general",
+        "thread": "other",
+        "role": "user",
+        "author_kind": "mcp",
+        "relay": "-",
+        "mcp": "mcp_receipt",
+        "count": 1
+      },
+      {
+        "thread_kind": "general",
+        "thread": "other",
+        "role": "user",
+        "author_kind": "none(daemon/cron/legacy)",
+        "relay": "-",
+        "mcp": "-",
+        "count": 1
+      },
+      {
+        "thread_kind": "project",
+        "thread": "cos_project_thread",
+        "role": "assistant",
+        "author_kind": "none(run)",
+        "relay": "-",
+        "mcp": "-",
+        "count": 118
+      },
+      {
+        "thread_kind": "project",
+        "thread": "cos_project_thread",
+        "role": "system",
+        "author_kind": "none(run)",
+        "relay": "-",
+        "mcp": "-",
+        "count": 193
+      },
+      {
+        "thread_kind": "project",
+        "thread": "cos_project_thread",
+        "role": "user",
+        "author_kind": "mcp",
+        "relay": "-",
+        "mcp": "mcp_receipt",
+        "count": 1
+      },
+      {
+        "thread_kind": "project",
+        "thread": "cos_project_thread",
+        "role": "user",
+        "author_kind": "none(daemon/cron/legacy)",
+        "relay": "-",
+        "mcp": "-",
+        "count": 15
+      },
+      {
+        "thread_kind": "project",
+        "thread": "other",
+        "role": "assistant",
+        "author_kind": "none(run)",
+        "relay": "-",
+        "mcp": "-",
+        "count": 20
+      },
+      {
+        "thread_kind": "project",
+        "thread": "other",
+        "role": "system",
+        "author_kind": "none(cos)",
+        "relay": "-",
+        "mcp": "-",
+        "count": 1
+      },
+      {
+        "thread_kind": "project",
+        "thread": "other",
+        "role": "system",
+        "author_kind": "none(run)",
+        "relay": "-",
+        "mcp": "-",
+        "count": 33
+      },
+      {
+        "thread_kind": "project",
+        "thread": "other",
+        "role": "user",
+        "author_kind": "none(daemon/cron/legacy)",
+        "relay": "-",
+        "mcp": "-",
+        "count": 1
+      },
+      {
+        "thread_kind": "project",
+        "thread": "other",
+        "role": "user",
+        "author_kind": "operator",
+        "relay": "-",
+        "mcp": "-",
+        "count": 1
+      },
+      {
+        "thread_kind": "project",
+        "thread": "other",
+        "role": "user",
+        "author_kind": "operator",
+        "relay": "relay",
+        "mcp": "-",
+        "count": 4
+      },
+      {
+        "thread_kind": "review",
+        "thread": "other",
+        "role": "assistant",
+        "author_kind": "none(run)",
+        "relay": "-",
+        "mcp": "-",
+        "count": 158
+      },
+      {
+        "thread_kind": "review",
+        "thread": "other",
+        "role": "system",
+        "author_kind": "none(run)",
+        "relay": "-",
+        "mcp": "-",
+        "count": 162
+      },
+      {
+        "thread_kind": "review",
+        "thread": "other",
+        "role": "user",
+        "author_kind": "none(daemon/cron/legacy)",
+        "relay": "-",
+        "mcp": "-",
+        "count": 158
+      }
+    ],
+    "chat_events_by_type": {
+      "tool": 5264,
+      "message": 1512,
+      "run": 1379,
+      "queue": 667,
+      "status": 618,
+      "text_delta": 326,
+      "card": 284,
+      "thread": 14
+    },
+    "chat_events_note": "chat_events.payload_json has no actor field; the actor of a chat event is its message's",
+    "mcp_calls_by_client_tool": [
+      {
+        "actor": "mcp:chatgpt-rdc-2",
+        "tool": "api_get",
+        "result": "error",
+        "count": 2
+      },
+      {
+        "actor": "mcp:chatgpt-rdc-2",
+        "tool": "api_get",
+        "result": "ok",
+        "count": 38
+      },
+      {
+        "actor": "mcp:chatgpt-rdc-2",
+        "tool": "console_instruct",
+        "result": "ok",
+        "count": 2
+      },
+      {
+        "actor": "mcp:chatgpt-rdc-2",
+        "tool": "console_reply",
+        "result": "ok",
+        "count": 8
+      },
+      {
+        "actor": "mcp:chatgpt-rdc-2",
+        "tool": "db_query",
+        "result": "error",
+        "count": 1
+      },
+      {
+        "actor": "mcp:chatgpt-rdc-2",
+        "tool": "db_query",
+        "result": "ok",
+        "count": 3
+      },
+      {
+        "actor": "mcp:chatgpt-rdc-2",
+        "tool": "knowledge_get",
+        "result": "ok",
+        "count": 10
+      },
+      {
+        "actor": "mcp:chatgpt-rdc-2",
+        "tool": "knowledge_search",
+        "result": "ok",
+        "count": 8
+      },
+      {
+        "actor": "mcp:chatgpt-rdc-2",
+        "tool": "tasks_get",
+        "result": "error",
+        "count": 2
+      },
+      {
+        "actor": "mcp:chatgpt-rdc-2",
+        "tool": "tasks_get",
+        "result": "ok",
+        "count": 23
+      },
+      {
+        "actor": "mcp:chatgpt-rdc-2",
+        "tool": "tasks_list",
+        "result": "error",
+        "count": 1
+      },
+      {
+        "actor": "mcp:chatgpt-rdc-2",
+        "tool": "tasks_list",
+        "result": "ok",
+        "count": 13
+      }
+    ],
+    "mcp_client_scopes": {
+      "chatgpt-rdc-2": "knowledge:read,knowledge:propose,tasks:read,tasks:interact,console:instruct,db:read,api:read"
+    },
+    "tree_task_events_by_actor_kind": [
+      {
+        "event": "answered",
+        "field": "by",
+        "actor_kind": "operator",
+        "count": 16
+      },
+      {
+        "event": "cos_operation",
+        "field": "actor",
+        "actor_kind": "cos",
+        "count": 16
+      },
+      {
+        "event": "created",
+        "field": "created_by",
+        "actor_kind": "cos",
+        "count": 11
+      },
+      {
+        "event": "created",
+        "field": "created_by",
+        "actor_kind": "daemon",
+        "count": 6
+      },
+      {
+        "event": "decision_answered",
+        "field": "by",
+        "actor_kind": "cos",
+        "count": 1
+      },
+      {
+        "event": "decision_answered",
+        "field": "by",
+        "actor_kind": "operator",
+        "count": 8
+      },
+      {
+        "event": "edited",
+        "field": "by",
+        "actor_kind": "operator",
+        "count": 2
+      },
+      {
+        "event": "integration_merged",
+        "field": "actor",
+        "actor_kind": "daemon",
+        "count": 9
+      },
+      {
+        "event": "plan_gate_decided",
+        "field": "by",
+        "actor_kind": "human",
+        "count": 1
+      },
+      {
+        "event": "plan_gate_decided",
+        "field": "by",
+        "actor_kind": "operator",
+        "count": 11
+      }
+    ],
+    "external_llm_or_mcp_recorded_as_human": {
+      "chat_user_messages_with_mcp_or_relay_and_human_author": 0,
+      "decisions_answered_by_mcp_since": 0
+    }
+  }
+}

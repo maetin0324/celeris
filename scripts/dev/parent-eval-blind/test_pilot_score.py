@@ -10,17 +10,23 @@ daemon も cargo も LLM も使わない。入力は合成の testdata（testdat
   rubric.md の採点の手順・軸と基準・合格線の節はそのまま写し、pilot-key.json の sha256 を書く。--seed で同じ byte。
 - check-blank は節がそろい採点欄が空で方式の名が無いときだけ通る（方式の名の混入・採点欄の記入で落ちる）。repo 用の写しは
   研究ケースの本文を持たず、check-blank を通る。
-- check-human（人の決定 2026-11-25、ADR D5・D7 の付記）は人の 4 軸の空欄・0〜2 の外・根拠の空・人の軸の「機械:」の根拠・
-  human: でない採点者・数でないレビュー時間・人が埋めた機械の 2 軸の行で落ち、機械の 2 軸が空なら通る。
+- check-graded（人の決定 2026-11-25 と 2026-11-27、ADR D5 付記 1・2）は採点者の 4 軸の空欄・0〜2 の外・根拠の空・4 軸の「機械:」の
+  根拠・数でないレビュー時間・採点者が埋めた機械の 2 軸の行で落ち、機械の 2 軸が空なら通る。採点者は human:<名> なら決定無しで通り、
+  model:<id> は --decision の人の決定の記録（scorer が同じ・decided_by が human:<名>・decided_at が YYYY-MM-DD・axes が 4 軸）が
+  あるときだけ通る。operator: など他の採点者は落ちる。check-scored・machine-axes・tally も同じ --decision を受ける。
+- tally は model の採点者の分に「model の wall・人の時間ではない」と出し、json に kind・決めた人・日を書く。
+- commit した scorer-decision.json（子 8 の人の決定の記録）は、今の採点者 model:claude-fable-5-1 を認める形である。
 - 埋め込んだ rubric の節のうち「採点の手順」は有無だけを見る（材料の後に人が手順 3 を変えた）。「軸と基準」「合格線」は一致を見る。
-- machine-axes は check-human・key・metrics・answer key の sha256 を確かめてから、pivot の時点とコストの 2 行だけを rubric の基準で
+- machine-axes は check-graded・key・metrics・answer key の sha256 を確かめてから、pivot の時点とコストの 2 行だけを rubric の基準で
   埋める（ほかの byte は同じ、もう一度流しても同じ byte）。点の境界・反復の最小・wrong_pivots 2 で 0・invalid の記録を検知に数えない。
 - check-scored は 6 軸の空欄・0〜2 の外・人の軸の根拠の空・機械の 2 軸の「機械:」で始まらない根拠・human: でない採点者で落ちる。
 - tally は pilot-key.json の sha256 が採点の file の値と違えば開封しない（exit 1）。一致すれば方式 × 軸 × 採点者の表と合格線の判定を出す。
   pivot の時点は採点の file の点のまま（wrong_pivots による上書きは machine-axes に移した。--metrics は受けない）。
 - record の status が invalid の記録は、判定と次の手が gate の既定値で評価器の答えでないことを示す（ADR D4.1 付記 2）。
 既存の試験で検出できない理由: 採点材料の script が無く、盲検の伏せ方・採点欄・開封の手順を確かめる試験が無かった。
-採点の分担の試験（check_human・machine_axes）は、分担の前の script に該当する subcommand と規則が無いので落ちる。
+採点の分担の試験（machine_axes）は、分担の前の script に該当する subcommand と規則が無いので落ちる。
+採点者の試験（check_graded）は、人の決定 2026-11-27 の前の script に check-graded・--decision が無く、model の採点者を
+human: でないとだけ見て落としていたので落ちる。
 """
 import json
 import pathlib
@@ -38,6 +44,8 @@ SCORE = HERE / "pilot_score.py"
 CLEAN = HERE / "testdata/pilot-runs/iter-1"
 KEY = REPO / "agent-docs/progress/2026-11-21-strategy-v1-0/replay/answer_key.json"
 REPO_COPY = REPO / "agent-docs/progress/2026-11-24-strategy-v1-8/pilot-scoring.md"
+DECISION = REPO / "agent-docs/progress/2026-11-24-strategy-v1-8/scorer-decision.json"
+MODEL = "model:claude-fable-5-1"
 sys.path.insert(0, str(HERE))
 import pilot_score  # noqa: E402
 
@@ -270,14 +278,14 @@ class Score(unittest.TestCase):
 
 
     # ------------------------------------------------------------ 採点の分担（人の決定 2026-11-25、ADR D5・D7 の付記）
-    def machine_axes(self, d, scoring, metrics=None, out=None):
+    def machine_axes(self, d, scoring, metrics=None, out=None, decision=None):
         return score("machine-axes", "--scoring", scoring, "--key", d / "pilot-key.json", "--metrics", metrics or self.metrics,
-                     "--answer-key", KEY, *(["--out", out] if out else []))
+                     "--answer-key", KEY, *(["--out", out] if out else []), *(["--decision", decision] if decision else []))
 
-    def human_scored(self, name, **kw):
+    def graded(self, name, scorer="human:rmaeda", **kw):
         d = self.blind(name, **kw)
         scoring = d / "scored.md"
-        scoring.write_text(fill((d / "pilot-scoring.md").read_text()))
+        scoring.write_text(fill((d / "pilot-scoring.md").read_text(), scorer=scorer))
         return d, scoring
 
     def changed_metrics(self, name, change, runs=CLEAN):
@@ -294,19 +302,19 @@ class Score(unittest.TestCase):
         path.write_text(json.dumps(doc, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
         return path
 
-    def test_check_human_accepts_four_axes_with_blank_machine_rows(self):
-        # 不変条件: 人は 4 軸・採点者・レビュー時間を埋め、機械の 2 軸は空のまま。check-human は通り、check-scored と check-blank は落ちる。
-        d, scoring = self.human_scored("h1")
-        r = score("check-human", scoring)
+    def test_check_graded_accepts_four_axes_with_blank_machine_rows(self):
+        # 不変条件: 採点者は 4 軸・採点者・レビュー時間を埋め、機械の 2 軸は空のまま。check-graded は通り、check-scored と check-blank は落ちる。
+        d, scoring = self.graded("h1")
+        r = score("check-graded", scoring)
         self.assertEqual(r.returncode, 0, r.stderr)
         r = score("check-scored", scoring)
         self.assertEqual(r.returncode, 1)
         self.assertIn("機械の軸が埋まっていない", r.stderr)
         self.assertEqual(score("check-blank", scoring).returncode, 1)
-        self.assertEqual(score("check-human", d / "pilot-scoring.md").returncode, 1, "空の材料は通らない")
+        self.assertEqual(score("check-graded", d / "pilot-scoring.md").returncode, 1, "空の材料は通らない")
 
-    def test_check_human_rejects_bad_fields(self):
-        d, scoring = self.human_scored("h2")
+    def test_check_graded_rejects_bad_fields(self):
+        d, scoring = self.graded("h2")
         md = scoring.read_text()
         blank = (d / "pilot-scoring.md").read_text()
         cases = (
@@ -323,13 +331,13 @@ class Score(unittest.TestCase):
             with self.subTest(want):
                 path = d / "bad.md"
                 path.write_text(bad)
-                r = score("check-human", path)
+                r = score("check-graded", path)
                 self.assertEqual(r.returncode, 1, want)
                 self.assertIn(want, r.stderr)
 
-    def test_check_human_rubric_procedure_presence_only_and_pass_line_exact(self):
-        # 不変条件: 「採点の手順」は有無だけを見る（人が材料の後に手順 3 を変え、材料の作り直しを禁じた）。「軸と基準」「合格線」は一致を見る。
-        d, scoring = self.human_scored("h3")
+    def test_check_graded_rubric_procedure_presence_only_and_pass_line_exact(self):
+        # 不変条件: 「採点の手順」は有無だけを見る（人が材料の後に手順 1・3 を変え、材料の作り直しを禁じた）。「軸と基準」「合格線」は一致を見る。
+        d, scoring = self.graded("h3")
         md = scoring.read_text()
         old_proc = "<!-- rubric:採点の手順 -->\n1. 採点者は人 1 名以上。古い手順の写し。\n<!-- /rubric -->\n"
         changed_proc = re.sub(r"<!-- rubric:採点の手順 -->\n.*?<!-- /rubric -->\n", lambda m: old_proc, md, count=1, flags=re.S)
@@ -343,7 +351,7 @@ class Score(unittest.TestCase):
             with self.subTest(want):
                 path = d / "rubric.md"
                 path.write_text(text)
-                r = score("check-human", path)
+                r = score("check-graded", path)
                 self.assertEqual(r.returncode, code, r.stderr)
                 if want:
                     self.assertIn(want, r.stderr)
@@ -365,7 +373,7 @@ class Score(unittest.TestCase):
             self.assertEqual(pilot_score.cost_points(ratio), want, ratio)
 
     def test_machine_axes_fills_only_the_two_rows_and_is_idempotent(self):
-        d, scoring = self.human_scored("m1")
+        d, scoring = self.graded("m1")
         before = scoring.read_text()
         r = self.machine_axes(d, scoring, out=d / "machine.json")
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -392,7 +400,7 @@ class Score(unittest.TestCase):
 
     def test_machine_axes_points_on_the_synthetic_runs(self):
         # 合成の testdata（iter-1）: replay の検知は a 無し・b D-done（E-mid の 1 時点後）・c C-mid（前）。研究ケースは c だけ 11.17 で検知。
-        d, scoring = self.human_scored("m2")
+        d, scoring = self.graded("m2")
         r = self.machine_axes(d, scoring, out=d / "machine.json")
         self.assertEqual(r.returncode, 0, r.stderr)
         doc = json.loads((d / "machine.json").read_text())
@@ -421,7 +429,7 @@ class Score(unittest.TestCase):
             arms["c"]["replay"]["unneeded_after_first_detectable"] = {"worker_runs": 60, "usd": 10.0}
             arms["c"]["research"]["first_detection"] = None
         metrics = self.changed_metrics("min", change, runs=runs)
-        d, scoring = self.human_scored("m3", metrics=metrics, runs=runs)
+        d, scoring = self.graded("m3", metrics=metrics, runs=runs)
         r = self.machine_axes(d, scoring, metrics=metrics, out=d / "machine.json")
         self.assertEqual(r.returncode, 0, r.stderr)
         by_arm = {(v["case"], v["arm"]): v for v in json.loads((d / "machine.json").read_text())["ids"].values()}
@@ -439,7 +447,7 @@ class Score(unittest.TestCase):
         def change(doc):
             doc["iterations"]["iter-1"]["points"]["replay/D-done/b"]["status"] = "invalid"
         metrics = self.changed_metrics("invalid", change)
-        d, scoring = self.human_scored("m4", metrics=metrics)
+        d, scoring = self.graded("m4", metrics=metrics)
         r = self.machine_axes(d, scoring, metrics=metrics, out=d / "machine.json")
         self.assertEqual(r.returncode, 0, r.stderr)
         by_arm = {(v["case"], v["arm"]): v for v in json.loads((d / "machine.json").read_text())["ids"].values()}
@@ -449,7 +457,7 @@ class Score(unittest.TestCase):
         self.assertIn("invalid の記録の検知 D-done を数えない", scoring.read_text())
 
     def test_machine_axes_refuses_unscored_files_and_other_inputs(self):
-        d, scoring = self.human_scored("m5")
+        d, scoring = self.graded("m5")
         md = scoring.read_text()
         other_key = d / "other-key.json"
         other_key.write_bytes((d / "pilot-key.json").read_bytes().replace(b'"seed": 7', b'"seed": 8'))
@@ -459,7 +467,7 @@ class Score(unittest.TestCase):
         blank = d / "blank.md"
         blank.write_bytes((d / "pilot-scoring.md").read_bytes())
         cases = (
-            (["--scoring", blank, "--key", d / "pilot-key.json", "--metrics", self.metrics, "--answer-key", KEY], "check-human"),
+            (["--scoring", blank, "--key", d / "pilot-key.json", "--metrics", self.metrics, "--answer-key", KEY], "check-graded"),
             (["--scoring", scoring, "--key", other_key, "--metrics", self.metrics, "--answer-key", KEY], "pilot-key.json の sha256"),
             (["--scoring", scoring, "--key", d / "pilot-key.json", "--metrics", other_metrics, "--answer-key", KEY], "metrics_sha256"),
             (["--scoring", scoring, "--key", d / "pilot-key.json", "--metrics", self.metrics, "--answer-key", other_answer],
@@ -472,6 +480,119 @@ class Score(unittest.TestCase):
                 self.assertIn(want, r.stderr)
         self.assertEqual(scoring.read_text(), md, "断ったときは採点の file を変えない")
         self.assertEqual(blank.read_bytes(), (d / "pilot-scoring.md").read_bytes())
+
+    # ------------------------------------------------------------ 採点者（人の決定 2026-11-27、ADR D5 付記 2、rubric の手順 1・3）
+    def decision(self, name, **change):
+        """commit した scorer-decision.json の欄を change で替えた写し（値が None の欄は消す）。"""
+        doc = json.loads(DECISION.read_text())
+        for k, v in change.items():
+            if v is None:
+                doc.pop(k, None)
+            else:
+                doc[k] = v
+        path = self.dir / f"{name}-decision.json"
+        path.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
+        return path
+
+    def test_check_graded_model_scorer_passes_only_with_the_human_decision(self):
+        # 不変条件: model:<id> の採点者は、--decision の人の決定（scorer が同じ・decided_by が human:<名>・decided_at が YYYY-MM-DD・
+        # axes が採点者の 4 軸）があるときだけ通る。決定が無い・欄が違うと落ちる。
+        d, scoring = self.graded("g1", scorer=MODEL)
+        r = score("check-graded", scoring, "--decision", self.decision("g1"))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        r = score("check-graded", scoring)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn(f"採点者 {MODEL} を認めた人の決定の記録（--decision）が無い", r.stderr)
+        axes4 = ["execution success", "epistemic progress", "parent goal achievement", "unsupported claims"]
+        cases = (
+            (dict(decided_by="operator:claude-code-ops-session"), "--decision の decided_by が human:<名> でない"),
+            (dict(decided_by=MODEL), "--decision の decided_by が human:<名> でない"),
+            (dict(decided_by=None), "--decision の decided_by が human:<名> でない"),
+            (dict(scorer="model:claude-sonnet-5-5"), f"採点者 {MODEL} が --decision の scorer"),
+            (dict(scorer=None), "--decision の scorer が model:<id> でない"),
+            (dict(axes=axes4[:3]), "--decision の axes が採点者の 4 軸"),
+            (dict(axes=[*axes4, "pivot の時点"]), "--decision の axes が採点者の 4 軸"),
+            (dict(axes=None), "--decision の axes が採点者の 4 軸"),
+            (dict(decided_at="2026/11/27"), "--decision の decided_at が YYYY-MM-DD でない"),
+            (dict(decided_at="2026-13-27"), "--decision の decided_at が YYYY-MM-DD でない"),
+            (dict(decided_at=None), "--decision の decided_at が YYYY-MM-DD でない"),
+        )
+        for i, (change, want) in enumerate(cases):
+            with self.subTest(want=want, change=change):
+                r = score("check-graded", scoring, "--decision", self.decision(f"g1-{i}", **change))
+                self.assertEqual(r.returncode, 1, r.stderr)
+                self.assertIn(want, r.stderr)
+
+    def test_check_graded_other_scorers_fail_and_human_needs_no_decision(self):
+        # 不変条件: human:<名> は決定無しでも決定付きでも通る。operator:・cos:・接頭辞の無い名・名の無い human:/model:・大文字の Human: は、
+        # 決定があっても落ちる。
+        d, scoring = self.graded("g2")
+        ok = self.decision("g2")
+        self.assertEqual(score("check-graded", scoring).returncode, 0)
+        self.assertEqual(score("check-graded", scoring, "--decision", ok).returncode, 0)
+        blank = (d / "pilot-scoring.md").read_text()
+        for scorer in ("operator:claude-code-ops-session", "cos:x", "claude-fable-5-1", "human:", "model:", "Human:rmaeda", ""):
+            for extra in ((), ("--decision", ok)):
+                with self.subTest(scorer=scorer, extra=extra):
+                    path = d / "bad.md"
+                    path.write_text(fill(blank, scorer=scorer))
+                    r = score("check-graded", path, *extra)
+                    self.assertEqual(r.returncode, 1, r.stderr)
+                    self.assertIn("採点者が human:<名> でない", r.stderr)
+
+    def test_check_graded_decision_reaches_check_scored_machine_axes_and_tally(self):
+        # 不変条件: check-scored・machine-axes・tally も --decision を受け、決定の無い model の採点者は断る（file を変えない）。
+        # tally は model の採点者の分に「model の wall・人の時間ではない」と出し、人の採点者の分には出さない。
+        d, scoring = self.graded("g3", scorer=MODEL)
+        ok = self.decision("g3")
+        before = scoring.read_bytes()
+        r = self.machine_axes(d, scoring)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("check-graded を通らない", r.stderr)
+        self.assertEqual(scoring.read_bytes(), before, "断ったときは採点の file を変えない")
+        r = self.machine_axes(d, scoring, decision=ok)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(score("check-scored", scoring, "--decision", ok).returncode, 0)
+        r = score("check-scored", scoring)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("人の決定の記録（--decision）が無い", r.stderr)
+        human = d / "human.md"
+        human.write_text(fill((d / "pilot-scoring.md").read_text(), machine=True))
+        r = score("tally", "--scoring", scoring, "--scoring", human, "--key", d / "pilot-key.json")
+        self.assertEqual(r.returncode, 1, "決定の無い model の採点は開封しない")
+        r = score("tally", "--scoring", scoring, "--scoring", human, "--key", d / "pilot-key.json", "--decision", ok,
+                  "--out", d / "tally.json")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        rows = [line for line in r.stdout.splitlines() if line.startswith("| replay |")]
+        self.assertTrue(rows)
+        for line in rows:
+            if f"| {MODEL} |" in line:
+                self.assertTrue(line.endswith("| 12.0（model の wall・人の時間ではない） |"), line)
+            else:
+                self.assertTrue(line.endswith("| 12.0 |"), line)
+        self.assertIn(f"採点者 {MODEL}: human:rmaeda が 2026-11-27 に決めた model の採点。分は model の wall・人の時間ではない", r.stdout)
+        res = json.loads((d / "tally.json").read_text())["scorers"]
+        self.assertEqual((res[MODEL]["kind"], res[MODEL]["minutes_note"], res[MODEL]["decided_by"], res[MODEL]["decided_at"]),
+                         ("model", "model の wall・人の時間ではない", "human:rmaeda", "2026-11-27"))
+        self.assertEqual(res["human:rmaeda"]["kind"], "human")
+        self.assertNotIn("minutes_note", res["human:rmaeda"])
+
+    def test_check_graded_committed_decision_admits_the_pilot_scorer(self):
+        # 不変条件: commit した子 8 の人の決定の記録は、採点者 model:claude-fable-5-1 を認める形で、決めたのは human:rmaeda（2026-11-27）。
+        doc = json.loads(DECISION.read_text())
+        self.assertEqual(pilot_score.decision_problems(doc), [])
+        self.assertEqual((doc["scorer"], doc["decided_by"], doc["decided_at"]), (MODEL, "human:rmaeda", "2026-11-27"))
+        self.assertEqual(doc["axes"], pilot_score.graded_axes())
+
+    def test_check_graded_blind_material_states_the_scorer_rule(self):
+        # 不変条件: blind が作る材料の「この文書について」は、採点者を人か人の決定の記録がある model と書き、機械の 2 行を空に残すと書く。
+        d = self.blind("g5")
+        about = (d / "pilot-scoring.md").read_text().split("## この文書について", 1)[1].split("\n## ", 1)[0]
+        for want in ("`human:<名>`", "人の決定の記録がある model（`model:<id>`）", "pivot の時点とコストの行は空のまま残す",
+                     "model の採点者のレビュー時間は model の wall で、人の時間ではない"):
+            self.assertIn(want, about)
+        self.assertNotIn("採点者は人（rubric の手順）", about)
+        self.assertEqual(score("check-blank", d / "pilot-scoring.md").returncode, 0)
 
 if __name__ == "__main__":
     unittest.main()

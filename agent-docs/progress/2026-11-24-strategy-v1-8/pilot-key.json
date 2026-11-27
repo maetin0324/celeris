@@ -1,0 +1,21 @@
+{
+  "cases": {
+    "replay": {
+      "39qsqvyx": "b",
+      "dny1h1fe": "a",
+      "xt8ed4vg": "c"
+    },
+    "research": {
+      "1gttmq2w": "b",
+      "30ndgmd9": "c",
+      "ewnqz6v2": "a"
+    }
+  },
+  "iterations": [
+    "iter-1",
+    "iter-2"
+  ],
+  "metrics_sha256": "a0d193743579a928b04706d831f5892cdb44bf193b612480173df825e3274e45",
+  "schema": "celeris.pilot-key/1",
+  "seed": null
+}

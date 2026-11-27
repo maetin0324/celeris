@@ -396,6 +396,24 @@ driver・比較・採点材料の script（`scripts/dev/` の下）と task-api 
 | （段の外） | 人 | rubric で採点する |
 | close | close-audit・close-verify | 開封・集計・LoC・未確認・寄与を進捗と ADR に書き、検査を提出時の HEAD で再実行する |
 
+### D12 付記（2026-11-27、WU close-audit）: 結果と rollout の判断
+
+- 開封: close-audit が D5 付記 2 の順で流した。`check-graded --decision` exit 0（採点者は 6 表とも `model:claude-fable-5-1`、`human:` は 0 表）→ `pilot-key.json` の sha256 が
+  `36841f6b189dbecbbb0217108f1118ab235c17c73fe800528ea2b6f8de64aace` で採点の file の値と一致 → `machine-axes` exit 0 → `check-scored --decision` exit 0 → `tally --decision` exit 0。
+  4 軸の点は書き換えていない。機械の 2 軸は machine-axes だけが付けた（当て直すと同じ byte）。
+- 開封の後は盲検が要らないので、D5 の「`pilot-key.json` を commit しない」を外し、同じ byte の写しを `agent-docs/progress/2026-11-24-strategy-v1-8/pilot-key.json` に置いた。
+- 結果（4 軸は model、2 軸は機械。合計は a 5・b 10・c 11）:
+  - 方式 b・c とも合格線を満たさない。両事例の条件は replay で偽（pivot の時点が 2 反復の最小で 0。b は unsupported claims 0、c は parent goal achievement 0）、研究ケースで真。a との差は b 5・c 6。失格の記録は無い。
+  - replay では、方式 c の iter-1 が C-mid、方式 b の iter-2 が D-done で at_risk ＋ ask_human を出した（A〜H の完走の前）。もう一方の反復では検知が無かった。
+  - 24 件の評価の記録で next の `pivot`・`discriminating_experiment` は 0 件、verdict `off_track` も 0 件。方式 c の v2 と子 5 の gate（D1.3）は起きなかった。
+  - 方式 c の 12 点中 4 点が turn の上限（30）で invalid。D3.3 の上限と同じ値で流し、流し直していない。
+  - 研究ケースでは方式 b・c が反証の 11.20 を `refuted` に記録したが、実験設計を直した版は出ていない。
+- rollout の判断: 合格を実証できなかったので **rollout しない**（D7）。本番の controller の checkpoint の評価は mode `shadow` のまま。canary・HPC・外部公開・本番昇格・publish はしない。
+  評価器の prompt（`change_rules`）は answer key に合わせて直していない（D10。`git diff $(git merge-base HEAD main) HEAD -- crates/task-worker/src/change_rules/` が空）。
+- 限界（D5 付記 2 のとおり）: 4 軸は人ではなく model の採点で、評価器と同じ provider の model が採点した。レビュー時間 0.93 分は model の wall で人の時間ではない。
+  採点者が data.json だけを読んだことは operator の申告で、close-audit は transcript を見ていない。
+- 詳細（表・指標・LoC・未確認・寄与・提案）は task の進捗 `agent-docs/progress/2026-11-24-strategy-v1-8.md`。
+
 ## 足さないもの
 
 - 新しい Goal の正本・Conversation DB・Manager・trait・状態機械・DB 表・migration・events の種類・Agent サービス・production の API・config の欄。

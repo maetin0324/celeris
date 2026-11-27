@@ -1,0 +1,705 @@
+{
+  "schema": "strategy-v1-9-metrics/1",
+  "loc": {
+    "base_rev": "7f69057907ad649829ec5a08b5ac7c892b9fe055",
+    "head_rev": "8c44c114c155daf7b9ff48516a23d276f8bcf553",
+    "head_note": "測定時の HEAD は main の先端と同じ commit（子 8 の統合の後）",
+    "config_sha256": "a0d5eca1025f123c6ee7a71caf108979eda391c3322b8c3db352c771059145d5",
+    "config_sha256_head_run": "a0d5eca1025f123c6ee7a71caf108979eda391c3322b8c3db352c771059145d5",
+    "command": "python3 -I <base の scripts/dev/source-size-report.py> --root . --config <base の scripts/dev/source-size-report.toml> --exclusive-classes --rev <rev> --format json",
+    "base": {
+      "product_only_lines": 376018,
+      "product_only_rust_lines": 331327,
+      "production_typescript_lines": 33557,
+      "own_total_with_tests_lines": 1034966
+    },
+    "head": {
+      "product_only_lines": 394123,
+      "product_only_rust_lines": 346942,
+      "production_typescript_lines": 36038,
+      "own_total_with_tests_lines": 1090145
+    },
+    "delta": {
+      "product_only_lines": 18105,
+      "product_only_rust_lines": 15615,
+      "production_typescript_lines": 2481,
+      "own_total_with_tests_lines": 55179
+    },
+    "children": [
+      {
+        "child": 0,
+        "source": "agent-docs/progress/2026-11-21-strategy-v1-0.md",
+        "section": "## LoC の差分（値は「証拠」の節）",
+        "product_only_lines": {
+          "base": 376018,
+          "head": 376018,
+          "delta": 0
+        },
+        "product_only_rust_lines": null,
+        "production_typescript_lines": null,
+        "own_total_with_tests_lines": {
+          "base": 1034966,
+          "head": 1034966,
+          "delta": 0
+        },
+        "note": "production・test の差 0。Rust・TS の欄は節に数が無い（production の差 0 とだけある）"
+      },
+      {
+        "child": 1,
+        "source": "agent-docs/progress/2026-11-21-strategy-v1-1.md",
+        "section": "## 3. LoC（受入条件 2）",
+        "product_only_lines": {
+          "base": 376018,
+          "head": 376359,
+          "delta": 341
+        },
+        "product_only_rust_lines": {
+          "base": 331327,
+          "head": 331668,
+          "delta": 341
+        },
+        "production_typescript_lines": null,
+        "own_total_with_tests_lines": {
+          "base": 1034966,
+          "head": 1037789,
+          "delta": 2823
+        },
+        "note": "TS の欄は節に無い（production の差は Rust だけと書いてある）"
+      },
+      {
+        "child": 2,
+        "source": "agent-docs/progress/2026-11-21-strategy-v1-2.md",
+        "section": "## 3. LoC",
+        "product_only_lines": {
+          "base": 376359,
+          "head": 378484,
+          "delta": 2125
+        },
+        "product_only_rust_lines": {
+          "base": 331668,
+          "head": 333793,
+          "delta": 2125
+        },
+        "production_typescript_lines": null,
+        "own_total_with_tests_lines": {
+          "base": 1037789,
+          "head": 1041768,
+          "delta": 3979
+        },
+        "note": "TS の欄は節に無い"
+      },
+      {
+        "child": 3,
+        "source": "agent-docs/progress/2026-11-21-strategy-v1-3.md",
+        "section": "## LoC",
+        "product_only_lines": {
+          "base": 378597,
+          "head": 381294,
+          "delta": 2697
+        },
+        "product_only_rust_lines": {
+          "base": 333906,
+          "head": 335764,
+          "delta": 1858
+        },
+        "production_typescript_lines": {
+          "base": 33557,
+          "head": 34396,
+          "delta": 839
+        },
+        "own_total_with_tests_lines": {
+          "base": 1042742,
+          "head": 1049667,
+          "delta": 6925
+        },
+        "note": "own_total_with_tests は dagbench-flake の evaluation_infra +134 を含む（子 3 だけなら +6,791）"
+      },
+      {
+        "child": 4,
+        "source": "agent-docs/progress/2026-11-22-strategy-v1-4.md",
+        "section": "## LoC",
+        "product_only_lines": {
+          "base": 381294,
+          "head": 384090,
+          "delta": 2796
+        },
+        "product_only_rust_lines": {
+          "base": 335764,
+          "head": 338560,
+          "delta": 2796
+        },
+        "production_typescript_lines": null,
+        "own_total_with_tests_lines": {
+          "base": 1049562,
+          "head": 1056466,
+          "delta": 6904
+        },
+        "note": "TS は節で「production TypeScript ほか 差 0」（base・HEAD の値は書かれていない）"
+      },
+      {
+        "child": 5,
+        "source": "agent-docs/progress/2026-11-22-strategy-v1-5.md",
+        "section": "## LoC",
+        "product_only_lines": {
+          "base": 381294,
+          "head": 382436,
+          "delta": 1142
+        },
+        "product_only_rust_lines": {
+          "base": 335764,
+          "head": 336906,
+          "delta": 1142
+        },
+        "production_typescript_lines": null,
+        "own_total_with_tests_lines": {
+          "base": 1049562,
+          "head": 1053886,
+          "delta": 4324
+        },
+        "note": "TS の欄は節に無い"
+      },
+      {
+        "child": 6,
+        "source": "agent-docs/progress/2026-11-22-strategy-v1-6.md",
+        "section": "## LoC",
+        "product_only_lines": {
+          "base": 382436,
+          "head": 385396,
+          "delta": 2960
+        },
+        "product_only_rust_lines": {
+          "base": 336906,
+          "head": 339739,
+          "delta": 2833
+        },
+        "production_typescript_lines": null,
+        "own_total_with_tests_lines": {
+          "base": 1053886,
+          "head": 1064487,
+          "delta": 10601
+        },
+        "note": "TS の欄は節に無い（production 全言語 − Rust = +127）"
+      },
+      {
+        "child": 7,
+        "source": "agent-docs/progress/2026-11-23-strategy-v1-7.md",
+        "section": "## LoC",
+        "product_only_lines": {
+          "base": 388192,
+          "head": 393338,
+          "delta": 5146
+        },
+        "product_only_rust_lines": {
+          "base": 342535,
+          "head": 346168,
+          "delta": 3633
+        },
+        "production_typescript_lines": {
+          "base": 34523,
+          "head": 36035,
+          "delta": 1512
+        },
+        "own_total_with_tests_lines": {
+          "base": 1071391,
+          "head": 1082712,
+          "delta": 11321
+        }
+      },
+      {
+        "child": 8,
+        "source": "agent-docs/progress/2026-11-24-strategy-v1-8.md",
+        "section": "## LoC",
+        "product_only_lines": {
+          "base": 393338,
+          "head": 393415,
+          "delta": 77
+        },
+        "product_only_rust_lines": {
+          "base": 346168,
+          "head": 346245,
+          "delta": 77
+        },
+        "production_typescript_lines": {
+          "base": 36035,
+          "head": 36035,
+          "delta": 0
+        },
+        "own_total_with_tests_lines": {
+          "base": 1082712,
+          "head": 1087451,
+          "delta": 4739
+        }
+      }
+    ],
+    "children_product_only_delta_sum": 17284,
+    "unattributed_product_only_delta": 821,
+    "unattributed_note": "基準から HEAD までの差には、件名に strategy-v1 を含まない merge 以外の main の commit（82 件。子の WU の commit が一部入りうる）の差と、子の base の間の隙間（例: 子 2 の HEAD 378,484 と子 3 の base 378,597）が入る。子ごとの値は各子の base が違うので、足し算は近似"
+  },
+  "cost": {
+    "children": [
+      {
+        "child": 0,
+        "task_id": "01M7XQ9PZQ3DQZMYKNFNPTPBQJ",
+        "title": "[戦略層v1 0] 実測・過去の失敗の replay・研究 rubric・脅威モデルの固定（実装 source の変更 0）",
+        "status": "done",
+        "tasks_in_subtree": 1,
+        "runs": 3,
+        "cost_usd": 7.4932,
+        "runs_without_cost": 0,
+        "runs_running_at_snapshot": 0
+      },
+      {
+        "child": 1,
+        "task_id": "01M7XQ9Q4P4ZQ38Y509J9XYAQ0",
+        "title": "[戦略層v1 1] 人への承認要求・root の成果物の認識・実 prompt の受け入れ条件・userns 試験の安全修復（第一ゲート）",
+        "status": "done",
+        "tasks_in_subtree": 3,
+        "runs": 48,
+        "cost_usd": 110.6162,
+        "runs_without_cost": 0,
+        "runs_running_at_snapshot": 0
+      },
+      {
+        "child": 2,
+        "task_id": "01M7XQ9Q9EB3CH59TSNYM9HBC8",
+        "title": "[戦略層v1 2] 小さな Strategy/Hypothesis/Evidence 契約（既存の artifact・Knowledge・events の上に）",
+        "status": "done",
+        "tasks_in_subtree": 1,
+        "runs": 11,
+        "cost_usd": 26.3848,
+        "runs_without_cost": 1,
+        "runs_running_at_snapshot": 0
+      },
+      {
+        "child": 3,
+        "task_id": "01M7XQ9QE8STND208NXG90F743",
+        "title": "[戦略層v1 3] 既存の案件 CoS Chat に discussion mode（discuss-only は API 側で deny）",
+        "status": "done",
+        "tasks_in_subtree": 1,
+        "runs": 24,
+        "cost_usd": 69.3147,
+        "runs_without_cost": 0,
+        "runs_running_at_snapshot": 0
+      },
+      {
+        "child": 4,
+        "task_id": "01M7XQ9QK1KC34Q2A6PJ960TJB",
+        "title": "[戦略層v1 4] ChatGPT・Muse など外部 LLM との vendor-neutral な接続（既存の MCP/REST）",
+        "status": "done",
+        "tasks_in_subtree": 2,
+        "runs": 21,
+        "cost_usd": 55.4509,
+        "runs_without_cost": 0,
+        "runs_running_at_snapshot": 0
+      },
+      {
+        "child": 5,
+        "task_id": "01M7XQ9QQXY1DY56EXE0TT8X6W",
+        "title": "[戦略層v1 5] Strategy Review と少数の戦略候補の比較（既存の CoS と独立 Critic）",
+        "status": "done",
+        "tasks_in_subtree": 1,
+        "runs": 19,
+        "cost_usd": 52.9726,
+        "runs_without_cost": 0,
+        "runs_running_at_snapshot": 0
+      },
+      {
+        "child": 6,
+        "task_id": "01M7XQ9QWK58ESMW42Q1TGT3WZ",
+        "title": "[戦略層v1 6] 途中の親目的・epistemic progress の独立評価と pivot（第二ゲート）",
+        "status": "done",
+        "tasks_in_subtree": 1,
+        "runs": 57,
+        "cost_usd": 145.4111,
+        "runs_without_cost": 0,
+        "runs_running_at_snapshot": 0
+      },
+      {
+        "child": 7,
+        "task_id": "01M7XQ9R1EHA8GQ0TZVRM4FBVX",
+        "title": "[戦略層v1 7] 人の observability と publish 準備の UI（既存の Web を延長）",
+        "status": "done",
+        "tasks_in_subtree": 3,
+        "runs": 32,
+        "cost_usd": 86.6218,
+        "runs_without_cost": 0,
+        "runs_running_at_snapshot": 0
+      },
+      {
+        "child": 8,
+        "task_id": "01M7XQA74FP70G3T3KSTP02S0W",
+        "title": "[戦略層v1 8] アーキv4 と研究ケースの対照 pilot・ablation（shadow/read-only）",
+        "status": "done",
+        "tasks_in_subtree": 2,
+        "runs": 35,
+        "cost_usd": 82.855,
+        "runs_without_cost": 3,
+        "runs_running_at_snapshot": 0
+      },
+      {
+        "child": 9,
+        "task_id": "01M7XQA79910VEZ66HWTX4HZVT",
+        "title": "[戦略層v1 9] 統合・最終検証と人の publish 判断",
+        "status": "running",
+        "tasks_in_subtree": 1,
+        "runs": 3,
+        "cost_usd": 1.9546,
+        "runs_without_cost": 2,
+        "runs_running_at_snapshot": 2
+      }
+    ],
+    "total_runs": 253,
+    "total_cost_usd": 639.0749,
+    "total_runs_without_cost": 6,
+    "parent_own": {
+      "task_id": "01M7XQ9PS0AFKKMRJ7P5ZMKQQE",
+      "runs": 0,
+      "cost_usd": 0,
+      "runs_without_cost": 0
+    }
+  },
+  "long_runs": {
+    "top10_by_wall": [
+      {
+        "child": 3,
+        "run_id": "01M80MQEB6EK9PC018TDVAC531",
+        "task_id": "01M7XQ9QE8STND208NXG90F743",
+        "work_unit": "cite-attach",
+        "role": "worker",
+        "status": "completed",
+        "wall_s": 4207.7,
+        "cost_usd": 4.433444,
+        "started_at": "2026-11-22T03:27:49.667700184Z"
+      },
+      {
+        "child": 7,
+        "run_id": "01M84VMVWJ2P5K3KKKR267M1K0",
+        "task_id": "01M7XQ9R1EHA8GQ0TZVRM4FBVX",
+        "work_unit": "proposal-api",
+        "role": "worker",
+        "status": "failed",
+        "wall_s": 4151.7,
+        "cost_usd": 4.0211754,
+        "started_at": "2026-11-23T18:45:42.970111308Z"
+      },
+      {
+        "child": 6,
+        "run_id": "01M83XF493W9SNMTTYHTS7S4CC",
+        "task_id": "01M7XQ9QWK58ESMW42Q1TGT3WZ",
+        "work_unit": "blind-eval-runs",
+        "role": "worker",
+        "status": "completed",
+        "wall_s": 3980.5,
+        "cost_usd": 5.165222,
+        "started_at": "2026-11-23T09:58:17.72911303Z"
+      },
+      {
+        "child": 5,
+        "run_id": "01M81R2HYTP5XPXVWQVC2HP9JD",
+        "task_id": "01M7XQ9QQXY1DY56EXE0TT8X6W",
+        "work_unit": "shadow-case",
+        "role": "worker",
+        "status": "failed",
+        "wall_s": 3923.2,
+        "cost_usd": 5.3022514,
+        "started_at": "2026-11-22T13:45:33.95828891Z"
+      },
+      {
+        "child": 3,
+        "run_id": "01M8091XB9HRH7MJBTKB3PW5GE",
+        "task_id": "01M7XQ9QE8STND208NXG90F743",
+        "work_unit": "edit-retract",
+        "role": "worker",
+        "status": "failed",
+        "wall_s": 3769.0,
+        "cost_usd": 5.6656764,
+        "started_at": "2026-11-22T00:03:49.784612259Z"
+      },
+      {
+        "child": 2,
+        "run_id": "01M7Z7ZWMCVS7MSAW4S08HZH5T",
+        "task_id": "01M7XQ9Q9EB3CH59TSNYM9HBC8",
+        "work_unit": "request-prompt",
+        "role": "worker",
+        "status": "budget_exhausted",
+        "wall_s": 3609.8,
+        "cost_usd": null,
+        "started_at": "2026-11-21T14:26:00.490708581Z"
+      },
+      {
+        "child": 7,
+        "run_id": "01M85XBXVYBKFH8TM45DBZV8ME",
+        "task_id": "01M7XQ9R1EHA8GQ0TZVRM4FBVX",
+        "work_unit": "dedup-api",
+        "role": "worker",
+        "status": "completed",
+        "wall_s": 3590.7,
+        "cost_usd": 3.0392832000000003,
+        "started_at": "2026-11-24T04:35:01.706281948Z"
+      },
+      {
+        "child": 7,
+        "run_id": "01M84Q76RPS3T3E4RQYMDWGD7W",
+        "task_id": "01M7XQ9R1EHA8GQ0TZVRM4FBVX",
+        "work_unit": "publish-api",
+        "role": "worker",
+        "status": "completed",
+        "wall_s": 3553.3,
+        "cost_usd": 5.6784504,
+        "started_at": "2026-11-23T17:28:21.313601509Z"
+      },
+      {
+        "child": 5,
+        "run_id": "01M81VT9NFBVVTCESRE0N3XYT7",
+        "task_id": "01M7XQ9QQXY1DY56EXE0TT8X6W",
+        "work_unit": "shadow-case",
+        "role": "worker",
+        "status": "completed",
+        "wall_s": 3509.5,
+        "cost_usd": 1.1771538000000001,
+        "started_at": "2026-11-22T14:50:57.636595915Z"
+      },
+      {
+        "child": 1,
+        "run_id": "01M7Y18T3XNXATNHA6MPYRS6QF",
+        "task_id": "01M7XSGW4FH258N1K3AMW76Y6F",
+        "work_unit": "settle-leaf",
+        "role": "worker",
+        "status": "completed",
+        "wall_s": 3467.6,
+        "cost_usd": 5.9527168,
+        "started_at": "2026-11-21T03:09:18.386858816Z"
+      }
+    ],
+    "limit_stopped_runs": [
+      {
+        "child": 1,
+        "run_id": "01M7XT7ATFAAYFJ6HGVDPG8X3Y",
+        "task_id": "01M7XQ9Q4P4ZQ38Y509J9XYAQ0",
+        "work_unit": "prompt-fix",
+        "role": "worker",
+        "wall_s": 1416.5,
+        "limit": "turns",
+        "cost_usd": 4.8919724
+      },
+      {
+        "child": 1,
+        "run_id": "01M7XYKYBWN3DBRG5PQY18ZKAM",
+        "task_id": "01M7XQ9Q4P4ZQ38Y509J9XYAQ0",
+        "work_unit": "root-artifacts",
+        "role": "worker",
+        "wall_s": 982.8,
+        "limit": "turns",
+        "cost_usd": 3.6331574
+      },
+      {
+        "child": 2,
+        "run_id": "01M7Z7ZWMCVS7MSAW4S08HZH5T",
+        "task_id": "01M7XQ9Q9EB3CH59TSNYM9HBC8",
+        "work_unit": "request-prompt",
+        "role": "worker",
+        "wall_s": 3609.8,
+        "limit": "wall（推定: worker_finished が無く wall_ms=3609679）",
+        "cost_usd": null
+      },
+      {
+        "child": 2,
+        "run_id": "01M7ZF9SESF6MRGKV1WGSA1K8G",
+        "task_id": "01M7XQ9Q9EB3CH59TSNYM9HBC8",
+        "work_unit": "strategy-gate",
+        "role": "worker",
+        "wall_s": 1062.8,
+        "limit": "turns",
+        "cost_usd": 4.9658882
+      },
+      {
+        "child": 3,
+        "run_id": "01M7ZXY102BMZMVEXM8C58EPED",
+        "task_id": "01M7XQ9QE8STND208NXG90F743",
+        "work_unit": "mode-gate",
+        "role": "worker",
+        "wall_s": 1080.7,
+        "limit": "turns",
+        "cost_usd": 5.1962748
+      },
+      {
+        "child": 3,
+        "run_id": "01M8081ANN2SJYDVRMMCTK703T",
+        "task_id": "01M7XQ9QE8STND208NXG90F743",
+        "work_unit": "edit-retract",
+        "role": "worker",
+        "wall_s": 1067.3,
+        "limit": "turns",
+        "cost_usd": 5.0481296
+      },
+      {
+        "child": 3,
+        "run_id": "01M810HM0EAETM3R3QBK9SYM5B",
+        "task_id": "01M7XQ9QE8STND208NXG90F743",
+        "work_unit": "web-cite",
+        "role": "worker",
+        "wall_s": 480.2,
+        "limit": "turns",
+        "cost_usd": 3.4196734
+      },
+      {
+        "child": 6,
+        "run_id": "01M82NSSFQVZ6DGS4ES9YNVBJ1",
+        "task_id": "01M7XQ9QWK58ESMW42Q1TGT3WZ",
+        "work_unit": "review-launcher",
+        "role": "worker",
+        "wall_s": 1279.2,
+        "limit": "turns",
+        "cost_usd": 3.9795938
+      },
+      {
+        "child": 6,
+        "run_id": "01M82NT27PM5RRX801DQF7NT2C",
+        "task_id": "01M7XQ9QWK58ESMW42Q1TGT3WZ",
+        "work_unit": "strategy-read",
+        "role": "worker",
+        "wall_s": 1247.0,
+        "limit": "turns",
+        "cost_usd": 3.642509
+      },
+      {
+        "child": 6,
+        "run_id": "01M82XWAF0NM52SJ8E9XGMB97P",
+        "task_id": "01M7XQ9QWK58ESMW42Q1TGT3WZ",
+        "work_unit": "cos-skill-checkpoint",
+        "role": "worker",
+        "wall_s": 747.0,
+        "limit": "turns",
+        "cost_usd": 2.3085620000000002
+      },
+      {
+        "child": 6,
+        "run_id": "01M83444YNPB437PDT4T0J6X2V",
+        "task_id": "01M7XQ9QWK58ESMW42Q1TGT3WZ",
+        "work_unit": "checkpoint-act-fix",
+        "role": "worker",
+        "wall_s": 1771.3,
+        "limit": "turns",
+        "cost_usd": 2.8391072
+      },
+      {
+        "child": 6,
+        "run_id": "01M838P4JGG4TPXF6HZBVW74XS",
+        "task_id": "01M7XQ9QWK58ESMW42Q1TGT3WZ",
+        "work_unit": "controller-launch",
+        "role": "worker",
+        "wall_s": 2233.7,
+        "limit": "turns",
+        "cost_usd": 5.2817110000000005
+      },
+      {
+        "child": 6,
+        "run_id": "01M84C6024BGQ6592FQZ59DAX6",
+        "task_id": "01M7XQ9QWK58ESMW42Q1TGT3WZ",
+        "work_unit": "close-docfix",
+        "role": "worker",
+        "wall_s": 1006.2,
+        "limit": "turns",
+        "cost_usd": 3.5645830000000003
+      },
+      {
+        "child": 7,
+        "run_id": "01M84TM4DEF679A2JNJQ35FDJB",
+        "task_id": "01M7XQ9R1EHA8GQ0TZVRM4FBVX",
+        "work_unit": "proposal-api",
+        "role": "worker",
+        "wall_s": 1072.3,
+        "limit": "turns",
+        "cost_usd": 5.3636298
+      },
+      {
+        "child": 7,
+        "run_id": "01M85ES76G457YA5BRPK8XKS9F",
+        "task_id": "01M7XQ9R1EHA8GQ0TZVRM4FBVX",
+        "work_unit": "web-publish",
+        "role": "worker",
+        "wall_s": 748.7,
+        "limit": "turns",
+        "cost_usd": 4.979947
+      },
+      {
+        "child": 7,
+        "run_id": "01M863EMY26AX11JTP2D6AN9AC",
+        "task_id": "01M7XQ9R1EHA8GQ0TZVRM4FBVX",
+        "work_unit": "drilldown-e2e",
+        "role": "worker",
+        "wall_s": 718.9,
+        "limit": "turns",
+        "cost_usd": 3.2466796
+      },
+      {
+        "child": 8,
+        "run_id": "01M87R1NY6060926D0H4A4E4S7",
+        "task_id": "01M7XQA74FP70G3T3KSTP02S0W",
+        "work_unit": "artifact-name",
+        "role": "worker",
+        "wall_s": 2094.4,
+        "limit": "turns",
+        "cost_usd": 3.1565282
+      }
+    ],
+    "limit_stopped_counts": {
+      "turns": 16,
+      "wall_estimated": 1
+    },
+    "run_status_counts": {
+      "budget_exhausted": 17,
+      "completed": 178,
+      "failed": 25,
+      "harness_error": 5,
+      "question": 2,
+      "running": 2,
+      "yielded": 24
+    },
+    "work_unit_blocked_or_failed_by_reason": {
+      "decision": {
+        "transitions": 13,
+        "work_units": 12
+      },
+      "integration_failed": {
+        "transitions": 1,
+        "work_units": 1
+      },
+      "plan_issue": {
+        "transitions": 19,
+        "work_units": 18
+      },
+      "question": {
+        "transitions": 2,
+        "work_units": 1
+      }
+    },
+    "work_unit_no_progress_limit": {
+      "transitions": 0,
+      "work_units": 0
+    },
+    "task_blocked_failed_cancelled_by_reason": {
+      "awaiting_human": {
+        "transitions": 5,
+        "tasks": 2
+      },
+      "awaiting_plan_approval": {
+        "transitions": 12,
+        "tasks": 6
+      },
+      "worker_question": {
+        "transitions": 2,
+        "tasks": 1
+      }
+    },
+    "project_controller": {
+      "state_rows": 0,
+      "decisions": 0
+    }
+  },
+  "snapshot": {
+    "db": "file:/local/celeris/data/db/celeris.sqlite3?mode=ro",
+    "max_event_ts": "2026-11-27T13:30:40.844316595Z",
+    "excluded": "operator が worker の外で流した子 8 の実 LLM の pilot（34 run・8.6335 USD、子 8 の進捗の記載）は runs 表に無いので含めない"
+  }
+}

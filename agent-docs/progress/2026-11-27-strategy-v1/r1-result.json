@@ -1,0 +1,642 @@
+{
+ "falsification": {
+  "early_2plus": false,
+  "early_fired": [
+   "C-done"
+  ],
+  "early_points": [
+   "A-done",
+   "C-mid",
+   "C-done"
+  ],
+  "k": 3,
+  "no_fire_in_window": false,
+  "window": [
+   "A-mid",
+   "A-done",
+   "C-mid",
+   "C-done",
+   "D-mid",
+   "E-mid",
+   "D-done",
+   "E-done",
+   "F-mid",
+   "F-done"
+  ],
+  "window_fired": [
+   "C-done",
+   "D-mid",
+   "E-mid",
+   "D-done",
+   "E-done",
+   "F-mid",
+   "F-done"
+  ]
+ },
+ "falsified": false,
+ "inputs": {
+  "replay_manifest_sha256": "64c631fccfb3ef04483ea078e16cb5a180093ea928401cc9b133073a91aee74e",
+  "replay_slices": 12,
+  "research_slices": 7,
+  "research_src_sha256": "2830ce8242fd4d3ba538422ef5dc6c847e467eaebc3d25983109149423d264ea"
+ },
+ "llm_calls": 0,
+ "replay": {
+  "points": [
+   {
+    "children": [],
+    "cutoff": "2026-11-17T16:55:44.889399438Z",
+    "escalate": {
+     "2": false,
+     "3": false,
+     "4": false
+    },
+    "id": "A-mid",
+    "no_progress_streak": 0,
+    "order": 1,
+    "outcome_reached": false,
+    "outcomes": 1,
+    "outcomes_reached": 0,
+    "terminal_children": 0
+   },
+   {
+    "children": [
+     "A"
+    ],
+    "cutoff": "2026-11-17T18:45:54.402464476Z",
+    "escalate": {
+     "2": false,
+     "3": false,
+     "4": false
+    },
+    "id": "A-done",
+    "no_progress_streak": 1,
+    "order": 2,
+    "outcome_reached": false,
+    "outcomes": 1,
+    "outcomes_reached": 0,
+    "terminal_children": 1
+   },
+   {
+    "children": [
+     "A",
+     "B"
+    ],
+    "cutoff": "2026-11-18T07:41:56.354555537Z",
+    "escalate": {
+     "2": true,
+     "3": false,
+     "4": false
+    },
+    "id": "C-mid",
+    "no_progress_streak": 2,
+    "order": 3,
+    "outcome_reached": false,
+    "outcomes": 1,
+    "outcomes_reached": 0,
+    "terminal_children": 2
+   },
+   {
+    "children": [
+     "A",
+     "B",
+     "C"
+    ],
+    "cutoff": "2026-11-18T10:48:51.522536436Z",
+    "escalate": {
+     "2": true,
+     "3": true,
+     "4": false
+    },
+    "id": "C-done",
+    "no_progress_streak": 3,
+    "order": 4,
+    "outcome_reached": false,
+    "outcomes": 1,
+    "outcomes_reached": 0,
+    "terminal_children": 3
+   },
+   {
+    "children": [
+     "A",
+     "B",
+     "C"
+    ],
+    "cutoff": "2026-11-18T18:40:55.107022944Z",
+    "escalate": {
+     "2": true,
+     "3": true,
+     "4": false
+    },
+    "id": "D-mid",
+    "no_progress_streak": 3,
+    "order": 5,
+    "outcome_reached": false,
+    "outcomes": 1,
+    "outcomes_reached": 0,
+    "terminal_children": 3
+   },
+   {
+    "children": [
+     "A",
+     "B",
+     "C"
+    ],
+    "cutoff": "2026-11-18T20:36:35.314647904Z",
+    "escalate": {
+     "2": true,
+     "3": true,
+     "4": false
+    },
+    "id": "E-mid",
+    "no_progress_streak": 3,
+    "order": 6,
+    "outcome_reached": false,
+    "outcomes": 1,
+    "outcomes_reached": 0,
+    "terminal_children": 3
+   },
+   {
+    "children": [
+     "A",
+     "B",
+     "C",
+     "D"
+    ],
+    "cutoff": "2026-11-18T20:39:40.53360372Z",
+    "escalate": {
+     "2": true,
+     "3": true,
+     "4": true
+    },
+    "id": "D-done",
+    "no_progress_streak": 4,
+    "order": 7,
+    "outcome_reached": false,
+    "outcomes": 1,
+    "outcomes_reached": 0,
+    "terminal_children": 4
+   },
+   {
+    "children": [
+     "A",
+     "B",
+     "C",
+     "D",
+     "E"
+    ],
+    "cutoff": "2026-11-18T22:56:13.668271508Z",
+    "escalate": {
+     "2": true,
+     "3": true,
+     "4": true
+    },
+    "id": "E-done",
+    "no_progress_streak": 5,
+    "order": 8,
+    "outcome_reached": false,
+    "outcomes": 1,
+    "outcomes_reached": 0,
+    "terminal_children": 5
+   },
+   {
+    "children": [
+     "A",
+     "B",
+     "C",
+     "D",
+     "E"
+    ],
+    "cutoff": "2026-11-19T03:28:47.077695485Z",
+    "escalate": {
+     "2": true,
+     "3": true,
+     "4": true
+    },
+    "id": "F-mid",
+    "no_progress_streak": 5,
+    "order": 9,
+    "outcome_reached": false,
+    "outcomes": 1,
+    "outcomes_reached": 0,
+    "terminal_children": 5
+   },
+   {
+    "children": [
+     "A",
+     "B",
+     "C",
+     "D",
+     "E",
+     "F"
+    ],
+    "cutoff": "2026-11-19T04:55:10.553298044Z",
+    "escalate": {
+     "2": true,
+     "3": true,
+     "4": true
+    },
+    "id": "F-done",
+    "no_progress_streak": 6,
+    "order": 10,
+    "outcome_reached": false,
+    "outcomes": 1,
+    "outcomes_reached": 0,
+    "terminal_children": 6
+   },
+   {
+    "children": [
+     "A",
+     "B",
+     "C",
+     "D",
+     "E",
+     "F"
+    ],
+    "cutoff": "2026-11-19T09:26:52.083027038Z",
+    "escalate": {
+     "2": true,
+     "3": true,
+     "4": true
+    },
+    "id": "G-mid",
+    "no_progress_streak": 6,
+    "order": 11,
+    "outcome_reached": false,
+    "outcomes": 1,
+    "outcomes_reached": 0,
+    "terminal_children": 6
+   },
+   {
+    "children": [
+     "A",
+     "B",
+     "C",
+     "D",
+     "E",
+     "F",
+     "G"
+    ],
+    "cutoff": "2026-11-19T10:42:07.920460314Z",
+    "escalate": {
+     "2": true,
+     "3": true,
+     "4": true
+    },
+    "id": "G-done",
+    "no_progress_streak": 7,
+    "order": 12,
+    "outcome_reached": false,
+    "outcomes": 1,
+    "outcomes_reached": 0,
+    "terminal_children": 7
+   }
+  ],
+  "score": {
+   "by_k": {
+    "2": {
+     "false_positive_count": 3,
+     "false_positives": [
+      "C-mid",
+      "C-done",
+      "D-mid"
+     ],
+     "fired": [
+      "C-mid",
+      "C-done",
+      "D-mid",
+      "E-mid",
+      "D-done",
+      "E-done",
+      "F-mid",
+      "F-done",
+      "G-mid",
+      "G-done"
+     ],
+     "first_fire": "C-mid",
+     "lag_points": -3,
+     "missed": []
+    },
+    "3": {
+     "false_positive_count": 2,
+     "false_positives": [
+      "C-done",
+      "D-mid"
+     ],
+     "fired": [
+      "C-done",
+      "D-mid",
+      "E-mid",
+      "D-done",
+      "E-done",
+      "F-mid",
+      "F-done",
+      "G-mid",
+      "G-done"
+     ],
+     "first_fire": "C-done",
+     "lag_points": -2,
+     "missed": []
+    },
+    "4": {
+     "false_positive_count": 0,
+     "false_positives": [],
+     "fired": [
+      "D-done",
+      "E-done",
+      "F-mid",
+      "F-done",
+      "G-mid",
+      "G-done"
+     ],
+     "first_fire": "D-done",
+     "lag_points": 1,
+     "missed": [
+      "E-mid"
+     ]
+    }
+   },
+   "reference": "E-mid",
+   "reference_basis": "answer_key.json の first_detectable",
+   "warranted": [
+    "E-mid",
+    "D-done",
+    "E-done",
+    "F-mid",
+    "F-done",
+    "G-mid",
+    "G-done"
+   ],
+   "warranted_basis": "answer_key.json の ideal_verdict が off_track の点"
+  }
+ },
+ "research": {
+  "points": [
+   {
+    "escalate": {
+     "2": false,
+     "3": false,
+     "4": false
+    },
+    "id": "11.15",
+    "no_progress_streak": 1,
+    "order": 1,
+    "outcome_reached": false,
+    "outcomes": 0,
+    "outcomes_reached": 0,
+    "sections": [
+     "11.15"
+    ],
+    "sections_reported": [
+     "11.15"
+    ],
+    "terminal_children": 1
+   },
+   {
+    "escalate": {
+     "2": true,
+     "3": false,
+     "4": false
+    },
+    "id": "11.16",
+    "no_progress_streak": 2,
+    "order": 2,
+    "outcome_reached": false,
+    "outcomes": 0,
+    "outcomes_reached": 0,
+    "sections": [
+     "11.15",
+     "11.16"
+    ],
+    "sections_reported": [
+     "11.15",
+     "11.16"
+    ],
+    "terminal_children": 2
+   },
+   {
+    "escalate": {
+     "2": true,
+     "3": true,
+     "4": false
+    },
+    "id": "11.17",
+    "no_progress_streak": 3,
+    "order": 3,
+    "outcome_reached": false,
+    "outcomes": 0,
+    "outcomes_reached": 0,
+    "sections": [
+     "11.15",
+     "11.16",
+     "11.17"
+    ],
+    "sections_reported": [
+     "11.15",
+     "11.16",
+     "11.17"
+    ],
+    "terminal_children": 3
+   },
+   {
+    "escalate": {
+     "2": true,
+     "3": true,
+     "4": true
+    },
+    "id": "11.18",
+    "no_progress_streak": 4,
+    "order": 4,
+    "outcome_reached": false,
+    "outcomes": 0,
+    "outcomes_reached": 0,
+    "sections": [
+     "11.15",
+     "11.16",
+     "11.17",
+     "11.18"
+    ],
+    "sections_reported": [
+     "11.15",
+     "11.16",
+     "11.17",
+     "11.18"
+    ],
+    "terminal_children": 4
+   },
+   {
+    "escalate": {
+     "2": true,
+     "3": true,
+     "4": true
+    },
+    "id": "11.19",
+    "no_progress_streak": 5,
+    "order": 5,
+    "outcome_reached": false,
+    "outcomes": 0,
+    "outcomes_reached": 0,
+    "sections": [
+     "11.15",
+     "11.16",
+     "11.17",
+     "11.18",
+     "11.19"
+    ],
+    "sections_reported": [
+     "11.15",
+     "11.16",
+     "11.17",
+     "11.18",
+     "11.19"
+    ],
+    "terminal_children": 5
+   },
+   {
+    "escalate": {
+     "2": true,
+     "3": true,
+     "4": true
+    },
+    "id": "11.20",
+    "no_progress_streak": 6,
+    "order": 6,
+    "outcome_reached": false,
+    "outcomes": 0,
+    "outcomes_reached": 0,
+    "sections": [
+     "11.15",
+     "11.16",
+     "11.17",
+     "11.18",
+     "11.19",
+     "11.20"
+    ],
+    "sections_reported": [
+     "11.15",
+     "11.16",
+     "11.17",
+     "11.18",
+     "11.19",
+     "11.20"
+    ],
+    "terminal_children": 6
+   },
+   {
+    "escalate": {
+     "2": true,
+     "3": true,
+     "4": true
+    },
+    "id": "11.21",
+    "no_progress_streak": 7,
+    "order": 7,
+    "outcome_reached": false,
+    "outcomes": 0,
+    "outcomes_reached": 0,
+    "sections": [
+     "11.15",
+     "11.16",
+     "11.17",
+     "11.18",
+     "11.19",
+     "11.20",
+     "11.21"
+    ],
+    "sections_reported": [
+     "11.15",
+     "11.16",
+     "11.17",
+     "11.18",
+     "11.19",
+     "11.20",
+     "11.21"
+    ],
+    "terminal_children": 7
+   }
+  ],
+  "score": {
+   "by_k": {
+    "2": {
+     "false_positive_count": 4,
+     "false_positives": [
+      "11.16",
+      "11.17",
+      "11.18",
+      "11.19"
+     ],
+     "fired": [
+      "11.16",
+      "11.17",
+      "11.18",
+      "11.19",
+      "11.20",
+      "11.21"
+     ],
+     "first_fire": "11.16",
+     "lag_points": -4,
+     "missed": []
+    },
+    "3": {
+     "false_positive_count": 3,
+     "false_positives": [
+      "11.17",
+      "11.18",
+      "11.19"
+     ],
+     "fired": [
+      "11.17",
+      "11.18",
+      "11.19",
+      "11.20",
+      "11.21"
+     ],
+     "first_fire": "11.17",
+     "lag_points": -3,
+     "missed": []
+    },
+    "4": {
+     "false_positive_count": 2,
+     "false_positives": [
+      "11.18",
+      "11.19"
+     ],
+     "fired": [
+      "11.18",
+      "11.19",
+      "11.20",
+      "11.21"
+     ],
+     "first_fire": "11.18",
+     "lag_points": -2,
+     "missed": []
+    }
+   },
+   "reference": "11.20",
+   "reference_basis": "research-case.md の時点の表で、合理的な次の手に「改め」が出る最初の行",
+   "table_rows": [
+    "11.16",
+    "11.17",
+    "11.20"
+   ],
+   "warranted": [
+    "11.20",
+    "11.21"
+   ],
+   "warranted_basis": "基準の時点とその後の点"
+  }
+ },
+ "rule": {
+  "escalate": "not outcome_reached and terminal_children >= k and no_progress_streak >= k",
+  "k": 3,
+  "research_report_regex": {
+   "job": "(?<![\\d.])\\d{5}(?![\\d.])",
+   "ratio": "(?<![\\d.])\\d+\\s*/\\s*\\d+(?![\\d.])"
+  },
+  "sensitivity": [
+   2,
+   4
+  ]
+ },
+ "schema": "celeris.r1-escalate-result/1"
+}

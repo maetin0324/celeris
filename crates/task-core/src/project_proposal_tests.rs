@@ -214,6 +214,7 @@ fn checkpoint(root: &str, due: &[&str], running: Option<&str>) -> SnapshotCheckp
             .collect(),
         running: running.map(str::to_owned),
         unmapped: vec![],
+        stall: None,
     }
 }
 

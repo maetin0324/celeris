@@ -276,6 +276,7 @@ impl Shadow {
             &s.roots,
             &rows,
             &self.settings,
+            &Default::default(),
             &mut |_| Ok(self.tokens_used),
         )
         .expect("checkpoints");

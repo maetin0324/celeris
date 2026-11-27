@@ -196,13 +196,13 @@ use crate::cluster_runtime::{
     ClusterConnChange, ClusterResolution, ClusterRuntime, run_cluster_hooks_off_async,
 };
 use leases::wall_ms_since;
-#[cfg(test)]
-use planner_flow::{
-    planner_blocked_question, planner_rejections_since_last_plan, planner_retry_message,
-};
 use route_failure::{
     account_cooldown_reason_name, cooldown_reason_name, excluded_reason_name,
-    provider_failure_reason,
+    provider_failure_reason, record_supply_failure,
+};
+#[cfg(test)]
+use task_ops::tree::{
+    planner_blocked_question, planner_rejections_since_last_plan, planner_retry_message,
 };
 use worker_finish::{
     build_continuation_context, finish_reviewer_run_index, set_worker_finished_end,

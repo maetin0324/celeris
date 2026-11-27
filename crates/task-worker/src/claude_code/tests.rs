@@ -1281,7 +1281,7 @@ async fn result_wait_becomes_terminal_waiting() {
     let config = stub_claude(
         dir.path(),
         r#"mkdir -p artifacts
-printf '%s' '{"type":"wait","kind":"cluster_job","cluster":"sirius","jobs":["42634","42635"],"scheduler":"pbs","poll_secs":300,"timeout_secs":43200,"checkpoint":{"completed":["submitted"],"next_action":"collect"},"summary":"submitted 2 jobs"}' > artifacts/result.json
+printf '%s' '{"type":"wait","kind":"cluster_job","cluster":"sirius","jobs":["42634","42635"],"poll_secs":300,"timeout_secs":43200,"checkpoint":{"completed":["submitted"],"next_action":"collect"},"summary":"submitted 2 jobs"}' > artifacts/result.json
 echo '{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":10,"output_tokens":20}}'
 "#,
     );
@@ -1300,10 +1300,6 @@ echo '{"type":"result","subtype":"success","is_error":false,"usage":{"input_toke
         } => {
             assert_eq!(request.cluster.as_deref(), Some("sirius"));
             assert_eq!(request.jobs, vec!["42634".to_string(), "42635".to_string()]);
-            assert_eq!(
-                request.scheduler,
-                task_core::cluster_job::ClusterScheduler::Pbs
-            );
             assert_eq!(request.poll_secs, Some(300));
             assert_eq!(request.timeout_secs, Some(43200));
             assert_eq!(request.summary, "submitted 2 jobs");

@@ -23,7 +23,6 @@
 use super::super::*;
 
 use super::super::planner_flow::plan_adoption::AdoptionHold;
-use super::super::planner_flow::planner_retry_message;
 /// `planner_flow::replan_trigger_reason` が使う（`dispatcher/` からは `design_gate::design_verdict::` 経由で読む）。
 pub(in super::super) use crate::health_review::design::design_review_failed_reason;
 use crate::health_review::design::{
@@ -31,6 +30,7 @@ use crate::health_review::design::{
     planner_run_before,
 };
 use task_core::ExecutionPlanSpec;
+use task_ops::tree::planner_retry_message;
 use task_worker::protocol::DesignVerdictOut;
 
 /// D3.5 5.: 同じ task で続いた設計 review の不合格がこの数に達したら人に回す。

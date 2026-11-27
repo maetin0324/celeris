@@ -215,7 +215,7 @@ fn remote_task_syncs_runs_and_is_checked_on_the_cluster() {
 
     let config = env.write_config(
         &script,
-        &format!("[[clusters]]\nid = \"local\"\nhost = \"{HOST}\"\nconcurrency = 2\n"),
+        &format!("[[clusters]]\nid = \"local\"\nhost = \"{HOST}\"\nscheduler = \"none\"\nconcurrency = 2\n"),
     );
     // 判定コマンドはクラスタ側で走る（答えのファイルが push されていることを確かめる）。
     let id = env.add_remote(
@@ -258,7 +258,7 @@ fn missing_control_master_records_cluster_unavailable_and_does_not_block_idle() 
     std::fs::create_dir_all(&remote).unwrap();
     let config = env.write_config(
         &script,
-        "[[clusters]]\nid = \"offline\"\nhost = \"celeris-no-such-host-for-tests\"\nconcurrency = 1\n",
+        "[[clusters]]\nid = \"offline\"\nhost = \"celeris-no-such-host-for-tests\"\nscheduler = \"none\"\nconcurrency = 1\n",
     );
     let id = env.add_remote("offline work", "offline", &remote, "true");
 
@@ -312,7 +312,7 @@ fn worker_run_cluster_executes_one_run_against_the_cluster_dir() {
 
     let config = env.write_config(
         &script,
-        &format!("[[clusters]]\nid = \"local\"\nhost = \"{HOST}\"\nconcurrency = 2\n"),
+        &format!("[[clusters]]\nid = \"local\"\nhost = \"{HOST}\"\nscheduler = \"none\"\nconcurrency = 2\n"),
     );
     let id = env.add_remote("worker run cluster", "local", &remote, "true");
 
@@ -377,7 +377,7 @@ fn worker_run_cluster_without_control_master_exits_4() {
     std::fs::create_dir_all(&remote).unwrap();
     let config = env.write_config(
         &script,
-        "[[clusters]]\nid = \"offline\"\nhost = \"celeris-no-such-host-for-tests\"\nconcurrency = 1\n",
+        "[[clusters]]\nid = \"offline\"\nhost = \"celeris-no-such-host-for-tests\"\nscheduler = \"none\"\nconcurrency = 1\n",
     );
     let id = env.add_remote("offline worker run", "offline", &remote, "true");
 
@@ -450,7 +450,7 @@ fn worktree_cluster_runs_in_a_worktree_and_leaves_the_repository_alone() {
 
     let config = env.write_config(
         &script,
-        &format!("[[clusters]]\nid = \"local\"\nhost = \"{HOST}\"\nconcurrency = 1\nsync = \"worktree\"\n"),
+        &format!("[[clusters]]\nid = \"local\"\nhost = \"{HOST}\"\nscheduler = \"none\"\nconcurrency = 1\nsync = \"worktree\"\n"),
     );
     let id = env.add_remote(
         "worktree work",

@@ -28,6 +28,7 @@ fn status(job: &str, state: ClusterJobState) -> ClusterJobStatus {
         scheduling: Vec::new(),
         queued_since: None,
         queue_notified: false,
+        poll_failure: None,
     }
 }
 

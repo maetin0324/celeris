@@ -89,6 +89,7 @@ pub fn settle_external(
         .map(|c| task_core::ChildFacts {
             task_id: c.id,
             status: c.status,
+            self_paused: c.paused_at.is_some(),
             labels: c.labels,
         })
         .collect();

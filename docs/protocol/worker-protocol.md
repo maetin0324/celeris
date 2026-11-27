@@ -415,7 +415,7 @@ celeris 側の扱い（ADR-0016 D2, 実装メモ M2/M6/M7）:
 ### 4.8 `wait`（終端。ADR-0090 D1）
 
 ```json
-{"type":"wait","kind":"cluster_job","cluster":"sirius","scheduler":"pbs","jobs":["42634","42635"],
+{"type":"wait","kind":"cluster_job","cluster":"sirius","jobs":["42634","42635"],
  "poll_secs":300,"timeout_secs":86400,
  "checkpoint":{"completed":["job を投入した"],"next_action":"結果を集計する"},
  "summary":"IOR を 2 本投入した"}
@@ -425,7 +425,6 @@ celeris 側の扱い（ADR-0016 D2, 実装メモ M2/M6/M7）:
 |---|---|---|---|
 | `kind` | string | ✓ | 常に `"cluster_job"`（それ以外は不正） |
 | `cluster` | string | – | `[[clusters]] id` |
-| `scheduler` | string | – | `pbs` \| `slurm`。省略時は `pbs` |
 | `jobs` | array | ✓ | 待つ job id（文字列） |
 | `poll_secs` / `timeout_secs` | integer | – | 確かめる間隔と待つ上限 |
 | `checkpoint` | object | – | `yielded` と同じ checkpoint の意味の欄 |
@@ -433,7 +432,10 @@ celeris 側の扱い（ADR-0016 D2, 実装メモ M2/M6/M7）:
 | `usage` | object | – | `done` と同じ形 |
 
 クラスタ job の終了を待って続きを走らせる。検証は `result.json` の wait と同じ
-（`task_core::cluster_job::parse_wait_request`）で、不正なら `error{retryable:true}` になる。daemon が job を
+（`task_core::cluster_job::parse_wait_request`）で、不正なら `error{retryable:true}` になる。
+`scheduler` の欄は無い（ADR 2026-11-25-cluster-scheduler-from-config D2）。書くと不正な wait になる。poll の command と
+読み方は wait のクラスタの `[[clusters]] scheduler`（`pbs` | `slurm` | `nqsv` | `none`）で決まり、`none` のクラスタへの
+wait も `error{retryable:true}` になる。daemon が job を
 見て、終わったら（または `timeout_secs`・cancel で）次の run を始め、`context.continuation.cluster_jobs` に
 job の最終状態を渡す。`yielded` と違い、continuation の回数・進捗なしの窓・attempts には数えない。
 

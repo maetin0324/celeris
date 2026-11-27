@@ -8,7 +8,7 @@ use crate::protocol::{Evidence, RunContext, RunRequest};
 
 const REL: &str = "artifacts";
 
-const WAIT_FIELDS: &str = r#""type":"wait","kind":"cluster_job","cluster":"sirius","jobs":["42634"],"scheduler":"pbs","summary":"submitted 1 job""#;
+const WAIT_FIELDS: &str = r#""type":"wait","kind":"cluster_job","cluster":"sirius","jobs":["42634"],"summary":"submitted 1 job""#;
 
 fn usage() -> Option<task_core::Usage> {
     Some(task_core::Usage {
@@ -154,6 +154,26 @@ fn result_contract_no_known_field_is_retryable_error() {
         let message = error_message(interpret(text));
         assert!(
             message.starts_with("result.json has an invalid cluster job wait: "),
+            "{text}: {message}"
+        );
+    }
+}
+
+/// 不変条件（ADR 2026-11-25-cluster-scheduler-from-config D2）: wait の申告に `scheduler` を書くと、値によらず
+/// 不正な wait（`Error{retryable: true}`）になり、run は scheduler を外して申告し直す。2026-11-25 の事象
+/// （Pegasus の NQSV の job を `pbs` で申告して wait が期限まで解けなかった）の形を含む。旧い試験は
+/// `scheduler` を含む申告を正しい申告として使っていたので、欄を受け付ける形を検出できない。
+#[test]
+fn result_contract_wait_naming_a_scheduler_is_retryable_error() {
+    for text in [
+        r#"{"type":"wait","kind":"cluster_job","cluster":"pegasus","jobs":["318985","318986"],"scheduler":"pbs"}"#,
+        r#"{"type":"wait","kind":"cluster_job","cluster":"pegasus","jobs":["318985"],"scheduler":"nqsv"}"#,
+        r#"{"summary":"s","wait":{"jobs":["1"],"scheduler":"slurm"}}"#,
+    ] {
+        let message = error_message(interpret(text));
+        assert!(
+            message.starts_with("result.json has an invalid cluster job wait: ")
+                && message.contains("[[clusters]] scheduler"),
             "{text}: {message}"
         );
     }

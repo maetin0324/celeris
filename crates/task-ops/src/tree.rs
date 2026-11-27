@@ -550,10 +550,145 @@ pub fn planner_retry_pending(events: &[(u64, task_core::Event)]) -> bool {
             } if msg.starts_with(PLANNER_RETRY_PREFIX) && msg.ends_with(PLANNER_RETRY_SUFFIX) => {
                 return true;
             }
+            // ADR 2026-11-24-planner-supply-failure-cooldown D2: 供給側の失敗で終わった planner run は試行に数えず、
+            // 次の run で planner を起こし直す（replan の依頼は 1 回目の dispatch で消費済み）。
+            e if is_supply_failed_planner_finish(e) => return true,
             _ => {}
         }
     }
     false
+}
+
+/// ADR 2026-11-24-planner-supply-failure-cooldown D2: 供給側の失敗（認証の失敗・枠切れ・throttle）で終わり、計画の試行に
+/// 数えなかった planner run の `WorkerFinished`（`end` が `HarnessError{Supply}`）か。上限に達して不正な試行に数えた
+/// 供給側の失敗は `end` を `Supply` にしないので、ここに入らない。
+pub fn is_supply_failed_planner_finish(e: &task_core::Event) -> bool {
+    matches!(
+        e,
+        task_core::Event::WorkerFinished {
+            role: Some(task_core::RunRole::Planner),
+            end: Some(SUPPLY_FAILED_END),
+            ..
+        }
+    )
+}
+
+/// [`is_supply_failed_planner_finish`] の run を `run_id` で引く（計画の試行の数から外す）。
+pub fn planner_run_supply_failed(events: &[(u64, task_core::Event)], run_id: &str) -> bool {
+    events.iter().any(|(_, e)| {
+        is_supply_failed_planner_finish(e)
+            && matches!(e, task_core::Event::WorkerFinished { run_id: r, .. } if r == run_id)
+    })
+}
+
+/// ADR 2026-11-24-planner-supply-failure-cooldown D2: 供給側の失敗で終わり試行に数えなかった run の `WorkerFinished.end`
+/// （planner と side review の run）。
+pub const SUPPLY_FAILED_END: task_core::RunEnd = task_core::RunEnd::HarnessError {
+    class: task_core::HarnessErrorClass::Supply,
+};
+
+/// Phase F5-fix3: replan の planner が 2 回とも不正だったときの質問の文面（[`planner_rejections_since_last_plan`] が
+/// 同じ定数で理由を取り出す）。
+pub const PLANNER_BLOCKED_PREFIX: &str = "計画を直せませんでした（";
+pub const PLANNER_BLOCKED_SUFFIX: &str = "）。予算を増やして続ける／人が計画を書き直す\n（PUT /tasks/{id}/execution-plan）／中止のいずれかを選んでください。";
+
+pub fn planner_retry_message(reason: &str) -> String {
+    format!("{PLANNER_RETRY_PREFIX}{reason}{PLANNER_RETRY_SUFFIX}")
+}
+
+/// ADR 2026-11-24-planner-supply-failure-cooldown D2: 供給側の失敗で終わった planner run の進捗の文（計画の拒否の理由
+/// ではないので `PLANNER_RETRY_PREFIX` を使わない。次の planner の「前の試行の拒否の理由」に入れない）。
+pub fn planner_supply_requeue_message(message: &str) -> String {
+    format!(
+        "planner の run が供給側の失敗で終わりました（{message}）。計画の試行には数えず、使える account で planner を起こし直します。"
+    )
+}
+
+pub fn planner_blocked_question(reason: &str) -> String {
+    format!("{PLANNER_BLOCKED_PREFIX}{reason}{PLANNER_BLOCKED_SUFFIX}")
+}
+
+/// Phase F5-fix3: 直近の `ExecutionPlanned`（無ければ最初）より後で、daemon が planner の計画を拒否した
+/// 理由（`planner_retry_message` / `planner_blocked_question` の進捗から、古い順・重複なし）。次の
+/// planner run のプロンプトに「前の計画はこの理由で拒否された」として渡す（純粋関数）。
+pub fn planner_rejections_since_last_plan(events: &[(u64, task_core::Event)]) -> Vec<String> {
+    let since = events
+        .iter()
+        .rposition(|(_, e)| matches!(e, task_core::Event::ExecutionPlanned { .. }))
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let mut out: Vec<String> = Vec::new();
+    for (_, e) in &events[since..] {
+        let task_core::Event::WorkerProgress {
+            msg, kind: None, ..
+        } = e
+        else {
+            continue;
+        };
+        let reason = msg
+            .strip_prefix(PLANNER_RETRY_PREFIX)
+            .and_then(|r| r.strip_suffix(PLANNER_RETRY_SUFFIX))
+            .or_else(|| {
+                msg.strip_prefix(PLANNER_BLOCKED_PREFIX)
+                    .and_then(|r| r.strip_suffix(PLANNER_BLOCKED_SUFFIX))
+            });
+        if let Some(reason) = reason
+            && !out.iter().any(|r| r == reason)
+        {
+            out.push(reason.to_string());
+        }
+    }
+    out
+}
+
+/// ADR-0079 D7（Phase R3a）: 節点の events で、`plan_invalid` の決定への最後の回答（`DecisionAnswered`）の位置
+/// （planner の試行の窓を開け直す境目）。
+pub fn plan_invalid_answer_position(events: &[(u64, task_core::Event)]) -> Option<usize> {
+    let ids: std::collections::BTreeSet<&str> = events
+        .iter()
+        .filter_map(|(_, e)| match e {
+            task_core::Event::DecisionRequested { decision }
+                if decision.kind == task_core::DecisionKind::PlanInvalid =>
+            {
+                Some(decision.id.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    events.iter().rposition(
+        |(_, e)| matches!(e, task_core::Event::DecisionAnswered { id, .. } if ids.contains(id.as_str())),
+    )
+}
+
+/// ADR-0079 D7（Phase R3a）: 最後の計画の採用の後に `plan_invalid` へ「replan」で答えた人の note（planner に
+/// 渡す。無ければ `None`）。
+pub fn plan_invalid_replan_note(events: &[(u64, task_core::Event)]) -> Option<String> {
+    let idx = plan_invalid_answer_position(events)?;
+    let last_plan = events
+        .iter()
+        .rposition(|(_, e)| matches!(e, task_core::Event::ExecutionPlanned { .. }));
+    if last_plan.is_some_and(|p| p > idx) {
+        return None;
+    }
+    match &events[idx].1 {
+        task_core::Event::DecisionAnswered {
+            option, note, by, ..
+        } if task_core::answer_effect(task_core::DecisionKind::PlanInvalid, option)
+            == task_core::DecisionEffect::Replan =>
+        {
+            Some(
+                match note.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+                    Some(n) => format!(
+                        "人の指示（{by}、plan_invalid の決定への回答 replan）: {n} — 前の試行の拒否の理由を踏まえ、この指示に従って計画を書き直してください"
+                    ),
+                    None => format!(
+                        "人（{by}）が plan_invalid の決定に replan と答えました。前の試行の拒否の理由を直して計画を書き直してください"
+                    ),
+                },
+            )
+        }
+        _ => None,
+    }
 }
 
 /// ADR-0079 D10（Phase R3b）: 計画を持つ節点の次の run が planner になるか（人の replan の依頼・途中確認の
@@ -567,12 +702,14 @@ pub fn planner_pending(events: &[(u64, task_core::Event)]) -> bool {
 
 /// ADR-0079 D10（Phase R3b）: 木の 1 節点の生存確認の事実を store の読み取りだけで集める（判定は
 /// `task_core::tree::liveness`）。`eligible` は `ready_tasks` が返すか、`replans_left` は節点の replan の余地
-/// （回答の余裕込み。dispatcher が決める）。
+/// （回答の余裕込み。dispatcher が決める）。`child_slot_limit` は実効の `max_parallel_child_tasks`（ADR
+/// 2026-11-24-paused-children-free-child-slots D4: 枠を待つ unit を dispatcher の子の生成と同じ規則で決める）。
 pub fn node_liveness_facts(
     store: &SqliteStore,
     task: &Task,
     eligible: bool,
     replans_left: bool,
+    child_slot_limit: usize,
 ) -> Result<task_core::NodeLivenessFacts, OpsError> {
     use task_core::decision::{NEEDED_BEFORE_SELF, NEEDED_BEFORE_STAGE_PREFIX};
     let events = store.events_for(task.id)?;
@@ -609,11 +746,19 @@ pub fn node_liveness_facts(
     let task_deps =
         crate::unit_task_deps::resolve_pending_units(store, task, &rows, &mut Default::default())?;
     let mut units = Vec::new();
-    for u in rows {
+    // ADR 2026-11-24-paused-children-free-child-slots D1: 自分で一時停止した子（枠に数えない）。
+    let mut self_paused = std::collections::BTreeSet::new();
+    for u in &rows {
         let child = if u.kind == task_core::WorkUnitKind::Task {
             match u.child_task_id.as_deref() {
                 Some(raw) => match raw.parse::<TaskId>() {
-                    Ok(id) => Some((id, store.get(id)?.map(|c| c.status))),
+                    Ok(id) => {
+                        let child = store.get(id)?;
+                        if child.as_ref().is_some_and(|c| c.paused_at.is_some()) {
+                            self_paused.insert(id);
+                        }
+                        Some((id, child.map(|c| c.status)))
+                    }
                     Err(_) => None,
                 },
                 None => None,
@@ -662,6 +807,9 @@ pub fn node_liveness_facts(
         replans_left,
         plan_reviewed,
         plan_stalled,
+        child_slot_waiting: task_core::wait::child_slot_wait(&rows, &self_paused, child_slot_limit)
+            .map(|w| w.unit_keys)
+            .unwrap_or_default(),
         units,
     })
 }

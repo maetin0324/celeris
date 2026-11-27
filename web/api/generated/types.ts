@@ -1294,11 +1294,17 @@ export type ClusterForwardView = {
   "up"?: boolean | null;
 };
 
+export type ClusterJobPollFailure = {
+  "error": string;
+  "since": string;
+};
+
 export type ClusterJobState = "queued" | "held" | "running" | "exiting" | "finished" | "gone" | "unknown";
 
 export type ClusterJobStatus = {
   "exit_status"?: number | null;
   "job_id": string;
+  "poll_failure"?: ClusterJobPollFailure | null;
   "queue_notified"?: boolean;
   "queued_since"?: string | null;
   "raw_state"?: string | null;
@@ -1358,7 +1364,7 @@ export type ClusterLive = {
   "tunnel_login_needed"?: boolean;
 };
 
-export type ClusterScheduler = "pbs" | "slurm";
+export type ClusterScheduler = "pbs" | "slurm" | "nqsv";
 
 export type ClusterSettingsPutBody = {
   "work_dir"?: string | null;
@@ -6660,6 +6666,11 @@ export type TaskWait = {
   "task_id": TaskId;
 } | {
   "kind": "children";
+  "task_ids": Array<TaskId>;
+  "unit_keys": Array<string>;
+} | {
+  "kind": "child_slot";
+  "limit": number;
   "task_ids": Array<TaskId>;
   "unit_keys": Array<string>;
 } | {

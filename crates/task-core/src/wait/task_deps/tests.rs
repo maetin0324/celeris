@@ -143,6 +143,7 @@ fn task_dependency_is_a_named_wait_and_ended_ones_are_unexplained() {
         replans_left: true,
         plan_reviewed: false,
         plan_stalled: None,
+        child_slot_waiting: Vec::new(),
         units: vec![LivenessUnitFacts {
             key: "final".into(),
             kind: WorkUnitKind::Implement,

@@ -49,6 +49,10 @@ pub struct ClusterSpec {
     /// ServerAliveCountMax=3 -o TCPKeepAlive=yes`（`0` なら keepalive を付けない）。既定 30 秒。
     /// コマンドラインの `-o` は `~/.ssh/config` より優先されるので、人の設定を変えずに効く。
     pub keepalive_secs: u64,
+    /// ADR 2026-11-25-cluster-scheduler-from-config D1: このクラスタの job scheduler（`[[clusters]] scheduler`）。
+    /// クラスタ job の wait の poll の command と読み方の正本（worker の申告には無い）。`None` は job scheduler の
+    /// 無いノード（`scheduler = "none"`）で、wait を登録しない。
+    pub scheduler: Option<task_core::cluster_job::ClusterScheduler>,
     /// ADR-0090 D7: クラスタ job の durable wait の poll 間隔と上限（`[[clusters]] job_wait`）。
     pub job_wait: task_core::cluster_job::ClusterJobWaitLimits,
     /// ADR-0062 A: master 越しの実通信（`ssh -o BatchMode=yes <host> -- true`）による生存確認を
@@ -474,7 +478,8 @@ fn tunnel_prober_loop(
 /// poll の ssh の打ち切り（秒）。
 const POLL_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// ADR-0090 D2: poll の要求（フックに渡す）。`script` はクラスタで流す 1 行（`setup` の後に `qstat -xf ...`）。
+/// ADR-0090 D2: poll の要求（フックに渡す）。`script` はクラスタで流す 1 行（`setup` の後に `qstat -xf ...`。
+/// NQSV は `bash -lc '...'`）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClusterJobPollRequest {
     pub cluster: String,
@@ -783,23 +788,23 @@ impl ClusterRuntime {
         &mut self.last_cluster_command_probe
     }
 
-    /// ADR-0090 D2: poll の要求を組む（`env`・`setup` の後に `qstat -xf` / `sacct`）。
+    /// ADR-0090 D2: poll の要求を組む（`env`・`setup` の後に `qstat -xf` / `sacct` / `qstat -f`。NQSV は全体を
+    /// ログインシェルで包む。形は [`cluster_job::poll_script`] が決める）。
     pub(crate) fn job_poll_request(
         spec: &ClusterSpec,
         wait: &ClusterJobWait,
     ) -> ClusterJobPollRequest {
-        let mut script = String::new();
+        let mut prelude = String::new();
         for (k, v) in &spec.env {
-            script.push_str(&format!("export {k}={} && ", shell_quote(v)));
+            prelude.push_str(&format!("export {k}={} && ", shell_quote(v)));
         }
         for line in &spec.setup {
-            script.push_str(&format!("{{ {line}; }} && "));
+            prelude.push_str(&format!("{{ {line}; }} && "));
         }
-        script.push_str(&cluster_job::poll_command(wait.scheduler, &wait.jobs));
         ClusterJobPollRequest {
             cluster: wait.cluster.clone(),
             host: spec.host.clone(),
-            script,
+            script: cluster_job::poll_script(wait.scheduler, &prelude, &wait.jobs),
             timeout: POLL_TIMEOUT,
         }
     }

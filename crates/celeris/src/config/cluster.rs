@@ -80,10 +80,39 @@ pub struct ClusterConfig {
     /// 既定を変える運用は想定しない（逃げ道）。
     #[serde(default = "default_control_persist")]
     pub control_persist: String,
+    /// ADR 2026-11-25-cluster-scheduler-from-config D1: このクラスタの job scheduler（`"pbs"` | `"slurm"` | `"nqsv"` |
+    /// `"none"`）。必須（既定値は無い。欄が無い・値が不正なら読み込みエラー）。クラスタ job の wait の poll の command と
+    /// 読み方はこの値で決まり、worker の wait の申告には scheduler を書かない。`"none"` は job scheduler の無い
+    /// ノード（fern03 等）で、そのクラスタへの wait は登録時に断る。
+    pub scheduler: ClusterSchedulerSetting,
     /// ADR-0090 D7: クラスタ job の durable wait の既定（`job_wait = { poll_secs = 300, max_wait_secs = 86400 }`）。
     /// **本番の設定に足すのは、この欄を知る release の昇格の後**（旧い版は未知のキーで起動に失敗する）。
     #[serde(default)]
     pub job_wait: ClusterJobWaitConfig,
+}
+
+/// `[[clusters]] scheduler`（ADR 2026-11-25-cluster-scheduler-from-config D1）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClusterSchedulerSetting {
+    Pbs,
+    Slurm,
+    Nqsv,
+    /// job scheduler の無いノード。クラスタ job の wait は登録時に断る。
+    None,
+}
+
+impl ClusterSchedulerSetting {
+    /// wait の poll に使う scheduler（`None` は job scheduler が無い）。
+    pub fn job_scheduler(self) -> Option<task_core::cluster_job::ClusterScheduler> {
+        use task_core::cluster_job::ClusterScheduler;
+        match self {
+            Self::Pbs => Some(ClusterScheduler::Pbs),
+            Self::Slurm => Some(ClusterScheduler::Slurm),
+            Self::Nqsv => Some(ClusterScheduler::Nqsv),
+            Self::None => None,
+        }
+    }
 }
 
 /// `[[clusters]] job_wait`（ADR-0090 D7）: worker の `result.json` の `wait` を daemon が poll する間隔と上限。
@@ -92,6 +121,7 @@ pub struct ClusterConfig {
 /// [[clusters]]
 /// id = "sirius"
 /// host = "sirius"
+/// scheduler = "pbs"
 /// job_wait = { poll_secs = 300, max_wait_secs = 86400 }
 /// ```
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -105,6 +135,10 @@ pub struct ClusterJobWaitConfig {
     pub max_wait_secs: u64,
     #[serde(default = "task_core::cluster_job::default_queued_wake_secs")]
     pub queued_wake_secs: u64,
+    /// job の状態を返さない poll がこの秒数続いたら続きの run を起こす（既定 1800、正の整数。
+    /// ADR 2026-11-25-cluster-scheduler-from-config D4）。
+    #[serde(default = "task_core::cluster_job::default_poll_failure_wake_secs")]
+    pub poll_failure_wake_secs: u64,
 }
 
 impl Default for ClusterJobWaitConfig {
@@ -113,6 +147,7 @@ impl Default for ClusterJobWaitConfig {
             poll_secs: default_job_wait_poll_secs(),
             max_wait_secs: default_job_wait_max_wait_secs(),
             queued_wake_secs: task_core::cluster_job::default_queued_wake_secs(),
+            poll_failure_wake_secs: task_core::cluster_job::default_poll_failure_wake_secs(),
         }
     }
 }
@@ -123,6 +158,7 @@ impl ClusterJobWaitConfig {
             poll_secs: self.poll_secs,
             max_wait_secs: self.max_wait_secs,
             queued_wake_secs: self.queued_wake_secs,
+            poll_failure_wake_secs: self.poll_failure_wake_secs,
         }
     }
 }
@@ -140,6 +176,7 @@ fn default_job_wait_max_wait_secs() -> u64 {
 /// [[clusters]]
 /// id = "pegasus"
 /// host = "pegasus"
+/// scheduler = "nqsv"
 /// auth = "totp"
 ///
 /// [[clusters.forwards]]
@@ -230,6 +267,8 @@ impl Config {
                         // ADR-0062 A（Phase 107）。
                         keepalive_secs: c.keepalive_secs,
                         liveness_probe_secs: c.liveness_probe_secs,
+                        // ADR 2026-11-25-cluster-scheduler-from-config D1。
+                        scheduler: c.scheduler.job_scheduler(),
                         // ADR-0090 D7。
                         job_wait: c.job_wait.limits(),
                         // ADR-0053 D3（Phase 66）。

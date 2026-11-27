@@ -1204,7 +1204,7 @@ fn clusters_endpoint_inbox_attention_and_task_detail_show_an_offline_cluster() {
     let config = env.write_config(&script, &env.api_listen());
     let mut text = std::fs::read_to_string(&config).unwrap();
     text.push_str(
-        "\n[[clusters]]\nid = \"offline\"\nhost = \"celeris-no-such-host-for-tests\"\nconcurrency = 1\n\
+        "\n[[clusters]]\nid = \"offline\"\nhost = \"celeris-no-such-host-for-tests\"\nscheduler = \"pbs\"\nconcurrency = 1\n\
          setup = [\"true\"]\nenv = { SECRET_CLUSTER_VALUE = \"cluster-s3cr3t-value\" }\nrsync_excludes = [\".git/\"]\n",
     );
     std::fs::write(&config, text).unwrap();

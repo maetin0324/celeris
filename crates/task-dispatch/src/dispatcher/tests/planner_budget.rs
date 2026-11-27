@@ -552,7 +552,7 @@ async fn planner_budget_comment_interrupt_is_not_a_planner_attempt() {
         .into_iter()
         .filter(|(_, e)| {
             matches!(e, Event::WorkerProgress { msg, .. }
-                if msg.starts_with(super::super::planner_flow::PLANNER_RETRY_PREFIX))
+                if msg.starts_with(task_ops::tree::PLANNER_RETRY_PREFIX))
         })
         .count();
     assert_eq!(retries, 1);

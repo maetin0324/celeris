@@ -400,6 +400,7 @@ pub fn task_tree(
                 task_id: c.id,
                 status: c.status,
                 labels: c.labels.clone(),
+                self_paused: c.paused_at.is_some(),
             })
             .collect();
         let units = unit_views(&f.work_units, &child_facts);

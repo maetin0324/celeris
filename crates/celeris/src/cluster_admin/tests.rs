@@ -1,7 +1,9 @@
 use super::*;
 
 fn config_with(auth: &str) -> Config {
-    let text = format!("[[clusters]]\nid = \"c1\"\nhost = \"h1\"\nauth = {auth:?}\n");
+    let text = format!(
+        "[[clusters]]\nid = \"c1\"\nhost = \"h1\"\nscheduler = \"none\"\nauth = {auth:?}\n"
+    );
     let cfg: Config = toml::from_str(&text).expect("config");
     cfg.validate().expect("valid config");
     cfg

@@ -208,6 +208,7 @@ max_requeues = 3
 [[clusters]]
 id = "pegasus"
 host = "pegasus"
+scheduler = "nqsv"
 sync = "worktree"
 "#,
     )

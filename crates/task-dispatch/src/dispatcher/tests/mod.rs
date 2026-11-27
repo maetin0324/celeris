@@ -947,6 +947,7 @@ fn cluster_spec_with_auth(id: &str, host: &str, auth: &str) -> ClusterSpec {
         work_dir: None,
         keepalive_secs: 0,
         liveness_probe_secs: 0,
+        scheduler: Some(task_core::cluster_job::ClusterScheduler::Pbs),
         job_wait: Default::default(),
     }
 }
@@ -3148,6 +3149,10 @@ mod replan_rebase;
 /// 子待ち・subtree の中止・`review: human`（`src/dispatcher/tests/tree.rs`）。
 mod tree;
 
+/// ADR 2026-11-24-paused-children-free-child-slots: 自分で一時停止した子は同時の子 task の枠に数えない・祖先の一時停止は数える・
+/// 再開で上限を超えてよい・枠の待ち（`child_slot`）を waits に出す（`src/dispatcher/tests/tree_child_slots.rs`）。
+mod tree_child_slots;
+
 /// ADR-0079 §7 R1c: 子のブランチの基点・統合での子のブランチの merge・子の最終レビューの基点・孫 → 子 → root
 /// （`src/dispatcher/tests/tree_branches.rs`）。
 mod tree_branches;
@@ -3192,6 +3197,8 @@ mod cos_chat_triage_stagnation;
 mod cos_launch_cross;
 mod cos_launch_wire;
 mod cos_live_fix_d4;
+/// ADR 2026-11-24-planner-supply-failure-cooldown D5: CoS の代替経路は失敗した account を cooldown にして選び直す。
+mod cos_route_failover;
 mod cos_slot_wait;
 /// ADR 2026-10-11-task-wait-reasons: 見送りの理由（snapshot の task_waits と共有の待ち判定）。
 mod dep_integration;
@@ -3212,6 +3219,9 @@ mod knowledge_usage;
 /// ADR-0074「R7-11 実装時の明確化」: planner / WU の run の予算が `RunRequest.task.budget` に届く
 /// （`src/dispatcher/tests/planner_budget.rs`）。
 mod planner_budget;
+/// ADR 2026-11-24-planner-supply-failure-cooldown: planner の run の供給側の失敗は計画の試行に数えず account を cooldown にする
+/// （`src/dispatcher/tests/planner_supply.rs`）。
+mod planner_supply;
 mod prompt_ancestor_objective;
 mod prompt_project_request;
 /// ADR-0079 付記 R7-9: 統合済みの段階に unit が増えたら段階の統合をやり直す（replan・修正前の行の reopen）

@@ -680,6 +680,52 @@ pub fn apply_delta(
     })
 }
 
+/// ADR-0074 D5.3（Phase F1）: planner の出力（`execution-plan.json` の本文）を読む（純粋関数）。`schema` が
+/// [`EXECUTION_PLAN_DELTA_SCHEMA`] なら差分として `active` な計画に当て、全体に展開する（`base_version` は
+/// `active` の版と一致しなければならない）。それ以外は「移行期間」として全体形式で読む（D5.3「旧形式（全体）の
+/// replan 出力も受け付ける」）。/3 の replan では `done_keys` の unit を今の版の spec のまま持ち越す。
+pub fn parse_planner_output(
+    text: &str,
+    active: Option<&ExecutionPlanRow>,
+    done_keys: &BTreeSet<String>,
+) -> Result<ExecutionPlanSpec, String> {
+    let raw: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| format!("execution-plan.json の形式が不正: {e}"))?;
+    let schema = raw.get("schema").and_then(|v| v.as_str()).unwrap_or("");
+    if schema == EXECUTION_PLAN_DELTA_SCHEMA {
+        let Some(active) = active else {
+            return Err(
+                "execution-plan-delta/1 は replan（既に計画がある Task）でだけ受け付ける"
+                    .to_string(),
+            );
+        };
+        // ADR-0079 D9（Phase R2b）: 差分は /2 の形（`work_units`）しか持たない。/3 の replan は計画の全体を書く。
+        if active.spec.schema == EXECUTION_PLAN_SCHEMA_V3 {
+            return Err(format!(
+                "execution-plan-delta/1 は {EXECUTION_PLAN_SCHEMA_V3} の計画の replan には使えない（計画の全体を書くこと。done の unit は省略してよい）"
+            ));
+        }
+        let delta: ExecutionPlanDelta = serde_json::from_value(raw)
+            .map_err(|e| format!("execution-plan-delta.json の形式が不正: {e}"))?;
+        if delta.base_version != active.version {
+            return Err(format!(
+                "execution-plan-delta.json の base_version {} が現在の版 {} と一致しない",
+                delta.base_version, active.version
+            ));
+        }
+        apply_delta(&active.spec, &delta)
+    } else {
+        let mut spec: ExecutionPlanSpec = serde_json::from_value(raw)
+            .map_err(|e| format!("execution-plan.json の形式が不正: {e}"))?;
+        // ADR-0079 D9（Phase R2b）: /3 の replan では done の unit を今の版の spec のまま持ち越す（planner が
+        // 省いた・書き写し損ねた unit も。unit の gate で上げ下げした spec を planner は知らない）。
+        if let Some(active) = active {
+            carry_done_units_v3(&active.spec, &mut spec, done_keys);
+        }
+        Ok(spec)
+    }
+}
+
 mod design_brief;
 mod plan_limits;
 mod scheduling;

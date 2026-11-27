@@ -5,13 +5,17 @@ use super::*;
 mod commit_refs;
 
 /// ADR-0090 D5: planner の leaf の基準に足す 1 段落（数時間かかるクラスタ job の扱い）。
-pub const CLUSTER_JOB_PLANNER_GUIDANCE: &str = "**Long cluster jobs (PBS / Slurm, ADR-0090)**: a unit that \
+pub const CLUSTER_JOB_PLANNER_GUIDANCE: &str = "**Long cluster jobs (PBS / Slurm / NQSV, ADR-0090)**: a unit that \
      submits jobs that run for hours is still one unit — its run submits the jobs and ends with a `wait` \
      (`{\"type\":\"wait\",\"kind\":\"cluster_job\",...}` in result.json); celeris polls the scheduler and resumes \
-     the same unit as a continuation run when the jobs finish, and that run collects the results. Do not \
+     the same unit as a continuation run when the jobs finish (or when its polls keep failing), and that run \
+     collects the results. The scheduler comes from the cluster's configuration (`[[clusters]] scheduler`); \
+     a wait must not name it. Do not \
      split \"submit\" and \"collect\" into separate units and do not budget the unit for the job's wall time. \
      An acceptance check may require the jobs to have finished successfully (for example \"all PBS jobs are \
-     F with Exit_status 0\" verified from the scheduler or the job logs).";
+     F with Exit_status 0\" verified from the scheduler or the job logs). NEC NQSV keeps no record of finished \
+     requests in `qstat` (no `-x`; a finished request is \"does not exist\" with no exit status), so for NQSV jobs \
+     require success from the job logs or outputs, not from `qstat`.";
 
 /// agent-docs/adr/2026-10-05-browser-department-web-live-view.md D2.0 (e): browser 子 task の
 /// `requirements.browser.allowed_domains` には作業に必要な最小の origin だけを書き、親を超えない規則と例。

@@ -1,8 +1,9 @@
-//! ADR-0090: クラスタ job（PBS / Slurm）の durable wait。
+//! ADR-0090: クラスタ job（PBS / Slurm / NQSV）の durable wait。
 //!
 //! worker の run が `result.json` の `{"type": "wait", "kind": "cluster_job", ...}` で終わると、dispatcher は
 //! その run を閉じ（`runs.status = waiting`）、task（または WorkUnit）を止めて `ClusterJobWaitStarted` を残す。
-//! daemon の tick がクラスタの ssh master 越しに `qstat -xf`（PBS）/ `sacct`（Slurm）を `poll_secs` ごとに
+//! daemon の tick がクラスタの ssh master 越しに `qstat -xf`（PBS）/ `sacct`（Slurm）/ `qstat -f`（NQSV。ログイン
+//! シェルの中。ADR 2026-11-24-cluster-job-wait-nqsv）を `poll_secs` ごとに
 //! 高々 1 回だけ流し、次のどれかで `ClusterJobWaitFinished{satisfied}` と一緒に task を continuation の run に戻す:
 //! すべての job が終わった（detail は空）、job の 1 つが失敗で終わった（detail `job_failed`。失敗の発生ごとに
 //! 1 回）、job が Q/H のまま `queued_wake_secs` を超えた（detail `queue_stalled`。job ごとに 1 回）。起床の条件は
@@ -41,6 +42,21 @@ pub const WAIT_KIND_CLUSTER_JOB: &str = "cluster_job";
 pub const REASON_WAITING: &str = "waiting_for_cluster_jobs";
 /// `Trigger::ClusterJobResume` の `Transitioned.reason`。
 pub const REASON_RESUME: &str = "cluster_job_resume";
+/// 早期起床の `ClusterJobWaitFinished.detail`（state は `satisfied`）: job の 1 つが失敗で終わった（ADR 2026-11-11）。
+pub const WAKE_JOB_FAILED: &str = "job_failed";
+/// 早期起床: job が Q/H のまま `queued_wake_secs` を超えた（ADR 2026-11-11）。
+pub const WAKE_QUEUE_STALLED: &str = "queue_stalled";
+/// 早期起床: poll が job の状態を返さない失敗を `poll_failure_wake_secs` 続けた
+/// （ADR 2026-11-25-cluster-scheduler-from-config D4）。
+pub const WAKE_POLL_FAILED: &str = "poll_failed";
+
+/// `ClusterJobWaitFinished.detail` が早期起床の理由か（続きの run の前置きの `state` に渡す）。
+pub fn is_wake_reason(detail: &str) -> bool {
+    matches!(
+        detail,
+        WAKE_JOB_FAILED | WAKE_QUEUE_STALLED | WAKE_POLL_FAILED
+    )
+}
 
 /// job scheduler の種類。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -48,6 +64,9 @@ pub const REASON_RESUME: &str = "cluster_job_resume";
 pub enum ClusterScheduler {
     Pbs,
     Slurm,
+    // NEC NQSV（Pegasus）。`qstat` に `-x` が無く、終わった request は `does not exist` になる
+    // （ADR 2026-11-24-cluster-job-wait-nqsv。`///` にすると JSON Schema が enum から oneOf に変わるので `//`）。
+    Nqsv,
 }
 
 impl ClusterScheduler {
@@ -55,6 +74,7 @@ impl ClusterScheduler {
         match self {
             Self::Pbs => "pbs",
             Self::Slurm => "slurm",
+            Self::Nqsv => "nqsv",
         }
     }
 
@@ -62,6 +82,7 @@ impl ClusterScheduler {
         match s {
             "pbs" => Some(Self::Pbs),
             "slurm" => Some(Self::Slurm),
+            "nqsv" => Some(Self::Nqsv),
             _ => None,
         }
     }
@@ -71,17 +92,18 @@ impl ClusterScheduler {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ClusterJobState {
-    /// 待ち行列にいる（PBS `Q` / `W` / `T`、Slurm `PENDING`）。
+    /// 待ち行列にいる（PBS `Q` / `W` / `T`、Slurm `PENDING`、NQSV `ARR` / `WAI` / `QUE` / `STG`）。
     Queued,
-    /// 保留・一時停止（PBS `H` / `S` / `U`、Slurm `SUSPENDED` / `REQUEUE_HOLD`）。
+    /// 保留・一時停止（PBS `H` / `S` / `U`、Slurm `SUSPENDED` / `REQUEUE_HOLD`、NQSV `HLD` / `HOL` / `SUS`）。
     Held,
-    /// 実行中（PBS `R` / `B`、Slurm `RUNNING`）。
+    /// 実行中（PBS `R` / `B`、Slurm `RUNNING`、NQSV `PRR` / `RUN` / `MIG`）。
     Running,
-    /// 終了処理中（PBS `E`、Slurm `COMPLETING`）。
+    /// 終了処理中（PBS `E`、Slurm `COMPLETING`、NQSV `POR` / `EXT`）。
     Exiting,
     /// 終わった（PBS `F` / `X` / `C`、Slurm の終端の状態）。
     Finished,
-    /// scheduler が「その job は知らない」と明示した（履歴が消えた・id の誤り）。終わったものとして扱う。
+    /// scheduler が「その job は知らない」と明示した（履歴が消えた・id の誤り。NQSV では終わった request は
+    /// 常にこれ）。終わったものとして扱う。
     Gone,
     /// 出力に現れなかった（poll の失敗かもしれないので終わったとは扱わない）。
     Unknown,
@@ -128,7 +150,23 @@ pub struct ClusterJobStatus {
     /// A queue-delay wakeup was already delivered for this job.
     #[serde(default)]
     pub queue_notified: bool,
+    /// 連続した失敗の poll（job の状態を返さない poll）の記録。job の状態を返した poll で消える
+    /// （ADR 2026-11-25-cluster-scheduler-from-config D4）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poll_failure: Option<ClusterJobPollFailure>,
 }
+
+/// 連続した失敗の poll（ADR 2026-11-25-cluster-scheduler-from-config D4）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ClusterJobPollFailure {
+    /// 連続した失敗の最初の時刻（RFC 3339）。daemon の再起動・同じ wait の poll をまたいで残る。
+    pub since: String,
+    /// 最後の失敗の要約（`exit 127: <stderr の末尾>` の形、[`POLL_ERROR_MAX_CHARS`] 字まで）。
+    pub error: String,
+}
+
+/// `ClusterJobPollFailure.error` の上限の字数。
+pub const POLL_ERROR_MAX_CHARS: usize = 300;
 
 impl ClusterJobStatus {
     fn unknown(job_id: &str) -> Self {
@@ -140,6 +178,7 @@ impl ClusterJobStatus {
             scheduling: Vec::new(),
             queued_since: None,
             queue_notified: false,
+            poll_failure: None,
         }
     }
 }
@@ -178,10 +217,10 @@ impl ClusterJobWaitState {
 /// `result.json` の wait の申告（[`parse_wait_request`] が検証した後の形）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ClusterJobWaitRequest {
-    /// `[[clusters]] id`。省略時は task のクラスタ（dispatcher が埋める）。
+    /// `[[clusters]] id`。省略時は task のクラスタ（dispatcher が埋める）。scheduler は申告せず、
+    /// クラスタの設定（`[[clusters]] scheduler`）で決まる（ADR 2026-11-25-cluster-scheduler-from-config D1・D2）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cluster: Option<String>,
-    pub scheduler: ClusterScheduler,
     pub jobs: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub poll_secs: Option<u64>,
@@ -253,11 +292,14 @@ fn parse_wait_fields(
             "unsupported wait kind {kind:?} (only \"{WAIT_KIND_CLUSTER_JOB}\")"
         ));
     }
-    let scheduler = match spec.get("scheduler").and_then(|s| s.as_str()) {
-        Some(s) => ClusterScheduler::parse(&s.to_ascii_lowercase())
-            .ok_or_else(|| format!("unknown scheduler {s:?} (pbs | slurm)"))?,
-        None => ClusterScheduler::Pbs,
-    };
+    // ADR 2026-11-25-cluster-scheduler-from-config D2: scheduler はクラスタの設定で決まる。申告の欄は消した。
+    if spec.contains_key("scheduler") {
+        return Err(
+            "`scheduler` is not part of the wait; celeris uses the cluster's configured scheduler \
+             ([[clusters]] scheduler). Remove `scheduler` and write the wait again"
+                .to_string(),
+        );
+    }
     let cluster = match spec.get("cluster") {
         None | Some(serde_json::Value::Null) => None,
         Some(serde_json::Value::String(c)) if valid_cluster_id(c) => Some(c.clone()),
@@ -311,7 +353,6 @@ fn parse_wait_fields(
     Ok((
         ClusterJobWaitRequest {
             cluster,
-            scheduler,
             jobs,
             poll_secs,
             timeout_secs,
@@ -331,6 +372,10 @@ pub struct ClusterJobWaitLimits {
     /// Q/H observation threshold before waking the worker (seconds, positive).
     #[serde(default = "default_queued_wake_secs")]
     pub queued_wake_secs: u64,
+    /// job の状態を返さない poll がこの秒数続いたら続きの run を起こす（正の整数。
+    /// ADR 2026-11-25-cluster-scheduler-from-config D4）。
+    #[serde(default = "default_poll_failure_wake_secs")]
+    pub poll_failure_wake_secs: u64,
 }
 
 impl Default for ClusterJobWaitLimits {
@@ -343,6 +388,11 @@ pub fn default_queued_wake_secs() -> u64 {
     3600
 }
 
+/// `job_wait.poll_failure_wake_secs` の既定（30 分。`poll_secs = 300` なら失敗の poll がおよそ 7 回続いたとき）。
+pub fn default_poll_failure_wake_secs() -> u64 {
+    1800
+}
+
 impl ClusterJobWaitLimits {
     /// Set poll/deadline limits while using the standard queue reassessment interval.
     pub fn new(poll_secs: u64, max_wait_secs: u64) -> Self {
@@ -350,6 +400,7 @@ impl ClusterJobWaitLimits {
             poll_secs,
             max_wait_secs,
             queued_wake_secs: default_queued_wake_secs(),
+            poll_failure_wake_secs: default_poll_failure_wake_secs(),
         }
     }
 
@@ -357,6 +408,9 @@ impl ClusterJobWaitLimits {
     pub fn validate(&self) -> Result<(), String> {
         if self.queued_wake_secs == 0 {
             return Err("job_wait.queued_wake_secs must be > 0".into());
+        }
+        if self.poll_failure_wake_secs == 0 {
+            return Err("job_wait.poll_failure_wake_secs must be > 0".into());
         }
         if self.poll_secs < MIN_POLL_SECS {
             return Err(format!(
@@ -468,6 +522,7 @@ pub fn all_finished(jobs: &[String], statuses: &[ClusterJobStatus]) -> bool {
 ///
 /// - PBS: `qstat -xf <ids>`（`-x` で終わった job の履歴も返す。PBS Pro の job history が前提）。
 /// - Slurm: `sacct -n -P -X -o JobID,State%64,ExitCode -j <ids>`（`squeue` は終わった job を返さない）。
+/// - NQSV: `qstat -f <ids>`（`-x` が無い。終わった request は `does not exist` と答える）。
 pub fn poll_command(scheduler: ClusterScheduler, jobs: &[String]) -> String {
     let ids: Vec<&str> = jobs
         .iter()
@@ -476,11 +531,56 @@ pub fn poll_command(scheduler: ClusterScheduler, jobs: &[String]) -> String {
         .collect();
     match scheduler {
         ClusterScheduler::Pbs => format!("qstat -xf {}", ids.join(" ")),
+        ClusterScheduler::Nqsv => format!("qstat -f {}", ids.join(" ")),
         ClusterScheduler::Slurm => format!(
             "sacct -n -P -X -o JobID,State%64,ExitCode -j {}",
             ids.join(",")
         ),
     }
+}
+
+/// クラスタで流す poll の script（シェルの 1 行）。`prelude` はクラスタの `env`・`setup` を `&&` で繋いだ前置き
+/// （空でもよい。末尾は ` && `）。
+///
+/// - PBS / Slurm: `<prelude><poll_command>`（ADR-0090 D2 のまま）。
+/// - NQSV: `bash -lc '<prelude><poll_command>'`。`qstat` は site の profile（`/opt/nec/nqsv/bin`）でしか PATH に入らない
+///   ので、ログインシェルの profile を読んだ後で `env`・`setup` と `qstat` を流す（ADR 2026-11-24-cluster-job-wait-nqsv D2）。
+pub fn poll_script(scheduler: ClusterScheduler, prelude: &str, jobs: &[String]) -> String {
+    let script = format!("{prelude}{}", poll_command(scheduler, jobs));
+    match scheduler {
+        ClusterScheduler::Pbs | ClusterScheduler::Slurm => script,
+        ClusterScheduler::Nqsv => format!("bash -lc '{}'", script.replace('\'', "'\\''")),
+    }
+}
+
+/// poll の結果を、job の状態か失敗の poll の要約（`Err`）に分ける（ADR 2026-11-25-cluster-scheduler-from-config D4）。
+///
+/// 失敗の poll は exit ≠ 0 でどの job の状態も分からない（`Unknown` だけの）もの。command が無い（exit 127）・usage・
+/// ssh の失敗（exit 255）がこれに当たる。exit 0 で `Unknown` だけの poll は失敗に数えない（NQSV の Q・R の書式が
+/// 未取得で、書式の違いで Q・R の job を `Unknown` と読む恐れがあるため）。要約は `exit 127: <stderr の末尾>` の形
+/// （stderr が空なら stdout の末尾）。
+pub fn read_poll_output(
+    scheduler: ClusterScheduler,
+    exit: Option<i32>,
+    stdout: &str,
+    stderr: &str,
+    jobs: &[String],
+) -> Result<Vec<ClusterJobStatus>, String> {
+    let statuses = parse_poll_output(scheduler, stdout, stderr, jobs);
+    if exit == Some(0) || statuses.iter().any(|s| s.state != ClusterJobState::Unknown) {
+        return Ok(statuses);
+    }
+    let exit = exit.map_or_else(|| "no exit code".to_string(), |c| format!("exit {c}"));
+    let detail = if stderr.trim().is_empty() {
+        stdout.trim()
+    } else {
+        stderr.trim()
+    };
+    let tail = match detail.char_indices().rev().nth(POLL_ERROR_MAX_CHARS - 1) {
+        Some((i, _)) => &detail[i..],
+        None => detail,
+    };
+    Err(format!("{exit}: {tail}"))
 }
 
 /// poll の出力を scheduler ごとに読む。
@@ -493,6 +593,7 @@ pub fn parse_poll_output(
     match scheduler {
         ClusterScheduler::Pbs => parse_pbs_qstat_xf(stdout, stderr, jobs),
         ClusterScheduler::Slurm => parse_slurm_sacct(stdout, jobs),
+        ClusterScheduler::Nqsv => parse_nqsv_qstat_f(stdout, stderr, jobs),
     }
 }
 
@@ -601,6 +702,7 @@ pub fn parse_pbs_qstat_xf(stdout: &str, stderr: &str, jobs: &[String]) -> Vec<Cl
                         .collect(),
                     queued_since: None,
                     queue_notified: false,
+                    poll_failure: None,
                 };
             }
             if gone.iter().any(|g| job_matches(j, g)) {
@@ -612,9 +714,112 @@ pub fn parse_pbs_qstat_xf(stdout: &str, stderr: &str, jobs: &[String]) -> Vec<Cl
                     scheduling: Vec::new(),
                     queued_since: None,
                     queue_notified: false,
+                    poll_failure: None,
                 };
             }
             ClusterJobStatus::unknown(j)
+        })
+        .collect()
+}
+
+/// NQSV の状態名（`qstat -Q` の列名と、その長い形）を正規化する。
+fn nqsv_state(state: &str) -> ClusterJobState {
+    match state.to_ascii_uppercase().as_str() {
+        "ARR" | "ARRIVING" | "WAI" | "WAITING" | "QUE" | "QUEUED" | "STG" | "STAGING" => {
+            ClusterJobState::Queued
+        }
+        "HLD" | "HELD" | "HOL" | "HOLDING" | "SUS" | "SUSPENDED" => ClusterJobState::Held,
+        "PRR" | "PRE-RUNNING" | "RUN" | "RUNNING" | "MIG" | "MIGRATING" => ClusterJobState::Running,
+        "POR" | "POST-RUNNING" | "EXT" | "EXITING" => ClusterJobState::Exiting,
+        _ => ClusterJobState::Unknown,
+    }
+}
+
+/// NQSV の `Batch Request: 315477.nqsv does not exist on nqsv.` の行なら、その request id を返す。
+fn nqsv_missing_request(line: &str) -> Option<&str> {
+    let rest = line.trim().strip_prefix("Batch Request:")?;
+    let (id, _) = rest.trim().split_once(" does not exist")?;
+    Some(id.trim())
+}
+
+/// NQSV の `qstat -f <ids>` の出力を読む（ADR 2026-11-24-cluster-job-wait-nqsv D3・D4）。
+///
+/// - stdout・stderr の `Batch Request: <id> does not exist on <server>.` は [`ClusterJobState::Gone`]
+///   （NQSV は終わった request を返さないので、正常終了も失敗もこれ。終了コードは不明）。
+/// - 要求した id を含むそれ以外の行は、その request の段落の始まり。段落の中で key が `State` で終わる行
+///   （`Current State: RUNNING` / `State = QUE`）の値の先頭の語を [`nqsv_state`] で読む。読めなければ
+///   [`ClusterJobState::Unknown`]（終わったとは扱わない）。Q・R の段落の書式は実機で未取得。
+/// - 出力に現れない request は [`ClusterJobState::Unknown`]。
+pub fn parse_nqsv_qstat_f(stdout: &str, stderr: &str, jobs: &[String]) -> Vec<ClusterJobStatus> {
+    let lines = || stdout.lines().chain(stderr.lines());
+    let missing: Vec<(&str, &str)> = lines()
+        .filter_map(|l| nqsv_missing_request(l).map(|id| (id, l.trim())))
+        .collect();
+    // 要求した request ごとの段落（要求した id の語を含む、`does not exist` でない行から次の段落の始まりまで）。
+    let mentions = |line: &str, j: &str| {
+        line.split(|c: char| {
+            !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '[' | ']'))
+        })
+        .any(|word| !word.is_empty() && job_matches(j, word))
+    };
+    let mut blocks: Vec<(usize, Option<String>)> = Vec::new();
+    for line in stdout.lines() {
+        if nqsv_missing_request(line).is_some() {
+            continue;
+        }
+        if let Some(idx) = jobs.iter().position(|j| mentions(line, j))
+            && blocks.last().is_none_or(|(current, _)| *current != idx)
+        {
+            blocks.push((idx, None));
+            continue;
+        }
+        let Some((_, state)) = blocks.last_mut() else {
+            continue;
+        };
+        let Some((key, value)) = line.split_once(':').or_else(|| line.split_once('=')) else {
+            continue;
+        };
+        if state.is_none() && key.trim().to_ascii_lowercase().ends_with("state") {
+            *state = value.split_whitespace().next().map(str::to_string);
+        }
+    }
+    jobs.iter()
+        .enumerate()
+        .map(|(idx, j)| {
+            if let Some((_, line)) = missing.iter().find(|(id, _)| job_matches(j, id)) {
+                return ClusterJobStatus {
+                    job_id: j.clone(),
+                    state: ClusterJobState::Gone,
+                    exit_status: None,
+                    raw_state: Some((*line).to_string()),
+                    scheduling: Vec::new(),
+                    queued_since: None,
+                    queue_notified: false,
+                    poll_failure: None,
+                };
+            }
+            let mut own = blocks.iter().filter(|(i, _)| *i == idx).peekable();
+            let listed = own.peek().is_some();
+            let raw = own.find_map(|(_, state)| state.clone());
+            match listed.then_some(raw) {
+                Some(raw) => ClusterJobStatus {
+                    job_id: j.clone(),
+                    state: raw
+                        .as_deref()
+                        .map(nqsv_state)
+                        .unwrap_or(ClusterJobState::Unknown),
+                    exit_status: None,
+                    raw_state: Some(
+                        raw.clone()
+                            .unwrap_or_else(|| "listed by qstat (state not read)".to_string()),
+                    ),
+                    scheduling: Vec::new(),
+                    queued_since: None,
+                    queue_notified: false,
+                    poll_failure: None,
+                },
+                None => ClusterJobStatus::unknown(j),
+            }
         })
         .collect()
 }
@@ -677,6 +882,7 @@ pub fn parse_slurm_sacct(stdout: &str, jobs: &[String]) -> Vec<ClusterJobStatus>
                     scheduling: Vec::new(),
                     queued_since: None,
                     queue_notified: false,
+                    poll_failure: None,
                 }
             }
             None => ClusterJobStatus::unknown(j),
@@ -701,6 +907,13 @@ pub fn preamble_lines(statuses: &[ClusterJobStatus]) -> Vec<String> {
                     }
                 })
                 .unwrap_or_default();
+            let raw = match &s.poll_failure {
+                Some(f) => format!(
+                    "{raw} / celeris poll failing since {}: {}",
+                    f.since, f.error
+                ),
+                None => raw,
+            };
             match (s.state, s.exit_status) {
                 (ClusterJobState::Finished, Some(code)) => {
                     format!("{}: finished (Exit_status {code}{raw})", s.job_id)

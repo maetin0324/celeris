@@ -18,13 +18,24 @@ pub(super) fn fixture(
     Dispatcher,
 ) {
     let dir = crate::test_support::WritableTempDir::new();
-    let db_path = dir.path().join("celeris.db");
-    let store = Arc::new(SqliteStore::open(&db_path).expect("store"));
+    let store = Arc::new(SqliteStore::open(&dir.path().join("celeris.db")).expect("store"));
     let adapter: Arc<dyn WorkerAdapter> = Arc::new(FakeAdapter::new(command));
     let mut d = dispatcher_with_test_clock(store.clone(), adapter, 2, true);
+    install_cos_launch(&mut d, dir.path(), &store, max_cos_runs);
+    (dir, store, d)
+}
+
+/// The CoS launch these tests share: the CoS skills exist and the chat data and the database
+/// (`celeris.db`, already opened as `store`) live under `dir`.
+pub(super) fn install_cos_launch(
+    d: &mut Dispatcher,
+    dir: &std::path::Path,
+    store: &Arc<SqliteStore>,
+    max_cos_runs: usize,
+) {
     d.config.execution.max_cos_runs = max_cos_runs;
     d.config.min_free_disk_pct = 0.0;
-    d.config.knowledge.root = dir.path().join("knowledge");
+    d.config.knowledge.root = dir.join("knowledge");
     task_ops::cos_skill_gate::write_fixture(
         &d.config.knowledge.root.join("skills"),
         "cos-inbox-triage",
@@ -41,15 +52,14 @@ pub(super) fn fixture(
             max_wall_secs: 30,
             inline_read_max_commands: 20,
             unavailable_reason: None,
-            data_dir: dir.path().to_path_buf(),
-            db_path,
+            data_dir: dir.to_path_buf(),
+            db_path: dir.join("celeris.db"),
             attachment_limits: Default::default(),
             api_base_url: "http://127.0.0.1:7700/api/v1".into(),
             web_base_url: None,
             triage: Default::default(),
         },
     );
-    (dir, store, d)
 }
 
 pub(super) fn thread(store: &SqliteStore, key: &str) -> String {

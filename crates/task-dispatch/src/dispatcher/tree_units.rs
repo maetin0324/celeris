@@ -115,6 +115,7 @@ impl Dispatcher {
                     t,
                     eligible.contains(&t.id),
                     replans_left,
+                    self.config.execution.limits.tree.max_parallel_child_tasks,
                 )
                 .map_err(ops_to_store)?,
             );
@@ -302,7 +303,8 @@ impl Dispatcher {
             self.snapshot_task_waits()
                 .into_iter()
                 .map(|w| (w.task_id, w.wait)),
-        );
+        )
+        .with_child_slot_limit(self.config.execution.limits.tree.max_parallel_child_tasks);
         let facts = task_ops::stagnation::gather(
             self.store.as_ref(),
             self.config.releases_dir.as_deref(),
@@ -1017,30 +1019,29 @@ impl Dispatcher {
                 .tree
                 .max_parallel_child_tasks
                 .max(1);
-            let mut open_children = units
-                .iter()
-                .filter(|u| {
-                    u.kind == task_core::WorkUnitKind::Task
-                        && u.status == task_core::WorkUnitStatus::Running
-                })
-                .count();
-            // 現在の段階（終端でない行のうち seq 最小の行の段階。`runnable_work_units` と同じ）。
-            let current_stage = units
-                .iter()
-                .filter(|u| !u.status.is_terminal())
-                .min_by_key(|u| u.seq)
-                .and_then(|u| u.phase.clone());
-            let mut ready: Vec<&task_core::WorkUnitRow> = units
-                .iter()
-                .filter(|u| {
-                    u.kind == task_core::WorkUnitKind::Task
-                        && u.status == task_core::WorkUnitStatus::Ready
-                        && u.child_task_id.is_none()
-                        && u.phase == current_stage
-                })
-                .collect();
-            ready.sort_by_key(|u| u.seq);
-            for u in ready {
+            // ADR 2026-11-24-paused-children-free-child-slots D1: 枠を占めるのは running の kind task の unit のうち、子 task 自身が
+            // 一時停止されていないもの（祖先の一時停止で止まっている子は数える）。D2: 再開した子で上限を超えても再開は待たせず、
+            // 超えている間は新しい子を作らない。
+            let mut self_paused = std::collections::BTreeSet::new();
+            for u in units.iter().filter(|u| {
+                u.kind == task_core::WorkUnitKind::Task
+                    && u.status == task_core::WorkUnitStatus::Running
+            }) {
+                if let Some(child_id) = u
+                    .child_task_id
+                    .as_deref()
+                    .and_then(|s| s.parse::<TaskId>().ok())
+                    && self
+                        .store
+                        .get(child_id)?
+                        .is_some_and(|c| c.paused_at.is_some())
+                {
+                    self_paused.insert(child_id);
+                }
+            }
+            let mut open_children = task_core::wait::child_slot_holders(&units, &self_paused).len();
+            // 候補（現在の段の ready の kind task の unit で子がまだ無いもの、seq 順）は `waits` の枠の待ちと同じ関数。
+            for u in task_core::wait::child_creation_candidates(&units) {
                 if open_children >= limit {
                     break;
                 }

@@ -81,6 +81,7 @@ fn node(units: Vec<LivenessUnitFacts>) -> NodeLivenessFacts {
         replans_left: true,
         plan_reviewed: false,
         plan_stalled: None,
+        child_slot_waiting: Vec::new(),
         units,
     }
 }
@@ -269,5 +270,43 @@ fn liveness_plan_stalled_node_is_unexplained_even_with_a_ready_unit() {
     assert_eq!(
         class(n),
         (LivenessClass::Unexplained, "plan_stalled".to_string())
+    );
+}
+
+/// ADR 2026-11-24-paused-children-free-child-slots D4: ready の kind task の unit は、枠の待ち（`child_slot_waiting`）に入るときだけ
+/// 名指しの待ち（`child_slot`）で、入らなければ次の tick で子を作る（`Runnable`）。従来は非終端の子が 1 件でもあれば（自分で
+/// 一時停止した子でも）枠待ちに分類し、今回の待ち合いを名指しの待ちに隠していた。既存の試験は ready の kind task の unit の
+/// 分類を見ていないので足す。
+#[test]
+fn ready_task_unit_waits_on_a_child_slot_only_when_the_slots_are_full() {
+    let paused_child = |key: &str| {
+        let mut u = leaf(key, WorkUnitStatus::Running);
+        u.kind = WorkUnitKind::Task;
+        u.child = Some((TaskId::new(), Some(Status::Ready)));
+        u
+    };
+    let mut ready = leaf("e1b", WorkUnitStatus::Ready);
+    ready.kind = WorkUnitKind::Task;
+    // 今回の事象の形: 枠を占めていた 2 件の子は自分で一時停止 → 枠の待ちに入らない → 次の tick で子を作る。
+    let units = vec![paused_child("e2"), paused_child("e3"), ready.clone()];
+    assert_eq!(
+        class(node(units)),
+        (LivenessClass::Runnable, "child_creation".to_string())
+    );
+    // 枠が埋まっている（止まっていない子 2 件）: 名指しの待ち（StallDetected にしない）。名指しの待ちは最初の 1 件が理由に
+    // なるので、枠を待つ unit を先に並べて `child_slot` の分類そのものを見る。
+    let mut full = node(vec![ready.clone(), paused_child("e2"), paused_child("e3")]);
+    full.child_slot_waiting = vec!["e1b".into()];
+    assert_eq!(
+        class(full),
+        (LivenessClass::Waiting, "child_slot".to_string())
+    );
+    // 祖先の一時停止で止まっている節点は unit を見る前に `dependencies`（人の一時停止）の待ち。受信箱には知らせない。
+    let mut paused_node = node(vec![paused_child("e2"), paused_child("e3"), ready]);
+    paused_node.eligible = false;
+    paused_node.child_slot_waiting = vec!["e1b".into()];
+    assert_eq!(
+        class(paused_node),
+        (LivenessClass::Waiting, "dependencies".to_string())
     );
 }

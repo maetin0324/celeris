@@ -16,9 +16,13 @@ use time::format_description::well_known::Rfc3339;
 use crate::OpsError;
 use crate::daemon::DaemonSnapshot;
 
-/// dispatcher のメモリの見送り理由（task ごとに 1 件。`DaemonSnapshot.task_waits` の写し）。
+/// DB の外から渡す待ちの材料: dispatcher のメモリの見送り理由（task ごとに 1 件。`DaemonSnapshot.task_waits` の写し）と、
+/// 実効の `max_parallel_child_tasks`（ADR 2026-11-24-paused-children-free-child-slots D3。`None` なら枠の待ちを推測しない）。
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct MemoryWaits(HashMap<TaskId, TaskWait>);
+pub struct MemoryWaits {
+    waits: HashMap<TaskId, TaskWait>,
+    child_slot_limit: Option<usize>,
+}
 
 impl MemoryWaits {
     /// D4: snapshot が古すぎない（`last_tick_at` から `tick_ms × 10` 以内）ときだけ使う。古ければ空（推測しない）。
@@ -34,21 +38,33 @@ impl MemoryWaits {
         if now - last > window {
             return Self::default();
         }
-        Self(
-            s.task_waits
+        Self {
+            waits: s
+                .task_waits
                 .iter()
                 .map(|w| (w.task_id, w.wait.clone()))
                 .collect(),
-        )
+            child_slot_limit: None,
+        }
     }
 
     /// dispatcher が自分のメモリの理由をそのまま渡す（ADR 2026-10-27-project-stagnation-inbox D1 の `task_unscheduled`）。
     pub fn from_waits(waits: impl IntoIterator<Item = (TaskId, TaskWait)>) -> Self {
-        Self(waits.into_iter().collect())
+        Self {
+            waits: waits.into_iter().collect(),
+            child_slot_limit: None,
+        }
+    }
+
+    /// ADR 2026-11-24-paused-children-free-child-slots D3: daemon と同じ実効の `max_parallel_child_tasks`（API は
+    /// `ApiState` の `tree_limits`、dispatcher は自分の config）。渡したときだけ `plan_waits` が `child_slot` を出す。
+    pub fn with_child_slot_limit(mut self, limit: usize) -> Self {
+        self.child_slot_limit = Some(limit);
+        self
     }
 
     pub fn get(&self, id: TaskId) -> Option<&TaskWait> {
-        self.0.get(&id)
+        self.waits.get(&id)
     }
 }
 
@@ -131,6 +147,7 @@ fn child_facts(
                     task_id: c.id,
                     status: c.status,
                     labels: c.labels.clone(),
+                    self_paused: c.paused_at.is_some(),
                 })
                 .collect()
         })
@@ -151,6 +168,7 @@ fn child_facts(
                 task_id: c.id,
                 status: c.status,
                 labels: c.labels.clone(),
+                self_paused: c.paused_at.is_some(),
             });
         }
     }
@@ -164,6 +182,7 @@ fn plan_waits_of(
     units: &[WorkUnitRow],
     children_by_parent: &HashMap<TaskId, Vec<&Task>>,
     decisions: &mut HashMap<TaskId, Vec<task_core::DecisionRow>>,
+    child_slot_limit: Option<usize>,
 ) -> Result<Vec<TaskWait>, OpsError> {
     let root = task_core::tree::root_id_of(task);
     if let std::collections::hash_map::Entry::Vacant(e) = decisions.entry(root) {
@@ -177,7 +196,7 @@ fn plan_waits_of(
         return Ok(Vec::new());
     }
     let children = child_facts(store, task, units, children_by_parent)?;
-    let mut waits = task_core::plan_waits(units, &children, &keys);
+    let mut waits = task_core::plan_waits(units, &children, &keys, child_slot_limit);
     // ADR 2026-11-11-unit-task-dependencies D5（M11）: pending の unit が `task:<id>` で待つ木の外の task（DB と、M10 と同じ
     // git の祖先判定。`task:` の依存が無ければ何も読まない）。
     let task_deps =
@@ -221,6 +240,7 @@ pub fn task_waits(
             &units,
             &children_by_parent,
             &mut decisions,
+            memory.child_slot_limit,
         )?);
         let plan = store.execution_plan_active(task.id)?;
         waits.extend(human_gate_waits(

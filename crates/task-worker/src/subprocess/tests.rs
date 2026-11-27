@@ -527,7 +527,6 @@ async fn run_common_finish_run_writes_wait_line_for_waiting() {
     let checkpoint = serde_json::json!({"completed": ["submitted"], "next_action": "collect"});
     let request = task_core::cluster_job::ClusterJobWaitRequest {
         cluster: Some("sirius".into()),
-        scheduler: task_core::cluster_job::ClusterScheduler::Pbs,
         jobs: vec!["42634.sirius-pbs".into(), "42635".into()],
         poll_secs: Some(300),
         timeout_secs: Some(43_200),
@@ -557,7 +556,8 @@ async fn run_common_finish_run_writes_wait_line_for_waiting() {
     assert_eq!(line["type"], "wait");
     assert_eq!(line["kind"], task_core::cluster_job::WAIT_KIND_CLUSTER_JOB);
     assert_eq!(line["cluster"], "sirius");
-    assert_eq!(line["scheduler"], "pbs");
+    // ADR 2026-11-25-cluster-scheduler-from-config D2: 申告に scheduler は無い（書き戻しても断られない形）。
+    assert!(line.get("scheduler").is_none(), "{line}");
     assert_eq!(
         line["jobs"],
         serde_json::json!(["42634.sirius-pbs", "42635"])

@@ -24,6 +24,7 @@ pub fn continuation_of(
                     scheduling: Vec::new(),
                     queued_since: None,
                     queue_notified: false,
+                    poll_failure: None,
                 })
         })
         .collect();
@@ -66,7 +67,7 @@ pub fn cluster_jobs_from_events(events: &[(u64, Event)]) -> Option<crate::Cluste
         _ => None,
     })?;
     let mut result = continuation_of(&wait, state, &jobs);
-    if matches!(detail.as_str(), "job_failed" | "queue_stalled") {
+    if cluster_job::is_wake_reason(&detail) {
         result.state = detail;
     }
     Some(result)
@@ -90,9 +91,7 @@ pub fn wake_reason(events: &[(u64, Event)], id: &str) -> Option<String> {
     events.iter().rev().find_map(|(_, event)| match event {
         Event::ClusterJobWaitFinished {
             wait_id, detail, ..
-        } if wait_id == id && matches!(detail.as_str(), "job_failed" | "queue_stalled") => {
-            Some(detail.clone())
-        }
+        } if wait_id == id && cluster_job::is_wake_reason(detail) => Some(detail.clone()),
         _ => None,
     })
 }

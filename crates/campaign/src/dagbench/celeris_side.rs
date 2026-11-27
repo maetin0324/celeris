@@ -665,7 +665,6 @@ impl WorkerAdapter for StubWorker {
                     terminal: Terminal::Waiting {
                         request: task_core::cluster_job::ClusterJobWaitRequest {
                             cluster: Some(CLUSTER.into()),
-                            scheduler: task_core::cluster_job::ClusterScheduler::Pbs,
                             jobs: vec![job],
                             poll_secs: Some(sh.spec.poll_secs),
                             timeout_secs: None,
@@ -1507,6 +1506,8 @@ fn build_dispatcher(shared: &Arc<Shared>, paths: &Paths, store: Arc<SqliteStore>
         work_dir: None,
         keepalive_secs: 0,
         liveness_probe_secs: 0,
+        // ADR 2026-11-25-cluster-scheduler-from-config D1: dagbench の擬似クラスタは PBS の qstat の形で答える。
+        scheduler: Some(task_core::cluster_job::ClusterScheduler::Pbs),
         job_wait: task_core::cluster_job::ClusterJobWaitLimits::new(
             shared.spec.poll_secs,
             task_core::cluster_job::MAX_WAIT_SECS_CEILING,

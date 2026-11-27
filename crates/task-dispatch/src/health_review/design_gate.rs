@@ -39,6 +39,7 @@ use crate::review::parent_evaluation as pe;
 use crate::run_settlement::run_end_record;
 use task_core::ExecutionPlanSpec;
 use task_core::design_review::ReviewPolicyState;
+use task_ops::tree::SUPPLY_FAILED_END;
 use task_worker::protocol::DesignReviewRequest;
 
 /// side review（task の status を変えない reviewer run）の完了の種類。起動口に渡し、終わりの判定の振り分けに使う。
@@ -422,6 +423,16 @@ impl Dispatcher {
             .map(|e| (e.account, e.account_adapter, Some(e.since)))
             .unwrap_or((None, None, None));
         let (run_end, outcome, usage) = run_end_of(&end.result, kind.label());
+        // ADR 2026-11-24-planner-supply-failure-cooldown D4: 供給側の失敗は worker・planner の run と同じ関数で account か
+        // source を cooldown にし、`end` を `HarnessError{Supply}` にして判定（設計 review・親の途中評価）に流さない。
+        // 起こし直しは判定の無い side review を次の dispatch が起こす既存の経路（cooldown の account は admission が外す）。
+        let e = end.result.as_ref().err();
+        let supply = e.and_then(|e| provider_failure_reason(e).zip(provider_failure_outcome(e)));
+        let cooldown = supply.as_ref().and_then(|(reason, outcome)| {
+            let account = (account.as_deref(), account_adapter);
+            record_supply_failure(self, account, &end.provider, reason, outcome)
+        });
+        let run_end = supply.as_ref().map(|_| SUPPLY_FAILED_END).or(run_end);
         let model = self.started_model_of(task_id, &run_id);
         let quota = self.routing.settle_quota(
             &self.store,
@@ -441,8 +452,9 @@ impl Dispatcher {
         tracing::info!(%task_id, %run_id, kind = kind.label(), %outcome, "side review run finished (the verdict is read by its kind, not by the final review)");
         let role = Some(RunRole::Reviewer);
         let finished = run_end_record(&run_id, outcome, usage, role, metrics, run_end);
-        self.store.append_event(task_id, &finished)?;
-        self.store.append_event(task_id, &quota)?;
+        for ev in [&finished, &quota].into_iter().chain(&cooldown) {
+            self.store.append_event(task_id, ev)?;
+        }
         let status = run_end
             .map(task_core::RunIndexStatus::from_run_end)
             .unwrap_or(task_core::RunIndexStatus::HarnessError);
@@ -455,6 +467,9 @@ impl Dispatcher {
             OffsetDateTime::now_utc(),
         ) {
             tracing::warn!(%task_id, %run_id, kind = kind.label(), error = %e, "failed to finish the runs index row for the side review run");
+        }
+        if supply.is_some() {
+            return Ok(());
         }
         match kind {
             SideReviewKind::Design => self.settle_design_review(task_id, &run_id, &end.result),

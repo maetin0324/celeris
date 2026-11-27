@@ -202,7 +202,7 @@ mod tests {
     fn route_store_schema_is_pinned_and_has_all_tables() {
         let s = store();
         assert_eq!(s.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 126);
+        assert_eq!(SCHEMA_VERSION, 127);
         let c = s.lock().unwrap();
         for name in [
             "route_features",

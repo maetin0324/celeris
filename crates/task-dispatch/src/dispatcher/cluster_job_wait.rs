@@ -2,7 +2,7 @@
 //!
 //! - run の終わり（`Terminal::Waiting`）の検証と wait の組み立て（[`Dispatcher::cluster_job_wait_for`]）。
 //! - tick の poll（[`Dispatcher::poll_cluster_job_waits`]）: `waiting` の wait を `poll_secs` ごとに高々 1 回、
-//!   クラスタの ssh master 越しに `qstat -xf` / `sacct` で調べ（OS スレッドに逃がし、結果は次の tick 以降に拾う）、
+//!   クラスタの ssh master 越しに `qstat -xf` / `sacct` / `qstat -f`（NQSV。ログインシェルの中）で調べ（OS スレッドに逃がし、結果は次の tick 以降に拾う）、
 //!   状態が変わったら `ClusterJobWaitPolled`。すべて終わったとき、job の 1 つが失敗で終わったとき（detail
 //!   `job_failed`）、job が Q/H のまま `queued_wake_secs` を超えたとき（detail `queue_stalled`）は
 //!   `ClusterJobWaitFinished{satisfied}` と task / unit の再開（起床の条件は `task_core::cluster_job::wakeup::observe`）、
@@ -76,6 +76,10 @@ impl Dispatcher {
                 "cluster {cluster:?} is not configured ([[clusters]])"
             ));
         };
+        // ADR 2026-11-25-cluster-scheduler-from-config D1: scheduler はクラスタの設定が正本（申告には無い）。
+        let scheduler = spec.scheduler.ok_or_else(|| {
+            format!("cluster {cluster:?} has no job scheduler ([[clusters]] scheduler = \"none\")")
+        })?;
         let (poll_secs, timeout_secs) = spec.job_wait.clamp(request);
         let now = self.now_utc();
         let deadline =
@@ -86,7 +90,7 @@ impl Dispatcher {
             work_unit_id: work_unit_id.map(str::to_string),
             run_id: run_id.to_string(),
             cluster,
-            scheduler: request.scheduler,
+            scheduler,
             jobs: request.jobs.clone(),
             poll_secs,
             timeout_secs,
@@ -198,21 +202,20 @@ impl Dispatcher {
         result: Result<task_worker::RemoteCommandOutput, String>,
         now: OffsetDateTime,
     ) -> Result<bool, DispatchError> {
-        let out = match result {
-            Ok(out) => out,
-            Err(e) => {
-                tracing::warn!(task_id = %wait.task_id, wait_id = %wait.wait_id, cluster = %wait.cluster, error = %e, "cluster job poll failed; retrying after poll_secs (ADR-0090)");
-                return Ok(false);
-            }
-        };
-        let statuses =
-            cluster_job::parse_poll_output(wait.scheduler, &out.stdout, &out.stderr, &wait.jobs);
-        let nothing_known = statuses.iter().all(|s| s.state == ClusterJobState::Unknown);
-        if out.exit != Some(0) && nothing_known {
-            tracing::warn!(task_id = %wait.task_id, wait_id = %wait.wait_id, cluster = %wait.cluster, exit = ?out.exit, stderr = %out.stderr.trim(), "cluster job poll returned no job states; retrying after poll_secs (ADR-0090)");
-            return Ok(false);
+        // ADR 2026-11-25-cluster-scheduler-from-config D4: 失敗の poll（`Err`）も同じ判定に渡す（`wakeup::evaluate`）。
+        let read = result.and_then(|out| {
+            cluster_job::read_poll_output(
+                wait.scheduler,
+                out.exit,
+                &out.stdout,
+                &out.stderr,
+                &wait.jobs,
+            )
+        });
+        if let Err(error) = &read {
+            tracing::warn!(task_id = %wait.task_id, wait_id = %wait.wait_id, cluster = %wait.cluster, error = %error, "cluster job poll returned no job states (ADR-0090, ADR 2026-11-25-cluster-scheduler-from-config D4)");
         }
-        self.apply_cluster_job_statuses(wait, statuses, now)
+        self.apply_cluster_job_statuses(wait, read, now)
     }
 
     /// 完了判定の共通部（poll の結果も通知も通る）。全 job が終わっていれば `finish_cluster_job_wait`（satisfied）、
@@ -220,17 +223,13 @@ impl Dispatcher {
     fn apply_cluster_job_statuses(
         &mut self,
         wait: &ClusterJobWait,
-        mut statuses: Vec<ClusterJobStatus>,
+        read: Result<Vec<ClusterJobStatus>, String>,
         now: OffsetDateTime,
     ) -> Result<bool, DispatchError> {
         let history = self.store.cluster_job_waits_for_task(wait.task_id)?;
-        let threshold = self
-            .config
-            .clusters
-            .get(&wait.cluster)
-            .map(|spec| spec.job_wait.queued_wake_secs)
-            .unwrap_or_else(cluster_job::default_queued_wake_secs);
-        let reason = cluster_job::wakeup::observe(wait, &history, &mut statuses, now, threshold);
+        let spec = self.config.clusters.get(&wait.cluster);
+        let limits = spec.map(|spec| spec.job_wait).unwrap_or_default();
+        let (statuses, reason) = cluster_job::wakeup::evaluate(wait, &history, read, now, &limits);
         let all_finished = cluster_job::all_finished(&wait.jobs, &statuses);
         let reason = if all_finished { None } else { reason };
         if all_finished || reason.is_some() {
@@ -506,6 +505,7 @@ impl Dispatcher {
             scheduling: Vec::new(),
             queued_since: None,
             queue_notified: false,
+            poll_failure: None,
         };
         match statuses.iter_mut().find(|s| s.job_id == notice.job_id) {
             Some(s) => *s = fresh,
@@ -515,10 +515,12 @@ impl Dispatcher {
             return Ok(ClusterJobNoticeOutcome::Duplicate);
         }
         let now = self.now_utc();
-        Ok(if self.apply_cluster_job_statuses(&wait, statuses, now)? {
-            ClusterJobNoticeOutcome::Finished
-        } else {
-            ClusterJobNoticeOutcome::Applied
-        })
+        Ok(
+            if self.apply_cluster_job_statuses(&wait, Ok(statuses), now)? {
+                ClusterJobNoticeOutcome::Finished
+            } else {
+                ClusterJobNoticeOutcome::Applied
+            },
+        )
     }
 }

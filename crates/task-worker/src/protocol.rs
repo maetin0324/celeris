@@ -1464,7 +1464,8 @@ pub enum WorkerMessage {
         usage: Option<Usage>,
     },
     /// ADR-0090 D1: クラスタ job の終了待ち（`result.json` と同じ形
-    /// `{"type": "wait", "kind": "cluster_job", "cluster": .., "jobs": [..], "scheduler": "pbs", ...}`）。
+    /// `{"type": "wait", "kind": "cluster_job", "cluster": .., "jobs": [..], ...}`）。scheduler はクラスタの設定
+    /// （`[[clusters]] scheduler`）で決まり、申告には無い（ADR 2026-11-25-cluster-scheduler-from-config D2）。
     /// `yield` と同じく checkpoint を添えるが、continuation の回数・進捗なしの窓・attempts には数えない。
     /// 追加のみ（`PROTOCOL_VERSION` は変えない）。
     Wait {
@@ -1472,9 +1473,6 @@ pub enum WorkerMessage {
         kind: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cluster: Option<String>,
-        /// 省略時は `pbs`。
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        scheduler: Option<task_core::cluster_job::ClusterScheduler>,
         jobs: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         poll_secs: Option<u64>,

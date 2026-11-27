@@ -1,0 +1,1616 @@
+{
+ "arms": {
+  "ctl.null": {
+   "by_k": {
+    "2": {
+     "false_positive_points": 0,
+     "false_positive_trials": 0
+    },
+    "3": {
+     "false_positive_points": 0,
+     "false_positive_trials": 0
+    },
+    "4": {
+     "false_positive_points": 0,
+     "false_positive_trials": 0
+    }
+   },
+   "excluded": 10,
+   "full_reach_trials": 0,
+   "included": 0,
+   "trials": 10
+  },
+  "new": {
+   "by_k": {
+    "2": {
+     "false_positive_points": 0,
+     "false_positive_trials": 0
+    },
+    "3": {
+     "false_positive_points": 0,
+     "false_positive_trials": 0
+    },
+    "4": {
+     "false_positive_points": 0,
+     "false_positive_trials": 0
+    }
+   },
+   "excluded": 13,
+   "full_reach_trials": 0,
+   "included": 0,
+   "trials": 13
+  },
+  "old.passive": {
+   "by_k": {
+    "2": {
+     "false_positive_points": 0,
+     "false_positive_trials": 0
+    },
+    "3": {
+     "false_positive_points": 0,
+     "false_positive_trials": 0
+    },
+    "4": {
+     "false_positive_points": 0,
+     "false_positive_trials": 0
+    }
+   },
+   "excluded": 11,
+   "full_reach_trials": 0,
+   "included": 0,
+   "trials": 11
+  },
+  "old.proactive": {
+   "by_k": {
+    "2": {
+     "false_positive_points": 0,
+     "false_positive_trials": 0
+    },
+    "3": {
+     "false_positive_points": 0,
+     "false_positive_trials": 0
+    },
+    "4": {
+     "false_positive_points": 0,
+     "false_positive_trials": 0
+    }
+   },
+   "excluded": 10,
+   "full_reach_trials": 0,
+   "included": 0,
+   "trials": 10
+  }
+ },
+ "counts": {
+  "excluded": 44,
+  "excluded_by_reason": {
+   "no_roots": 9,
+   "outcome_reach_time_missing": 44,
+   "root_terminal_time_missing": 35
+  },
+  "full_reach_trials": 0,
+  "included": 0,
+  "midway_trials": 0,
+  "trials": 44
+ },
+ "f1": {
+  "hit": false,
+  "midway_trials": [],
+  "violations": []
+ },
+ "f2": {
+  "by_k": {
+   "2": {
+    "count": 0,
+    "hit": false,
+    "trials_fired_before_full_reach": []
+   },
+   "3": {
+    "count": 0,
+    "hit": false,
+    "trials_fired_before_full_reach": []
+   },
+   "4": {
+    "count": 0,
+    "hit": false,
+    "trials_fired_before_full_reach": []
+   }
+  },
+  "hit": false,
+  "k": 3,
+  "min_trials": 2
+ },
+ "falsified": false,
+ "inconclusive": true,
+ "inconclusive_reason": "途中到達のある trial が 0 件で 3 件未満",
+ "inputs": {
+  "facts_digest_sha256": "85dcbf1b6369b782c9cd3b64b5886d84c80fd7979ed780c3361e570cb41e74a9",
+  "facts_schema": "celeris.long-horizon-facts/1",
+  "r1_result_sha256": "1083b0fb9e652d8a6fde9d0845a3f1fd40b71c45ae2d73e783c845ee881d2e46",
+  "sets": [
+   "a8b/replay",
+   "a9/stub",
+   "a9/llm"
+  ],
+  "trials": 44
+ },
+ "llm_calls": 0,
+ "rule": {
+  "escalate": "r1_rule.escalate: not outcome_reached and terminal_children >= k and no_progress_streak >= k",
+  "judgement": {
+   "f1": "途中到達のある trial で、到達の直後の no_progress_streak が 0 にならない到達がある",
+   "f2": "必要な Outcome に全部到達した trial のうち、到達より前に K = 3 で発火した trial が 2 件以上",
+   "inconclusive": "途中到達のある trial が 3 件未満なら inconclusive、falsified にしない"
+  },
+  "k": 3,
+  "mapping": {
+   "no_inference": "時刻が facts に無い trial は invocations・created_at・achieved_at から補わず除外する",
+   "point": "root が終端 status（done・failed・cancelled）になった時点（時刻の順、同じ時刻は logical_id の順）",
+   "project": "親",
+   "reach_time": "outcomes の {id, required, reached_at}",
+   "root": "子",
+   "terminal_time": "statuses の最初の終端の要素（{status, at} の object）の at"
+  },
+  "r1_rule_sha256": "622972aacd9ac065c92fb99fbd94402629fa732d4d3feff52f5f89e2d30dd6cf",
+  "sensitivity": [
+   2,
+   4
+  ],
+  "streak": "r1_rule.streak_after_reach（到達した必要な Outcome の数が最後に増えた時刻より後に終端になった root の数）"
+ },
+ "schema": "celeris.r1-bench-result/1",
+ "trials": [
+  {
+   "arm": "new",
+   "case": "C04",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": 12600,
+    "has_outcomes_field": false,
+    "roots": 3,
+    "statuses_shape": "str",
+    "terminal_roots": 3,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "root_terminal_time_missing",
+     "reason": "root の statuses が時刻の無い列で、終端になった時刻が facts に無い"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "74f789d6ee16002aa63829c19b393a6ac821d016f1c876f3cce987979ff65c3e",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "095c3dec279f5c10"
+  },
+  {
+   "arm": "old.proactive",
+   "case": "C06",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": 263100,
+    "has_outcomes_field": false,
+    "roots": 1,
+    "statuses_shape": "str",
+    "terminal_roots": 1,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "root_terminal_time_missing",
+     "reason": "root の statuses が時刻の無い列で、終端になった時刻が facts に無い"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "4bcfc1859619fa06c3c84d4e749762a748c76a33c06091b0642417f0803bfab8",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "16c7e2767a000316"
+  },
+  {
+   "arm": "ctl.null",
+   "case": "C02",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": null,
+    "has_outcomes_field": false,
+    "roots": 0,
+    "statuses_shape": "none",
+    "terminal_roots": 0,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "no_roots",
+     "reason": "roots が 0 件で、終端になった root が無い（点が作れない）"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "a8bb06cba3ee28280872d0763c032e2d2b26547ea3d5b8378a3349fd73bfab56",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "197b19f0eb8e3abf"
+  },
+  {
+   "arm": "old.passive",
+   "case": "C02",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": 33000,
+    "has_outcomes_field": false,
+    "roots": 2,
+    "statuses_shape": "str",
+    "terminal_roots": 2,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "root_terminal_time_missing",
+     "reason": "root の statuses が時刻の無い列で、終端になった時刻が facts に無い"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "0d117e8f58f737518eddcc3c536e52a1aded3e726747c75a5866e64c8bf9a311",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "1c4dd868cef62921"
+  },
+  {
+   "arm": "old.passive",
+   "case": "C09",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": 18000,
+    "has_outcomes_field": false,
+    "roots": 2,
+    "statuses_shape": "str",
+    "terminal_roots": 2,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "root_terminal_time_missing",
+     "reason": "root の statuses が時刻の無い列で、終端になった時刻が facts に無い"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "669d1da11ce84bd62dc10c04e4bdbce0815f639d814b2c38d0ac70c6567bbf71",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "2b82569b7648fe96"
+  },
+  {
+   "arm": "ctl.null",
+   "case": "C07",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": null,
+    "has_outcomes_field": false,
+    "roots": 0,
+    "statuses_shape": "none",
+    "terminal_roots": 0,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "no_roots",
+     "reason": "roots が 0 件で、終端になった root が無い（点が作れない）"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "c3353bf6f2a3d1ea2c847de9fa952fc5fc6951a56a816fc8989028b2dccea460",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "2d9e754f6d71952c"
+  },
+  {
+   "arm": "old.passive",
+   "case": "C08",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": 80400,
+    "has_outcomes_field": false,
+    "roots": 4,
+    "statuses_shape": "str",
+    "terminal_roots": 4,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "root_terminal_time_missing",
+     "reason": "root の statuses が時刻の無い列で、終端になった時刻が facts に無い"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "b70e08123437c2a18c7e2acdaa44014735c09671c4228d6a948584cd205a6a3b",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "2ddf1ebe20945a5c"
+  },
+  {
+   "arm": "old.proactive",
+   "case": "C08",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": 15600,
+    "has_outcomes_field": false,
+    "roots": 4,
+    "statuses_shape": "str",
+    "terminal_roots": 4,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "root_terminal_time_missing",
+     "reason": "root の statuses が時刻の無い列で、終端になった時刻が facts に無い"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "8798c4422170a8cbab4d16886875e4357271cd8a932fb8553ba8741c521dfcfc",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "31307b8b1a072844"
+  },
+  {
+   "arm": "ctl.null",
+   "case": "C06",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": null,
+    "has_outcomes_field": false,
+    "roots": 0,
+    "statuses_shape": "none",
+    "terminal_roots": 0,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "no_roots",
+     "reason": "roots が 0 件で、終端になった root が無い（点が作れない）"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "ee56484daeef9636c36977b627f3e9b5b18aa565c9ab1b314da2f64d2e140cde",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "373a06a695d95963"
+  },
+  {
+   "arm": "ctl.null",
+   "case": "C09",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": 18000,
+    "has_outcomes_field": false,
+    "roots": 2,
+    "statuses_shape": "str",
+    "terminal_roots": 2,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "root_terminal_time_missing",
+     "reason": "root の statuses が時刻の無い列で、終端になった時刻が facts に無い"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "669d1da11ce84bd62dc10c04e4bdbce0815f639d814b2c38d0ac70c6567bbf71",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "403a47709621e762"
+  },
+  {
+   "arm": "old.passive",
+   "case": "C05",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": 34500,
+    "has_outcomes_field": false,
+    "roots": 1,
+    "statuses_shape": "str",
+    "terminal_roots": 1,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "root_terminal_time_missing",
+     "reason": "root の statuses が時刻の無い列で、終端になった時刻が facts に無い"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "33b506e0351df9344c02ebd23108575622aca98eb7db21725133d665a2725691",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "463b00953944f333"
+  },
+  {
+   "arm": "old.passive",
+   "case": "C10",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": 90000,
+    "has_outcomes_field": false,
+    "roots": 3,
+    "statuses_shape": "str",
+    "terminal_roots": 3,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "root_terminal_time_missing",
+     "reason": "root の statuses が時刻の無い列で、終端になった時刻が facts に無い"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "e3633cadb6856455d65bea8ab9f36c55f01fb4688b48688e6ff788a8b048226e",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "47d7d8b6e274d7f2"
+  },
+  {
+   "arm": "old.proactive",
+   "case": "C10",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": 90000,
+    "has_outcomes_field": false,
+    "roots": 4,
+    "statuses_shape": "str",
+    "terminal_roots": 4,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "root_terminal_time_missing",
+     "reason": "root の statuses が時刻の無い列で、終端になった時刻が facts に無い"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "fb61ca0bd1337fc2b8cbb0ed508d1cdc0fb9d898c8bd38cadce33eb3f018afce",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "4db780ad3b129a1a"
+  },
+  {
+   "arm": "new",
+   "case": "C09",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": 9600,
+    "has_outcomes_field": false,
+    "roots": 2,
+    "statuses_shape": "str",
+    "terminal_roots": 2,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "root_terminal_time_missing",
+     "reason": "root の statuses が時刻の無い列で、終端になった時刻が facts に無い"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "7ecf7aa8d238c1be8cf02b990589a494c85e833db1c7b7ddefc9e6fc106d9ac3",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "61e164064c7939fd"
+  },
+  {
+   "arm": "ctl.null",
+   "case": "C08",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": null,
+    "has_outcomes_field": false,
+    "roots": 0,
+    "statuses_shape": "none",
+    "terminal_roots": 0,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "no_roots",
+     "reason": "roots が 0 件で、終端になった root が無い（点が作れない）"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "de16d83866e9e598c3883fc7705bd8a12bd9bf8c04309319f92fe406a5522d08",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "64f2dbcb0ea19d79"
+  },
+  {
+   "arm": "new",
+   "case": "C05",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": 12600,
+    "has_outcomes_field": false,
+    "roots": 1,
+    "statuses_shape": "str",
+    "terminal_roots": 1,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "root_terminal_time_missing",
+     "reason": "root の statuses が時刻の無い列で、終端になった時刻が facts に無い"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "f1301fd014c859d06d2dcf002cc334e89a7d98a10b9ce93cc1fa396835a1cdd9",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "72b0830964c10c7f"
+  },
+  {
+   "arm": "old.passive",
+   "case": "C01",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": 3900,
+    "has_outcomes_field": false,
+    "roots": 1,
+    "statuses_shape": "str",
+    "terminal_roots": 1,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "root_terminal_time_missing",
+     "reason": "root の statuses が時刻の無い列で、終端になった時刻が facts に無い"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "49b672f8e30b9b8be1690b9b571ed82ef6346756175c2fc13bb0a1cc42582604",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "73c884dc73aea80e"
+  },
+  {
+   "arm": "old.proactive",
+   "case": "C07",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": 11400,
+    "has_outcomes_field": false,
+    "roots": 2,
+    "statuses_shape": "str",
+    "terminal_roots": 2,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "root_terminal_time_missing",
+     "reason": "root の statuses が時刻の無い列で、終端になった時刻が facts に無い"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "6e9805b4e81bacc0dd471db87d293d7bc8b4616737377042022c9ad1119e65d5",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "7dac82b673e137e5"
+  },
+  {
+   "arm": "new",
+   "case": "C08",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": 16500,
+    "has_outcomes_field": false,
+    "roots": 4,
+    "statuses_shape": "str",
+    "terminal_roots": 4,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "root_terminal_time_missing",
+     "reason": "root の statuses が時刻の無い列で、終端になった時刻が facts に無い"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "06d7e860c8af0af2979e2d326aff9c5afa9a355ed312862eb5935a33771ca241",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "8aedb500651f5788"
+  },
+  {
+   "arm": "old.proactive",
+   "case": "C04",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": 11700,
+    "has_outcomes_field": false,
+    "roots": 3,
+    "statuses_shape": "str",
+    "terminal_roots": 3,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "root_terminal_time_missing",
+     "reason": "root の statuses が時刻の無い列で、終端になった時刻が facts に無い"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "30c3387cde367c9a366520dd0cef51387e1387602563e2f1158dc144e16da7d2",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "90ce803c8ef08ab7"
+  },
+  {
+   "arm": "ctl.null",
+   "case": "C05",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": null,
+    "has_outcomes_field": false,
+    "roots": 0,
+    "statuses_shape": "none",
+    "terminal_roots": 0,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "no_roots",
+     "reason": "roots が 0 件で、終端になった root が無い（点が作れない）"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "9afaf568b3808b2964819adec7eaabbc07a2e855c4d453c0c515edcb8fb5edb2",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "92d954f4bf0d34e7"
+  },
+  {
+   "arm": "ctl.null",
+   "case": "C01",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": null,
+    "has_outcomes_field": false,
+    "roots": 0,
+    "statuses_shape": "none",
+    "terminal_roots": 0,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "no_roots",
+     "reason": "roots が 0 件で、終端になった root が無い（点が作れない）"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "af413c4ab640bc7e20717d5185ec9e882db49099b9572cfbc276e623c6148ce2",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "948a48ff0789a75f"
+  },
+  {
+   "arm": "old.proactive",
+   "case": "C03",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": 69000,
+    "has_outcomes_field": false,
+    "roots": 2,
+    "statuses_shape": "str",
+    "terminal_roots": 2,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "root_terminal_time_missing",
+     "reason": "root の statuses が時刻の無い列で、終端になった時刻が facts に無い"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "070ebcf2709e20218878a2be2307d3ba317e22758db64938ea09d92f63627a60",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "9d30f1c1033a03cf"
+  },
+  {
+   "arm": "old.passive",
+   "case": "C07",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": 33000,
+    "has_outcomes_field": false,
+    "roots": 2,
+    "statuses_shape": "str",
+    "terminal_roots": 2,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "root_terminal_time_missing",
+     "reason": "root の statuses が時刻の無い列で、終端になった時刻が facts に無い"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "f2769d69b3099ae10076c2c99884d3cbd404fad32cbaaa92ae6a177d9232adfb",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "aa856b1fe9f487a4"
+  },
+  {
+   "arm": "old.passive",
+   "case": "C06",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": 263100,
+    "has_outcomes_field": false,
+    "roots": 1,
+    "statuses_shape": "str",
+    "terminal_roots": 1,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "root_terminal_time_missing",
+     "reason": "root の statuses が時刻の無い列で、終端になった時刻が facts に無い"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "4bcfc1859619fa06c3c84d4e749762a748c76a33c06091b0642417f0803bfab8",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "b1261aa355bb5212"
+  },
+  {
+   "arm": "old.proactive",
+   "case": "C05",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": 12600,
+    "has_outcomes_field": false,
+    "roots": 1,
+    "statuses_shape": "str",
+    "terminal_roots": 1,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "root_terminal_time_missing",
+     "reason": "root の statuses が時刻の無い列で、終端になった時刻が facts に無い"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "cc9fcd0bbba1061f92779a1c9621ea7dafc4a03be1d097d7d91c55a468b59752",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "b16280e66159bab1"
+  },
+  {
+   "arm": "old.proactive",
+   "case": "C02",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": 11400,
+    "has_outcomes_field": false,
+    "roots": 2,
+    "statuses_shape": "str",
+    "terminal_roots": 2,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "root_terminal_time_missing",
+     "reason": "root の statuses が時刻の無い列で、終端になった時刻が facts に無い"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "01ab7cbc65e47a8e161d451063ba22404a9ccbac554b25fe56a1584ffd2c29a4",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "b1c78c80b1a968fd"
+  },
+  {
+   "arm": "new",
+   "case": "C07",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": 11700,
+    "has_outcomes_field": false,
+    "roots": 2,
+    "statuses_shape": "str",
+    "terminal_roots": 2,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "root_terminal_time_missing",
+     "reason": "root の statuses が時刻の無い列で、終端になった時刻が facts に無い"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "fb39874c6e61037aedf8b0b1943496e983937f3e7b7cbc8a0532d45a12f52271",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "b26aa5c58e47b1f6"
+  },
+  {
+   "arm": "new",
+   "case": "C02",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": 12000,
+    "has_outcomes_field": false,
+    "roots": 2,
+    "statuses_shape": "str",
+    "terminal_roots": 2,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "root_terminal_time_missing",
+     "reason": "root の statuses が時刻の無い列で、終端になった時刻が facts に無い"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "30e7e75a0b9233f049f8b9416a375d2b5190e9bfc4f0494f2cd5eba1b89b8c2d",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "b4e43885750b43fc"
+  },
+  {
+   "arm": "old.passive",
+   "case": "C03",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": 90600,
+    "has_outcomes_field": false,
+    "roots": 2,
+    "statuses_shape": "str",
+    "terminal_roots": 2,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "root_terminal_time_missing",
+     "reason": "root の statuses が時刻の無い列で、終端になった時刻が facts に無い"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "3352c28856e94f957635b8c924150336571b31d04b80a379127c3b46931f4a5c",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "b547376ca080f7ae"
+  },
+  {
+   "arm": "new",
+   "case": "C06",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": 263100,
+    "has_outcomes_field": false,
+    "roots": 2,
+    "statuses_shape": "str",
+    "terminal_roots": 2,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "root_terminal_time_missing",
+     "reason": "root の statuses が時刻の無い列で、終端になった時刻が facts に無い"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "736c53708beaf40b7d56b4a62edeeb2f78a4e8024d3b29f3defda7d698319d37",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "c1e7bd0d60febe49"
+  },
+  {
+   "arm": "ctl.null",
+   "case": "C04",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": null,
+    "has_outcomes_field": false,
+    "roots": 0,
+    "statuses_shape": "none",
+    "terminal_roots": 0,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "no_roots",
+     "reason": "roots が 0 件で、終端になった root が無い（点が作れない）"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "19db3ef47302c03cd263df00b752d24c86fd0770ebde2d85f461525e3f7d7c53",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "ccd135c0db31f381"
+  },
+  {
+   "arm": "new",
+   "case": "C03",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": 69300,
+    "has_outcomes_field": false,
+    "roots": 2,
+    "statuses_shape": "str",
+    "terminal_roots": 2,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "root_terminal_time_missing",
+     "reason": "root の statuses が時刻の無い列で、終端になった時刻が facts に無い"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "75b0856208af2e9911c01173c65f0aea635e05d2c32f69788fc845d250b7d500",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "d0c5791c2a0b1e44"
+  },
+  {
+   "arm": "new",
+   "case": "C10",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": 90000,
+    "has_outcomes_field": false,
+    "roots": 3,
+    "statuses_shape": "str",
+    "terminal_roots": 3,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "root_terminal_time_missing",
+     "reason": "root の statuses が時刻の無い列で、終端になった時刻が facts に無い"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "419ccc0c382e3147264faef8de4eb96f96feda524d4235484a584819858c339d",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "d577f598ef605149"
+  },
+  {
+   "arm": "new",
+   "case": "C01",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": 4200,
+    "has_outcomes_field": false,
+    "roots": 1,
+    "statuses_shape": "str",
+    "terminal_roots": 1,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "root_terminal_time_missing",
+     "reason": "root の statuses が時刻の無い列で、終端になった時刻が facts に無い"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "ae1e9613e9f508316531de551b7e4bf900c8a1639bb826a0f99934946e9b798e",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "dc443cc9ef4449fb"
+  },
+  {
+   "arm": "old.proactive",
+   "case": "C01",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": 3900,
+    "has_outcomes_field": false,
+    "roots": 1,
+    "statuses_shape": "str",
+    "terminal_roots": 1,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "root_terminal_time_missing",
+     "reason": "root の statuses が時刻の無い列で、終端になった時刻が facts に無い"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "49b672f8e30b9b8be1690b9b571ed82ef6346756175c2fc13bb0a1cc42582604",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "dfa6675adbdd0f84"
+  },
+  {
+   "arm": "ctl.null",
+   "case": "C10",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": 90000,
+    "has_outcomes_field": false,
+    "roots": 1,
+    "statuses_shape": "str",
+    "terminal_roots": 1,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "root_terminal_time_missing",
+     "reason": "root の statuses が時刻の無い列で、終端になった時刻が facts に無い"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "0cbe1803401863a8a6f1506c39470a170850fdd3b5058eac560c2d0b8a3038ee",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "e64eb4ff35019697"
+  },
+  {
+   "arm": "ctl.null",
+   "case": "C03",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": null,
+    "has_outcomes_field": false,
+    "roots": 0,
+    "statuses_shape": "none",
+    "terminal_roots": 0,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "no_roots",
+     "reason": "roots が 0 件で、終端になった root が無い（点が作れない）"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "c0cfd045b2c6b9206e61ea9e8797925e6e5935530acef66f16c3bf0d87a96677",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "e88f709936794c5c"
+  },
+  {
+   "arm": "old.proactive",
+   "case": "C09",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": 9300,
+    "has_outcomes_field": false,
+    "roots": 2,
+    "statuses_shape": "str",
+    "terminal_roots": 2,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "root_terminal_time_missing",
+     "reason": "root の statuses が時刻の無い列で、終端になった時刻が facts に無い"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "fa2728627506a34768d7e9b767925f927b0b7cc999fac49ed077d50cef9ab7e8",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "f5ec88c1af6a68d1"
+  },
+  {
+   "arm": "old.passive",
+   "case": "C04",
+   "dataset": "long_horizon_replay",
+   "evidence": {
+    "achieved_at": 54900,
+    "has_outcomes_field": false,
+    "roots": 3,
+    "statuses_shape": "str",
+    "terminal_roots": 3,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "root_terminal_time_missing",
+     "reason": "root の statuses が時刻の無い列で、終端になった時刻が facts に無い"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "06b114a49a6447a7bd394e0459226672b18b3b05492339d9d9655d72177b3674",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a8b/replay",
+   "trial": "f83c3f3dc92d1e57"
+  },
+  {
+   "arm": "old.passive",
+   "case": "C08",
+   "dataset": "long_horizon_llm_pilot",
+   "evidence": {
+    "achieved_at": null,
+    "has_outcomes_field": false,
+    "roots": 0,
+    "statuses_shape": "none",
+    "terminal_roots": 0,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "no_roots",
+     "reason": "roots が 0 件で、終端になった root が無い（点が作れない）"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "588b8247dbc1d665cd58a6648af6ee3b2845c506e6dece2457ce7728562eac13",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a9/stub",
+   "trial": "61b5cbd40385deb6"
+  },
+  {
+   "arm": "new",
+   "case": "C08",
+   "dataset": "long_horizon_llm_pilot",
+   "evidence": {
+    "achieved_at": null,
+    "has_outcomes_field": false,
+    "roots": 4,
+    "statuses_shape": "str",
+    "terminal_roots": 4,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "root_terminal_time_missing",
+     "reason": "root の statuses が時刻の無い列で、終端になった時刻が facts に無い"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "1961d5073ef8fe627e472c0f5ef111548a3478dd5c38bcf31a7f06c54a2c031a",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a9/stub",
+   "trial": "7420dfe789f99af7"
+  },
+  {
+   "arm": "new",
+   "case": "C06",
+   "dataset": "long_horizon_llm_pilot",
+   "evidence": {
+    "achieved_at": null,
+    "has_outcomes_field": false,
+    "roots": 2,
+    "statuses_shape": "str",
+    "terminal_roots": 2,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "root_terminal_time_missing",
+     "reason": "root の statuses が時刻の無い列で、終端になった時刻が facts に無い"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "85a223a9b3cdb98ce06681f3c373e2505aec92a0c142f2e1349825f25d5d635e",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a9/llm",
+   "trial": "49a77b52eb2fcefa"
+  },
+  {
+   "arm": "new",
+   "case": "C08",
+   "dataset": "long_horizon_llm_pilot",
+   "evidence": {
+    "achieved_at": null,
+    "has_outcomes_field": false,
+    "roots": 4,
+    "statuses_shape": "str",
+    "terminal_roots": 4,
+    "terminal_roots_with_time": 0
+   },
+   "exclusion": [
+    {
+     "code": "root_terminal_time_missing",
+     "reason": "root の statuses が時刻の無い列で、終端になった時刻が facts に無い"
+    },
+    {
+     "code": "outcome_reach_time_missing",
+     "reason": "Outcome ごとの到達の時刻（outcomes の reached_at）が facts に無い（achieved_at は案件単位の時刻だけ）"
+    }
+   ],
+   "f1_violations": [],
+   "facts_sha256": "9435f8507c64e7ccab5bc6f36928369a6e72cdc780756f9af12fe2b6bfdf6835",
+   "fired": {},
+   "fired_before_full_reach": {},
+   "included": false,
+   "points": [],
+   "reach": null,
+   "seed": 1,
+   "set": "a9/llm",
+   "trial": "7420dfe789f99af7"
+  }
+ ]
+}

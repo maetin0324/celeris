@@ -1,0 +1,1219 @@
+{
+  "achieved_at": 263100,
+  "case": "C06",
+  "decisions": [
+    {
+      "at": 300,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 3900,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "wait",
+      "rule_id": "pc/human-wait",
+      "ts_rule_id": "pc/human-wait"
+    },
+    {
+      "at": 90300,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "wait",
+      "rule_id": "pc/human-wait",
+      "ts_rule_id": "pc/human-wait"
+    },
+    {
+      "at": 176700,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "wait",
+      "rule_id": "pc/human-wait",
+      "ts_rule_id": "pc/human-wait"
+    },
+    {
+      "at": 259800,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 263400,
+      "effect_state": "suppressed",
+      "guard": null,
+      "key": "o1",
+      "kind": "mark_milestone",
+      "rule_id": "pc/milestone-reached",
+      "ts_rule_id": "pc/milestone-reached"
+    },
+    {
+      "at": 263700,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 267300,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 270900,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 274500,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 278100,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 281700,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 285300,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 288900,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 292500,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 296100,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 299700,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 303300,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 306900,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 310500,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 314100,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 317700,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 321300,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 324900,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 328500,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 332100,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 335700,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 339300,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 342900,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 346500,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 350100,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 353700,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 357300,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 360900,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 364500,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 368100,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 371700,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 375300,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 378900,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 382500,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 386100,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 389700,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 393300,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 396900,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 400500,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 404100,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 407700,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 411300,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 414900,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 418500,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 422100,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 425700,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 429300,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 432900,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 436500,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 440100,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 443700,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 447300,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 450900,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 454500,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 458100,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 461700,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 465300,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 468900,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 472500,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 476100,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 479700,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 483300,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 486900,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 490500,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 494100,
+      "effect_state": "none",
+      "guard": null,
+      "key": "o1",
+      "kind": "mark_milestone",
+      "rule_id": "pc/milestone-already-recorded",
+      "ts_rule_id": "pc/milestone-reached"
+    },
+    {
+      "at": 494400,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 498000,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 501600,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 505200,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 508800,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 512400,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 516000,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 519600,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 523200,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 526800,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 530400,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 534000,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 537600,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 541200,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 544800,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 548400,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 552000,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 555600,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 559200,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 562800,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 566400,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 570000,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 573600,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 577200,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 580800,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 584400,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 588000,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 591600,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 595200,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 598800,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 602400,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 606000,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 609600,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 613200,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 616800,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 620400,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 624000,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 627600,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 631200,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 634800,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 638400,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 642000,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 645600,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 649200,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 652800,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 656400,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 660000,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 663600,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 667200,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 670800,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 674400,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 678000,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 681600,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 685200,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 688800,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    }
+  ],
+  "effects": {
+    "controller_feed_sources": 0,
+    "controller_questions": 0,
+    "cos_inputs": 0,
+    "daemon_roots": 0,
+    "decisions": 126,
+    "decisions_with_effect": 0,
+    "suppressed": 1
+  },
+  "horizon_secs": 691200,
+  "outcomes": [
+    {
+      "id": "o1",
+      "reached_at": 263100,
+      "required": true
+    },
+    {
+      "id": "o2",
+      "reached_at": null,
+      "required": false
+    }
+  ],
+  "roots": [
+    {
+      "created_at": 0,
+      "created_by": "cos",
+      "logical_id": "o1:1",
+      "outcome": "o1",
+      "statuses": [
+        {
+          "at": 0,
+          "status": "ready"
+        },
+        {
+          "at": 300,
+          "status": "running"
+        },
+        {
+          "at": 263100,
+          "status": "done"
+        }
+      ]
+    }
+  ],
+  "schema": "celeris.long-horizon-shadow/1",
+  "seed": 1,
+  "stall_k": 3,
+  "stalls": [
+    {
+      "at": 300,
+      "stall": {
+        "escalate": false,
+        "k": 3,
+        "no_progress_streak": 0,
+        "outcome_reached": false,
+        "terminal_children": 0
+      }
+    },
+    {
+      "at": 263400,
+      "stall": {
+        "escalate": false,
+        "k": 3,
+        "no_progress_streak": 1,
+        "outcome_reached": false,
+        "terminal_children": 1
+      }
+    },
+    {
+      "at": 263700,
+      "stall": {
+        "escalate": false,
+        "k": 3,
+        "no_progress_streak": 0,
+        "outcome_reached": false,
+        "terminal_children": 1
+      }
+    }
+  ]
+}

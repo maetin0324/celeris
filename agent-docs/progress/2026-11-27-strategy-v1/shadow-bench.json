@@ -1,0 +1,546 @@
+{
+ "cases": [
+  {
+   "case": "C01",
+   "controller_recorded_reaches": [
+    {
+     "at": 4200,
+     "outcome": "o1"
+    }
+   ],
+   "decisions": 4,
+   "effects": {
+    "controller_feed_sources": 0,
+    "controller_questions": 0,
+    "cos_inputs": 0,
+    "daemon_roots": 0,
+    "decisions": 4,
+    "decisions_with_effect": 0,
+    "suppressed": 1
+   },
+   "escalate_seen_in_snapshot": [],
+   "f1_tested": 0,
+   "f1_violations": [],
+   "false_positives": [],
+   "fires": [],
+   "full_reach_at": 3900,
+   "guards": [],
+   "midway_reaches": [],
+   "python_rule": {
+    "fired_before_full_reach": [],
+    "fired_terminal_children": [],
+    "matches_controller": true
+   },
+   "r1_bench": {
+    "exclusion": [
+     "root_terminal_time_missing",
+     "outcome_reach_time_missing"
+    ],
+    "fired": [],
+    "included": false,
+    "matches": null,
+    "trial": "dfa6675adbdd0f84"
+   },
+   "r1_waiting": 0,
+   "terminal_roots": 1
+  },
+  {
+   "case": "C02",
+   "controller_recorded_reaches": [
+    {
+     "at": 11700,
+     "outcome": "o1"
+    }
+   ],
+   "decisions": 6,
+   "effects": {
+    "controller_feed_sources": 0,
+    "controller_questions": 0,
+    "cos_inputs": 0,
+    "daemon_roots": 0,
+    "decisions": 6,
+    "decisions_with_effect": 0,
+    "suppressed": 2
+   },
+   "escalate_seen_in_snapshot": [],
+   "f1_tested": 0,
+   "f1_violations": [],
+   "false_positives": [],
+   "fires": [],
+   "full_reach_at": 11400,
+   "guards": [],
+   "midway_reaches": [],
+   "python_rule": {
+    "fired_before_full_reach": [],
+    "fired_terminal_children": [],
+    "matches_controller": true
+   },
+   "r1_bench": {
+    "exclusion": [
+     "root_terminal_time_missing",
+     "outcome_reach_time_missing"
+    ],
+    "fired": [],
+    "included": false,
+    "matches": null,
+    "trial": "b1c78c80b1a968fd"
+   },
+   "r1_waiting": 0,
+   "terminal_roots": 2
+  },
+  {
+   "case": "C03",
+   "controller_recorded_reaches": [
+    {
+     "at": 65400,
+     "outcome": "o1"
+    },
+    {
+     "at": 69300,
+     "outcome": "o2"
+    }
+   ],
+   "decisions": 77,
+   "effects": {
+    "controller_feed_sources": 0,
+    "controller_questions": 0,
+    "cos_inputs": 0,
+    "daemon_roots": 0,
+    "decisions": 77,
+    "decisions_with_effect": 0,
+    "suppressed": 2
+   },
+   "escalate_seen_in_snapshot": [],
+   "f1_tested": 1,
+   "f1_violations": [],
+   "false_positives": [],
+   "fires": [],
+   "full_reach_at": 69000,
+   "guards": [
+    "pc/guard/achieved-quiet"
+   ],
+   "midway_reaches": [
+    65100
+   ],
+   "python_rule": {
+    "fired_before_full_reach": [],
+    "fired_terminal_children": [],
+    "matches_controller": true
+   },
+   "r1_bench": {
+    "exclusion": [
+     "root_terminal_time_missing",
+     "outcome_reach_time_missing"
+    ],
+    "fired": [],
+    "included": false,
+    "matches": null,
+    "trial": "9d30f1c1033a03cf"
+   },
+   "r1_waiting": 0,
+   "terminal_roots": 2
+  },
+  {
+   "case": "C04",
+   "controller_recorded_reaches": [
+    {
+     "at": 8100,
+     "outcome": "o1"
+    },
+    {
+     "at": 12000,
+     "outcome": "o2"
+    }
+   ],
+   "decisions": 7,
+   "effects": {
+    "controller_feed_sources": 0,
+    "controller_questions": 0,
+    "cos_inputs": 0,
+    "daemon_roots": 0,
+    "decisions": 7,
+    "decisions_with_effect": 0,
+    "suppressed": 4
+   },
+   "escalate_seen_in_snapshot": [],
+   "f1_tested": 1,
+   "f1_violations": [],
+   "false_positives": [],
+   "fires": [],
+   "full_reach_at": 11700,
+   "guards": [],
+   "midway_reaches": [
+    7800
+   ],
+   "python_rule": {
+    "fired_before_full_reach": [],
+    "fired_terminal_children": [],
+    "matches_controller": true
+   },
+   "r1_bench": {
+    "exclusion": [
+     "root_terminal_time_missing",
+     "outcome_reach_time_missing"
+    ],
+    "fired": [],
+    "included": false,
+    "matches": null,
+    "trial": "90ce803c8ef08ab7"
+   },
+   "r1_waiting": 0,
+   "terminal_roots": 3
+  },
+  {
+   "case": "C05",
+   "controller_recorded_reaches": [
+    {
+     "at": 12900,
+     "outcome": "o1"
+    }
+   ],
+   "decisions": 5,
+   "effects": {
+    "controller_feed_sources": 0,
+    "controller_questions": 0,
+    "cos_inputs": 0,
+    "daemon_roots": 0,
+    "decisions": 5,
+    "decisions_with_effect": 0,
+    "suppressed": 2
+   },
+   "escalate_seen_in_snapshot": [],
+   "f1_tested": 0,
+   "f1_violations": [],
+   "false_positives": [],
+   "fires": [],
+   "full_reach_at": 12600,
+   "guards": [],
+   "midway_reaches": [],
+   "python_rule": {
+    "fired_before_full_reach": [],
+    "fired_terminal_children": [],
+    "matches_controller": true
+   },
+   "r1_bench": {
+    "exclusion": [
+     "root_terminal_time_missing",
+     "outcome_reach_time_missing"
+    ],
+    "fired": [],
+    "included": false,
+    "matches": null,
+    "trial": "b16280e66159bab1"
+   },
+   "r1_waiting": 0,
+   "terminal_roots": 1
+  },
+  {
+   "case": "C06",
+   "controller_recorded_reaches": [
+    {
+     "at": 263400,
+     "outcome": "o1"
+    },
+    {
+     "at": 494100,
+     "outcome": "o1"
+    }
+   ],
+   "decisions": 126,
+   "effects": {
+    "controller_feed_sources": 0,
+    "controller_questions": 0,
+    "cos_inputs": 0,
+    "daemon_roots": 0,
+    "decisions": 126,
+    "decisions_with_effect": 0,
+    "suppressed": 1
+   },
+   "escalate_seen_in_snapshot": [],
+   "f1_tested": 0,
+   "f1_violations": [],
+   "false_positives": [],
+   "fires": [],
+   "full_reach_at": 263100,
+   "guards": [],
+   "midway_reaches": [],
+   "python_rule": {
+    "fired_before_full_reach": [],
+    "fired_terminal_children": [],
+    "matches_controller": true
+   },
+   "r1_bench": {
+    "exclusion": [
+     "root_terminal_time_missing",
+     "outcome_reach_time_missing"
+    ],
+    "fired": [],
+    "included": false,
+    "matches": null,
+    "trial": "16c7e2767a000316"
+   },
+   "r1_waiting": 0,
+   "terminal_roots": 1
+  },
+  {
+   "case": "C07",
+   "controller_recorded_reaches": [
+    {
+     "at": 7800,
+     "outcome": "o1"
+    },
+    {
+     "at": 11700,
+     "outcome": "o2"
+    }
+   ],
+   "decisions": 7,
+   "effects": {
+    "controller_feed_sources": 0,
+    "controller_questions": 0,
+    "cos_inputs": 0,
+    "daemon_roots": 0,
+    "decisions": 7,
+    "decisions_with_effect": 0,
+    "suppressed": 2
+   },
+   "escalate_seen_in_snapshot": [],
+   "f1_tested": 1,
+   "f1_violations": [],
+   "false_positives": [],
+   "fires": [],
+   "full_reach_at": 11400,
+   "guards": [],
+   "midway_reaches": [
+    7500
+   ],
+   "python_rule": {
+    "fired_before_full_reach": [],
+    "fired_terminal_children": [],
+    "matches_controller": true
+   },
+   "r1_bench": {
+    "exclusion": [
+     "root_terminal_time_missing",
+     "outcome_reach_time_missing"
+    ],
+    "fired": [],
+    "included": false,
+    "matches": null,
+    "trial": "7dac82b673e137e5"
+   },
+   "r1_waiting": 0,
+   "terminal_roots": 2
+  },
+  {
+   "case": "C08",
+   "controller_recorded_reaches": [
+    {
+     "at": 4200,
+     "outcome": "o1"
+    },
+    {
+     "at": 8100,
+     "outcome": "o2"
+    },
+    {
+     "at": 12000,
+     "outcome": "o3"
+    },
+    {
+     "at": 15900,
+     "outcome": "o4"
+    }
+   ],
+   "decisions": 11,
+   "effects": {
+    "controller_feed_sources": 0,
+    "controller_questions": 0,
+    "cos_inputs": 0,
+    "daemon_roots": 0,
+    "decisions": 11,
+    "decisions_with_effect": 0,
+    "suppressed": 5
+   },
+   "escalate_seen_in_snapshot": [],
+   "f1_tested": 3,
+   "f1_violations": [],
+   "false_positives": [],
+   "fires": [],
+   "full_reach_at": 15600,
+   "guards": [
+    "pc/guard/achieved-quiet"
+   ],
+   "midway_reaches": [
+    3900,
+    7800,
+    11700
+   ],
+   "python_rule": {
+    "fired_before_full_reach": [],
+    "fired_terminal_children": [],
+    "matches_controller": true
+   },
+   "r1_bench": {
+    "exclusion": [
+     "root_terminal_time_missing",
+     "outcome_reach_time_missing"
+    ],
+    "fired": [],
+    "included": false,
+    "matches": null,
+    "trial": "31307b8b1a072844"
+   },
+   "r1_waiting": 0,
+   "terminal_roots": 4
+  },
+  {
+   "case": "C09",
+   "controller_recorded_reaches": [
+    {
+     "at": 5700,
+     "outcome": "o1"
+    },
+    {
+     "at": 9600,
+     "outcome": "o2"
+    }
+   ],
+   "decisions": 4,
+   "effects": {
+    "controller_feed_sources": 0,
+    "controller_questions": 0,
+    "cos_inputs": 0,
+    "daemon_roots": 0,
+    "decisions": 4,
+    "decisions_with_effect": 0,
+    "suppressed": 2
+   },
+   "escalate_seen_in_snapshot": [],
+   "f1_tested": 1,
+   "f1_violations": [],
+   "false_positives": [],
+   "fires": [],
+   "full_reach_at": 9300,
+   "guards": [],
+   "midway_reaches": [
+    5400
+   ],
+   "python_rule": {
+    "fired_before_full_reach": [],
+    "fired_terminal_children": [],
+    "matches_controller": true
+   },
+   "r1_bench": {
+    "exclusion": [
+     "root_terminal_time_missing",
+     "outcome_reach_time_missing"
+    ],
+    "fired": [],
+    "included": false,
+    "matches": null,
+    "trial": "f5ec88c1af6a68d1"
+   },
+   "r1_waiting": 0,
+   "terminal_roots": 2
+  },
+  {
+   "case": "C10",
+   "controller_recorded_reaches": [
+    {
+     "at": 90300,
+     "outcome": "o1"
+    }
+   ],
+   "decisions": 7,
+   "effects": {
+    "controller_feed_sources": 0,
+    "controller_questions": 0,
+    "cos_inputs": 0,
+    "daemon_roots": 0,
+    "decisions": 7,
+    "decisions_with_effect": 0,
+    "suppressed": 4
+   },
+   "escalate_seen_in_snapshot": [
+    90300
+   ],
+   "f1_tested": 0,
+   "f1_violations": [],
+   "false_positives": [],
+   "fires": [],
+   "full_reach_at": 90000,
+   "guards": [
+    "pc/guard/same-failure"
+   ],
+   "midway_reaches": [],
+   "python_rule": {
+    "fired_before_full_reach": [
+     3
+    ],
+    "fired_terminal_children": [
+     3
+    ],
+    "matches_controller": false
+   },
+   "r1_bench": {
+    "exclusion": [
+     "root_terminal_time_missing",
+     "outcome_reach_time_missing"
+    ],
+    "fired": [],
+    "included": false,
+    "matches": null,
+    "trial": "4db780ad3b129a1a"
+   },
+   "r1_waiting": 0,
+   "terminal_roots": 4
+  }
+ ],
+ "counts": {
+  "cases": 10,
+  "effects_total": {
+   "controller_feed_sources": 0,
+   "controller_questions": 0,
+   "cos_inputs": 0,
+   "daemon_roots": 0,
+   "decisions": 254,
+   "decisions_with_effect": 0,
+   "suppressed": 25
+  },
+  "f1_tested_reaches": 7,
+  "f1_violation_cases": [],
+  "false_positive_cases": [],
+  "fire_points": 0,
+  "full_reach_cases": 10,
+  "midway_reach_cases": [
+   "C03",
+   "C04",
+   "C07",
+   "C08",
+   "C09"
+  ],
+  "python_rule_false_positive_cases": [
+   "C10"
+  ],
+  "python_rule_matches_controller": [
+   "C01",
+   "C02",
+   "C03",
+   "C04",
+   "C05",
+   "C06",
+   "C07",
+   "C08",
+   "C09"
+  ]
+ },
+ "f1": false,
+ "f2": false,
+ "falsified": false,
+ "inconclusive": false,
+ "k": 3,
+ "llm_calls": 0,
+ "rule": "pc/r1-stall",
+ "schema": "celeris.shadow-bench/1"
+}

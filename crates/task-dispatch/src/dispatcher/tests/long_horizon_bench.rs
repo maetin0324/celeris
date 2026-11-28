@@ -22,6 +22,9 @@ use std::path::{Path, PathBuf};
 use task_core::project_proposal::ProjectSnapshot;
 use task_core::project_wake::NewProjectWake;
 
+#[path = "long_horizon_shadow.rs"]
+mod long_horizon_shadow;
+
 const STEP_SECS: i64 = 300;
 const NUDGE_AFTER_SECS: i64 = 6 * 3600;
 const ANSWER_DELAY_SECS: i64 = 1800;
@@ -33,6 +36,9 @@ enum Arm {
     New,
     /// 対照（ADR D5）: `new` と同じ設定で、decider は常に待つ（`ProjectDecision::none`）。人の bot は催促しない。
     CtlNull,
+    /// R1 の shadow（ADR 2026-11-27-r1-stall-shadow D4・D5）: mode `shadow`・本物の TS・`old.proactive` と同じ台本の CoS。
+    /// 試験は接頭辞 `long_horizon_shadow_`（[`long_horizon_shadow`]。40 件の採点の数に入れない）。
+    Shadow,
 }
 
 impl Arm {
@@ -42,6 +48,7 @@ impl Arm {
             Arm::OldProactive => "old.proactive",
             Arm::New => "new",
             Arm::CtlNull => "ctl.null",
+            Arm::Shadow => "shadow",
         }
     }
 
@@ -50,12 +57,13 @@ impl Arm {
         match self {
             Arm::OldPassive | Arm::OldProactive => ControllerMode::Off,
             Arm::New | Arm::CtlNull => ControllerMode::Enabled,
+            Arm::Shadow => ControllerMode::Shadow,
         }
     }
 
-    /// 台本の CoS の種類（腕の名前ではなく台本の 2 通り。`new`・`ctl.null` は passive）。
+    /// 台本の CoS の種類（腕の名前ではなく台本の 2 通り。`new`・`ctl.null` は passive、`shadow` は proactive）。
     fn proactive_script(self) -> bool {
-        self == Arm::OldProactive
+        matches!(self, Arm::OldProactive | Arm::Shadow)
     }
 }
 
@@ -197,6 +205,8 @@ fn request_text(outcomes: &[&OutcomeSpec], invalid: bool) -> String {
 pub(super) struct RealTs {
     handle: celeris_script::ScriptRuntimeHandle,
     sha256: String,
+    /// TS に渡した snapshot の checkpoint（root と `stall`）。腕 `shadow` が tick ごとに読み出す（他の腕は読まずに捨てる）。
+    checkpoints: StdMutex<Vec<Value>>,
 }
 
 impl PolicyScript for RealTs {
@@ -233,6 +243,12 @@ impl PolicyScript for RealTs {
         deadline: std::time::Duration,
     ) -> PolicyFuture<'_> {
         Box::pin(async move {
+            let seen: Vec<Value> = input
+                .checkpoints
+                .iter()
+                .map(|c| json!({"root": c.root_id, "stall": c.stall}))
+                .collect();
+            self.checkpoints.lock().unwrap().push(json!(seen));
             let call = celeris_script::ScriptCall {
                 domain: "project_controller".into(),
                 input: serde_json::to_value(&input).map_err(|e| {
@@ -285,7 +301,11 @@ pub(super) fn real_ts(test: &str) -> Option<Arc<RealTs>> {
         .unwrap_or_else(|e| panic!("{test}: bundle {}: {e:?}", Path::new(&dir).display()));
     let sha256 = bundle.manifest.bundle_sha256.clone();
     let handle = celeris_script::ScriptRuntimeHandle::start(bundle.source()).expect("start V8");
-    let ts = Arc::new(RealTs { handle, sha256 });
+    let ts = Arc::new(RealTs {
+        handle,
+        sha256,
+        checkpoints: StdMutex::new(Vec::new()),
+    });
     // 最初の呼び出し（isolate の温め）は長い deadline で 1 回。判定は捨てる。
     let warm = ts.clone();
     std::thread::spawn(move || {
@@ -361,6 +381,8 @@ struct Trial<'a> {
     mid_digest: Option<(usize, String)>,
     fired_ops: BTreeSet<usize>,
     init_digest: String,
+    /// 腕 `shadow` の strategy root と記録（[`long_horizon_shadow::Shadow`]）。他の腕は `None`。
+    shadow: Option<long_horizon_shadow::Shadow>,
 }
 
 fn boundary_of(name: &str) -> Boundary {
@@ -438,6 +460,7 @@ impl<'a> Trial<'a> {
             mid_digest: None,
             fired_ops: BTreeSet::new(),
             init_digest: String::new(),
+            shadow: None,
         };
         let now = t.env.now();
         // launch_root の許可は全腕に同じ行を作る（ADR 未解決の判断: 揃える。`off` の案件では使われない）。
@@ -454,6 +477,9 @@ impl<'a> Trial<'a> {
                     now,
                 )
                 .unwrap();
+        }
+        if arm == Arm::Shadow {
+            t.shadow_start();
         }
         t.start_daemon("i0");
         // 人の依頼（案件の作成）は全腕で stimulus 1 件。
@@ -644,6 +670,7 @@ impl<'a> Trial<'a> {
         if let Some(r) = self.roots.get_mut(&id) {
             r.statuses.push(s.to_owned());
         }
+        self.shadow_status(id, to);
     }
 
     /// 台本の CoS が root を起票する。controller が `enabled` の案件では人の指示を引かない起票は 422
@@ -729,6 +756,7 @@ impl<'a> Trial<'a> {
                 statuses: vec!["ready".into()],
             },
         );
+        self.shadow_track(id);
     }
 
     /// controller が作った root を拾う。
@@ -739,7 +767,7 @@ impl<'a> Trial<'a> {
             .unwrap()
             .into_iter()
             .filter(|t| t.project_id == Some(self.p.id) && t.parent_id.is_none())
-            .filter(|t| !self.roots.contains_key(&t.id))
+            .filter(|t| !self.roots.contains_key(&t.id) && !self.shadow_owns(t.id))
             .collect();
         found.sort_by_key(|t| t.created_at);
         for t in found {
@@ -1337,6 +1365,7 @@ impl<'a> Trial<'a> {
         if r.is_err() {
             self.restart();
         }
+        self.shadow_observe();
     }
 
     fn cron(&mut self) {
@@ -1364,6 +1393,12 @@ impl<'a> Trial<'a> {
     }
 
     fn run(mut self) -> (Value, PathBuf) {
+        self.steps();
+        let facts = self.facts();
+        (facts, self.repo.clone())
+    }
+
+    fn steps(&mut self) {
         self.kick();
         let steps = self.sc.horizon_secs / STEP_SECS;
         for _ in 0..steps {
@@ -1382,9 +1417,8 @@ impl<'a> Trial<'a> {
             if self.mid_digest.is_none() && self.secs() >= self.sc.horizon_secs / 2 {
                 self.mid_digest = Some(self.events_digest(None));
             }
+            self.shadow_reach();
         }
-        let facts = self.facts();
-        (facts, self.repo.clone())
     }
 
     fn events_digest(&self, limit: Option<usize>) -> (usize, String) {
@@ -1584,6 +1618,10 @@ pub(super) fn seed_grant(store: &SqliteStore, project: &str, now: OffsetDateTime
 
 /// 課題 1 件 × 腕 1 つ。同じ seed で 2 回流し、facts の bytes が一致することを確かめてから書く。
 fn bench(case: &str, arm: Arm, test: &str) {
+    assert!(
+        arm != Arm::Shadow,
+        "{test}: the shadow arm runs in long_horizon_shadow"
+    );
     let ts = if arm == Arm::New {
         match real_ts(test) {
             Some(ts) => Some(ts),

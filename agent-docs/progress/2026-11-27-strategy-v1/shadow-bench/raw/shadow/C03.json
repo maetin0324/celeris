@@ -1,0 +1,818 @@
+{
+  "achieved_at": 69000,
+  "case": "C03",
+  "decisions": [
+    {
+      "at": 300,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 3600,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 7200,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 10800,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 14400,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 18000,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 21600,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 25200,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 28800,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 32400,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 36000,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 39600,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 43200,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 46800,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 50400,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 54000,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 57600,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 61200,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 64800,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 65400,
+      "effect_state": "suppressed",
+      "guard": null,
+      "key": "o1",
+      "kind": "mark_milestone",
+      "rule_id": "pc/milestone-reached",
+      "ts_rule_id": "pc/milestone-reached"
+    },
+    {
+      "at": 65700,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 68400,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 69300,
+      "effect_state": "suppressed",
+      "guard": null,
+      "key": "o2",
+      "kind": "mark_milestone",
+      "rule_id": "pc/milestone-reached",
+      "ts_rule_id": "pc/milestone-reached"
+    },
+    {
+      "at": 69600,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "wait",
+      "rule_id": "pc/achieved",
+      "ts_rule_id": "pc/achieved"
+    },
+    {
+      "at": 72000,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 75600,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 79200,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 82800,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 86400,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 90000,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 93600,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 97200,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 100800,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 104400,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 108000,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 111600,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 115200,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 118800,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 122400,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 126000,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 129600,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 133200,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 136800,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 140400,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 144000,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 147600,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 151200,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 154800,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 158400,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 162000,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 165600,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 169200,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 172800,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 176400,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 180000,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 183600,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 187200,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 190800,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 194400,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 198000,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 201600,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 205200,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 208800,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 212400,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 216000,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 219600,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 223200,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 226800,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 230400,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 234000,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 237600,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 241200,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 244800,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 248400,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 252000,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 255600,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    },
+    {
+      "at": 259200,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    }
+  ],
+  "effects": {
+    "controller_feed_sources": 0,
+    "controller_questions": 0,
+    "cos_inputs": 0,
+    "daemon_roots": 0,
+    "decisions": 77,
+    "decisions_with_effect": 0,
+    "suppressed": 2
+  },
+  "horizon_secs": 259200,
+  "outcomes": [
+    {
+      "id": "o1",
+      "reached_at": 65100,
+      "required": true
+    },
+    {
+      "id": "o2",
+      "reached_at": 69000,
+      "required": true
+    }
+  ],
+  "roots": [
+    {
+      "created_at": 0,
+      "created_by": "cos",
+      "logical_id": "o1:1",
+      "outcome": "o1",
+      "statuses": [
+        {
+          "at": 0,
+          "status": "ready"
+        },
+        {
+          "at": 300,
+          "status": "running"
+        },
+        {
+          "at": 65100,
+          "status": "done"
+        }
+      ]
+    },
+    {
+      "created_at": 65100,
+      "created_by": "cos",
+      "logical_id": "o2:1",
+      "outcome": "o2",
+      "statuses": [
+        {
+          "at": 65100,
+          "status": "ready"
+        },
+        {
+          "at": 65400,
+          "status": "running"
+        },
+        {
+          "at": 69000,
+          "status": "done"
+        }
+      ]
+    }
+  ],
+  "schema": "celeris.long-horizon-shadow/1",
+  "seed": 1,
+  "stall_k": 3,
+  "stalls": [
+    {
+      "at": 300,
+      "stall": {
+        "escalate": false,
+        "k": 3,
+        "no_progress_streak": 0,
+        "outcome_reached": false,
+        "terminal_children": 0
+      }
+    },
+    {
+      "at": 65400,
+      "stall": {
+        "escalate": false,
+        "k": 3,
+        "no_progress_streak": 1,
+        "outcome_reached": false,
+        "terminal_children": 1
+      }
+    },
+    {
+      "at": 65700,
+      "stall": {
+        "escalate": false,
+        "k": 3,
+        "no_progress_streak": 0,
+        "outcome_reached": false,
+        "terminal_children": 1
+      }
+    },
+    {
+      "at": 69300,
+      "stall": {
+        "escalate": false,
+        "k": 3,
+        "no_progress_streak": 1,
+        "outcome_reached": false,
+        "terminal_children": 2
+      }
+    },
+    {
+      "at": 69600,
+      "stall": {
+        "escalate": false,
+        "k": 3,
+        "no_progress_streak": 0,
+        "outcome_reached": true,
+        "terminal_children": 2
+      }
+    }
+  ]
+}

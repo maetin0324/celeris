@@ -310,6 +310,68 @@ pub fn triggers(facts: &TriggerFacts, settings: &CheckpointSettings) -> Vec<Trig
     out
 }
 
+// ---------------------------------------------------------------- R1 の停滞（ADR 2026-11-27-r1-stall-shadow）
+
+/// R1 の K: 終端の子の数と no-progress の連続がともに K 以上で、Outcome が未到達なら `escalate`。
+/// 根拠は親の進捗 `agent-docs/progress/2026-11-27-strategy-v1/` の r1-replay と r1-bench（事前に固定した値）。
+pub const STALL_K: u32 = 3;
+
+/// 案件の Outcome の到達（[`stall`] の入力）。`required` は今の Outcome の数。`reached_at` は D6 で到達した Outcome
+/// ごとの到達の順で、[`ChildTransition::at`] と同じ順の文字列（controller は「到達の時刻までに終端になった直下の子の
+/// 終端の event の順の最大」を入れ、その子が無ければ空文字列）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OutcomeReach {
+    pub required: usize,
+    pub reached_at: Vec<String>,
+}
+
+/// R1 の 1 root の値。`at` は `escalate` が真になった順（最後の到達より後に終端になった子の K 個目の終端の `at`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stall {
+    pub terminal_children: u32,
+    pub no_progress_streak: u32,
+    pub outcome_reached: bool,
+    pub escalate: bool,
+    pub at: Option<String>,
+}
+
+/// R1: root の直下の子の終端（[`triggers`] と同じく最後の遷移が [`Status::is_terminal`]）と Outcome の到達から、
+/// 終端の子の数・最後の到達より後に終端になった子の数（no-progress の連続）・Outcome の到達・escalate を導く。
+/// 到達が無ければ連続は終端の子の数。`outcome_reached` は Outcome が 1 件以上あり全部が到達のときだけ真。
+/// strategy root でない root（`facts.strategy` が `None`）は `None`。状態は持たず、LLM も呼ばない。
+pub fn stall(facts: &TriggerFacts, reach: &OutcomeReach) -> Option<Stall> {
+    facts.strategy.as_ref()?;
+    let mut terminal_at: Vec<&str> = facts
+        .children
+        .iter()
+        .filter_map(|c| c.transitions.last())
+        .filter(|t| t.to.is_terminal())
+        .map(|t| t.at.as_str())
+        .collect();
+    terminal_at.sort_unstable();
+    let last_reach = reach.reached_at.iter().max().map(String::as_str);
+    let after: Vec<&str> = terminal_at
+        .iter()
+        .copied()
+        .filter(|at| last_reach.is_none_or(|r| *at > r))
+        .collect();
+    let outcome_reached = reach.required >= 1 && reach.reached_at.len() >= reach.required;
+    let k = STALL_K as usize;
+    let escalate = !outcome_reached && terminal_at.len() >= k && after.len() >= k;
+    let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+    Some(Stall {
+        terminal_children: count(terminal_at.len()),
+        no_progress_streak: count(after.len()),
+        outcome_reached,
+        escalate,
+        at: if escalate {
+            after.get(k - 1).map(|at| (*at).to_owned())
+        } else {
+            None
+        },
+    })
+}
+
 /// 文書を読む。name の版・id と中身が一致しないもの、読めないものは `None`（D1.2「読めない文書は数えない」）。
 fn read_document(d: &StrategyDocumentFacts, strategy_id: &str) -> Option<StrategyDocument> {
     let (id, version) = strategy_artifact(&d.name)?;
@@ -1256,5 +1318,7 @@ pub fn child_reports(
     out
 }
 
+#[cfg(test)]
+mod stall_tests;
 #[cfg(test)]
 mod tests;

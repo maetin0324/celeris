@@ -149,6 +149,7 @@ impl Case {
             &s.roots,
             &rows,
             &Default::default(),
+            &Default::default(),
             &mut |_| Ok(0),
         )
         .expect("checkpoints");

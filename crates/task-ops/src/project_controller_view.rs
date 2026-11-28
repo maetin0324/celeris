@@ -7,7 +7,7 @@
 //!   判定の根拠には使わない（画面の写し）。
 //! - 許可の範囲は `authority_section` と同じ生きている許可（`grant_denial` が `None`）。
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 use task_core::ProjectId;
@@ -41,10 +41,34 @@ pub fn recorded_outcomes(
     mode: ControllerMode,
     snapshot: &ProjectSnapshot,
 ) -> Result<BTreeSet<String>, String> {
-    let mut out = BTreeSet::new();
+    Ok(recorded_outcome_times(store, mode, snapshot)?
+        .into_keys()
+        .collect())
+}
+
+/// [`recorded_outcomes`] の Outcome ごとの到達の時刻（RFC 3339。R1 の入力。ADR 2026-11-27-r1-stall-shadow）。
+/// Roadmap の到達はその Outcome の最後の状態の記録（`project_roadmap_outcome_events` の `kind = 'status'`）の
+/// `created_at`、判断の到達は数えた `mark_milestone` の判断の `created_at`。同じ Outcome に複数あれば早い方。
+/// 時刻の無い記録は空文字列（読み手は時刻を読めないとして扱う）。
+pub fn recorded_outcome_times(
+    store: &SqliteStore,
+    mode: ControllerMode,
+    snapshot: &ProjectSnapshot,
+) -> Result<BTreeMap<String, String>, String> {
+    let mut out: BTreeMap<String, String> = BTreeMap::new();
+    let mut put = |id: String, at: String| {
+        out.entry(id)
+            .and_modify(|t| {
+                if at < *t {
+                    t.clone_from(&at);
+                }
+            })
+            .or_insert(at);
+    };
     if let Some(view) = &snapshot.roadmap {
         let view: task_core::roadmap::Roadmap =
             serde_json::from_value(view.clone()).map_err(|e| format!("roadmap view: {e}"))?;
+        let mut reached = Vec::new();
         for o in view.outcomes {
             if o.status == task_core::roadmap::OutcomeStatus::Reached
                 && snapshot
@@ -59,7 +83,21 @@ pub fn recorded_outcomes(
                         })
                     })
             {
-                out.insert(o.id);
+                reached.push(o.id);
+            }
+        }
+        if !reached.is_empty() {
+            let events = store
+                .roadmap_outcome_events(&snapshot.project.id)
+                .map_err(|e| e.to_string())?;
+            for id in reached {
+                let at = events
+                    .iter()
+                    .rev()
+                    .find(|e| e.outcome_id == id && e.kind == "status")
+                    .map(|e| e.created_at.clone())
+                    .unwrap_or_default();
+                put(id, at);
             }
         }
     }
@@ -76,10 +114,33 @@ pub fn recorded_outcomes(
             continue;
         }
         if let Some(id) = record_outcome_id(&row.effect_json) {
-            out.insert(id);
+            put(id, row.created_at.clone());
         }
     }
     Ok(out)
+}
+
+/// R1 の入力（[`ps::OutcomeReachTimes`]）: 今の Outcome の数と、D6 で到達した Outcome（記録があり
+/// `pp::unverified_outcomes` に入らない）ごとの到達の時刻（[`recorded_outcome_times`]）。
+pub fn outcome_reach_times(
+    store: &SqliteStore,
+    mode: ControllerMode,
+    snapshot: &ProjectSnapshot,
+) -> Result<ps::OutcomeReachTimes, String> {
+    let times = recorded_outcome_times(store, mode, snapshot)?;
+    let recorded: BTreeSet<String> = times.keys().cloned().collect();
+    let unverified: BTreeSet<String> = pp::unverified_outcomes(snapshot, &recorded)
+        .into_iter()
+        .collect();
+    Ok(ps::OutcomeReachTimes {
+        required: snapshot.outcomes.len(),
+        reached_at: snapshot
+            .outcomes
+            .iter()
+            .filter(|o| !unverified.contains(&o.id))
+            .filter_map(|o| times.get(&o.id).cloned())
+            .collect(),
+    })
 }
 
 /// D6 の到達の読み口: 今の store の snapshot（判断・wake は空。Outcome・root・Roadmap は判定と同じ）と、到達を記録済みの

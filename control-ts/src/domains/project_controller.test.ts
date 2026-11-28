@@ -11,6 +11,7 @@ import {
   type SnapshotDecision,
   type SnapshotEvaluation,
   type SnapshotRoot,
+  type SnapshotStall,
 } from "./project_controller";
 
 function snapshot(): ProjectSnapshot {
@@ -781,5 +782,153 @@ describe("project_controller checkpoint", () => {
     // due が無く写していない評価も無い root は既存の判断のまま。
     s.checkpoints = [cp("R")];
     expect(decide(s).explanation.rule_id).toBe("pc/root-in-flight");
+  });
+});
+
+// R1（ADR 2026-11-27-r1-stall-shadow）: checkpoint の `stall` は Rust の `SnapshotStall` と同じ形で、値は Rust が導く。
+// base の TS は `stall` を読まず、Rust が escalate を出しても規則 pc/r1-stall は無かった（既存の試験は stall を置かない）。
+// 守る不変条件: (1) stall.escalate が真の最初の checkpoint だけを、key `r1_stall:<root>:<終端の子の数>` で 1 回だけ聞き、
+// 同じ key の 2 回目は待つ、(2) escalate が偽（K 未満・到達で連続が戻った後）・null・欄なしでは出さない、(3) paused・
+// no-progress が先に効き、写していない評価の写しより先に効く、(4) 到達を記録していない Outcome がある間と全部到達のときは
+// 記録・achieved が先（R1 の待ちが記録を塞がない）。
+function stall(over: Partial<SnapshotStall> = {}): SnapshotStall {
+  return {
+    k: 3,
+    terminal_children: 3,
+    no_progress_streak: 3,
+    outcome_reached: false,
+    escalate: true,
+    at: "00000000000000000042",
+    ...over,
+  };
+}
+
+const quiet = { escalate: false, at: null } as const;
+
+describe("project_controller r1 stall", () => {
+  it("project_controller_r1_stall_escalates_once_with_the_counts_k_and_open_outcomes", () => {
+    const s = strategySnapshot();
+    s.checkpoints = [cp("R", { stall: stall() })];
+    const p = decide(s);
+    expect(p.explanation.rule_id).toBe("pc/r1-stall");
+    expect(signal(p, "key")).toBe("r1_stall:R:3");
+    expect(p.action).toEqual({
+      kind: "escalate",
+      category: "explicit_human",
+      question_key: "r1_stall:R:3",
+      summary: expect.any(String),
+      options: [],
+      evidence_refs: [STRATEGY_REF],
+    });
+    if (p.action.kind !== "escalate") return;
+    for (const part of ["3 件終端", "no-progress の連続）が 3 件", "K = 3", "Outcome o1, o2 が未到達"])
+      expect(p.action.summary).toContain(part);
+    // Rust の JSON（stall の欄つき）を入口で受け付ける。
+    expect(projectController(JSON.parse(JSON.stringify(s)))).toEqual(p);
+    // escalate が真の最初の checkpoint を選ぶ。
+    s.checkpoints = [
+      cp("A", { stall: stall({ terminal_children: 2, no_progress_streak: 2, ...quiet }) }),
+      cp("B", { stall: stall({ terminal_children: 4, no_progress_streak: 4 }) }),
+      cp("C", { stall: stall() }),
+    ];
+    const b = decide(s);
+    expect(b.action.kind === "escalate" && b.action.question_key).toBe("r1_stall:B:4");
+    expect(b.action.kind === "escalate" && b.action.summary).toContain("4 件終端");
+  });
+
+  it("project_controller_r1_stall_below_k_does_not_fire", () => {
+    const s = strategySnapshot();
+    s.checkpoints = [cp("R", { stall: stall({ terminal_children: 2, no_progress_streak: 2, ...quiet }) })];
+    expect(decide(s).explanation.rule_id).toBe("pc/root-in-flight");
+  });
+
+  it("project_controller_r1_stall_does_not_fire_after_an_outcome_reach_resets_the_streak", () => {
+    const s = strategySnapshot();
+    for (const streak of [0, 2]) {
+      s.checkpoints = [cp("R", { stall: stall({ terminal_children: 5, no_progress_streak: streak, ...quiet }) })];
+      expect(decide(s).explanation.rule_id).toBe("pc/root-in-flight");
+    }
+    s.checkpoints = [cp("R", { stall: stall({ outcome_reached: true, ...quiet }) })];
+    expect(decide(s).explanation.rule_id).toBe("pc/root-in-flight");
+  });
+
+  it("project_controller_r1_stall_second_time_waits_and_a_new_terminal_child_asks_again", () => {
+    const s = strategySnapshot();
+    s.checkpoints = [cp("R", { stall: stall() })];
+    s.decisions = [decision("escalate", { root_key: "r1_stall:R:3" })];
+    const w = decide(s);
+    expect(w.explanation.rule_id).toBe("pc/r1-stall/waiting");
+    expect(signal(w, "key")).toBe("r1_stall:R:3");
+    expect(w.action.kind === "wait" && w.action.waiting_on[0]?.kind).toBe("human");
+    // 効果が failed の escalate は聞いたことに数えない。
+    s.decisions = [decision("escalate", { root_key: "r1_stall:R:3", effect_state: "failed" })];
+    expect(decide(s).explanation.rule_id).toBe("pc/r1-stall");
+    // 子がさらに終端になれば key が変わり、もう一度聞く。
+    s.decisions = [decision("escalate", { root_key: "r1_stall:R:3" })];
+    s.checkpoints = [cp("R", { stall: stall({ terminal_children: 4, no_progress_streak: 4 }) })];
+    const again = decide(s);
+    expect(again.explanation.rule_id).toBe("pc/r1-stall");
+    expect(again.action.kind === "escalate" && again.action.question_key).toBe("r1_stall:R:4");
+  });
+
+  it("project_controller_r1_stall_paused_and_no_progress_come_first", () => {
+    const paused = strategySnapshot();
+    paused.checkpoints = [cp("R", { stall: stall() })];
+    paused.project.status = "paused";
+    expect(decide(paused).explanation.rule_id).toBe("pc/project-not-active");
+    const loop = strategySnapshot();
+    loop.checkpoints = [cp("R", { stall: stall() })];
+    loop.decisions = Array.from({ length: 5 }, (_, i) =>
+      decision(i % 2 === 0 ? "evaluate" : "replan", { id: `d${i}`, root_key: "R" }),
+    );
+    const p = decide(loop);
+    expect(p.explanation.rule_id).toBe("pc/no-progress");
+    expect(p.action.kind === "escalate" && p.action.question_key).toBe("no_progress:0");
+  });
+
+  it("project_controller_r1_stall_precedes_the_checkpoint_mapping", () => {
+    const s = strategySnapshot();
+    s.checkpoints = [cp("R", { stall: stall(), unmapped: [evaluation("D1", "R", "pivot")] })];
+    expect(decide(s).explanation.rule_id).toBe("pc/r1-stall");
+    // escalate は CoS 入力を使わない: CoS 入力の日の上限（replan の待ち）より先に聞く。
+    s.limits.cos_inputs_remaining_today = 0;
+    expect(decide(s).explanation.rule_id).toBe("pc/r1-stall");
+    // stall が escalate でなければ写しに進む。
+    s.limits.cos_inputs_remaining_today = 10;
+    s.checkpoints = [cp("R", { stall: stall(quiet), unmapped: [evaluation("D1", "R", "pivot")] })];
+    expect(decide(s).explanation.rule_id).toBe("pc/checkpoint/act");
+  });
+
+  it("project_controller_r1_stall_null_or_missing_field_does_not_fire", () => {
+    const s = strategySnapshot();
+    s.checkpoints = [cp("R", { stall: null })];
+    expect(projectController(JSON.parse(JSON.stringify(s))).explanation.rule_id).toBe("pc/root-in-flight");
+    s.checkpoints = [cp("R")];
+    expect("stall" in s.checkpoints[0]!).toBe(false);
+    expect(decide(s).explanation.rule_id).toBe("pc/root-in-flight");
+    delete s.checkpoints;
+    expect(decide(s).explanation.rule_id).toBe("pc/root-in-flight");
+  });
+
+  it("project_controller_r1_stall_waits_for_milestone_records_and_achievement", () => {
+    // o1 は root A が満たしたが未記録: 記録が先（R1 の待ちが記録を塞がない）。
+    const s = snapshot();
+    s.roots = [
+      root("A", "outcome:o1:1"),
+      root("R", "outcome:o2:1", { status: "running", reviewer_passed: false, integrated: false }),
+    ];
+    s.checkpoints = [cp("R", { stall: stall() })];
+    const m = decide(s);
+    expect(m.explanation.rule_id).toBe("pc/milestone-reached");
+    expect(m.action).toEqual({ kind: "mark_milestone", outcome_id: "o1", evidence_refs: ["task:A"] });
+    // 記録の後は R1 が聞く。未到達は o2 だけ。
+    s.decisions = [decision("mark_milestone", { outcome_id: "o1" })];
+    const e = decide(s);
+    expect(e.explanation.rule_id).toBe("pc/r1-stall");
+    expect(e.action.kind === "escalate" && e.action.summary).toContain("Outcome o2 が未到達");
+    // 全部到達して記録した後は achieved（Rust の値が古くても聞かない）。
+    s.roots[1] = root("R", "outcome:o2:1");
+    s.decisions.push(decision("mark_milestone", { id: "d-m2", outcome_id: "o2" }));
+    expect(decide(s).explanation.rule_id).toBe("pc/achieved");
   });
 });

@@ -483,6 +483,8 @@ fn event_order(id: u64) -> String {
 /// `parent_checkpoint::checkpoint_states` で導き（D1.3）、due は `parent_checkpoint::triggers`、写していない評価の行動は
 /// `allowed_actions` の表（D5.2）。`decisions` は案件の判断の全件（`evaluate` と `pc/checkpoint/act` を最後まで読む）。
 /// `tokens_used` は root の木の使った token（呼び出し側の `token_budget::tree_tokens_used`）。strategy root が無ければ空。
+/// `stall` は R1（ADR 2026-11-27-r1-stall-shadow）の `parent_checkpoint::stall` の値で、`reach` は案件の Outcome の
+/// 到達の時刻（呼び出し側の `project_controller_view::outcome_reach_times`）。
 /// 戦略の文書と評価の記録の bytes は、成果物を記録した task の足回り（`workspace_roots` で解く
 /// [`crate::workspace::local_dir`]）を基準に `ArtifactRef.path`（workspace 相対）を引いて読む（API・子 5 の gate と同じ基準）。
 pub fn checkpoints(
@@ -491,6 +493,7 @@ pub fn checkpoints(
     roots: &[pp::SnapshotRoot],
     decisions: &[CheckpointDecisionRow<'_>],
     settings: &pc::CheckpointSettings,
+    reach: &OutcomeReachTimes,
     tokens_used: &mut dyn FnMut(TaskId) -> Result<u64, OpsError>,
 ) -> Result<Vec<pp::SnapshotCheckpoint>, OpsError> {
     let mut out = Vec::new();
@@ -601,6 +604,16 @@ pub fn checkpoints(
             requested: BTreeSet::new(),
         };
         states.fill(&mut facts);
+        let stall = reach_in_event_order(store, &facts.children, reach)?
+            .and_then(|r| pc::stall(&facts, &r))
+            .map(|s| pp::SnapshotStall {
+                k: pc::STALL_K,
+                terminal_children: s.terminal_children,
+                no_progress_streak: s.no_progress_streak,
+                outcome_reached: s.outcome_reached,
+                escalate: s.escalate,
+                at: s.at,
+            });
         let due = pc::triggers(&facts, settings)
             .into_iter()
             .filter(|t| t.state == pc::TriggerState::Due)
@@ -641,9 +654,64 @@ pub fn checkpoints(
             due,
             running: states.running.first().cloned(),
             unmapped,
+            stall,
         });
     }
     Ok(out)
+}
+
+/// R1 の入力: 案件の Outcome の数と、D6 で到達した Outcome ごとの到達の時刻（RFC 3339。
+/// `project_controller_view::outcome_reach_times` が作る）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OutcomeReachTimes {
+    pub required: usize,
+    pub reached_at: Vec<String>,
+}
+
+/// R1: 到達の時刻を、子の遷移の `at`（大域の event id の 20 桁）と同じ順に直す。到達 1 件の順は「その時刻までに終端に
+/// なった直下の子の終端の event の順の最大」（無ければ空文字列）。終端の子の時刻は events の行の `ts`
+/// （`events_since(id - 1, 1)` で同じ id の行を引く）。時刻を読めない終端の子か到達があれば `None`（その root の R1 は
+/// 出さない）。
+fn reach_in_event_order(
+    store: &SqliteStore,
+    children: &[pc::ChildFacts],
+    reach: &OutcomeReachTimes,
+) -> Result<Option<pc::OutcomeReach>, OpsError> {
+    let mut terminal: Vec<(OffsetDateTime, &str)> = Vec::new();
+    for c in children {
+        let Some(last) = c.transitions.last().filter(|t| t.to.is_terminal()) else {
+            continue;
+        };
+        let Ok(id) = last.at.parse::<u64>() else {
+            return Ok(None);
+        };
+        let row = store.events_since(id.saturating_sub(1), 1)?;
+        let Some(ts) = row
+            .first()
+            .filter(|r| r.id == id)
+            .and_then(|r| OffsetDateTime::parse(&r.ts, &Rfc3339).ok())
+        else {
+            return Ok(None);
+        };
+        terminal.push((ts, last.at.as_str()));
+    }
+    let mut reached_at = Vec::with_capacity(reach.reached_at.len());
+    for at in &reach.reached_at {
+        let Ok(t) = OffsetDateTime::parse(at, &Rfc3339) else {
+            return Ok(None);
+        };
+        let before = terminal
+            .iter()
+            .filter(|(ts, _)| *ts <= t)
+            .map(|(_, order)| *order)
+            .max()
+            .unwrap_or("");
+        reached_at.push(before.to_owned());
+    }
+    Ok(Some(pc::OutcomeReach {
+        required: reach.required,
+        reached_at,
+    }))
 }
 
 /// `owner` が記録した成果物の file の bytes。`ArtifactRef.path` は `owner` の足回りからの相対（worker の成果物・
@@ -1068,6 +1136,9 @@ mod root_row_tests {
 }
 
 #[cfg(test)]
+mod stall_tests;
+
+#[cfg(test)]
 mod checkpoint_tests {
     //! ADR 2026-11-22-parent-checkpoint-evaluator D5.3 の「写し済み」の試験（prefix `project_controller_checkpoint_`）。
     //! 守る不変条件: continue の行の評価を continue・wait（効果 `none`）で写した判断の後は、その評価は写し済みになり、
@@ -1106,7 +1177,7 @@ mod checkpoint_tests {
     }
 
     /// strategy root 1 件と、その判断 `D1` の最終の記録（on_track・continue）を置いた store。
-    fn strategy_root(dir: &std::path::Path) -> (SqliteStore, pp::SnapshotRoot) {
+    pub(super) fn strategy_root(dir: &std::path::Path) -> (SqliteStore, pp::SnapshotRoot) {
         let store = SqliteStore::open_in_memory().expect("store");
         let spec: NewTaskSpec = serde_json::from_value(serde_json::json!({
             "title": "t", "objective": "o",
@@ -1182,7 +1253,7 @@ mod checkpoint_tests {
         (store, row)
     }
 
-    fn roots(dir: &std::path::Path) -> WorkspaceRoots {
+    pub(super) fn roots(dir: &std::path::Path) -> WorkspaceRoots {
         WorkspaceRoots::new(dir.to_path_buf(), None)
     }
 
@@ -1206,6 +1277,7 @@ mod checkpoint_tests {
             std::slice::from_ref(root),
             &rows,
             &pc::CheckpointSettings::default(),
+            &OutcomeReachTimes::default(),
             &mut |_| Ok(0),
         )
         .expect("checkpoints")

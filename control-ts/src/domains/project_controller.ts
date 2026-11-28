@@ -69,6 +69,23 @@ export interface SnapshotCheckpoint {
   running: string | null;
   /** 評価済みでまだ行動に写していない評価。 */
   unmapped: SnapshotEvaluation[];
+  /** R1 の停滞（Rust の SnapshotStall）。子の終端か Outcome の到達の時刻を読めなければ null。欄の無い snapshot もある。 */
+  stall?: SnapshotStall | null;
+}
+
+/**
+ * R1 の 1 root の値（Rust の `parent_checkpoint::stall` と `STALL_K`。ADR 2026-11-27-r1-stall-shadow D1・D2）。
+ * 値は Rust が子の終端の event と Outcome の到達の記録から導いたもので、TS は数え直さない。
+ */
+export interface SnapshotStall {
+  k: number;
+  terminal_children: number;
+  /** 最後の到達より後に終端になった子の数（到達が無ければ terminal_children）。 */
+  no_progress_streak: number;
+  outcome_reached: boolean;
+  escalate: boolean;
+  /** escalate が真になった event の順（大域の event id の 20 桁。due[].at と同じ順）。偽なら null。 */
+  at: string | null;
 }
 
 export interface SnapshotEvaluation {
@@ -195,6 +212,8 @@ export const POLICY = {
   objectiveMax: 8000,
   /** Rust の上限（CHECKPOINT_TRIGGERS_MAX）。evaluate 1 回の trigger の数。 */
   checkpointTriggersMax: 8,
+  /** R1 の問いに名を挙げる未到達の Outcome の数（Outcome は最大 64 件。summary を Rust の LONG_TEXT_MAX に収める）。 */
+  stallOutcomesListed: 16,
 } as const;
 
 /** 写していない評価を行動に写す規則の id（Rust の CHECKPOINT_ACT_RULE）。signal `checkpoint` に判断 id を入れる。 */
@@ -451,6 +470,37 @@ export function decide(s: ProjectSnapshot): ProjectProposal {
       [],
     );
   }
+  // root が満たしたが、まだ到達を記録していない Outcome（4 が記録する。記録が先で、次の評価で続きを起票する）。
+  const unrecorded = s.outcomes.flatMap((o) => {
+    const root = reachedBy.get(o.id);
+    if (root === undefined) return [];
+    const recorded =
+      s.controller.mode === "enabled" && s.roadmap !== null && typeof s.roadmap === "object"
+        ? ((s.roadmap as { outcomes?: { id: string; status: string; evidence: string[] }[] }).outcomes ?? [])
+          .some((v) => v.id === o.id && v.status === "reached" && v.evidence.includes(`task:${root.id}`))
+        : decided((d) => d.kind === "mark_milestone" && d.outcome_id === o.id);
+    return recorded ? [] : [{ o, root }];
+  });
+  // 1c. R1（ADR 2026-11-27-r1-stall-shadow）: Rust の stall が escalate を出した最初の strategy root について、人に 1 回だけ
+  //     聞き、後は待つ。key は終端の子の数ごとで、子がさらに終端になれば聞き直す。値は Rust が導き、TS は数え直さない。
+  //     paused・no-progress は上で先に効く。escalate は CoS 入力を使わない（日の上限は replan だけに掛かる）。写していない
+  //     評価（1d）より先に置く（Rust は escalate を写しの不一致にしない）。到達を記録していない Outcome がある間（4）と、
+  //     gap に未到達が無いとき（5）は出さない: Rust は到達を記録から数えるので、記録の前に聞くと待ちが記録を塞ぐ。
+  //     mode は見ない（shadow で効果を抑えるのは Rust の門）。
+  const checkpoints = s.checkpoints ?? [];
+  const stalled = checkpoints.find((c) => c.stall?.escalate === true);
+  const st = stalled?.stall;
+  if (stalled !== undefined && st != null && unrecorded.length === 0 && open.length > 0) {
+    const n = POLICY.stallOutcomesListed;
+    const listed = open.slice(0, n).join(", ") + (open.length > n ? ` ほか ${open.length - n} 件` : "");
+    return escalateOnce(
+      `r1_stall:${stalled.root_id}:${st.terminal_children}`,
+      "explicit_human",
+      `strategy root ${stalled.root_id} の直下の子が ${st.terminal_children} 件終端になり、最後の Outcome の到達より後の終端（no-progress の連続）が ${st.no_progress_streak} 件で K = ${st.k} に達したが、Outcome ${listed} が未到達のまま。続けるか・戦略を変えるか・止めるかを人が決める必要がある`,
+      "pc/r1-stall",
+      [stalled.strategy_ref],
+    );
+  }
   // CoS 入力（replan）の今日の残りが無ければ、replan の代わりに待つ。
   const replan = (
     reason_code: string,
@@ -471,11 +521,10 @@ export function decide(s: ProjectSnapshot): ProjectProposal {
           rule,
           signals,
         );
-  // 1c. 親の途中評価のうち、まだ行動に写していない評価（ADR 2026-11-22-parent-checkpoint-evaluator D5.2・D5.3）。
+  // 1d. 親の途中評価のうち、まだ行動に写していない評価（ADR 2026-11-22-parent-checkpoint-evaluator D5.2・D5.3）。
   //     行動は Rust の表（allowed）から選ぶ。Rust は写していない評価がある間、この規則でない行動（evaluate を除く）を
-  //     checkpoint_action_mismatch で落とすので、到達の記録・起票より先に置く。paused・no-progress は上で先に効き、
+  //     checkpoint_action_mismatch で落とすので、到達の記録・起票より先に置く。paused・no-progress・R1 は上で先に効き、
   //     replan は CoS 入力の日の上限で待つ（`pc/checkpoint/act/daily-limit`）。
-  const checkpoints = s.checkpoints ?? [];
   // 進行中（未終端、または合格したが取り込み待ち）の root。checkpoint の continue と規則 7 が見守る。
   const inFlight = s.roots.filter(
     (r) =>
@@ -567,28 +616,20 @@ export function decide(s: ProjectSnapshot): ProjectProposal {
     );
   }
   // 4. 新しく到達した Outcome を記録する（記録が先。次の評価で続きを起票する）。
-  for (const o of s.outcomes) {
-    const root = reachedBy.get(o.id);
-    if (
-      root !== undefined &&
-      !(s.controller.mode === "enabled" && s.roadmap !== null && typeof s.roadmap === "object"
-        ? ((s.roadmap as { outcomes?: { id: string; status: string; evidence: string[] }[] }).outcomes ?? [])
-          .some((v) => v.id === o.id && v.status === "reached" && v.evidence.includes(`task:${root.id}`))
-        : decided((d) => d.kind === "mark_milestone" && d.outcome_id === o.id))
-    ) {
-      return out(
-        {
-          kind: "mark_milestone",
-          outcome_id: o.id,
-          evidence_refs: [`task:${root.id}`],
-        },
-        "pc/milestone-reached",
-        [
-          ["outcome", o.id],
-          ["root", root.id],
-        ],
-      );
-    }
+  const toRecord = unrecorded[0];
+  if (toRecord !== undefined) {
+    return out(
+      {
+        kind: "mark_milestone",
+        outcome_id: toRecord.o.id,
+        evidence_refs: [`task:${toRecord.root.id}`],
+      },
+      "pc/milestone-reached",
+      [
+        ["outcome", toRecord.o.id],
+        ["root", toRecord.root.id],
+      ],
+    );
   }
   // 5. 全部到達: 起票しない。
   if (open.length === 0) {

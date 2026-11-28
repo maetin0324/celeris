@@ -630,7 +630,8 @@ pub fn build_snapshot(
     .map_err(|e| e.to_string())
 }
 
-/// ADR 2026-11-22-parent-checkpoint-evaluator D1.3: snapshot の `checkpoints`。判断の表は `evaluate` と
+/// ADR 2026-11-22-parent-checkpoint-evaluator D1.3: snapshot の `checkpoints`（R1 の `stall` は
+/// ADR 2026-11-27-r1-stall-shadow。Outcome の到達の時刻は `outcome_reach_times`）。判断の表は `evaluate` と
 /// `pc/checkpoint/act` を最後まで読む（履歴の件数を超えた古い判断で同じ trigger を 2 回発火させない）。木の使った token は
 /// 呼び出し側の読み口（dispatcher の `token_budget::tree_tokens_used`）で数える。
 fn checkpoint_section(
@@ -656,12 +657,15 @@ fn checkpoint_section(
             proposal: p,
         })
         .collect();
+    let reach =
+        task_ops::project_controller_view::outcome_reach_times(store, input.mode, snapshot)?;
     ps::checkpoints(
         store,
         workspace_roots,
         &snapshot.roots,
         &rows,
         settings,
+        &reach,
         &mut |root| tree_tokens(store, root, None).map_err(task_ops::OpsError::from),
     )
     .map_err(|e| e.to_string())

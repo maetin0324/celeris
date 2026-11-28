@@ -369,6 +369,7 @@ impl Chain {
             &s.roots,
             &rows,
             &self.settings,
+            &Default::default(),
             &mut |_| Ok(0),
         )
         .expect("checkpoints");

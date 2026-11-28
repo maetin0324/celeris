@@ -287,6 +287,22 @@ pub struct SnapshotCheckpoint {
     pub running: Option<String>,
     /// 評価済みでまだ行動に写していない評価（D5.3）。
     pub unmapped: Vec<SnapshotEvaluation>,
+    /// R1 の停滞（`parent_checkpoint::stall`。ADR 2026-11-27-r1-stall-shadow）。子の終端か Outcome の到達の時刻を
+    /// 読めなければ `None`。
+    pub stall: Option<SnapshotStall>,
+}
+
+/// R1 の 1 root の値（`parent_checkpoint::Stall` と `STALL_K`）。`at` は `escalate` が真になった event の順（大域の
+/// event id の 20 桁。`SnapshotTrigger::at` と同じ順）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SnapshotStall {
+    pub k: u32,
+    pub terminal_children: u32,
+    pub no_progress_streak: u32,
+    pub outcome_reached: bool,
+    pub escalate: bool,
+    pub at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

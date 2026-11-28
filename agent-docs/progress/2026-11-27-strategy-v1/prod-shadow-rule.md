@@ -120,7 +120,10 @@ DB の path は `2026-11-27-strategy-v1-9/audit_query.py` と同じ `/local/cele
 
 - `python3 -I agent-docs/progress/2026-11-27-strategy-v1/test_prod_shadow.py`: exit 0、24 件 OK。
 - `python3 -I agent-docs/progress/2026-11-27-strategy-v1/prod_shadow.py verify`: exit 0（`preflight: ok (verdict inconclusive)`）。
-- ほかの検査の結果は WU の報告（result.json）に書く。
+- `bash scripts/dev/test-affected.sh`: exit 0（試験対象の変更なし。repo-health verdict=pass・fail_grade=0。new 1・worsened 1 はどちらも警告の `dup.public-surface` で、`prod_shadow.py` の subcommand 名 `run`・`verify` がほかの script と同じことによる。名前は objective が決めているので変えない）。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+- `sh scripts/dev/progress-index.sh --check`・`bash scripts/dev/check-doc-links.sh`: ok。
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` の path はこの file・`prod_shadow.py`・`test_prod_shadow.py`・`prod-shadow/` の 2 file だけ。`git diff --quiet "$CELERIS_WU_BASE" HEAD -- crates control-ts web scripts docs` と既存の `r1_*.py`・`shadow_bench.*`・子の進捗: exit 0（差分 0）。
 
 ## 未確認
 

@@ -124,7 +124,12 @@ strategy root が 0 件なので、直下の子の終端も全案件で 0 件。
 
 ## 検査（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 
-（下の「検査の結果」に書く）
+- `python3 -I agent-docs/progress/2026-11-27-strategy-v1/prod_shadow.py verify` → exit 0（`preflight: ok (verdict inconclusive)`・`prod: ok (verdict inconclusive)`）。
+- `python3 -I agent-docs/progress/2026-11-27-strategy-v1/test_prod_shadow.py` → exit 0（24 件 OK）。
+- `bash scripts/dev/test-affected.sh` → exit 0（試験対象の変更なし〈docs のみ〉。repo-health verdict=pass・fail_grade=0。new 1・worsened 1 は count-rule の記録と同じ警告 `dup.public-surface`〈`prod_shadow.py` の subcommand 名 `run`・`verify`〉で、この WU は `prod_shadow.py` を変えていない）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告は vendor の `deno_core` の既存の 1 件だけ）。`cargo fmt --all -- --check` → exit 0。
+- `sh scripts/dev/progress-index.sh --check` → ok。`bash scripts/dev/check-doc-links.sh` → ok。
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` の path はこの file・`prod-shadow/prod-snapshot.json`・`prod-shadow/prod.json` の 3 つだけ。
 
 ## 本番への移行
 

@@ -1,0 +1,314 @@
+{
+  "achieved_at": 15600,
+  "case": "C08",
+  "decisions": [
+    {
+      "at": 300,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 3900,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 4200,
+      "effect_state": "suppressed",
+      "guard": null,
+      "key": "o1",
+      "kind": "mark_milestone",
+      "rule_id": "pc/milestone-reached",
+      "ts_rule_id": "pc/milestone-reached"
+    },
+    {
+      "at": 4500,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 8100,
+      "effect_state": "suppressed",
+      "guard": null,
+      "key": "o2",
+      "kind": "mark_milestone",
+      "rule_id": "pc/milestone-reached",
+      "ts_rule_id": "pc/milestone-reached"
+    },
+    {
+      "at": 8400,
+      "effect_state": "suppressed",
+      "guard": null,
+      "key": null,
+      "kind": "evaluate",
+      "rule_id": "pc/checkpoint/evaluate",
+      "ts_rule_id": "pc/checkpoint/evaluate"
+    },
+    {
+      "at": 12000,
+      "effect_state": "suppressed",
+      "guard": null,
+      "key": "o3",
+      "kind": "mark_milestone",
+      "rule_id": "pc/milestone-reached",
+      "ts_rule_id": "pc/milestone-reached"
+    },
+    {
+      "at": 12300,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 15900,
+      "effect_state": "suppressed",
+      "guard": null,
+      "key": "o4",
+      "kind": "mark_milestone",
+      "rule_id": "pc/milestone-reached",
+      "ts_rule_id": "pc/milestone-reached"
+    },
+    {
+      "at": 16200,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "wait",
+      "rule_id": "pc/achieved",
+      "ts_rule_id": "pc/achieved"
+    },
+    {
+      "at": 19200,
+      "effect_state": "none",
+      "guard": "achieved-quiet",
+      "key": null,
+      "kind": "none",
+      "rule_id": "pc/guard/achieved-quiet",
+      "ts_rule_id": null
+    }
+  ],
+  "effects": {
+    "controller_feed_sources": 0,
+    "controller_questions": 0,
+    "cos_inputs": 0,
+    "daemon_roots": 0,
+    "decisions": 11,
+    "decisions_with_effect": 0,
+    "suppressed": 5
+  },
+  "horizon_secs": 259200,
+  "outcomes": [
+    {
+      "id": "o1",
+      "reached_at": 3900,
+      "required": true
+    },
+    {
+      "id": "o2",
+      "reached_at": 7800,
+      "required": true
+    },
+    {
+      "id": "o3",
+      "reached_at": 11700,
+      "required": true
+    },
+    {
+      "id": "o4",
+      "reached_at": 15600,
+      "required": true
+    }
+  ],
+  "roots": [
+    {
+      "created_at": 0,
+      "created_by": "cos",
+      "logical_id": "o1:1",
+      "outcome": "o1",
+      "statuses": [
+        {
+          "at": 0,
+          "status": "ready"
+        },
+        {
+          "at": 300,
+          "status": "running"
+        },
+        {
+          "at": 3900,
+          "status": "done"
+        }
+      ]
+    },
+    {
+      "created_at": 3900,
+      "created_by": "cos",
+      "logical_id": "o2:1",
+      "outcome": "o2",
+      "statuses": [
+        {
+          "at": 3900,
+          "status": "ready"
+        },
+        {
+          "at": 4200,
+          "status": "running"
+        },
+        {
+          "at": 7800,
+          "status": "done"
+        }
+      ]
+    },
+    {
+      "created_at": 7800,
+      "created_by": "cos",
+      "logical_id": "o3:1",
+      "outcome": "o3",
+      "statuses": [
+        {
+          "at": 7800,
+          "status": "ready"
+        },
+        {
+          "at": 8100,
+          "status": "running"
+        },
+        {
+          "at": 11700,
+          "status": "done"
+        }
+      ]
+    },
+    {
+      "created_at": 11700,
+      "created_by": "cos",
+      "logical_id": "o4:1",
+      "outcome": "o4",
+      "statuses": [
+        {
+          "at": 11700,
+          "status": "ready"
+        },
+        {
+          "at": 12000,
+          "status": "running"
+        },
+        {
+          "at": 15600,
+          "status": "done"
+        }
+      ]
+    }
+  ],
+  "schema": "celeris.long-horizon-shadow/1",
+  "seed": 1,
+  "stall_k": 3,
+  "stalls": [
+    {
+      "at": 300,
+      "stall": {
+        "escalate": false,
+        "k": 3,
+        "no_progress_streak": 0,
+        "outcome_reached": false,
+        "terminal_children": 0
+      }
+    },
+    {
+      "at": 4200,
+      "stall": {
+        "escalate": false,
+        "k": 3,
+        "no_progress_streak": 1,
+        "outcome_reached": false,
+        "terminal_children": 1
+      }
+    },
+    {
+      "at": 4500,
+      "stall": {
+        "escalate": false,
+        "k": 3,
+        "no_progress_streak": 0,
+        "outcome_reached": false,
+        "terminal_children": 1
+      }
+    },
+    {
+      "at": 8100,
+      "stall": {
+        "escalate": false,
+        "k": 3,
+        "no_progress_streak": 1,
+        "outcome_reached": false,
+        "terminal_children": 2
+      }
+    },
+    {
+      "at": 8400,
+      "stall": {
+        "escalate": false,
+        "k": 3,
+        "no_progress_streak": 0,
+        "outcome_reached": false,
+        "terminal_children": 2
+      }
+    },
+    {
+      "at": 12000,
+      "stall": {
+        "escalate": false,
+        "k": 3,
+        "no_progress_streak": 1,
+        "outcome_reached": false,
+        "terminal_children": 3
+      }
+    },
+    {
+      "at": 12300,
+      "stall": {
+        "escalate": false,
+        "k": 3,
+        "no_progress_streak": 0,
+        "outcome_reached": false,
+        "terminal_children": 3
+      }
+    },
+    {
+      "at": 15900,
+      "stall": {
+        "escalate": false,
+        "k": 3,
+        "no_progress_streak": 1,
+        "outcome_reached": false,
+        "terminal_children": 4
+      }
+    },
+    {
+      "at": 16200,
+      "stall": {
+        "escalate": false,
+        "k": 3,
+        "no_progress_streak": 0,
+        "outcome_reached": true,
+        "terminal_children": 4
+      }
+    }
+  ]
+}

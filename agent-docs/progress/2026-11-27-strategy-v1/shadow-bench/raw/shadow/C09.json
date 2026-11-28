@@ -1,0 +1,151 @@
+{
+  "achieved_at": 9300,
+  "case": "C09",
+  "decisions": [
+    {
+      "at": 5700,
+      "effect_state": "suppressed",
+      "guard": null,
+      "key": "o1",
+      "kind": "mark_milestone",
+      "rule_id": "pc/milestone-reached",
+      "ts_rule_id": "pc/milestone-reached"
+    },
+    {
+      "at": 6000,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 9600,
+      "effect_state": "suppressed",
+      "guard": null,
+      "key": "o2",
+      "kind": "mark_milestone",
+      "rule_id": "pc/milestone-reached",
+      "ts_rule_id": "pc/milestone-reached"
+    },
+    {
+      "at": 9900,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "wait",
+      "rule_id": "pc/achieved",
+      "ts_rule_id": "pc/achieved"
+    }
+  ],
+  "effects": {
+    "controller_feed_sources": 0,
+    "controller_questions": 0,
+    "cos_inputs": 0,
+    "daemon_roots": 0,
+    "decisions": 4,
+    "decisions_with_effect": 0,
+    "suppressed": 2
+  },
+  "horizon_secs": 172800,
+  "outcomes": [
+    {
+      "id": "o1",
+      "reached_at": 5400,
+      "required": true
+    },
+    {
+      "id": "o2",
+      "reached_at": 9300,
+      "required": true
+    }
+  ],
+  "roots": [
+    {
+      "created_at": 1800,
+      "created_by": "cos",
+      "logical_id": "o1:1",
+      "outcome": "o1",
+      "statuses": [
+        {
+          "at": 1800,
+          "status": "ready"
+        },
+        {
+          "at": 1800,
+          "status": "running"
+        },
+        {
+          "at": 5400,
+          "status": "done"
+        }
+      ]
+    },
+    {
+      "created_at": 5400,
+      "created_by": "cos",
+      "logical_id": "o2:1",
+      "outcome": "o2",
+      "statuses": [
+        {
+          "at": 5400,
+          "status": "ready"
+        },
+        {
+          "at": 5700,
+          "status": "running"
+        },
+        {
+          "at": 9300,
+          "status": "done"
+        }
+      ]
+    }
+  ],
+  "schema": "celeris.long-horizon-shadow/1",
+  "seed": 1,
+  "stall_k": 3,
+  "stalls": [
+    {
+      "at": 5700,
+      "stall": {
+        "escalate": false,
+        "k": 3,
+        "no_progress_streak": 1,
+        "outcome_reached": false,
+        "terminal_children": 1
+      }
+    },
+    {
+      "at": 6000,
+      "stall": {
+        "escalate": false,
+        "k": 3,
+        "no_progress_streak": 0,
+        "outcome_reached": false,
+        "terminal_children": 1
+      }
+    },
+    {
+      "at": 9600,
+      "stall": {
+        "escalate": false,
+        "k": 3,
+        "no_progress_streak": 1,
+        "outcome_reached": false,
+        "terminal_children": 2
+      }
+    },
+    {
+      "at": 9900,
+      "stall": {
+        "escalate": false,
+        "k": 3,
+        "no_progress_streak": 0,
+        "outcome_reached": true,
+        "terminal_children": 2
+      }
+    }
+  ]
+}

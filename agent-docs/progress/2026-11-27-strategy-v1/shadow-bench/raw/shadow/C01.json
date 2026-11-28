@@ -1,0 +1,121 @@
+{
+  "achieved_at": 3900,
+  "case": "C01",
+  "decisions": [
+    {
+      "at": 300,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 3600,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "continue",
+      "rule_id": "pc/root-in-flight",
+      "ts_rule_id": "pc/root-in-flight"
+    },
+    {
+      "at": 4200,
+      "effect_state": "suppressed",
+      "guard": null,
+      "key": "o1",
+      "kind": "mark_milestone",
+      "rule_id": "pc/milestone-reached",
+      "ts_rule_id": "pc/milestone-reached"
+    },
+    {
+      "at": 4500,
+      "effect_state": "none",
+      "guard": null,
+      "key": null,
+      "kind": "wait",
+      "rule_id": "pc/achieved",
+      "ts_rule_id": "pc/achieved"
+    }
+  ],
+  "effects": {
+    "controller_feed_sources": 0,
+    "controller_questions": 0,
+    "cos_inputs": 0,
+    "daemon_roots": 0,
+    "decisions": 4,
+    "decisions_with_effect": 0,
+    "suppressed": 1
+  },
+  "horizon_secs": 172800,
+  "outcomes": [
+    {
+      "id": "o1",
+      "reached_at": 3900,
+      "required": true
+    },
+    {
+      "id": "o2",
+      "reached_at": null,
+      "required": false
+    }
+  ],
+  "roots": [
+    {
+      "created_at": 0,
+      "created_by": "cos",
+      "logical_id": "o1:1",
+      "outcome": "o1",
+      "statuses": [
+        {
+          "at": 0,
+          "status": "ready"
+        },
+        {
+          "at": 300,
+          "status": "running"
+        },
+        {
+          "at": 3900,
+          "status": "done"
+        }
+      ]
+    }
+  ],
+  "schema": "celeris.long-horizon-shadow/1",
+  "seed": 1,
+  "stall_k": 3,
+  "stalls": [
+    {
+      "at": 300,
+      "stall": {
+        "escalate": false,
+        "k": 3,
+        "no_progress_streak": 0,
+        "outcome_reached": false,
+        "terminal_children": 0
+      }
+    },
+    {
+      "at": 4200,
+      "stall": {
+        "escalate": false,
+        "k": 3,
+        "no_progress_streak": 1,
+        "outcome_reached": false,
+        "terminal_children": 1
+      }
+    },
+    {
+      "at": 4500,
+      "stall": {
+        "escalate": false,
+        "k": 3,
+        "no_progress_streak": 0,
+        "outcome_reached": true,
+        "terminal_children": 1
+      }
+    }
+  ]
+}

@@ -87,9 +87,16 @@ python3 -I agent-docs/progress/2026-11-27-strategy-v1/shadow_bench.py verify   #
 - 試験は `CELERIS_SCRIPT_REQUIRE_BUNDLE=1` で流すので、bundle が無ければ skip せずに落ちる。
 - 試験名は `long_horizon_shadow_` で始まり、`scripts/dev/test-long-horizon-bench.sh` の filter（`long_horizon_bench_`）に入らない（40 件の採点の数は変わらない）。
 
-## 試験と検査（提出時の HEAD で実行）
+## 試験と検査（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 
-結果は報告（result.json の summary）に書く。
+- `sh agent-docs/progress/2026-11-27-strategy-v1/shadow_bench.sh record`: exit 0（nextest 10 passed、`run: cases=10 fires=0 midway=5 inconclusive=False falsified=False`）。
+- `sh agent-docs/progress/2026-11-27-strategy-v1/shadow_bench.sh check`: exit 0（nextest 10 passed・`compare: ok`。実行後の `git status --short` は 0 行）。
+- `python3 -I agent-docs/progress/2026-11-27-strategy-v1/shadow_bench.py verify`: exit 0（`verify: ok`）。
+- `bash scripts/dev/test-affected.sh`: exit 0。対象 crate は celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch、nextest 4,038 passed・11 skipped、doc test の失敗 0、script bundle の SKIP 0 件、repo-health verdict=pass・fail_grade=0・new 0・worsened 0。
+- `cargo clippy --workspace -- -D warnings`: exit 0（警告は vendor の deno_core の既存の 1 件だけ）。`cargo fmt --all -- --check`: exit 0。
+- `sh scripts/dev/progress-index.sh --check`・`bash scripts/dev/check-doc-links.sh`: exit 0。
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` の path は上の「変更」の file だけ。`tests/fixtures/long-horizon`・`crates`（`crates/task-dispatch/src/dispatcher/tests/` を除く）・`control-ts`・`web`・`scripts`・`docs`・`Cargo.toml`・`Cargo.lock` の差分は 0 file。
+- LoC: production の差分は 0 行（変更は試験の dir と進捗の dir だけ）。試験は `long_horizon_bench.rs` +約 50 行・`long_horizon_shadow.rs` 新規、進捗の script は `shadow_bench.py`・`shadow_bench.sh` 新規（行数は `git diff --numstat "$CELERIS_WU_BASE" HEAD` で見られる）。
 
 ## 未確認
 

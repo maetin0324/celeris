@@ -1,0 +1,105 @@
+{
+  "controller_cos_inputs": [],
+  "controller_inbox_items": [],
+  "controller_tasks": [],
+  "counts": {
+    "n_decisions": 0,
+    "n_projects": 9,
+    "n_r1_waiting": 0,
+    "n_strategy_creates": 0
+  },
+  "decisions": [],
+  "exported_at": "2026-11-28T07:43:17.942840Z",
+  "guard_escalates": [],
+  "k": 3,
+  "outcome_reached": [],
+  "projects": [
+    {
+      "controller_mode": null,
+      "controller_phase": null,
+      "project_id": "01M2RBJBPQS3ZKG04YHGD9D5WS",
+      "strategy_roots": []
+    },
+    {
+      "controller_mode": null,
+      "controller_phase": null,
+      "project_id": "01M2RCYVZH6RGX8RX0JP572BAT",
+      "strategy_roots": []
+    },
+    {
+      "controller_mode": null,
+      "controller_phase": null,
+      "project_id": "01M2WTS3DKNZBSZ2JMVB4CZMBW",
+      "strategy_roots": []
+    },
+    {
+      "controller_mode": null,
+      "controller_phase": null,
+      "project_id": "01M35WRV77A2JPYGERQGXF6V7K",
+      "strategy_roots": []
+    },
+    {
+      "controller_mode": null,
+      "controller_phase": null,
+      "project_id": "01M4ZXVMKZKKZS1HHANZ9B0NPX",
+      "strategy_roots": []
+    },
+    {
+      "controller_mode": null,
+      "controller_phase": null,
+      "project_id": "01M51VQBN3QACQ9M2RCGZDKG9K",
+      "strategy_roots": []
+    },
+    {
+      "controller_mode": null,
+      "controller_phase": null,
+      "project_id": "01M54X4V836T3GSMWT7EGQRJB4",
+      "strategy_roots": []
+    },
+    {
+      "controller_mode": null,
+      "controller_phase": null,
+      "project_id": "01M5G00CDDW323Q67C45VPVWBJ",
+      "strategy_roots": []
+    },
+    {
+      "controller_mode": null,
+      "controller_phase": null,
+      "project_id": "01M856SYM7GB659365TS8RJ5NY",
+      "strategy_roots": []
+    }
+  ],
+  "schema_id": "celeris.prod-shadow-snapshot/1",
+  "script_domains": [
+    {
+      "domain_id": "cos_digest",
+      "generation_id": "01M6J6X3HE4Z3MXM11GHJ1B6M4",
+      "mode": "compare",
+      "updated_at": "2026-11-04T03:00:10.976355933Z"
+    },
+    {
+      "domain_id": "execution_gate",
+      "generation_id": null,
+      "mode": "rust",
+      "updated_at": "1970-01-01T00:00:00Z"
+    },
+    {
+      "domain_id": "lane_rules",
+      "generation_id": "01M6J6X3HE4Z3MXM11GHJ1B6M4",
+      "mode": "compare",
+      "updated_at": "2026-11-04T02:41:21.288067383Z"
+    },
+    {
+      "domain_id": "project_controller",
+      "generation_id": null,
+      "mode": "rust",
+      "updated_at": "1970-01-01T00:00:00Z"
+    },
+    {
+      "domain_id": "route_priority",
+      "generation_id": null,
+      "mode": "rust",
+      "updated_at": "1970-01-01T00:00:00Z"
+    }
+  ]
+}

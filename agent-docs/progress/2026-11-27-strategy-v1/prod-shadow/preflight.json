@@ -1,0 +1,115 @@
+{
+  "counts": {
+    "decisions": 0,
+    "false_positives": 0,
+    "guard_escalates": 0,
+    "leads": 0,
+    "outcome_reached": 0,
+    "r1_fires": 0,
+    "r1_waiting": 0,
+    "roots_with_k_terminal_children_in_shadow": 0,
+    "safety_violations": 0,
+    "shadow_projects": 0,
+    "strategy_roots": 0,
+    "strategy_roots_in_shadow": 0
+  },
+  "exported_at": "2026-11-28T07:00:59.072900Z",
+  "fires": [],
+  "k": 3,
+  "projects": [
+    {
+      "controller_mode": null,
+      "controller_phase": null,
+      "project_id": "01M2RBJBPQS3ZKG04YHGD9D5WS",
+      "roots_with_k_terminal_children": 0,
+      "strategy_roots": 0
+    },
+    {
+      "controller_mode": null,
+      "controller_phase": null,
+      "project_id": "01M2RCYVZH6RGX8RX0JP572BAT",
+      "roots_with_k_terminal_children": 0,
+      "strategy_roots": 0
+    },
+    {
+      "controller_mode": null,
+      "controller_phase": null,
+      "project_id": "01M2WTS3DKNZBSZ2JMVB4CZMBW",
+      "roots_with_k_terminal_children": 0,
+      "strategy_roots": 0
+    },
+    {
+      "controller_mode": null,
+      "controller_phase": null,
+      "project_id": "01M35WRV77A2JPYGERQGXF6V7K",
+      "roots_with_k_terminal_children": 0,
+      "strategy_roots": 0
+    },
+    {
+      "controller_mode": null,
+      "controller_phase": null,
+      "project_id": "01M4ZXVMKZKKZS1HHANZ9B0NPX",
+      "roots_with_k_terminal_children": 0,
+      "strategy_roots": 0
+    },
+    {
+      "controller_mode": null,
+      "controller_phase": null,
+      "project_id": "01M51VQBN3QACQ9M2RCGZDKG9K",
+      "roots_with_k_terminal_children": 0,
+      "strategy_roots": 0
+    },
+    {
+      "controller_mode": null,
+      "controller_phase": null,
+      "project_id": "01M54X4V836T3GSMWT7EGQRJB4",
+      "roots_with_k_terminal_children": 0,
+      "strategy_roots": 0
+    },
+    {
+      "controller_mode": null,
+      "controller_phase": null,
+      "project_id": "01M5G00CDDW323Q67C45VPVWBJ",
+      "roots_with_k_terminal_children": 0,
+      "strategy_roots": 0
+    },
+    {
+      "controller_mode": null,
+      "controller_phase": null,
+      "project_id": "01M856SYM7GB659365TS8RJ5NY",
+      "roots_with_k_terminal_children": 0,
+      "strategy_roots": 0
+    }
+  ],
+  "reason": "no project with controller mode shadow",
+  "safety": {
+    "controller_cos_inputs": [],
+    "controller_inbox_items": [],
+    "controller_tasks": [],
+    "r1_not_suppressed": []
+  },
+  "schema_id": "celeris.prod-shadow-result/1",
+  "script_domains": [
+    {
+      "domain_id": "cos_digest",
+      "mode": "compare"
+    },
+    {
+      "domain_id": "execution_gate",
+      "mode": "rust"
+    },
+    {
+      "domain_id": "lane_rules",
+      "mode": "compare"
+    },
+    {
+      "domain_id": "project_controller",
+      "mode": "rust"
+    },
+    {
+      "domain_id": "route_priority",
+      "mode": "rust"
+    }
+  ],
+  "verdict": "inconclusive"
+}

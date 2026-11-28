@@ -2,8 +2,8 @@
 tasks: [01M7XQ9PS0AFKKMRJ7P5ZMKQQE]
 wu: r1-core
 status: done
-updated: 2026-11-27
-completed: 2026-11-27
+updated: 2026-11-28
+completed: 2026-11-28
 ---
 # 戦略層 v1 親 r1-core: R1（K = 3）を parent_checkpoint の純関数と controller の snapshot に載せる
 
@@ -34,14 +34,29 @@ completed: 2026-11-27
 - 試験: `crates/task-core/src/parent_checkpoint/stall_tests.rs`（5 件）、`crates/task-ops/src/project_snapshot/stall_tests.rs`（1 件）。task-api の試験 3 file は `checkpoints` の新しい引数に既定値を渡すだけ。
 - 文書: ADR 2026-11-27-r1-stall-shadow、`docs/architecture-map.md` の parent_checkpoint の行。
 
+## 経緯（範囲の check と計画 v3）
+
+- 1〜3 回目の run（2026-11-27）は、範囲の check（計画の check 4）の許可リストに `crates/task-ops/src/project_controller_view.rs` と task-api の試験 3 file（`parent_checkpoint_{shadow,regression,pivot_chain}.rs`）が無く、範囲外として落ちた。
+  - task-api の試験 3 file は `checkpoints` を直接呼ぶので、引数 `reach` を足すと呼び出しを 1 行ずつ直す必要がある。旧い引数の形の wrapper は互換の分岐になるので置かない。
+  - `project_controller_view.rs` は `recorded_outcomes` の owner。到達の時刻をこの file の外で読むと、記録を選ぶ規則の二重実装になる。また `project_controller_view` は `project_snapshot` を use するので、逆向きに呼ぶと module の循環になる。
+  - 3 回目の run は plan_issue を申告した。2 回目の run の申告は result.json に summary も書いたため done として扱われ、計画に届かなかった。
+- 計画 v3（人が 2026-11-28 00:08Z ごろに承認）は許可リストにこの 4 path を足した。4 回目の run（この記録）はコードを変えず、check を流し直して検査の節を書き直しただけ。
+
 ## 試験と検査（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 
-- `cargo nextest run -p task-core -p task-ops -E 'test(/parent_checkpoint_stall_|project_controller_checkpoint/)'`: 6 件の `parent_checkpoint_stall_` を含めすべて passed（task-core 側 9 件・task-ops 側 2 件）。
-- `bash scripts/dev/test-affected.sh`: exit 0。nextest 8,944 passed・35 skipped、web の tsc -b 通過・vitest 774 passed、ts-verify 20 passed、repo-health verdict=pass・fail_grade=0・new 0。
-  - 1 回目は exit 1 だった（source-size の inline の試験 module `checkpoint_tests` が 343 行で上限 300 を超えた）。snapshot の試験を `project_snapshot/stall_tests.rs` に移して直した。
-- `cargo clippy --workspace -- -D warnings`: exit 0（警告は vendor の deno_core の既存の 1 件）。`cargo fmt --all -- --check`: exit 0。
-- `check-doc-links.sh`: exit 0。`check-adr-numbers.sh`: ok（487 files）。`node control-ts/scripts/gen-host-types.mjs --check`: exit 0（生成型は変わらない）。
-- `git diff --quiet $CELERIS_WU_BASE HEAD -- crates/task-core/src/store crates/task-core/migrations crates/task-core/src/model/events.rs crates/celeris/src/config docs/api/script-host control-ts`: exit 0。
+計画 v3 の check 0〜4 を 4 回目の run（2026-11-28）で流し直した。結果はすべて exit 0。
+
+- check 0 `r1-bench.json` の `falsified` が `false`: exit 0（`inconclusive: true`）。
+- check 1 `cargo nextest run -p task-core -E 'test(/parent_checkpoint_stall_/)'`: exit 0、5 passed（`k_boundary`・`reach_resets_streak`・`non_strategy_root_is_none`・`r1_result_points_match`・`r1_bench_trials_match`）。
+  - あわせて `cargo nextest run -p task-ops -E 'test(/parent_checkpoint_stall_/)'`: exit 0、1 passed（`snapshot_field_from_store`）。
+- check 2 `bash scripts/dev/test-affected.sh && cargo clippy --workspace -- -D warnings && cargo fmt --all -- --check`: すべて exit 0。
+  - test-affected: 対象 14 crate の nextest 8,944 passed・35 skipped、doc test は失敗 0、web の tsc -b 通過・vitest 108 file 774 passed・node --test 110 passed、ts-verify 20 passed、script bundle の SKIP 0 件、repo-health verdict=pass・fail_grade=0・new 0・worsened 0。
+  - 前の版で 1 回 exit 1 になった（source-size の inline の試験 module `checkpoint_tests` が 343 行で上限 300 を超えた）ので、snapshot の試験を `project_snapshot/stall_tests.rs` に移した。今回は落ちていない。
+  - clippy: exit 0（警告は vendor の deno_core の既存の 1 件だけ）。fmt: exit 0。
+- check 3 ADR の存在・`check-doc-links.sh`・`check-adr-numbers.sh`・`progress-index.sh --check`: exit 0（doc-links ok、adr-numbers ok 487 files、progress-index ok）。
+- check 4 範囲（v3 の許可リスト）: exit 0。`sh "$CELERIS_WU_SCOPE_PATHS"` の 14 path に範囲外は無い。
+- `node control-ts/scripts/gen-host-types.mjs --check`: exit 0（生成型は変わらない）。
+- `git diff --quiet $CELERIS_WU_BASE HEAD -- crates/task-core/src/store crates/task-core/migrations crates/task-core/src/model/events.rs crates/celeris/src/config docs/api/script-host control-ts`: exit 0（store・migrations・events の module・config・schema・control-ts の差分 0）。
 
 ## LoC（base の script と toml を `git show` で取り出し、`--exclusive-classes` で base と HEAD に当てた）
 

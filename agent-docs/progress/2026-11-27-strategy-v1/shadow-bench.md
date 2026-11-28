@@ -87,11 +87,19 @@ python3 -I agent-docs/progress/2026-11-27-strategy-v1/shadow_bench.py verify   #
 - 試験は `CELERIS_SCRIPT_REQUIRE_BUNDLE=1` で流すので、bundle が無ければ skip せずに落ちる。
 - 試験名は `long_horizon_shadow_` で始まり、`scripts/dev/test-long-horizon-bench.sh` の filter（`long_horizon_bench_`）に入らない（40 件の採点の数は変わらない）。
 
+## 前回の run の check の不合格と直し
+
+- 不合格だった check: `grep -rqE 'fn long_horizon_shadow_' crates/task-dispatch/src/dispatcher/tests/ && ! grep -rqE 'fn long_horizon_bench_shadow' crates/task-dispatch/src/dispatcher/tests/`（exit 1、期待 0）。
+- 原因: 試験 10 件は macro `shadow_case!("C01", long_horizon_shadow_c01_stale_event)` が生成していて、file に `fn long_horizon_shadow_` の文字列が無かった。試験そのものは在り、通っていた（前回の `shadow_bench.sh check` は 10 passed）。
+- 直し: macro の引数を `shadow_case!("C01", fn long_horizon_shadow_c01_stale_event)` の形にした（`long_horizon_shadow.rs`）。生成される試験の名前・中身は変わらない。試験の定義を `fn <名前>` の grep で引ける。
+- 同じ check を cwd（repo の root）で流し直して exit 0。
+
 ## 試験と検査（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 
-- `sh agent-docs/progress/2026-11-27-strategy-v1/shadow_bench.sh record`: exit 0（nextest 10 passed、`run: cases=10 fires=0 midway=5 inconclusive=False falsified=False`）。
-- `sh agent-docs/progress/2026-11-27-strategy-v1/shadow_bench.sh check`: exit 0（nextest 10 passed・`compare: ok`。実行後の `git status --short` は 0 行）。
+- 上の check: exit 0。
+- `sh agent-docs/progress/2026-11-27-strategy-v1/shadow_bench.sh check`: exit 0（nextest 10 passed・`compare: ok`。実行後の `git status --short` は直した試験の file 1 行だけで、raw・json は変わらない）。
 - `python3 -I agent-docs/progress/2026-11-27-strategy-v1/shadow_bench.py verify`: exit 0（`verify: ok`）。
+- `shadow_bench.sh record` は前回の run で exit 0（nextest 10 passed、`run: cases=10 fires=0 midway=5 inconclusive=False falsified=False`）。今回は試験の名前の書き方だけを変えたので流し直していない（`check` が commit 済みの json と一致した）。
 - `bash scripts/dev/test-affected.sh`: exit 0。対象 crate は celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch、nextest 4,038 passed・11 skipped、doc test の失敗 0、script bundle の SKIP 0 件、repo-health verdict=pass・fail_grade=0・new 0・worsened 0。
 - `cargo clippy --workspace -- -D warnings`: exit 0（警告は vendor の deno_core の既存の 1 件だけ）。`cargo fmt --all -- --check`: exit 0。
 - `sh scripts/dev/progress-index.sh --check`・`bash scripts/dev/check-doc-links.sh`: exit 0。

@@ -408,8 +408,9 @@ fn shadow(case: &str, test: &str) {
     std::fs::write(dir.join(format!("{case}.json")), format!("{}\n", outs[0].1)).unwrap();
 }
 
+// 呼び出し側に `fn <name>` と書かせ、試験の名前を `grep 'fn long_horizon_shadow_'` で引けるようにする。
 macro_rules! shadow_case {
-    ($case:literal, $name:ident) => {
+    ($case:literal, fn $name:ident) => {
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         async fn $name() {
             shadow($case, stringify!($name));
@@ -417,13 +418,13 @@ macro_rules! shadow_case {
     };
 }
 
-shadow_case!("C01", long_horizon_shadow_c01_stale_event);
-shadow_case!("C02", long_horizon_shadow_c02_partial_result);
-shadow_case!("C03", long_horizon_shadow_c03_slow_worker);
-shadow_case!("C04", long_horizon_shadow_c04_child_failed);
-shadow_case!("C05", long_horizon_shadow_c05_plan_invalid);
-shadow_case!("C06", long_horizon_shadow_c06_auth_wait);
-shadow_case!("C07", long_horizon_shadow_c07_daemon_restart);
-shadow_case!("C08", long_horizon_shadow_c08_multi_root);
-shadow_case!("C09", long_horizon_shadow_c09_consult_short_continue);
-shadow_case!("C10", long_horizon_shadow_c10_repeat_failure);
+shadow_case!("C01", fn long_horizon_shadow_c01_stale_event);
+shadow_case!("C02", fn long_horizon_shadow_c02_partial_result);
+shadow_case!("C03", fn long_horizon_shadow_c03_slow_worker);
+shadow_case!("C04", fn long_horizon_shadow_c04_child_failed);
+shadow_case!("C05", fn long_horizon_shadow_c05_plan_invalid);
+shadow_case!("C06", fn long_horizon_shadow_c06_auth_wait);
+shadow_case!("C07", fn long_horizon_shadow_c07_daemon_restart);
+shadow_case!("C08", fn long_horizon_shadow_c08_multi_root);
+shadow_case!("C09", fn long_horizon_shadow_c09_consult_short_continue);
+shadow_case!("C10", fn long_horizon_shadow_c10_repeat_failure);
